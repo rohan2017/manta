@@ -8,12 +8,12 @@
 #include "articulated_part.hpp"
 #include "composite_part.hpp"
 #include "root_part.hpp"
+#include "scene.hpp"   // sense_and_aggregate uses Scene::world_to_scene
 #include "../geom/kinematic_link.hpp"
 #include "../fields/field.hpp"
 
 namespace manta {
 
-class Scene;
 class World;
 
 // A craft is a self-contained vehicle: a root part tree plus its own rigid-

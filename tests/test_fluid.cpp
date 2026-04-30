@@ -204,8 +204,10 @@ TEST_CASE("Hull: lift varies smoothly across surface (no step)") {
 
     auto sample_lift_at = [&](float z_offset, Real smoothing) {
         OceanAtmosField oa(0.0f);
+        FlatSeaSurface  surf(0.0f);
         Craft c("t");
         c.register_field<FluidField>(oa);
+        c.register_field<SeaSurface>(surf);   // engages Hull's smoothstep blend
         c.register_field(gf);
         c.root().add<PointMass>("m", 0.0f);
         auto& hull = c.root().add<Hull>("hull", 0.001f, z_column_4(0.1f));
@@ -240,9 +242,11 @@ TEST_CASE("Hull: smoothing→0 collapses to hard step") {
     // gives 2 below + 2 above the surface (at z=0, sample at z=0 is exactly at
     // surface and gets weight 0.5; nudge by ε so we land cleanly).
     OceanAtmosField oa(0.0f);
+    FlatSeaSurface  surf(0.0f);
     GravityField gf;
     Craft c("t");
     c.register_field<FluidField>(oa);
+    c.register_field<SeaSurface>(surf);
     c.register_field(gf);
     c.root().add<PointMass>("m", 0.0f);
     auto& hull = c.root().add<Hull>("hull", 0.001f, z_column_4(0.1f));
@@ -302,4 +306,27 @@ TEST_CASE("Hull: produces roll-righting torque when tilted in water") {
     auto T = c2.root().net_wrench().torque();
     // Roll about y direction: tilt is +y rotation; expect restoring torque (negative y).
     CHECK(T.y() < 0.0f);
+}
+
+// ---- SeaSurface ----
+
+#include "manta/fields/sea_surface.hpp"
+
+TEST_CASE("FlatSeaSurface: signed altitude relative to z = sea_level") {
+    using namespace manta::fields;
+    FlatSeaSurface sea{/*sea_level=*/0.0f};
+
+    CHECK(sea.height_above_surface(Vec3<SceneFrame>{0, 0,  5.0f}) == doctest::Approx( 5.0f));
+    CHECK(sea.height_above_surface(Vec3<SceneFrame>{0, 0, -3.0f}) == doctest::Approx(-3.0f));
+    CHECK(sea.height_above_surface(Vec3<SceneFrame>{0, 0,  0.0f}) == doctest::Approx( 0.0f));
+
+    // x and y don't matter — the surface is a horizontal plane.
+    CHECK(sea.height_above_surface(Vec3<SceneFrame>{42, -17, 1.0f}) == doctest::Approx(1.0f));
+}
+
+TEST_CASE("FlatSeaSurface: nonzero sea_level offsets correctly") {
+    using namespace manta::fields;
+    FlatSeaSurface sea{/*sea_level=*/10.0f};
+    CHECK(sea.height_above_surface(Vec3<SceneFrame>{0, 0, 12.0f}) == doctest::Approx( 2.0f));
+    CHECK(sea.height_above_surface(Vec3<SceneFrame>{0, 0,  8.0f}) == doctest::Approx(-2.0f));
 }
