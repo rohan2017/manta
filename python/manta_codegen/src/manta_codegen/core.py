@@ -119,6 +119,11 @@ class PartDescriptor:
     # codegen falls back to the bare cpp_class (which forces Real). When ALL
     # parts in a craft have cpp_class_template set, the codegen emits the
     # craft as a class template; otherwise it emits the non-templated form.
+    #
+    # Most parts use the default `cpp_class_template_instantiation`, which
+    # produces `f"{cpp_class_template}<{scalar}>"`. Parts with extra template
+    # parameters beyond Scalar (e.g. `SurfaceT<N, Scalar>`) override the
+    # method to splice in their additional parameters.
     cpp_class_template: ClassVar[str] = ""
     # List of FieldDescriptor subclasses this part requires. Codegen verifies
     # all of these are registered with the craft and emits `static_assert`s on
@@ -155,6 +160,14 @@ class PartDescriptor:
     # numeric scalar. Default `"manta::Real"` produces the original (Real-typed)
     # output; the templated codegen passes `"Scalar"` to generate code valid
     # inside a `template <class Scalar> class ...` body.
+
+    def cpp_class_template_instantiation(self, scalar: str) -> str:
+        """The C++ template instantiation to use inside `parent.template add<...>(...)`
+        when emitting a Scalar-templated craft. Default: `cpp_class_template<scalar>`.
+        Override for parts that have additional template parameters (e.g. Surface
+        adds an `int N` before Scalar). Only called when `cpp_class_template` is
+        non-empty."""
+        return f"{self.cpp_class_template}<{scalar}>"
 
     def emit_constructor_args(self, scalar: str = "manta::Real") -> str:
         """C++ argument list for `parent.add<CppClass>(...)`. Subclasses override.

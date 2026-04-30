@@ -147,11 +147,12 @@ def _emit_craft_hpp_templated(craft: Craft) -> str:
 
     def emit_subtree(parent_handle: str, part) -> None:
         ctor_args = part.emit_constructor_args(scalar="Scalar")
+        ct        = part.cpp_class_template_instantiation("Scalar")
         # `template add<Foo<Scalar>>` requires the `template` disambiguator
         # because the inheritance is dependent on the template parameter.
         lines.append(
             f"        {part.name}_ = &{parent_handle}.template add<"
-            f"{part.cpp_class_template}<Scalar>>({ctor_args});"
+            f"{ct}>({ctor_args});"
         )
         for stmt in part.emit_post_construction(scalar="Scalar"):
             lines.append(f"        {stmt}")
@@ -167,13 +168,13 @@ def _emit_craft_hpp_templated(craft: Craft) -> str:
 
     # Accessors.
     for p in parts:
-        ct = f"{p.cpp_class_template}<Scalar>"
+        ct = p.cpp_class_template_instantiation("Scalar")
         lines.append(f"    {ct}& {p.name}() {{ return *{p.name}_; }}")
         lines.append(f"    const {ct}& {p.name}() const {{ return *{p.name}_; }}")
 
     lines += ["", "private:"]
     for p in parts:
-        ct = f"{p.cpp_class_template}<Scalar>"
+        ct = p.cpp_class_template_instantiation("Scalar")
         lines.append(f"    {ct}* {p.name}_ = nullptr;")
     lines += ["};", "", f"using {cls} = {cls_t}<manta::Real>;", ""]
     return "\n".join(lines)
