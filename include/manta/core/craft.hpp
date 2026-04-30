@@ -112,24 +112,50 @@ public:
             return;
         }
 
+        // The aggregated wrench is expressed at the root part's origin =
+        // craft origin. The MOI from compute_params is about the craft COM.
+        // Newton's second law gives a_COM = F/m; Euler's gives
+        // I_COM·α = τ_COM − ω×(I_COM·ω) where τ_COM = τ_origin − r_COM × F.
+        // We then transform back to the origin's acceleration for storage in
+        // scene_to_craft_:
+        //   a_origin = a_COM + α × r_OC + ω × (ω × r_OC),
+        // where r_OC = origin − COM (in scene frame). Static-COM only;
+        // d(r_COM)/dt for articulated mass-shifting bodies is not modeled.
         const auto& w = root_.net_wrench();
-
         using EigenV = Eigen::Matrix<Scalar, 3, 1>;
-        EigenV F_craft = w.force().raw();
-        EigenV a_scene = scene_to_craft_.orientation().raw() * F_craft / m;
-        scene_to_craft_.set_acc_linear(geom::Vec3<SceneFrame, Scalar>::from_raw(a_scene));
+        EigenV F           = w.force().raw();
+        EigenV tau_origin  = w.torque().raw();
+        EigenV r_com_craft = root_.get_com().raw();    // COM in CraftFrame
 
-        const auto& I = root_.get_moi();
-        EigenV omega = scene_to_craft_.vel_angular().raw();
-        EigenV tau   = w.torque().raw();
-        EigenV alpha = EigenV::Zero();
-        Scalar det = I.raw().determinant();
+        // Linear: a_COM in scene = R_(scene<-craft) · (F / m).
+        EigenV a_com_scene =
+            scene_to_craft_.orientation().raw() * (F / m);
+
+        // Angular: solve I_COM · α = τ_COM − ω × (I_COM · ω) in CraftFrame.
+        const auto& I_com = root_.get_moi();
+        EigenV omega_craft = scene_to_craft_.vel_angular().raw();
+        EigenV tau_com     = tau_origin - r_com_craft.cross(F);
+        EigenV alpha_craft = EigenV::Zero();
+        Scalar det = I_com.raw().determinant();
         if (det > Scalar(1e-18)) {
-            EigenV I_omega  = I.raw() * omega;
-            EigenV tau_eff  = tau - omega.cross(I_omega);
-            alpha           = I.raw().inverse() * tau_eff;
+            EigenV I_omega = I_com.raw() * omega_craft;
+            EigenV tau_eff = tau_com - omega_craft.cross(I_omega);
+            alpha_craft    = I_com.raw().inverse() * tau_eff;
         }
-        scene_to_craft_.set_acc_angular(geom::Vec3<CraftFrame, Scalar>::from_raw(alpha));
+
+        // Origin acceleration: a_COM + α × r_OC + ω × (ω × r_OC), all in scene.
+        EigenV r_oc_craft = -r_com_craft;              // origin − COM, craft frame
+        EigenV r_oc_scene = scene_to_craft_.orientation().raw() * r_oc_craft;
+        EigenV alpha_scene = scene_to_craft_.orientation().raw() * alpha_craft;
+        EigenV omega_scene = scene_to_craft_.orientation().raw() * omega_craft;
+        EigenV a_origin_scene = a_com_scene
+                              + alpha_scene.cross(r_oc_scene)
+                              + omega_scene.cross(omega_scene.cross(r_oc_scene));
+
+        scene_to_craft_.set_acc_linear(
+            geom::Vec3<SceneFrame, Scalar>::from_raw(a_origin_scene));
+        scene_to_craft_.set_acc_angular(
+            geom::Vec3<CraftFrame, Scalar>::from_raw(alpha_craft));
     }
 
     void integrate(Scalar dt) {

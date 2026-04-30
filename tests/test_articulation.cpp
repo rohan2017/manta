@@ -158,3 +158,66 @@ TEST_CASE("Articulation invariant: balanced Motor preserves COM and Lz") {
     // --- Sanity: motor has advanced. ---
     CHECK(std::abs(motor.angle()) > 0.01f);
 }
+
+// Asymmetric configuration from prompts/my_prompt.txt: m1 rigidly attached
+// to the craft root at (+r, 0, 0); Motor at the root with axis = z; m2
+// attached to the motor at (-r, 0, 0) in the joint-output frame. Total
+// craft COM in CraftFrame is at the origin only at angle = 0; for any
+// other motor angle, the COM moves in CraftFrame.
+//
+// This exercises the origin/COM split in the rigid-body integrator —
+// previously failed (deferred) when integration assumed origin == COM.
+//
+// Invariants:
+//   - Scene-frame COM (averaged over m1 + m2) stays at the origin
+//     (no external forces; static-COM integrator should handle this
+//     correctly even though COM moves in body frame).
+//   - Total Lz remains zero (started at rest, internal torques only).
+TEST_CASE("Articulation invariant: asymmetric Motor preserves COM and Lz") {
+    constexpr float r   = 0.5f;
+    constexpr float m   = 1.0f;
+    constexpr float dt  = 0.001f;
+    constexpr int   N   = 1000;
+    constexpr float tau = 0.05f;
+
+    World w;
+    w.clock().set_dt(dt);
+    auto& scene = w.create_scene();
+    Craft c("asymmetric_motor");
+
+    auto& m1 = c.root().add<PointMass>("m1", m);
+    m1.set_transform(StaticLink<ParentFrame, PartFrame>{
+        Vec3<ParentFrame>{+r, 0, 0},
+        Ori<ParentFrame>::identity()});
+
+    auto& motor = c.root().add<Motor>("motor", Vec3<PartFrame>{0, 0, 1},
+                                       /*stall=*/10.0f);
+    auto& m2 = motor.add<PointMass>("m2", m);
+    m2.set_transform(StaticLink<ParentFrame, PartFrame>{
+        Vec3<ParentFrame>{-r, 0, 0},
+        Ori<ParentFrame>::identity()});
+
+    motor.set_torque(tau);
+    scene.add_craft(c, InitialState{});
+
+    for (int i = 0; i < N; ++i) {
+        w.update();
+    }
+    c.kinematic_pass();
+
+    auto p1 = m1.scene_to_part().position();
+    auto p2 = m2.scene_to_part().position();
+    Vec3<SceneFrame> com_scene = Vec3<SceneFrame>::from_raw(
+        m * (p1.raw() + p2.raw()) / (2 * m));
+    INFO("p1=(", p1.x(), ",", p1.y(), ") p2=(", p2.x(), ",", p2.y(), ")");
+    CHECK(test::approx_equal(com_scene, Vec3<SceneFrame>::zero(), 5e-2f));
+
+    auto v1 = m1.scene_to_part().vel_linear().raw();
+    auto v2 = m2.scene_to_part().vel_linear().raw();
+    float Lz = m * (p1.x() * v1.y() - p1.y() * v1.x())
+             + m * (p2.x() * v2.y() - p2.y() * v2.x());
+    INFO("Lz = ", Lz);
+    CHECK(std::abs(Lz) < 5e-2f);
+
+    CHECK(std::abs(motor.angle()) > 0.01f);
+}
