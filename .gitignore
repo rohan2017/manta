@@ -20,6 +20,7 @@ __pycache__/
 *.swp
 *.swo
 .DS_Store
+prompts/
 
 # Codegen output is committed (lives in examples/<ex>/generated/) so these
 # stay tracked. Do NOT add them here.
