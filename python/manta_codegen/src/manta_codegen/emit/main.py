@@ -47,6 +47,8 @@ def emit_main_cpp(craft: Craft) -> str:
     ]
     for f in craft.fields:
         lines.append(f'#include "{f.cpp_header}"')
+    for p in craft.planets:
+        lines.append(f'#include "{p.cpp_header}"')
     lines += [
         "",
         "namespace {",
@@ -85,6 +87,17 @@ def emit_main_cpp(craft: Craft) -> str:
         "    w.clock().set_dt(DT);",
         "    auto& scene = w.create_scene();",
     ]
+
+    # Planets — added to World, then the (single) scene anchors to the first.
+    # Each planet contributes its own field disturbances inside add_planet's
+    # call to register_disturbances, so user-level field registration only
+    # needs to cover whatever the user explicitly listed in craft.fields.
+    for i, p in enumerate(craft.planets):
+        var = f"planet_{i}"
+        lines.append(f"    auto& {var} = w.add_planet<{p.cpp_class}>("
+                     f"{p.emit_constructor_args()});")
+    if craft.planets:
+        lines.append(f"    scene.set_planet(&planet_0);")
 
     # Field instances live with static storage in main; register with the World.
     # Concrete-type registration is implicit via template deduction; additional

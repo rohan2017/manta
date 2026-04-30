@@ -80,6 +80,26 @@ class FieldDescriptor:
 
 
 # ---------------------------------------------------------------------------
+# Planet descriptor base
+
+class PlanetDescriptor:
+    """Base class for planet descriptors. A Planet, when added to a craft via
+    `craft.planets.append(...)`, gets emitted as `world.add_planet<CppClass>(...)`
+    in the codegenerated main, and the world's first scene is anchored to it
+    via `scene.set_planet(&planet)`.
+
+    Subclasses set `cpp_class` and `cpp_header`, override `emit_constructor_args`
+    if the planet takes typed arguments.
+    """
+    cpp_class:  ClassVar[str] = ""
+    cpp_header: ClassVar[str] = ""
+
+    def emit_constructor_args(self) -> str:
+        """C++ argument list inside `world.add_planet<CppClass>(...)`. Default empty."""
+        return ""
+
+
+# ---------------------------------------------------------------------------
 # Part descriptor base
 
 class PartDescriptor:
@@ -223,11 +243,15 @@ class Craft:
     def __init__(self,
                  name: str,
                  fields: list[FieldDescriptor] | None = None,
+                 planets: list[PlanetDescriptor] | None = None,
                  topic_prefix: str | None = None) -> None:
         if not name.isidentifier():
             raise ValueError(f"Craft name {name!r} must be a valid C++ identifier")
         self.name = name
         self.fields: list[FieldDescriptor] = fields or []
+        # Planets registered on the World. The first scene the codegen
+        # creates is anchored to the first planet here (if any).
+        self.planets: list[PlanetDescriptor] = planets or []
         self.topic_prefix = topic_prefix if topic_prefix is not None else f"manta/{name}"
         self.root: _RootProxy = _RootProxy(craft=self)
         # Initial state is applied at scene-add time, not in the Craft's

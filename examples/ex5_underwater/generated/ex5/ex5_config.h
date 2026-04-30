@@ -8,4 +8,3 @@
 // into every TU of the craft target via the generated CMake fragment.
 
 #define MANTA_HAS_GRAVITY_FIELD 1
-#define MANTA_HAS_OCEAN_ATMOS_FIELD 1

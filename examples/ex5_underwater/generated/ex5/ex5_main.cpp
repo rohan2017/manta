@@ -19,7 +19,7 @@
 #include "ex5.hpp"
 #include "ex5_telemetry.hpp"
 #include "manta/fields/gravity_field.hpp"
-#include "manta/fields/ocean_atmos_field.hpp"
+#include "manta/planets/earth.hpp"
 
 namespace {
 std::atomic<bool> g_run{true};
@@ -56,11 +56,10 @@ int main() {
     manta::World w;
     w.clock().set_dt(DT);
     auto& scene = w.create_scene();
+    auto& planet_0 = w.add_planet<manta::planets::Earth>(0.0f, 1000.0f, 1.225f, 0.0f);
+    scene.set_planet(&planet_0);
     manta::fields::GravityField field_0{manta::geom::Vec3<manta::SceneFrame>{0.0f, 0.0f, -9.81f}};
     w.register_field(field_0);
-    manta::fields::OceanAtmosField field_1{0.0f, 1000.0f, 1.225f};
-    w.register_field(field_1);
-    w.register_field<manta::fields::FluidField>(field_1);
     Ex5Craft craft;
     scene.add_craft(craft, manta::InitialState{manta::geom::Vec3<manta::SceneFrame>{0.0f, 0.0f, -0.5f}, manta::geom::Ori<manta::SceneFrame>{Eigen::Quaternionf{1.0f, 0.0f, 0.0f, 0.0f}}, manta::geom::Vec3<manta::SceneFrame>{0.0f, 0.0f, 0.0f}, manta::geom::Vec3<manta::CraftFrame>{0.0f, 0.0f, 0.0f}});
 

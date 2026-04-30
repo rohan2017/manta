@@ -170,3 +170,44 @@ TEST_CASE("Planet phase 3: Coriolis acceleration on a radially-moving craft") {
     CHECK(a.y() == doctest::Approx(-2.0).epsilon(1e-3));
     CHECK(std::abs(a.z()) < 1e-3);
 }
+
+// ---- Earth concrete planet ----
+
+#include "manta/planets/earth.hpp"
+
+TEST_CASE("Earth: registers FluidField + SeaSurface on add_planet") {
+    World w;
+    auto& earth = w.add_planet<manta::planets::Earth>(/*sea_level=*/0.0f);
+
+    // FluidField is registered (OceanAtmosField under the FluidField slot).
+    auto* fluid_ptr = w.field_ptr(typeid(manta::fields::FluidField));
+    REQUIRE(fluid_ptr != nullptr);
+
+    // SeaSurface is registered too.
+    auto* surf_ptr = w.field_ptr(typeid(manta::fields::SeaSurface));
+    REQUIRE(surf_ptr != nullptr);
+
+    auto* surf = dynamic_cast<manta::fields::SeaSurface*>(surf_ptr);
+    REQUIRE(surf != nullptr);
+    CHECK(surf->height_above_surface(Vec3<SceneFrame>{0, 0,  3}) == doctest::Approx( 3));
+    CHECK(surf->height_above_surface(Vec3<SceneFrame>{0, 0, -2}) == doctest::Approx(-2));
+
+    // Earth defaults to non-rotating (rotation_rate = 0).
+    CHECK(earth.rotation_rate() == doctest::Approx(0));
+}
+
+TEST_CASE("Earth: optional sidereal rotation pushes Coriolis through") {
+    World w;
+    w.clock().set_dt(0.001f);
+    auto& earth = w.add_planet<manta::planets::Earth>(
+        /*sea_level=*/0.0f,
+        /*water_density=*/1000.0f,
+        /*air_density=*/1.225f,
+        /*rotation_rate=*/1.0f);   // 1 rad/s for an exaggerated test
+    auto& s = w.create_scene();
+    s.set_planet(&earth);
+    w.update();
+
+    // Scene picks up Earth's rotation rate.
+    CHECK(s.world_to_scene().vel_angular().z() == doctest::Approx(1.0));
+}

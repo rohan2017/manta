@@ -2,10 +2,10 @@
 
 A cylindrical-volume underwater vehicle modeled as a Hull with sample
 points distributed along its body, plus an IMU, a DVL, and a single aft
-Thruster. Floats at neutral buoyancy in OceanAtmosField below the sea
-surface, with GravityField pulling it down. The Hull's runtime
-dynamic_cast detects OceanAtmosField and blends water/air density across
-the surface — visible if the sub crosses sea_level.
+Thruster. Floats at neutral buoyancy below the sea surface; gravity
+pulls it down. Earth provides the ocean+atmosphere fluid disturbance and
+the SeaSurface that Hull's smoothstep blend uses to ramp buoyancy across
+the air-water interface.
 
 Codegen:
 
@@ -19,8 +19,9 @@ Workflow: binary. Topics:
 """
 
 from manta_codegen import Craft, tf
-from manta_codegen.parts  import DVL, GravityPart, Hull, IMU, PointMass, Thruster
-from manta_codegen.fields import GravityField, OceanAtmosField
+from manta_codegen.parts   import DVL, GravityPart, Hull, IMU, PointMass, Thruster
+from manta_codegen.fields  import GravityField
+from manta_codegen.planets import Earth
 
 
 # --- Vehicle geometry ---
@@ -43,10 +44,15 @@ SAMPLE_POINTS = [
 
 
 def make_craft() -> Craft:
-    c = Craft("ex5", fields=[
-        GravityField(),                    # default g = (0,0,-9.81)
-        OceanAtmosField(sea_level=0.0),    # surface at z=0
-    ])
+    # Earth registers an OceanAtmosField (under the FluidField slot) and a
+    # FlatSeaSurface automatically — Hull picks both up. GravityField is
+    # still a top-level world field (gravity isn't yet a planet-disturbance
+    # in the architecture).
+    c = Craft(
+        "ex5",
+        fields=[GravityField()],
+        planets=[Earth(sea_level=0.0)],
+    )
 
     # Hull: provides buoyancy + holds the bulk mass/MOI of the sub.
     # MOI of a uniform cylinder: I_xx = (1/2)·m·r², I_yy = I_zz = (1/12)·m·(3r²+L²).
