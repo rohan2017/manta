@@ -91,3 +91,12 @@ add_executable(ex6_estimator_demo
 target_link_libraries(ex6_estimator_demo PRIVATE manta_examples_shared)
 manta_ex6_apply(ex6_estimator_demo)
 manta_ex6_est_apply(ex6_estimator_demo)
+
+# ex7 — Pattern C: real-data-only estimator (no sim Craft). Subscribes to
+# external Zenoh topics, runs CraftEKF, publishes estimate.
+include(${CMAKE_CURRENT_SOURCE_DIR}/ex7_real_data_estimator/generated/ex7_est/ex7_est.cmake)
+add_executable(ex7_real_data_estimator
+    ex7_real_data_estimator/ex7.cpp
+    ${manta_ex7_est_SOURCES})
+target_link_libraries(ex7_real_data_estimator PRIVATE manta_examples_shared)
+manta_ex7_est_apply(ex7_real_data_estimator)
