@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vector>
+#include "../geom/kinematic_link.hpp"
 #include "../geom/ori.hpp"
 #include "../geom/static_link.hpp"
 #include "../geom/vec3.hpp"
@@ -75,6 +76,17 @@ public:
     const Planet* planet() const noexcept { return planet_; }
     bool          has_planet() const noexcept { return planet_ != nullptr; }
 
+    // The full WorldFrame → SceneFrame kinematic link, refreshed each tick by
+    // `Scene::update`. When a planet anchor is set, this is the composition
+    // `world_to_planet * planet_to_scene` and carries the planet's rotation
+    // rate so any consumer that needs WorldFrame quantities (the integrator,
+    // a Coriolis-aware sensor) gets correct values. When no planet is set,
+    // this is just `planet_to_scene` reinterpreted as a static link in
+    // WorldFrame (the planet IS the world).
+    const geom::KinematicLink<WorldFrame, SceneFrame>& world_to_scene() const noexcept {
+        return world_to_scene_;
+    }
+
 private:
     friend class World;
 
@@ -83,6 +95,8 @@ private:
     Planet*             planet_        = nullptr;
     geom::StaticLink<PlanetFrame, SceneFrame> planet_to_scene_ =
         geom::StaticLink<PlanetFrame, SceneFrame>::identity();
+    // Filled by Scene::update each tick from the planet's world_to_planet.
+    geom::KinematicLink<WorldFrame, SceneFrame> world_to_scene_;
 };
 
 } // namespace manta

@@ -80,3 +80,29 @@ TEST_CASE("Scene: optional planet anchor, defaults to none") {
     CHECK(s.has_planet() == true);
     CHECK(s.planet() == &p);
 }
+
+TEST_CASE("Scene: world_to_scene with no planet — static, zero motion") {
+    World w;
+    w.clock().set_dt(0.01f);
+    auto& s = w.create_scene();
+    w.update();
+    const auto& wts = s.world_to_scene();
+    CHECK(wts.position().raw().norm() == doctest::Approx(0.0));
+    CHECK(wts.vel_angular().raw().norm() == doctest::Approx(0.0));
+    CHECK(wts.vel_linear().raw().norm() == doctest::Approx(0.0));
+}
+
+TEST_CASE("Scene: world_to_scene picks up planet's rotation rate") {
+    World w;
+    w.clock().set_dt(0.01f);
+    auto& p = w.add_planet<TestPlanet>("rotor", /*omega_z=*/Real(0.5));
+    auto& s = w.create_scene();
+    s.set_planet(&p);
+
+    w.update();
+
+    const auto& wts = s.world_to_scene();
+    // Scene origin coincides with planet origin (planet_to_scene = identity)
+    // → no linear translation, but the angular velocity flows through.
+    CHECK(wts.vel_angular().z() == doctest::Approx(0.5));
+}

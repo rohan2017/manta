@@ -2,6 +2,7 @@
 #include <cassert>
 
 #include "manta/core/craft.hpp"
+#include "manta/core/planet.hpp"
 #include "manta/core/scene.hpp"
 #include "manta/core/world.hpp"
 
@@ -31,6 +32,24 @@ void Scene::remove_craft(CraftT<Real>& c) {
 }
 
 void Scene::update(float dt) {
+    // Refresh world_to_scene_ from the planet anchor (if any). Without a
+    // planet, the chain collapses to planet_to_scene_ reinterpreted as a
+    // static WorldFrame→SceneFrame link (planet IS world). With a planet,
+    // we compose the planet's KinematicLink<World, Planet> with the static
+    // PlanetFrame→SceneFrame link so any rotation/translation rate of the
+    // planet is carried into world_to_scene_.
+    if (planet_) {
+        world_to_scene_ = planet_->world_to_planet() * planet_to_scene_;
+    } else {
+        // Reinterpret the static link's data as living in WorldFrame.
+        world_to_scene_ = geom::KinematicLink<WorldFrame, SceneFrame>{
+            geom::Vec3<WorldFrame>::from_raw(planet_to_scene_.position().raw()),
+            geom::Ori<WorldFrame>{planet_to_scene_.orientation().raw()},
+            geom::Vec3<WorldFrame>::zero(),
+            geom::Vec3<SceneFrame>::zero(),
+        };
+    }
+
     // Phase 1 — kinematic pass for ALL crafts → globally consistent
     //           scene_to_part_ caches.
     for (CraftT<Real>* c : crafts_) c->kinematic_pass();
