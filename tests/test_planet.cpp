@@ -211,3 +211,38 @@ TEST_CASE("Earth: optional sidereal rotation pushes Coriolis through") {
     // Scene picks up Earth's rotation rate.
     CHECK(s.world_to_scene().vel_angular().z() == doctest::Approx(1.0));
 }
+
+// ---- Phase 5: craft().planet<P>() typed accessor ----
+
+TEST_CASE("Craft::planet<P>: returns the registered planet by concrete type") {
+    World w;
+    w.clock().set_dt(0.001f);
+    auto& earth = w.add_planet<manta::planets::Earth>();
+    auto& s = w.create_scene();
+    s.set_planet(&earth);
+
+    Craft c("test");
+    c.root().add<manta::parts::PointMass>("body", 1.0f);
+    c.root().compute_params();
+    s.add_craft(c);
+
+    // Typed accessor returns the planet pointer.
+    auto* p = c.planet<manta::planets::Earth>();
+    REQUIRE(p != nullptr);
+    CHECK(p == &earth);
+
+    // Querying a different planet type returns nullptr (dynamic_cast safety).
+    auto* not_real = c.planet<manta::Planet>();
+    CHECK(not_real == &earth);   // base class IS a match
+}
+
+TEST_CASE("Craft::planet<P>: returns nullptr when no planet anchored") {
+    World w;
+    auto& s = w.create_scene();   // no planet set
+    Craft c("test");
+    c.root().add<manta::parts::PointMass>("body", 1.0f);
+    c.root().compute_params();
+    s.add_craft(c);
+
+    CHECK(c.planet<manta::planets::Earth>() == nullptr);
+}

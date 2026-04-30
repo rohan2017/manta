@@ -59,6 +59,22 @@ public:
     void set_vel_linear(const geom::Vec3<SceneFrame, Scalar>& v) noexcept { scene_to_craft_.set_vel_linear(v); }
     void set_vel_angular(const geom::Vec3<CraftFrame, Scalar>& w) noexcept { scene_to_craft_.set_vel_angular(w); }
 
+    // Typed planet access via the craft's scene. Returns the scene's planet
+    // dynamically-cast to `PlanetT*`, or `nullptr` if the scene has no
+    // planet OR the planet isn't of the requested type. Mirrors how a Part
+    // declares `requires_planet = Earth` in its descriptor and then calls
+    // `craft().planet<Earth>()` from update().
+    template <typename PlanetT>
+    PlanetT* planet() noexcept {
+        if (!scene_) return nullptr;
+        return dynamic_cast<PlanetT*>(scene_->planet());
+    }
+    template <typename PlanetT>
+    const PlanetT* planet() const noexcept {
+        if (!scene_) return nullptr;
+        return dynamic_cast<const PlanetT*>(scene_->planet());
+    }
+
     // Field registry — keyed on typeid(FieldT).
     template <typename FieldT>
     void register_field(FieldT& f) {

@@ -124,6 +124,10 @@ class PartDescriptor:
     # all of these are registered with the craft and emits `static_assert`s on
     # the corresponding feature macros.
     requires_fields: ClassVar[list[type[FieldDescriptor]]] = []
+    # The PlanetDescriptor subclass this part requires (if any). Codegen
+    # validates that the craft has a planet of this type registered. The
+    # part's update() can then call `craft().planet<CppPlanetClass>()`.
+    requires_planet: ClassVar[type | None] = None
 
     def __init__(self,
                  name: str,
