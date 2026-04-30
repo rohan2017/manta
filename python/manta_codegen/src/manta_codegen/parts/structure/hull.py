@@ -21,10 +21,11 @@ class Hull(PartDescriptor):
     static_assert-based compile-time checks become possible later).
     """
 
-    cpp_class  = "manta::parts::Hull"
-    cpp_header = "manta/parts/structure/hull.hpp"
+    cpp_class          = "manta::parts::Hull"
+    cpp_class_template = "manta::parts::HullT"
+    cpp_header         = "manta/parts/structure/hull.hpp"
     # Note: FluidField descriptor doesn't exist yet. Add when it lands.
-    requires_fields = [GravityField]
+    requires_fields    = [GravityField]
 
     def __init__(self,
                  name: str,
@@ -37,10 +38,11 @@ class Hull(PartDescriptor):
         self.volume = float(volume)
         self.sample_points = [tuple(float(x) for x in p) for p in sample_points]
 
-    def emit_constructor_args(self) -> str:
+    def emit_constructor_args(self, scalar: str = "manta::Real") -> str:
         pts = ", ".join(
-            f"manta::geom::Vec3<manta::PartFrame>{{{_f(x)}, {_f(y)}, {_f(z)}}}"
+            f"manta::geom::Vec3<manta::PartFrame, {scalar}>{{"
+            f"{scalar}({_f(x)}), {scalar}({_f(y)}), {scalar}({_f(z)})}}"
             for (x, y, z) in self.sample_points
         )
-        return (f'"{self.name}", {_f(self.volume)}, '
-                f'std::vector<manta::geom::Vec3<manta::PartFrame>>{{{pts}}}')
+        return (f'"{self.name}", {scalar}({_f(self.volume)}), '
+                f'std::vector<manta::geom::Vec3<manta::PartFrame, {scalar}>>{{{pts}}}')
