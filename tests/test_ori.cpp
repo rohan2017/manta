@@ -1,6 +1,6 @@
 #include <doctest/doctest.h>
 
-#include "../include/mantapilot/geom/ori.hpp"
+#include "../include/manta/geom/ori.hpp"
 #include "test_helpers.hpp"
 
 using namespace manta;

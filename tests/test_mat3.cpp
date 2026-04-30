@@ -1,6 +1,6 @@
 #include <doctest/doctest.h>
 
-#include "../include/mantapilot/geom/mat3.hpp"
+#include "../include/manta/geom/mat3.hpp"
 #include "test_helpers.hpp"
 
 using namespace manta;

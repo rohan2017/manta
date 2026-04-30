@@ -1,6 +1,6 @@
 #include <doctest/doctest.h>
 
-#include "../include/mantapilot/core/wrench.hpp"
+#include "../include/manta/core/wrench.hpp"
 #include "test_helpers.hpp"
 
 using namespace manta;

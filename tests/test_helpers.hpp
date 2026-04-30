@@ -3,11 +3,11 @@
 #include <cmath>
 #include <doctest/doctest.h>
 
-#include "../include/mantapilot/geom/kinematic_link.hpp"
-#include "../include/mantapilot/geom/mat3.hpp"
-#include "../include/mantapilot/geom/ori.hpp"
-#include "../include/mantapilot/geom/static_link.hpp"
-#include "../include/mantapilot/geom/vec3.hpp"
+#include "../include/manta/geom/kinematic_link.hpp"
+#include "../include/manta/geom/mat3.hpp"
+#include "../include/manta/geom/ori.hpp"
+#include "../include/manta/geom/static_link.hpp"
+#include "../include/manta/geom/vec3.hpp"
 
 namespace manta::test {
 

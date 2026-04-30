@@ -1,0 +1,72 @@
+"""Thruster — applies a force along a direction in part frame, scaled by throttle."""
+
+from __future__ import annotations
+
+from ..._format import cpp_float as _f
+from ...core import PartDescriptor
+
+
+class Thruster(PartDescriptor):
+    """A thruster that applies a force along `direction` in part frame, scaled
+    by throttle ∈ [0, 1].
+
+    Required fields: none.
+
+    Default I/O:
+        publish_state    : True   — publishes `{throttle}`
+        subscribe_command: True   — receives a single float in [0,1]
+
+    Telemetry: throttle (float).
+    """
+
+    cpp_class          = "manta::parts::Thruster"
+    cpp_class_template = "manta::parts::ThrusterT"
+    cpp_header         = "manta/parts/actuator/thruster.hpp"
+
+    def __init__(self,
+                 name: str,
+                 max_thrust: float,
+                 direction: tuple[float, float, float] = (0.0, 0.0, 1.0),
+                 publish_state: bool = True,
+                 subscribe_command: bool = True,
+                 **kwargs) -> None:
+        super().__init__(name=name,
+                         publish_state=publish_state,
+                         subscribe_command=subscribe_command,
+                         **kwargs)
+        self.max_thrust = float(max_thrust)
+        self.direction  = tuple(float(x) for x in direction)
+
+    def emit_constructor_args(self, scalar: str = "manta::Real") -> str:
+        d = self.direction
+        return (f'"{self.name}", {scalar}({_f(self.max_thrust)}), '
+                f'manta::geom::Vec3<manta::PartFrame, {scalar}>{{'
+                f'{scalar}({_f(d[0])}), {scalar}({_f(d[1])}), {scalar}({_f(d[2])})}}')
+
+    def telemetry_fields(self) -> list[tuple[str, str]]:
+        return [("throttle", "float")]
+
+    def emit_telemetry_reads(self) -> list[tuple[str, str]]:
+        return [("throttle", f"craft.{self.name}().throttle()")]
+
+    def emit_command_apply(self, part_accessor: str, payload_var: str) -> str:
+        # Single-float command: throttle ∈ [0,1]. The emitted main wraps this in
+        # an `if (!payload_var.empty())` guard already.
+        return f"{part_accessor}.set_throttle({payload_var}[0]);"
+
+    def render(self, telemetry: dict, path: str) -> None:
+        try:
+            import rerun as rr
+        except ImportError:
+            return
+        rr.log(path, rr.Boxes3D(half_sizes=[[0.04, 0.04, 0.06]],
+                                colors=[[200, 100, 50]]))
+        thr = float(telemetry.get("throttle", 0.0))
+        if thr > 0:
+            d = self.direction
+            length = 0.5 * thr
+            rr.log(f"{path}/plume",
+                   rr.Arrows3D(origins=[[0, 0, 0]],
+                               vectors=[[-d[0]*length, -d[1]*length, -d[2]*length]],
+                               colors=[[255, 100, 50]]))
+        rr.log(f"{path}/throttle", rr.Scalar(thr))

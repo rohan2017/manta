@@ -1,0 +1,48 @@
+"""ex6 — Phase-4 EKF demo: sim + estimator side-by-side, in one process.
+
+Same craft definition, two consumers in the same binary:
+  1. The sim runs the dynamics, drives noisy IMU + DVL outputs.
+  2. An EKF (in the user main) consumes IMU as process input + DVL as
+     measurement and produces an estimated 6-DOF pose.
+
+Both truth and estimate are published to Zenoh on separate topics for
+overlay in rerun.
+
+Workflow: library — codegen emits Ex6Craft + telemetry; the user main
+in ex6.cpp wires the EKF and Zenoh I/O.
+
+Codegen:
+
+    PYTHONPATH=python/manta_codegen/src \\
+        python -m manta_codegen.cli examples/ex6_estimator_demo/craft.py \\
+            --workflow library
+"""
+
+from manta_codegen import Craft
+from manta_codegen.parts  import DVL, GravityPart, IMU, PointMass, Thruster
+from manta_codegen.fields import GravityField
+
+
+def make_craft() -> Craft:
+    c = Craft("ex6", fields=[GravityField()])
+
+    # Body inertia: lumped point with small diagonal MOI.
+    c.root.add(PointMass("body", mass=1.0, moi=(0.05, 0.05, 0.05)))
+
+    # Gravity drives the dynamics down at -9.81 m/s².
+    c.root.add(GravityPart("gravity"))
+
+    # Sensors. Modest noise — enough to be realistic, not so much that the
+    # EKF can't lock on within a few seconds.
+    c.root.add(IMU("imu", accel_sigma=0.05, gyro_sigma=0.005))
+    c.root.add(DVL("dvl", velocity_sigma=0.02))
+
+    # A diagonal aft thruster — pulse to drive 3-axis motion. Commanded by
+    # the user main via Zenoh ('manta/ex6/thrust/cmd').
+    c.root.add(Thruster("thrust",
+                        max_thrust=15.0,
+                        direction=(1.0, 1.0, 0.5),
+                        subscribe_command=True))
+
+    # Publish initial state at the origin, at rest.
+    return c

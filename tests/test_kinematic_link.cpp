@@ -1,9 +1,9 @@
 #include <cmath>
 #include <doctest/doctest.h>
 
-#include "../include/mantapilot/core/frame.hpp"
-#include "../include/mantapilot/geom/kinematic_link.hpp"
-#include "../include/mantapilot/geom/static_link.hpp"
+#include "../include/manta/core/frame.hpp"
+#include "../include/manta/geom/kinematic_link.hpp"
+#include "../include/manta/geom/static_link.hpp"
 #include "test_helpers.hpp"
 
 using namespace manta;

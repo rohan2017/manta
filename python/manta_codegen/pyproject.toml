@@ -1,0 +1,16 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "manta-codegen"
+version = "0.0.1"
+description = "Codegen + descriptor library for the manta C++ simulation framework"
+requires-python = ">=3.10"
+authors = [{name = "Rohan Bandaru"}]
+
+[project.scripts]
+manta-codegen = "manta_codegen.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/manta_codegen"]
