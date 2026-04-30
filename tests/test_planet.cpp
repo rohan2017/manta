@@ -1,10 +1,13 @@
 #include <doctest/doctest.h>
 
+#include "manta/core/craft.hpp"
 #include "manta/core/planet.hpp"
 #include "manta/core/scene.hpp"
 #include "manta/core/world.hpp"
+#include "manta/parts/structure/point_mass.hpp"
 
 using namespace manta;
+using namespace manta::geom;
 
 namespace {
 
@@ -105,4 +108,65 @@ TEST_CASE("Scene: world_to_scene picks up planet's rotation rate") {
     // Scene origin coincides with planet origin (planet_to_scene = identity)
     // → no linear translation, but the angular velocity flows through.
     CHECK(wts.vel_angular().z() == doctest::Approx(0.5));
+}
+
+// ---- Phase 3: rotating-frame fictitious forces ----
+
+// A craft at rest in a planet-rotating scene should accelerate outward due
+// to centrifugal: a_cf = -ω × (ω × r). For ω_z = 1 rad/s and r = (1, 0, 0),
+// ω × r = (0, 1, 0), ω × (ω × r) = (-1, 0, 0), so a_cf = (1, 0, 0).
+TEST_CASE("Planet phase 3: centrifugal acceleration on a craft at rest in a "
+          "rotating scene") {
+    World w;
+    w.clock().set_dt(0.001f);
+    auto& p = w.add_planet<TestPlanet>("rotor", /*omega_z=*/Real(1.0));
+    auto& s = w.create_scene();
+    s.set_planet(&p);
+
+    Craft c("rest_craft");
+    c.root().add<manta::parts::PointMass>("body", 1.0f);
+    c.root().compute_params();
+
+    InitialState init;
+    init.position = Vec3<SceneFrame>{1.0f, 0.0f, 0.0f};
+    s.add_craft(c, init);
+
+    // One tick advances world_to_scene's omega and computes fictitious forces.
+    w.update();
+
+    // a_linear in scene should be (~1, 0, 0): the centrifugal push outward.
+    auto a = c.scene_to_craft().acc_linear();
+    INFO("a = (", a.x(), ",", a.y(), ",", a.z(), ")");
+    CHECK(a.x() == doctest::Approx(1.0).epsilon(1e-3));
+    CHECK(std::abs(a.y()) < 1e-3);
+    CHECK(std::abs(a.z()) < 1e-3);
+}
+
+// A craft moving radially outward in a rotating scene experiences Coriolis
+// in the tangential direction. For ω_z = 1, v = (1, 0, 0), r = 0:
+//   F_cor = -2 ω × v = -2 (0,0,1) × (1,0,0) = -2 (0, 1, 0) → a_cor = (0,-2,0)
+// (centrifugal is zero at r=0, so the y-acceleration is purely Coriolis).
+TEST_CASE("Planet phase 3: Coriolis acceleration on a radially-moving craft") {
+    World w;
+    w.clock().set_dt(0.001f);
+    auto& p = w.add_planet<TestPlanet>("rotor", /*omega_z=*/Real(1.0));
+    auto& s = w.create_scene();
+    s.set_planet(&p);
+
+    Craft c("moving_craft");
+    c.root().add<manta::parts::PointMass>("body", 1.0f);
+    c.root().compute_params();
+
+    InitialState init;
+    init.position   = Vec3<SceneFrame>{0.0f, 0.0f, 0.0f};
+    init.vel_linear = Vec3<SceneFrame>{1.0f, 0.0f, 0.0f};
+    s.add_craft(c, init);
+
+    w.update();
+
+    auto a = c.scene_to_craft().acc_linear();
+    INFO("a = (", a.x(), ",", a.y(), ",", a.z(), ")");
+    CHECK(std::abs(a.x()) < 1e-3);
+    CHECK(a.y() == doctest::Approx(-2.0).epsilon(1e-3));
+    CHECK(std::abs(a.z()) < 1e-3);
 }

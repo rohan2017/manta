@@ -121,11 +121,40 @@ public:
         //   a_origin = a_COM + α × r_OC + ω × (ω × r_OC),
         // where r_OC = origin − COM (in scene frame). Static-COM only;
         // d(r_COM)/dt for articulated mass-shifting bodies is not modeled.
+        //
+        // Rotating-frame fictitious forces: when the SceneFrame itself rotates
+        // (e.g. anchored to a Planet), Newton's law in SceneFrame gains
+        // Coriolis and centrifugal terms. We add their wrench-equivalents to
+        // F before computing a_COM so the integrator (which advances state in
+        // SceneFrame) produces inertially correct motion. ω_planet is the
+        // angular velocity of SceneFrame relative to WorldFrame, expressed
+        // in SceneFrame — read from Scene's cached world_to_scene link.
         const auto& w = root_.net_wrench();
         using EigenV = Eigen::Matrix<Scalar, 3, 1>;
         EigenV F           = w.force().raw();
         EigenV tau_origin  = w.torque().raw();
         EigenV r_com_craft = root_.get_com().raw();    // COM in CraftFrame
+
+        // Fictitious-force corrections (active only when the scene anchors
+        // to a rotating planet — otherwise omega is zero and these are no-ops).
+        if (scene_) {
+            const auto& wts = scene_->world_to_scene();
+            EigenV omega_scene = wts.vel_angular().raw().template cast<Scalar>();
+            if (omega_scene.squaredNorm() > Scalar(0)) {
+                EigenV r_scene = scene_to_craft_.position().raw();
+                EigenV v_scene = scene_to_craft_.vel_linear().raw();
+                // Add F_centrifugal = -m * ω × (ω × r) and
+                //     F_coriolis    = -2m * ω × v
+                // expressed in scene frame, then rotate to craft frame and
+                // accumulate into F (which is in craft frame).
+                EigenV f_cf_scene  = -m * omega_scene.cross(omega_scene.cross(r_scene));
+                EigenV f_cor_scene = -Scalar(2) * m * omega_scene.cross(v_scene);
+                EigenV f_extra_scene = f_cf_scene + f_cor_scene;
+                EigenV f_extra_craft =
+                    scene_to_craft_.orientation().raw().conjugate() * f_extra_scene;
+                F += f_extra_craft;
+            }
+        }
 
         // Linear: a_COM in scene = R_(scene<-craft) · (F / m).
         EigenV a_com_scene =
