@@ -10,6 +10,7 @@ namespace manta {
 
 template <class Scalar> class CraftT;
 class World;
+class Planet;
 
 // Initial conditions applied to a craft when it joins a scene. Default values
 // are the natural identity: at origin, axis-aligned, at rest.
@@ -65,11 +66,21 @@ public:
     const World& world() const;
     bool has_world() const noexcept { return world_ != nullptr; }
 
+    // Planet anchor (optional). When non-null, the scene's planet_to_scene_
+    // transform is interpreted as living inside this planet's PlanetFrame;
+    // the kinematic chain becomes World → Planet → Scene → Craft → Part.
+    // When null (default), the scene parents directly to World identity.
+    void          set_planet(Planet* p) noexcept { planet_ = p; }
+    Planet*       planet()       noexcept { return planet_; }
+    const Planet* planet() const noexcept { return planet_; }
+    bool          has_planet() const noexcept { return planet_ != nullptr; }
+
 private:
     friend class World;
 
     std::vector<CraftT<Real>*> crafts_;
     World*              world_         = nullptr;
+    Planet*             planet_        = nullptr;
     geom::StaticLink<PlanetFrame, SceneFrame> planet_to_scene_ =
         geom::StaticLink<PlanetFrame, SceneFrame>::identity();
 };

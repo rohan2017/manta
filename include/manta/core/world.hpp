@@ -4,7 +4,9 @@
 #include <typeindex>
 #include <typeinfo>
 #include <unordered_map>
+#include <utility>
 #include <vector>
+#include "planet.hpp"
 #include "scene.hpp"
 #include "../fields/field.hpp"
 #include "../geom/static_link.hpp"
@@ -27,6 +29,23 @@ public:
                             geom::StaticLink<PlanetFrame, SceneFrame>::identity());
 
     const std::vector<std::unique_ptr<Scene>>& scenes() const noexcept { return scenes_; }
+
+    // --- Planet management ---
+    // Constructs a Planet of type P (must derive from `manta::Planet`),
+    // takes ownership, calls `register_disturbances(*this)`, and returns a
+    // reference. Multiple planets are allowed; each contributes its own
+    // disturbances to global fields.
+    template <typename P, typename... Args>
+    P& add_planet(Args&&... args) {
+        auto ptr = std::make_unique<P>(std::forward<Args>(args)...);
+        P& ref = *ptr;
+        ref.register_disturbances(*this);
+        planets_.push_back(std::move(ptr));
+        return ref;
+    }
+
+    const std::vector<std::unique_ptr<Planet>>& planets() const noexcept { return planets_; }
+    std::vector<std::unique_ptr<Planet>>&       planets()       noexcept { return planets_; }
 
     // --- Global field registry ---
     // Fields are NOT owned by World; the caller manages their lifetime.
@@ -62,6 +81,7 @@ public:
 
 private:
     std::vector<std::unique_ptr<Scene>>           scenes_;
+    std::vector<std::unique_ptr<Planet>>          planets_;
     std::unordered_map<std::type_index, fields::Field*> fields_;
     SimClock                                       clock_;
 };

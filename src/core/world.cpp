@@ -11,7 +11,15 @@ Scene& World::create_scene(const geom::StaticLink<PlanetFrame, SceneFrame>& orig
 }
 
 void World::update() {
+    Real t = Real(clock_.time());
+    Real dt_r = Real(clock_.dt());
     float dt = clock_.dt();
+
+    // Planet phase: advance each planet's frame transform + disturbance state
+    // BEFORE the craft phase so crafts see consistent planet poses.
+    for (auto& p : planets_) {
+        p->update(t, dt_r);
+    }
 
     // Craft phase: all scenes update their crafts.
     for (auto& scene : scenes_) {
