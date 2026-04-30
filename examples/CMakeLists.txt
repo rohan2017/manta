@@ -100,3 +100,11 @@ add_executable(ex7_real_data_estimator
     ${manta_ex7_est_SOURCES})
 target_link_libraries(ex7_real_data_estimator PRIVATE manta_examples_shared)
 manta_ex7_est_apply(ex7_real_data_estimator)
+
+# ex8 — multi-craft swarm: three Ex8Craft instances tethered in a chain.
+include(${CMAKE_CURRENT_SOURCE_DIR}/ex8_swarm/generated/ex8/ex8.cmake)
+add_executable(ex8_swarm
+    ex8_swarm/ex8.cpp
+    ${manta_ex8_SOURCES})
+target_link_libraries(ex8_swarm PRIVATE manta_examples_shared)
+manta_ex8_apply(ex8_swarm)
