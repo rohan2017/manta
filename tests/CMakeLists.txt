@@ -46,6 +46,7 @@ add_executable(manta_tests
     test_ekf_against_sim.cpp
     test_ukf.cpp
     test_planet.cpp
+    test_system_id.cpp
     "${_signal_sync_test_out}")
 
 target_link_libraries(manta_tests PRIVATE
