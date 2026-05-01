@@ -108,3 +108,8 @@ add_executable(ex8_swarm
     ${manta_ex8_SOURCES})
 target_link_libraries(ex8_swarm PRIVATE manta_examples_shared)
 manta_ex8_apply(ex8_swarm)
+
+# ex9 — binary workflow demo of the new explicit Binding pub/sub API
+# (single-signal + bundled-struct on both directions). Codegen emits the
+# entire main, including all publishers/subscribers, from craft.bindings.
+include(${CMAKE_CURRENT_SOURCE_DIR}/ex9_bindings_demo/generated/ex9/ex9.cmake)
