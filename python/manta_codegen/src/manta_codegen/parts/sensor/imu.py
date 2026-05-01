@@ -44,9 +44,8 @@ class IMU(PartDescriptor):
                  name: str,
                  accel_sigma: float = 0.0,
                  gyro_sigma:  float = 0.0,
-                 publish_state: bool = True,
                  **kwargs) -> None:
-        super().__init__(name=name, publish_state=publish_state, **kwargs)
+        super().__init__(name=name, **kwargs)
         self.accel_sigma = float(accel_sigma)
         self.gyro_sigma  = float(gyro_sigma)
 

@@ -21,8 +21,7 @@ def make_world() -> World:
     c.add(PointMass("body", mass=1.0))
     c.add(Thruster("forward",
                    max_thrust=2.0,
-                   direction=(1.0, 0.0, 0.0),
-                   subscribe_command=False))   # commands set per-instance by user main
+                   direction=(1.0, 0.0, 0.0)))
 
     # Library workflow: user main does multi-instance pub/sub via tethers.
     return World().add_craft(c)

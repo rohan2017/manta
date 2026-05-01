@@ -4,12 +4,8 @@ Usage:
     manta-codegen path/to/craft.py [--out OUT_DIR] [--workflow library|binary]
 
 The craft module must expose either:
-  * A top-level `CRAFT` or `WORLD` variable, OR
-  * A factory function `make_craft()` or `make_world()` returning the same.
-
-Returning a Craft (legacy) is still supported — the CLI wraps it in a
-synthetic World built from the Craft's deprecated fields/planets/dt/
-initial_state. Prefer returning a World via make_world() in new code.
+  * A top-level `WORLD` variable bound to a `manta_codegen.World`, OR
+  * A factory function `make_world()` that returns a World.
 """
 
 from __future__ import annotations
@@ -19,7 +15,7 @@ import importlib.util
 import sys
 from pathlib import Path
 
-from .core import Craft, World, world_from_craft
+from .core import Craft, World
 from .emit import emit
 
 
@@ -31,35 +27,17 @@ def _load_world(module_path: Path) -> World:
     sys.modules["user_craft_spec"] = module
     spec.loader.exec_module(module)
 
-    # Preferred: a World handle, either named WORLD or returned by make_world().
-    obj = None
     if hasattr(module, "WORLD"):
         obj = module.WORLD
     elif hasattr(module, "make_world"):
         obj = module.make_world()
-    elif hasattr(module, "CRAFT"):
-        obj = module.CRAFT
-    elif hasattr(module, "make_craft"):
-        obj = module.make_craft()
     else:
         raise RuntimeError(
-            f"{module_path} must define WORLD/make_world() or CRAFT/make_craft().")
+            f"{module_path} must define WORLD or make_world() returning a World.")
 
-    if isinstance(obj, World):
-        return obj
-    if isinstance(obj, Craft):
-        return world_from_craft(obj)
-    raise TypeError(
-        f"Loaded object must be a World or Craft (got {type(obj).__name__}).")
-
-
-# Back-compat shim used by emit/CLI internals: when callers want the
-# (single) primary craft handle, they can grab world.crafts[0].craft.
-def _load_craft(module_path: Path) -> Craft:
-    w = _load_world(module_path)
-    if not w.crafts:
-        raise RuntimeError(f"{module_path}: World has no crafts")
-    return w.crafts[0].craft
+    if not isinstance(obj, World):
+        raise TypeError(f"Loaded object must be a World (got {type(obj).__name__}).")
+    return obj
 
 
 def _parse_topics(s: str) -> dict[str, str]:
@@ -101,15 +79,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.workflow == "real_data" and not args.topics:
         parser.error("--workflow real_data requires --topics")
 
-    craft = _load_craft(craft_py)
+    world = _load_world(craft_py)
+    if not world.crafts:
+        parser.error(f"{craft_py}: World has no crafts")
+    primary_craft_name = world.crafts[0].craft.name
 
     if args.out:
         out_dir = Path(args.out).resolve()
     else:
-        out_dir = craft_py.parent / "generated" / craft.name
+        out_dir = craft_py.parent / "generated" / primary_craft_name
 
-    emit(craft, out_dir=out_dir, workflow=args.workflow, topics=args.topics)
-    print(f"manta-codegen: wrote {craft.name} ({args.workflow}) → {out_dir}")
+    emit(world, out_dir=out_dir, workflow=args.workflow, topics=args.topics)
+    print(f"manta-codegen: wrote {primary_craft_name} ({args.workflow}) → {out_dir}")
     return 0
 
 

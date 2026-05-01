@@ -1,8 +1,10 @@
 """Emit <name>_telemetry.hpp — per-craft telemetry struct + JSON encoder.
 
-Each part that opts into `publish_state=True` contributes a sub-struct of named
-members (whatever its `telemetry_fields()` returns). The codegen aggregates all
-of them into a single `<Cls>Telemetry` struct.
+Each part with non-empty `telemetry_fields()` contributes a sub-struct of
+named members. The codegen aggregates them into a single `<Cls>Telemetry`
+struct, used by hand-written user mains in the library workflow (ex2/ex3/ex6).
+The binary-workflow main (emit/main.py) does not use this struct — that path
+publishes per-Binding payloads directly.
 
 Capture is a free function `capture_<name>_telemetry(craft, telemetry)` that
 reads each part's accessor methods (e.g. `craft.motor_0().throttle()`).
@@ -19,7 +21,9 @@ from ._util import GENERATED_BANNER, CPP_INCLUDE_GUARD, class_name_for_craft
 
 def emit_telemetry_hpp(craft: Craft) -> str:
     cls = class_name_for_craft(craft.name)
-    publishing_parts = [p for p in craft.all_parts() if p.publish_state]
+    # A part contributes iff it declares non-empty `telemetry_fields()` — the
+    # only gate now that the publish_state flag is gone.
+    publishing_parts = [p for p in craft.all_parts() if p.telemetry_fields()]
 
     lines: list[str] = [
         GENERATED_BANNER,

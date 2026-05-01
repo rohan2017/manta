@@ -76,7 +76,7 @@ int main() {
     auto pub_1 = session.declare_publisher(zenoh::KeyExpr("manta/ex9/imu/last_gyro"));
     auto pub_2 = session.declare_publisher(zenoh::KeyExpr("manta/ex9/state"));
 
-    std::printf("ex9: ready. 4 explicit binding(s).\n");
+    std::printf("ex9: ready. 4 binding(s).\n");
 
     auto next = std::chrono::steady_clock::now();
     const auto period = std::chrono::microseconds(int64_t(WALL_PERIOD * 1e6));

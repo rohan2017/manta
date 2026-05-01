@@ -1,24 +1,16 @@
 """Emit <name>_main.cpp — sim binary main with Zenoh I/O. (workflow="binary")
 
-Wires the typed Craft into a 1 kHz sim loop. Two pub/sub paths coexist:
-
-  * Legacy flag-based path — active when `craft.bindings` is empty. Each
-    part with `publish_state=True` contributes to a bundled state topic;
-    each part with `subscribe_command=True` gets a `<topic>/cmd` topic.
-    Used by all pre-migration examples.
-
-  * New Binding-based path (phase 2 of the API redesign) — active when
-    `craft.bindings` is non-empty. Each Binding becomes one Zenoh
-    publisher/subscriber on its specified topic. Per-binding wire format
-    is determined by `binding.encoding` (json today, binary later). When
-    a craft has any bindings, it must declare ALL of its pub/sub via
-    bindings (the legacy bundled-state topic is not auto-emitted).
+Wires the typed Craft into a sim loop driven by World.dt. Each Binding
+on the Craft becomes one Zenoh publisher/subscriber on its specified
+topic. Per-binding wire format is determined by `binding.encoding`
+(json today, binary later). A craft must declare ALL of its pub/sub
+via bindings; there is no auto-bundled state topic.
 """
 
 from __future__ import annotations
 
 from .._format import cpp_float as _f
-from ..core import Craft, World, world_from_craft
+from ..core import Craft, World
 from ..signal import Binding, accessor_for
 from ._util import GENERATED_BANNER, class_name_for_craft
 
@@ -50,24 +42,12 @@ def _initial_state_literal(entry) -> str:
     )
 
 
-def emit_main_cpp(craft: Craft, world: World | None = None) -> str:
+def emit_main_cpp(craft: Craft, world: World) -> str:
     cls = class_name_for_craft(craft.name)
-    use_bindings = bool(craft.bindings)
-    publishing_parts = [] if use_bindings else [p for p in craft.all_parts() if p.publish_state]
-    subscribing_parts = [] if use_bindings else [p for p in craft.all_parts() if p.subscribe_command]
-
-    # World drives the sim loop config (dt, sim_rate_mult) and per-craft
-    # initial state. Tests / older callers that pass only a Craft get a
-    # synthesized World built from the Craft's deprecated sim_config /
-    # initial_state fields.
-    if world is None:
-        world = world_from_craft(craft)
     entry = next((e for e in world.crafts if e.craft is craft), None)
     if entry is None:
         raise RuntimeError(
             f"emit_main_cpp: craft {craft.name!r} not registered with the World")
-
-    state_topic = f"{craft.topic_prefix}/state"
 
     lines: list[str] = [
         GENERATED_BANNER,
@@ -163,54 +143,21 @@ def emit_main_cpp(craft: Craft, world: World | None = None) -> str:
     ]
 
     # ---- Subscribers ----
-    if use_bindings:
-        for i, b in enumerate(craft.bindings):
-            if b.direction != "in":
-                continue
-            _emit_binding_subscriber(lines, i, b)
-    else:
-        # Legacy flag-based subscribers — each holds a small mutex-guarded payload buffer.
-        for p in subscribing_parts:
-            topic = p.command_topic or f"{craft.topic_prefix}/{p.name}/cmd"
-            lines += [
-                f"    std::mutex {p.name}_cmd_mtx;",
-                f"    std::vector<float> {p.name}_cmd;",
-                f"    auto {p.name}_sub = session.declare_subscriber(",
-                f"        zenoh::KeyExpr({_quote(topic)}),",
-                f"        [&](const zenoh::Sample& s) {{",
-                f"            std::vector<float> v;",
-                f"            std::string payload(s.get_payload().as_string());",
-                f"            if (parse_float_array(payload, v)) {{",
-                f"                std::lock_guard<std::mutex> lk({p.name}_cmd_mtx);",
-                f"                {p.name}_cmd = std::move(v);",
-                f"            }}",
-                f"        }}, zenoh::closures::none);",
-            ]
+    for i, b in enumerate(craft.bindings):
+        if b.direction != "in":
+            continue
+        _emit_binding_subscriber(lines, i, b)
 
     # ---- Publishers ----
-    if use_bindings:
-        for i, b in enumerate(craft.bindings):
-            if b.direction != "out":
-                continue
-            lines.append(
-                f"    auto pub_{i} = session.declare_publisher(zenoh::KeyExpr({_quote(b.topic)}));")
-    else:
-        # Legacy flag-based: top-level bundled state + per-part publishers.
-        lines.append(f"    auto state_pub = session.declare_publisher(zenoh::KeyExpr({_quote(state_topic)}));")
-        for p in publishing_parts:
-            topic = p.state_topic or f"{craft.topic_prefix}/{p.name}/state"
-            lines.append(
-                f"    auto {p.name}_pub = session.declare_publisher(zenoh::KeyExpr({_quote(topic)}));"
-            )
+    for i, b in enumerate(craft.bindings):
+        if b.direction != "out":
+            continue
+        lines.append(
+            f"    auto pub_{i} = session.declare_publisher(zenoh::KeyExpr({_quote(b.topic)}));")
 
-    ready_msg = (
-        f"{craft.name}: ready. {len(craft.bindings)} explicit binding(s)."
-        if use_bindings
-        else f"{craft.name}: ready. State on '{state_topic}'."
-    )
     lines += [
         "",
-        f'    std::printf("{ready_msg}\\n");',
+        f'    std::printf("{craft.name}: ready. {len(craft.bindings)} binding(s).\\n");',
         "",
         "    auto next = std::chrono::steady_clock::now();",
         "    const auto period = std::chrono::microseconds(int64_t(WALL_PERIOD * 1e6));",
@@ -221,20 +168,10 @@ def emit_main_cpp(craft: Craft, world: World | None = None) -> str:
     ]
 
     # Apply commands.
-    if use_bindings:
-        for i, b in enumerate(craft.bindings):
-            if b.direction != "in":
-                continue
-            _emit_binding_apply(lines, i, b)
-    else:
-        for p in subscribing_parts:
-            apply_stmt = p.emit_command_apply(f"craft.{p.name}()", f"{p.name}_cmd")
-            lines += [
-                f"        {{ std::lock_guard<std::mutex> lk({p.name}_cmd_mtx);",
-                f"          if (!{p.name}_cmd.empty()) {{",
-                f"              {apply_stmt}",
-                f"          }} }}",
-            ]
+    for i, b in enumerate(craft.bindings):
+        if b.direction != "in":
+            continue
+        _emit_binding_apply(lines, i, b)
 
     lines += [
         "",
@@ -244,17 +181,10 @@ def emit_main_cpp(craft: Craft, world: World | None = None) -> str:
         "            pub_decim = 0;",
     ]
 
-    if use_bindings:
-        for i, b in enumerate(craft.bindings):
-            if b.direction != "out":
-                continue
-            _emit_binding_publish(lines, i, b)
-    else:
-        lines += [
-            f"            {cls}Telemetry telem;",
-            f"            capture_{craft.name}_telemetry(craft, w.clock().time(), telem);",
-            "            state_pub.put(zenoh::Bytes(telem.to_json()));",
-        ]
+    for i, b in enumerate(craft.bindings):
+        if b.direction != "out":
+            continue
+        _emit_binding_publish(lines, i, b)
 
     lines += [
         "        }",

@@ -74,7 +74,7 @@ int main() {
         }, zenoh::closures::none);
     auto pub_0 = session.declare_publisher(zenoh::KeyExpr("manta/ex4/state"));
 
-    std::printf("ex4: ready. 2 explicit binding(s).\n");
+    std::printf("ex4: ready. 2 binding(s).\n");
 
     auto next = std::chrono::steady_clock::now();
     const auto period = std::chrono::microseconds(int64_t(WALL_PERIOD * 1e6));

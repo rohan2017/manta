@@ -41,9 +41,8 @@ class Motor(PartDescriptor):
                  axis: tuple[float, float, float] = (0.0, 0.0, 1.0),
                  stall_torque: float = 0.0,
                  damping: float = 0.0,
-                 publish_state: bool = True,
                  **kwargs) -> None:
-        super().__init__(name=name, publish_state=publish_state, **kwargs)
+        super().__init__(name=name, **kwargs)
         self.axis = (float(axis[0]), float(axis[1]), float(axis[2]))
         self.stall_torque = float(stall_torque)
         self.damping = float(damping)

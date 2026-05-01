@@ -18,6 +18,8 @@
 #include "manta/core/world.hpp"
 #include "ex5.hpp"
 #include "ex5_telemetry.hpp"
+#include "manta/fields/gravity_field.hpp"
+#include "manta/planets/earth.hpp"
 
 namespace {
 std::atomic<bool> g_run{true};
@@ -54,8 +56,12 @@ int main() {
     manta::World w;
     w.clock().set_dt(DT);
     auto& scene = w.create_scene();
+    auto& planet_0 = w.add_planet<manta::planets::Earth>(0.0f, 1000.0f, 1.225f, 0.0f);
+    scene.set_planet(&planet_0);
+    manta::fields::GravityField field_0{manta::geom::Vec3<manta::SceneFrame>{0.0f, 0.0f, -9.81f}};
+    w.register_field(field_0);
     Ex5Craft craft;
-    scene.add_craft(craft, manta::InitialState{});
+    scene.add_craft(craft, manta::InitialState{manta::geom::Vec3<manta::SceneFrame>{0.0f, 0.0f, -0.5f}, manta::geom::Ori<manta::SceneFrame>{Eigen::Quaternionf{1.0f, 0.0f, 0.0f, 0.0f}}, manta::geom::Vec3<manta::SceneFrame>{0.0f, 0.0f, 0.0f}, manta::geom::Vec3<manta::CraftFrame>{0.0f, 0.0f, 0.0f}});
 
     zenoh::Config cfg = zenoh::Config::create_default();
     auto session = zenoh::Session::open(std::move(cfg));
@@ -74,7 +80,7 @@ int main() {
         }, zenoh::closures::none);
     auto pub_0 = session.declare_publisher(zenoh::KeyExpr("manta/ex5/state"));
 
-    std::printf("ex5: ready. 2 explicit binding(s).\n");
+    std::printf("ex5: ready. 2 binding(s).\n");
 
     auto next = std::chrono::steady_clock::now();
     const auto period = std::chrono::microseconds(int64_t(WALL_PERIOD * 1e6));

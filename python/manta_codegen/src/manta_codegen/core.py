@@ -193,23 +193,12 @@ class PartDescriptor:
     def __init__(self,
                  name: str,
                  transform: StaticTransform | None = None,
-                 static: bool = False,
-                 publish_state: bool = False,
-                 state_topic: str | None = None,
-                 subscribe_command: bool = False,
-                 command_topic: str | None = None) -> None:
+                 static: bool = False) -> None:
         if not name.isidentifier():
             raise ValueError(f"Part name {name!r} must be a valid C++ identifier")
         self.name = name
         self.transform = transform or StaticTransform()
         self.static = static
-        # Legacy flag-based pub/sub. Phase 2 of the API redesign replaces these
-        # with explicit Craft.publish(BoundSignal, topic) / subscribe calls;
-        # both paths coexist until all examples migrate, then these go away.
-        self.publish_state = publish_state
-        self.state_topic = state_topic
-        self.subscribe_command = subscribe_command
-        self.command_topic = command_topic
         # Filled by Craft.add() / CompositePartRef.add()
         self._children: list[PartDescriptor] = []
         # Attach a BoundSignal for each declared signal. Names are pre-validated
@@ -318,25 +307,12 @@ class Craft:
 
     def __init__(self,
                  name: str,
-                 fields: list[FieldDescriptor] | None = None,
-                 planets: list[PlanetDescriptor] | None = None,
                  topic_prefix: str | None = None) -> None:
         if not name.isidentifier():
             raise ValueError(f"Craft name {name!r} must be a valid C++ identifier")
         self.name = name
-        self.fields: list[FieldDescriptor] = fields or []
-        # Planets registered on the World. The first scene the codegen
-        # creates is anchored to the first planet here (if any).
-        self.planets: list[PlanetDescriptor] = planets or []
         self.topic_prefix = topic_prefix if topic_prefix is not None else f"manta/{name}"
         self.root: _RootProxy = _RootProxy(craft=self)
-        # Initial state is applied at scene-add time, not in the Craft's
-        # constructor. Stored here so the codegen can emit it at the
-        # `scene.add_craft(...)` call site. Default: identity (at origin, at rest).
-        self._initial_state: dict[str, tuple] = {}
-        # Sim-loop configuration used by the binary workflow's main emitter.
-        self.dt: float = 0.001            # 1 kHz default
-        self.sim_rate_mult: float = 1.0   # 1× wall-time
         # When True, codegen emits the craft as a class template
         # (`template <class Scalar = manta::Real> class FooCraftT : public
         # CraftT<Scalar>`) plus a `using FooCraft = FooCraftT<manta::Real>`
@@ -360,56 +336,6 @@ class Craft:
         for sig in _CRAFT_SIGNALS:
             object.__setattr__(self, sig.name,
                                BoundSignal(part_name=CRAFT_SENTINEL, signal=sig))
-
-    def initial_state(self,
-                      position:    tuple[float, float, float] = (0.0, 0.0, 0.0),
-                      orientation: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0),
-                      vel_linear:  tuple[float, float, float] = (0.0, 0.0, 0.0),
-                      vel_angular: tuple[float, float, float] = (0.0, 0.0, 0.0)) -> "Craft":
-        """Set initial conditions applied when the craft joins a scene.
-
-        Quaternion is (w, x, y, z). Returns self so calls chain.
-        """
-        self._initial_state = {
-            "position":    tuple(float(x) for x in position),
-            "orientation": tuple(float(x) for x in orientation),
-            "vel_linear":  tuple(float(x) for x in vel_linear),
-            "vel_angular": tuple(float(x) for x in vel_angular),
-        }
-        return self
-
-    def has_initial_state(self) -> bool:
-        return bool(self._initial_state)
-
-    def sim_config(self, dt: float = 0.001, sim_rate_mult: float = 1.0) -> "Craft":
-        """Configure the binary-workflow sim main:
-            dt              : sim step (seconds) — passed to World::clock().set_dt(dt).
-            sim_rate_mult   : ratio of sim seconds to wall seconds. 1.0 = realtime;
-                              200.0 = 200x realtime (useful for orbit / long-horizon sims).
-        Returns self so calls chain.
-        """
-        self.dt = float(dt)
-        self.sim_rate_mult = float(sim_rate_mult)
-        return self
-
-    def emit_initial_state_cpp(self) -> str:
-        """C++ literal for `manta::InitialState{...}`. Returns `manta::InitialState{}`
-        when no initial state was set (the natural identity)."""
-        s = self._initial_state
-        if not s:
-            return "manta::InitialState{}"
-        px, py, pz = s["position"]
-        ow, ox, oy, oz = s["orientation"]
-        vx, vy, vz = s["vel_linear"]
-        wx, wy, wz = s["vel_angular"]
-        return (
-            "manta::InitialState{"
-            f"manta::geom::Vec3<manta::SceneFrame>{{{_f(px)}, {_f(py)}, {_f(pz)}}}, "
-            f"manta::geom::Ori<manta::SceneFrame>{{Eigen::Quaternionf{{{_f(ow)}, {_f(ox)}, {_f(oy)}, {_f(oz)}}}}}, "
-            f"manta::geom::Vec3<manta::SceneFrame>{{{_f(vx)}, {_f(vy)}, {_f(vz)}}}, "
-            f"manta::geom::Vec3<manta::CraftFrame>{{{_f(wx)}, {_f(wy)}, {_f(wz)}}}"
-            "}"
-        )
 
     # ---- pub/sub binding API (phase 2) ----
 
@@ -512,9 +438,6 @@ class Craft:
         for p in self.root.children:
             yield from p.walk()
 
-    def field_descriptors(self) -> list[FieldDescriptor]:
-        return list(self.fields)
-
 
 # ---------------------------------------------------------------------------
 # World — top-level simulation container (phase 3 of the API redesign).
@@ -545,11 +468,6 @@ class World:
         w.add_craft(drone, on=earth, pos=(0, 0, 100.0))
         w.run(dt=0.001, sim_rate_mult=1.0)
 
-    Backward compatibility: the codegen CLI also accepts make_craft() that
-    returns a Craft — it wraps the Craft in a synthetic World built from
-    the Craft's deprecated `fields`, `planets`, `dt`, `sim_rate_mult`,
-    and `_initial_state` fields. Once all examples migrate to World those
-    Craft-level fields go away.
     """
 
     def __init__(self) -> None:
@@ -605,28 +523,6 @@ class World:
         self.dt = float(dt)
         self.sim_rate_mult = float(sim_rate_mult)
         return self
-
-
-def world_from_craft(craft: "Craft") -> World:
-    """Backward-compat shim: synthesize a World from a legacy Craft. Reads
-    the Craft's own fields/planets/dt/sim_rate_mult/_initial_state. Used by
-    the codegen CLI when make_craft() returns a Craft instead of a World."""
-    w = World()
-    w.fields  = list(craft.fields)
-    w.planets = list(craft.planets)
-    w.dt = craft.dt
-    w.sim_rate_mult = craft.sim_rate_mult
-
-    init = craft._initial_state
-    pos = init.get("position",    (0.0, 0.0, 0.0))
-    ori = init.get("orientation", (1.0, 0.0, 0.0, 0.0))
-    vel = init.get("vel_linear",  (0.0, 0.0, 0.0))
-    vw  = init.get("vel_angular", (0.0, 0.0, 0.0))
-    w.crafts.append(_CraftEntry(
-        craft=craft, on=None,
-        position=pos, orientation=ori, vel_linear=vel, vel_angular=vw,
-    ))
-    return w
 
 
 class _RootProxy:

@@ -16,7 +16,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from ..core import Craft, World, world_from_craft
+from ..core import Craft, World
 from .craft import emit_craft_hpp, emit_craft_cpp
 from .config import emit_config_h
 from .telemetry import emit_telemetry_hpp
@@ -25,7 +25,7 @@ from .real_data_main import emit_real_data_main_cpp
 from .cmake import emit_cmake_fragment
 
 
-def emit(craft_or_world: Craft | World,
+def emit(world: World,
          out_dir: str | os.PathLike,
          workflow: str = "library",
          topics: dict[str, str] | None = None) -> None:
@@ -48,10 +48,8 @@ def emit(craft_or_world: Craft | World,
     if workflow == "real_data" and not topics:
         raise ValueError("workflow='real_data' requires a non-empty `topics` mapping")
 
-    # Normalize input → World. Per-craft emitters take the primary craft;
-    # emit_main_cpp also consults World for dt / sim_rate_mult / initial state.
-    world = (craft_or_world if isinstance(craft_or_world, World)
-             else world_from_craft(craft_or_world))
+    # Per-craft emitters take the primary craft; emit_main_cpp consumes the
+    # World for dt / sim_rate_mult / initial state.
     if not world.crafts:
         raise RuntimeError("emit(): World has no crafts")
     craft = world.crafts[0].craft
@@ -63,7 +61,7 @@ def emit(craft_or_world: Craft | World,
     files: dict[str, str] = {
         f"{name}.hpp":            emit_craft_hpp(craft),
         f"{name}.cpp":            emit_craft_cpp(craft),
-        f"{name}_config.h":       emit_config_h(craft),
+        f"{name}_config.h":       emit_config_h(world),
         f"{name}.cmake":          emit_cmake_fragment(craft, workflow=workflow),
     }
     # Telemetry only applies to sim-side workflows; an estimator-side craft

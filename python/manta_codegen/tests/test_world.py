@@ -1,9 +1,7 @@
 """Phase 3a tests: World API — add_planet/add_field/add_craft, run().
 
 Pure Python; verifies the World container records planets, fields, crafts
-with their initial state, and the sim-loop config; verifies the back-compat
-`world_from_craft` shim correctly hoists Craft.fields/planets/initial_state
-into a synthetic World.
+with their initial state, and the sim-loop config.
 """
 
 from __future__ import annotations
@@ -15,7 +13,7 @@ _SRC = Path(__file__).resolve().parents[1] / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from manta_codegen.core import Craft, World, world_from_craft
+from manta_codegen.core import Craft, World
 from manta_codegen.parts.structure.point_mass import PointMass
 
 
@@ -71,25 +69,6 @@ def test_world_chaining_returns_world() -> None:
          .run(dt=0.001))
     _check(len(w.crafts) == 1, "chained add_craft didn't record")
     _check(w.dt == 0.001, "chained run didn't set dt")
-
-
-def test_world_from_craft_legacy_shim() -> None:
-    """A Craft with sim_config + initial_state should round-trip through the
-    backward-compat shim into a synthetic World with matching fields."""
-    body = PointMass("body", mass=1.0)
-    c = (Craft("legacy")
-         .sim_config(dt=0.002, sim_rate_mult=10.0)
-         .initial_state(position=(1, 2, 3),
-                        vel_linear=(0, 0.5, 0)))
-    c.root.add(body)
-    w = world_from_craft(c)
-    _check(w.dt == 0.002, "dt didn't propagate")
-    _check(w.sim_rate_mult == 10.0, "rate mult didn't propagate")
-    _check(len(w.crafts) == 1, "craft missing")
-    e = w.crafts[0]
-    _check(e.position == (1.0, 2.0, 3.0), "initial position lost")
-    _check(e.vel_linear == (0.0, 0.5, 0.0), "initial velocity lost")
-    _check(e.on is None, "legacy crafts have no planet anchor")
 
 
 if __name__ == "__main__":

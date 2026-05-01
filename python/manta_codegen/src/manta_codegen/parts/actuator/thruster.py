@@ -31,13 +31,8 @@ class Thruster(PartDescriptor):
                  name: str,
                  max_thrust: float,
                  direction: tuple[float, float, float] = (0.0, 0.0, 1.0),
-                 publish_state: bool = True,
-                 subscribe_command: bool = True,
                  **kwargs) -> None:
-        super().__init__(name=name,
-                         publish_state=publish_state,
-                         subscribe_command=subscribe_command,
-                         **kwargs)
+        super().__init__(name=name, **kwargs)
         self.max_thrust = float(max_thrust)
         self.direction  = tuple(float(x) for x in direction)
 

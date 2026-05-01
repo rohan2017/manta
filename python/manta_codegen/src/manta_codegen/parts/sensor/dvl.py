@@ -39,9 +39,8 @@ class DVL(PartDescriptor):
     def __init__(self,
                  name: str,
                  velocity_sigma: float = 0.0,
-                 publish_state: bool = True,
                  **kwargs) -> None:
-        super().__init__(name=name, publish_state=publish_state, **kwargs)
+        super().__init__(name=name, **kwargs)
         self.velocity_sigma = float(velocity_sigma)
 
     def emit_constructor_args(self, scalar: str = "manta::Real") -> str:
