@@ -193,6 +193,7 @@ The codegen has two output modes:
 | ex7 | library | Real-data-only EKF, fed from external Zenoh topics |
 | ex8 | library | Multi-craft swarm: 3 drones tethered in a chain |
 | ex9 | binary  | Minimal demo of the explicit Binding API |
+| ex10| binary  | Multi-craft codegen — two Crafts in one binary |
 
 ## Building
 
@@ -208,16 +209,18 @@ binary over Zenoh.
 ## Status
 
 Early/active development. The public API is stable enough for examples
-ex0..ex9 to drive it without back-compat shims, but any of it can still
+ex0..ex10 to drive it without back-compat shims, but any of it can still
 move. Notable items not yet built:
 
-- Multi-craft codegen (today the user main instantiates the swarm; ex8
-  is hand-written for that reason).
-- System identification / parameter optimization layer on top of the
-  autodiff infrastructure.
+- Multi-craft Tether codegen — independent multi-craft works (ex10) but
+  ex8's tether-chain swarm is still hand-written because there's no
+  Python descriptor for `coupling::Tether` yet.
+- A first-class system-ID layer (the proof-of-concept is in
+  `tests/test_system_id.cpp`; the API for batch parameter fitting is
+  not yet wrapped).
 - Distributed Field backend over Zenoh (cross-process FluidField sharing).
-- Position-dependent atmosphere/gravity models on Planet (J2 gravity,
-  ECEF magnetics, etc.).
+- A magnetometer Part to consume `MagField` (the field exists; no Part
+  reads it yet).
 
 ## Design docs
 
