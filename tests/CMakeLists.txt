@@ -7,6 +7,24 @@ FetchContent_Declare(
     GIT_SHALLOW    TRUE)
 FetchContent_MakeAvailable(doctest)
 
+# ---- Codegen-driven signal sync test ----
+# Regenerated at configure time from each part descriptor's `signals` table.
+# Compile failure here = a Python signal expression no longer matches the C++
+# part API.
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+set(_signal_sync_test_out
+    "${CMAKE_CURRENT_BINARY_DIR}/test_codegen_signals.gen.cpp")
+set(_signal_sync_script
+    "${CMAKE_SOURCE_DIR}/python/manta_codegen/scripts/emit_signal_sync_test.py")
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E env
+        "PYTHONPATH=${CMAKE_SOURCE_DIR}/python/manta_codegen/src"
+        "${Python3_EXECUTABLE}" "${_signal_sync_script}" "${_signal_sync_test_out}"
+    RESULT_VARIABLE _sync_rc)
+if(NOT _sync_rc EQUAL 0)
+    message(FATAL_ERROR "emit_signal_sync_test.py failed (exit ${_sync_rc})")
+endif()
+
 add_executable(manta_tests
     test_main.cpp
     test_vec3.cpp
@@ -27,7 +45,8 @@ add_executable(manta_tests
     test_ekf.cpp
     test_ekf_against_sim.cpp
     test_ukf.cpp
-    test_planet.cpp)
+    test_planet.cpp
+    "${_signal_sync_test_out}")
 
 target_link_libraries(manta_tests PRIVATE
     manta::manta
