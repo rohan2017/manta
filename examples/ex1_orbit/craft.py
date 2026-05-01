@@ -40,10 +40,10 @@ def make_world() -> World:
     grav      = PointGravityPart("grav")
 
     c = Craft("ex1")
-    c.root.add(body)
+    c.add(body)
     for t in thrusters:
-        c.root.add(t)
-    c.root.add(grav)
+        c.add(t)
+    c.add(grav)
 
     # Bundled state topic: craft pose + per-thruster throttles. Wire format
     # matches what the viewer expects (top-level "p","q","v","w" arrays).

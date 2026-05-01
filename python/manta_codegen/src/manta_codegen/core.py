@@ -491,6 +491,21 @@ class Craft:
             "Craft.publish/subscribe: a multi-member struct binding needs an "
             "explicit `topic` argument (no good default for bundled structs)")
 
+    def add(self, child: PartDescriptor) -> PartDescriptor:
+        """Convenience shortcut for `c.root.add(child)`. Returns the child so
+        chained-style still works, but the canonical pattern is
+        construct-first-then-attach:
+
+            imu = IMU("imu")
+            c.add(imu)
+            c.publish(imu.last_accel)
+
+        Calls to `c.root.add(...)` continue to work for explicit composition
+        when the user wants to nest below an articulated part — `motor.add(p)`
+        for a child of a Motor's joint output, for example.
+        """
+        return self.root.add(child)
+
     # ---- iteration helpers used by emitters ----
 
     def all_parts(self) -> Iterator[PartDescriptor]:

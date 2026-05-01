@@ -29,9 +29,9 @@ def make_world() -> World:
     thrusters = [Thruster(name, max_thrust=5.0, direction=d) for name, d in THRUSTER_DIRS]
 
     c = Craft("ex0")
-    c.root.add(body)
+    c.add(body)
     for t in thrusters:
-        c.root.add(t)
+        c.add(t)
 
     state = {
         "p": c.position, "q": c.orientation,

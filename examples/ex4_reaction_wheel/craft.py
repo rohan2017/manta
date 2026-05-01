@@ -43,8 +43,8 @@ def make_world() -> World:
     flywheel = PointMass("flywheel", mass=WHEEL_MASS, moi=WHEEL_MOI)
 
     c = Craft("ex4")
-    c.root.add(body)
-    c.root.add(motor)
+    c.add(body)
+    c.add(motor)
     motor.add(flywheel)          # flywheel rides the motor's joint output
 
     c.publish({

@@ -66,12 +66,12 @@ def make_world() -> World:
                           direction=(1.0, 0.0, 0.0),
                           transform=tf((-LENGTH/2, 0.0, 0.0)))
 
-    c.root.add(hull)
-    c.root.add(body)
-    c.root.add(gravity)
-    c.root.add(imu)
-    c.root.add(dvl)
-    c.root.add(aft_thrust)
+    c.add(hull)
+    c.add(body)
+    c.add(gravity)
+    c.add(imu)
+    c.add(dvl)
+    c.add(aft_thrust)
 
     # Bundled state: pose + sensor signals + thrust. Smoke test only reads
     # `state["p"]` and `state["v"]` so the legacy wire shape is preserved

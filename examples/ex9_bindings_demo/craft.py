@@ -19,9 +19,9 @@ def make_world() -> World:
     thr  = Thruster("thrust", max_thrust=5.0, direction=(1.0, 0.0, 0.0))
 
     c = Craft("ex9")
-    c.root.add(body)
-    c.root.add(imu)
-    c.root.add(thr)
+    c.add(body)
+    c.add(imu)
+    c.add(thr)
 
     # Explicit bindings — replaces the legacy publish_state / subscribe_command
     # flag-based defaults. Single-signal binding picks up the default topic;
