@@ -26,6 +26,7 @@ add_executable(manta_tests
     test_articulation.cpp
     test_ekf.cpp
     test_ekf_against_sim.cpp
+    test_ukf.cpp
     test_planet.cpp)
 
 target_link_libraries(manta_tests PRIVATE
