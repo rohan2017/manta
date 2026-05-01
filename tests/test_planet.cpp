@@ -421,3 +421,58 @@ TEST_CASE("Craft::planet<P>: returns nullptr when no planet anchored") {
 
     CHECK(c.planet<manta::planets::Earth>() == nullptr);
 }
+
+// ---- Magnetometer Part ----
+
+#include "../include/manta/parts/sensor/magnetometer.hpp"
+
+TEST_CASE("Magnetometer: reads MagField at part position, rotates to part frame") {
+    // No-rotation craft at origin, MagField is a dipole at world origin with
+    // moment along -z. At z=10, B is parallel to -z (see DipoleMagField pole
+    // test). The craft has identity orientation, so part-frame B == scene B.
+    World w;
+    w.clock().set_dt(0.001f);
+    manta::fields::DipoleMagField dipole{geom::Vec3<SceneFrame>{0, 0, -7.94e22f}};
+    w.register_field(dipole);
+    w.register_field<manta::fields::MagField>(dipole);
+
+    auto& s = w.create_scene();
+
+    Craft c("mag_test");
+    c.root().add<manta::parts::PointMass>("body", 1.0f);
+    auto& mag = c.root().add<manta::parts::Magnetometer>("mag");
+    c.root().compute_params();
+    c.set_position(Vec3<SceneFrame>{0, 0, 10.0f});
+    s.add_craft(c);
+
+    w.update();
+
+    // At pole z=10, |B| = 2·(μ₀/4π)·|m|/r³ = 2·1e-7·7.94e22/1000 ≈ 1.588e13 T,
+    // along -z (since moment is along -z, and at pole B is parallel to moment).
+    // (The unrealistically-large value is because the dipole's moment magnitude
+    // is Earth-scale but we sampled 10 m from a singular origin — a sanity
+    // check on the formula, not a realistic field strength.)
+    auto b = mag.last_b();
+    INFO("b = (", b.x(), ",", b.y(), ",", b.z(), ")");
+    CHECK(std::abs(b.x()) < 1e10f);
+    CHECK(std::abs(b.y()) < 1e10f);
+    CHECK(b.z() == doctest::Approx(-1.588e13f).epsilon(1e-2));
+}
+
+TEST_CASE("Magnetometer: zero output when no MagField is registered") {
+    World w;
+    w.clock().set_dt(0.001f);
+    auto& s = w.create_scene();
+
+    Craft c("no_mag");
+    c.root().add<manta::parts::PointMass>("body", 1.0f);
+    auto& mag = c.root().add<manta::parts::Magnetometer>("mag");
+    c.root().compute_params();
+    s.add_craft(c);
+
+    w.update();
+    auto b = mag.last_b();
+    CHECK(std::abs(b.x()) < 1e-6f);
+    CHECK(std::abs(b.y()) < 1e-6f);
+    CHECK(std::abs(b.z()) < 1e-6f);
+}

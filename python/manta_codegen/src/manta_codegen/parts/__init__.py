@@ -1,5 +1,6 @@
 from .sensor.dvl import DVL
 from .sensor.imu import IMU
+from .sensor.magnetometer import Magnetometer
 
 from .actuator.thruster import Thruster
 from .actuator.prop_thruster import PropThruster
@@ -24,6 +25,7 @@ __all__ = [
     "GravityPart",
     "Hull",
     "IMU",
+    "Magnetometer",
     "Mass",
     "Motor",
     "PointBuoy",
