@@ -188,3 +188,37 @@ TEST_CASE("TetherEndpoint: same-craft tether between two parts produces zero net
     auto v = c.scene_to_craft().vel_linear();
     CHECK(test::approx_equal(v, Vec3<SceneFrame>::zero(), 1e-3f));
 }
+
+// ---- Scalar templating: TetherT<Jet> compiles & yields autodiff derivatives ----
+
+#include <ceres/jet.h>
+
+TEST_CASE("TetherT<Jet>: force_on_self differentiates through extension") {
+    // Stretched tether: d=12, rest=10, k=100 → F_x = 200 (+x toward other).
+    // Differentiate w.r.t. p_other_x: ∂F_x/∂p_other_x should equal stiffness
+    // (k = 100) along the rhat direction. With both endpoints on the x-axis
+    // and rhat = (+1,0,0), |F| = k*(d - rest); ∂|F|/∂p_other_x = k = 100.
+    using Jet = ceres::Jet<double, 1>;
+    coupling::TetherT<Jet> t(Jet(10.0), Jet(100.0), Jet(0.0));
+    auto F = t.force_on_self(
+        geom::Vec3<SceneFrame, Jet>{Jet(0), Jet(0), Jet(0)},
+        geom::Vec3<SceneFrame, Jet>{Jet(12.0, 0), Jet(0), Jet(0)},
+        geom::Vec3<SceneFrame, Jet>{Jet(0), Jet(0), Jet(0)},
+        geom::Vec3<SceneFrame, Jet>{Jet(0), Jet(0), Jet(0)});
+    CHECK(F.x().a       == doctest::Approx(200.0));
+    CHECK(F.x().v(0)    == doctest::Approx(100.0));   // ∂F_x/∂p_other_x = k
+    CHECK(F.y().a       == doctest::Approx(0.0));
+    CHECK(F.z().a       == doctest::Approx(0.0));
+}
+
+TEST_CASE("TetherT<Jet>: slack region returns identically-zero Jet (no derivative leak)") {
+    using Jet = ceres::Jet<double, 1>;
+    coupling::TetherT<Jet> t(Jet(10.0), Jet(100.0));
+    auto F = t.force_on_self(
+        geom::Vec3<SceneFrame, Jet>{Jet(0), Jet(0), Jet(0)},
+        geom::Vec3<SceneFrame, Jet>{Jet(5.0, 0), Jet(0), Jet(0)},  // d=5 < rest
+        geom::Vec3<SceneFrame, Jet>{Jet(0), Jet(0), Jet(0)},
+        geom::Vec3<SceneFrame, Jet>{Jet(0), Jet(0), Jet(0)});
+    CHECK(F.x().a    == doctest::Approx(0.0));
+    CHECK(F.x().v(0) == doctest::Approx(0.0));  // slack ⇒ derivative is zero
+}

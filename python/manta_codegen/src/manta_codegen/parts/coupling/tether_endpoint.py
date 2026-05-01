@@ -22,17 +22,19 @@ class TetherEndpoint(PartDescriptor):
     Telemetry: none (yet).
     """
 
-    cpp_class  = "manta::parts::TetherEndpoint"
-    cpp_header = "manta/parts/coupling/tether_endpoint.hpp"
+    cpp_class          = "manta::parts::TetherEndpoint"
+    cpp_class_template = "manta::parts::TetherEndpointT"
+    cpp_header         = "manta/parts/coupling/tether_endpoint.hpp"
 
     def __init__(self, name: str, tether_var: str, is_a: bool, **kwargs) -> None:
-        """`tether_var` is the C++ variable name of the `manta::coupling::Tether`
-        in scope at the construction site (caller is responsible for ensuring
-        it exists). `is_a=True` registers as the first endpoint, `False` as the
-        second."""
+        """`tether_var` is the C++ variable name of the
+        `manta::coupling::TetherT<Scalar>` (or its `Tether` Real-alias) in scope
+        at the construction site. The caller's glue code is responsible for
+        ensuring it exists with the matching Scalar. `is_a=True` registers as
+        the first endpoint, `False` as the second."""
         super().__init__(name=name, **kwargs)
         self.tether_var = tether_var
         self.is_a = bool(is_a)
 
-    def emit_constructor_args(self) -> str:
+    def emit_constructor_args(self, scalar: str = "manta::Real") -> str:
         return f'"{self.name}", {self.tether_var}, {"true" if self.is_a else "false"}'
