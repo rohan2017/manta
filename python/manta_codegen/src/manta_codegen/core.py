@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import ClassVar, Iterator
 
 from ._format import cpp_float as _f
-from .signal import BoundSignal, Signal
+from .signal import Binding, BoundSignal, Signal
 
 
 # ---------------------------------------------------------------------------
@@ -295,10 +295,13 @@ class Craft:
         # raises if any part lacks it.
         self.scalar_templated: bool = False
         # Explicit pub/sub bindings (phase 2 of the API redesign). Each entry
-        # is (BoundSignal, topic, protocol). Codegen iterates these to emit
-        # one publisher / subscriber per binding; replaces the older
-        # publish_state / subscribe_command flag-based path.
-        self.bindings: list[tuple[BoundSignal, str, str]] = []
+        # is a Binding holding {member_name: BoundSignal}, a topic, a protocol,
+        # and an encoding. Single-signal and bundled-struct bindings are the
+        # same primitive; the single-signal case is just a one-member dict.
+        # Codegen iterates these to emit one publisher / subscriber per
+        # Binding; replaces the older publish_state / subscribe_command
+        # flag-based path.
+        self.bindings: list[Binding] = []
 
     def initial_state(self,
                       position:    tuple[float, float, float] = (0.0, 0.0, 0.0),
@@ -353,35 +356,82 @@ class Craft:
     # ---- pub/sub binding API (phase 2) ----
 
     def publish(self,
-                signal: BoundSignal,
+                what: BoundSignal | dict[str, BoundSignal],
                 topic: str | None = None,
-                protocol: str = "zenoh") -> "Craft":
-        """Register an outgoing binding: codegen emits a publisher for `signal`
-        on `topic`. The signal must be `direction == "out"` (the part exposes
-        a value the user wants to broadcast). When `topic` is None, codegen
-        defaults to `f"{craft.topic_prefix}/{part_name}/{signal_name}"`."""
-        if signal.direction != "out":
-            raise ValueError(
-                f"Craft.publish: signal {signal.name!r} on part {signal.part_name!r} "
-                f"has direction='in' — use Craft.subscribe instead")
-        topic = topic if topic is not None else f"{self.topic_prefix}/{signal.part_name}/{signal.name}"
-        self.bindings.append((signal, topic, protocol))
+                protocol: str = "zenoh",
+                encoding: str = "json") -> "Craft":
+        """Register an outgoing binding.
+
+        `what` is either:
+          * A single BoundSignal — wrapped to {signal.name: signal} and given
+            a default topic of `f"{topic_prefix}/{part_name}/{signal_name}"`
+            if `topic` is None.
+          * A dict[str, BoundSignal] — the keys become struct member names in
+            the published payload. `topic` is required; no good default.
+
+        All members (one or many) must have direction='out'.
+        """
+        members = self._normalize_binding_input(what, kind="publish")
+        topic   = self._resolve_topic(topic, members, what)
+        self.bindings.append(Binding(members=members, topic=topic,
+                                     protocol=protocol, encoding=encoding))
         return self
 
     def subscribe(self,
-                  signal: BoundSignal,
+                  what: BoundSignal | dict[str, BoundSignal],
                   topic: str | None = None,
-                  protocol: str = "zenoh") -> "Craft":
-        """Register an incoming binding: codegen emits a subscriber on `topic`
-        whose payload is forwarded into `signal` (which must be
-        `direction == "in"` — the part has a setter that consumes it)."""
-        if signal.direction != "in":
-            raise ValueError(
-                f"Craft.subscribe: signal {signal.name!r} on part {signal.part_name!r} "
-                f"has direction='out' — use Craft.publish instead")
-        topic = topic if topic is not None else f"{self.topic_prefix}/{signal.part_name}/{signal.name}"
-        self.bindings.append((signal, topic, protocol))
+                  protocol: str = "zenoh",
+                  encoding: str = "json") -> "Craft":
+        """Register an incoming binding. Symmetric to publish(); all members
+        must have direction='in'."""
+        members = self._normalize_binding_input(what, kind="subscribe")
+        topic   = self._resolve_topic(topic, members, what)
+        self.bindings.append(Binding(members=members, topic=topic,
+                                     protocol=protocol, encoding=encoding))
         return self
+
+    def _normalize_binding_input(self,
+                                 what: BoundSignal | dict[str, BoundSignal],
+                                 kind: str) -> dict[str, BoundSignal]:
+        expect = "out" if kind == "publish" else "in"
+        opposite_method = "subscribe" if kind == "publish" else "publish"
+        if isinstance(what, BoundSignal):
+            members = {what.name: what}
+        elif isinstance(what, dict):
+            if not what:
+                raise ValueError(f"Craft.{kind}: empty struct dict")
+            for k, v in what.items():
+                if not isinstance(k, str) or not k.isidentifier():
+                    raise ValueError(
+                        f"Craft.{kind}: struct member name {k!r} must be a valid identifier")
+                if not isinstance(v, BoundSignal):
+                    raise TypeError(
+                        f"Craft.{kind}: struct member {k!r} must be a BoundSignal, got {type(v).__name__}")
+            members = dict(what)
+        else:
+            raise TypeError(
+                f"Craft.{kind}: expected BoundSignal or dict[str, BoundSignal], got {type(what).__name__}")
+        bad = [(k, v) for k, v in members.items() if v.direction != expect]
+        if bad:
+            names = ", ".join(f"{k!r}" for k, _ in bad)
+            raise ValueError(
+                f"Craft.{kind}: member(s) {names} have direction!='{expect}'; "
+                f"use Craft.{opposite_method} instead (or split the struct)")
+        return members
+
+    def _resolve_topic(self,
+                       topic: str | None,
+                       members: dict[str, BoundSignal],
+                       what: BoundSignal | dict[str, BoundSignal]) -> str:
+        if topic is not None:
+            return topic
+        # Default topic only makes sense for a single-signal binding — there's
+        # no good default for a multi-member struct.
+        if isinstance(what, BoundSignal):
+            return f"{self.topic_prefix}/{what.part_name}/{what.name}"
+        raise ValueError(
+            "Craft.publish/subscribe: a multi-member struct binding needs an "
+            "explicit `topic` argument (no good default for bundled structs)")
 
     # ---- iteration helpers used by emitters ----
 

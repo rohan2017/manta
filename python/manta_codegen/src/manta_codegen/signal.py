@@ -28,7 +28,7 @@ encoding (JSON today, binary later) is the emitter's responsibility.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Mapping
 
 if TYPE_CHECKING:
     from .core import PartDescriptor
@@ -133,3 +133,49 @@ def scalar_in_signal(name: str, setter_method: str) -> Signal:
         n_floats=1,
         cpp_write_stmt=f"{{accessor}}.{setter_method}({{v0}});",
     )
+
+
+# ---------------------------------------------------------------------------
+# Binding — what gets recorded on a Craft for codegen to consume.
+
+@dataclass
+class Binding:
+    """One pub/sub entry on a Craft. Always carries a struct of named members,
+    even when the user binds a single signal — the per-signal case is just the
+    degenerate struct {signal.name: signal}.
+
+    Args:
+        members: ordered mapping of struct-member name → BoundSignal. All
+                 members must share the same `direction` (a Binding is either
+                 fully publish or fully subscribe; mixed direction is invalid).
+        topic: protocol-agnostic topic identifier (e.g. Zenoh key expression).
+        protocol: emitter selector — "zenoh" today, "ros"/"udp"/etc. later.
+        encoding: wire encoding — "json" (per-member named fields) today;
+                  "binary" (packed floats in member order) future.
+    """
+    members: dict[str, BoundSignal]
+    topic: str
+    protocol: str = "zenoh"
+    encoding: str = "json"
+
+    def __post_init__(self) -> None:
+        if not self.members:
+            raise ValueError("Binding: members dict cannot be empty")
+        directions = {sig.direction for sig in self.members.values()}
+        if len(directions) != 1:
+            raise ValueError(
+                f"Binding {self.topic!r}: all members must share direction; "
+                f"got mixed {sorted(directions)}")
+        if self.encoding not in ("json", "binary"):
+            raise ValueError(
+                f"Binding {self.topic!r}: encoding must be 'json' or 'binary', "
+                f"got {self.encoding!r}")
+
+    @property
+    def direction(self) -> str:
+        return next(iter(self.members.values())).direction
+
+    @property
+    def total_floats(self) -> int:
+        return sum(sig.signal.n_floats for sig in self.members.values())
+

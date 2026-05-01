@@ -22,7 +22,7 @@ if str(_SRC) not in sys.path:
 from manta_codegen.core import Craft
 from manta_codegen.parts.sensor.imu import IMU
 from manta_codegen.parts.actuator.thruster import Thruster
-from manta_codegen.signal import BoundSignal
+from manta_codegen.signal import Binding, BoundSignal
 
 
 def _check(cond: bool, msg: str) -> None:
@@ -53,17 +53,72 @@ def test_publish_records_binding_with_default_topic() -> None:
     c = Craft("ex_test")
     c.publish(imu.last_accel)
     _check(len(c.bindings) == 1, "binding not recorded")
-    sig, topic, proto = c.bindings[0]
-    _check(sig is imu.last_accel, "wrong signal in binding")
-    _check(topic == "manta/ex_test/imu0/last_accel", f"unexpected default topic: {topic}")
-    _check(proto == "zenoh", "default protocol must be zenoh")
+    b = c.bindings[0]
+    _check(isinstance(b, Binding), "binding must be a Binding instance")
+    _check(list(b.members.keys()) == ["last_accel"], "single-signal struct must have one member named after signal")
+    _check(b.members["last_accel"] is imu.last_accel, "wrong signal in binding")
+    _check(b.topic == "manta/ex_test/imu0/last_accel", f"unexpected default topic: {b.topic}")
+    _check(b.protocol == "zenoh", "default protocol must be zenoh")
+    _check(b.encoding == "json", "default encoding must be json")
+    _check(b.direction == "out", "single-signal direction must propagate")
+    _check(b.total_floats == 3, f"vec3 signal should have 3 floats, got {b.total_floats}")
 
 
 def test_publish_explicit_topic() -> None:
     imu = IMU("imu0")
     c = Craft("ex_test")
     c.publish(imu.last_gyro, "custom/topic/path")
-    _check(c.bindings[0][1] == "custom/topic/path", "explicit topic ignored")
+    _check(c.bindings[0].topic == "custom/topic/path", "explicit topic ignored")
+
+
+def test_publish_struct_bundle() -> None:
+    imu = IMU("imu0")
+    c = Craft("ex_test")
+    c.publish({"accel": imu.last_accel, "gyro": imu.last_gyro}, "manta/ex_test/imu_bundle")
+    b = c.bindings[0]
+    _check(set(b.members) == {"accel", "gyro"}, f"unexpected members: {list(b.members)}")
+    _check(b.total_floats == 6, f"two vec3 should be 6 floats, got {b.total_floats}")
+    _check(b.direction == "out", "all-out bundle must have direction=out")
+
+
+def test_publish_struct_requires_explicit_topic() -> None:
+    imu = IMU("imu0")
+    c = Craft("ex_test")
+    try:
+        c.publish({"accel": imu.last_accel, "gyro": imu.last_gyro})
+        raise AssertionError("multi-member bundle without topic should have raised")
+    except ValueError:
+        pass
+
+
+def test_struct_with_mixed_directions_rejected() -> None:
+    imu = IMU("imu0")
+    t = Thruster("fwd", max_thrust=1.0)
+    c = Craft("ex_test")
+    try:
+        c.publish({"accel": imu.last_accel, "throttle": t.set_throttle},
+                  "manta/ex_test/mixed")
+        raise AssertionError("mixed-direction struct should have raised")
+    except ValueError:
+        pass
+
+
+def test_subscribe_struct_bundle() -> None:
+    t1 = Thruster("a", max_thrust=1.0)
+    t2 = Thruster("b", max_thrust=1.0)
+    c = Craft("ex_test")
+    c.subscribe({"left": t1.set_throttle, "right": t2.set_throttle},
+                "manta/ex_test/throttles")
+    _check(len(c.bindings) == 1, "bundled subscribe didn't record")
+    b = c.bindings[0]
+    _check(b.direction == "in", "all-in bundle must have direction=in")
+
+
+def test_explicit_encoding() -> None:
+    imu = IMU("imu0")
+    c = Craft("ex_test")
+    c.publish(imu.last_accel, encoding="binary")
+    _check(c.bindings[0].encoding == "binary", "encoding override ignored")
 
 
 def test_subscribe_records_binding() -> None:
