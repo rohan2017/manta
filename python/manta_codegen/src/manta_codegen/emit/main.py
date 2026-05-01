@@ -18,7 +18,7 @@ Wires the typed Craft into a 1 kHz sim loop. Two pub/sub paths coexist:
 from __future__ import annotations
 
 from .._format import cpp_float as _f
-from ..core import Craft
+from ..core import Craft, World, world_from_craft
 from ..signal import Binding, accessor_for
 from ._util import GENERATED_BANNER, class_name_for_craft
 
@@ -27,11 +27,45 @@ def _quote(s: str) -> str:
     return '"' + s.replace('\\', '\\\\').replace('"', '\\"') + '"'
 
 
-def emit_main_cpp(craft: Craft) -> str:
+def _initial_state_literal(entry) -> str:
+    """C++ literal for `manta::InitialState{...}` built from a _CraftEntry.
+    Returns `manta::InitialState{}` when the state is identity, matching the
+    legacy behavior."""
+    px, py, pz = entry.position
+    ow, ox, oy, oz = entry.orientation
+    vx, vy, vz = entry.vel_linear
+    wx, wy, wz = entry.vel_angular
+    if (entry.position == (0.0, 0.0, 0.0)
+            and entry.orientation == (1.0, 0.0, 0.0, 0.0)
+            and entry.vel_linear == (0.0, 0.0, 0.0)
+            and entry.vel_angular == (0.0, 0.0, 0.0)):
+        return "manta::InitialState{}"
+    return (
+        "manta::InitialState{"
+        f"manta::geom::Vec3<manta::SceneFrame>{{{_f(px)}, {_f(py)}, {_f(pz)}}}, "
+        f"manta::geom::Ori<manta::SceneFrame>{{Eigen::Quaternionf{{{_f(ow)}, {_f(ox)}, {_f(oy)}, {_f(oz)}}}}}, "
+        f"manta::geom::Vec3<manta::SceneFrame>{{{_f(vx)}, {_f(vy)}, {_f(vz)}}}, "
+        f"manta::geom::Vec3<manta::CraftFrame>{{{_f(wx)}, {_f(wy)}, {_f(wz)}}}"
+        "}"
+    )
+
+
+def emit_main_cpp(craft: Craft, world: World | None = None) -> str:
     cls = class_name_for_craft(craft.name)
     use_bindings = bool(craft.bindings)
     publishing_parts = [] if use_bindings else [p for p in craft.all_parts() if p.publish_state]
     subscribing_parts = [] if use_bindings else [p for p in craft.all_parts() if p.subscribe_command]
+
+    # World drives the sim loop config (dt, sim_rate_mult) and per-craft
+    # initial state. Tests / older callers that pass only a Craft get a
+    # synthesized World built from the Craft's deprecated sim_config /
+    # initial_state fields.
+    if world is None:
+        world = world_from_craft(craft)
+    entry = next((e for e in world.crafts if e.craft is craft), None)
+    if entry is None:
+        raise RuntimeError(
+            f"emit_main_cpp: craft {craft.name!r} not registered with the World")
 
     state_topic = f"{craft.topic_prefix}/state"
 
@@ -55,9 +89,9 @@ def emit_main_cpp(craft: Craft) -> str:
         f'#include "{craft.name}.hpp"',
         f'#include "{craft.name}_telemetry.hpp"',
     ]
-    for f in craft.fields:
+    for f in world.fields:
         lines.append(f'#include "{f.cpp_header}"')
-    for p in craft.planets:
+    for p in world.planets:
         lines.append(f'#include "{p.cpp_header}"')
     lines += [
         "",
@@ -89,8 +123,8 @@ def emit_main_cpp(craft: Craft) -> str:
         "    std::signal(SIGINT,  on_signal);",
         "    std::signal(SIGTERM, on_signal);",
         "",
-        f"    constexpr float DT             = {_f(craft.dt)};",
-        f"    constexpr float SIM_RATE_MULT  = {_f(craft.sim_rate_mult)};",
+        f"    constexpr float DT             = {_f(world.dt)};",
+        f"    constexpr float SIM_RATE_MULT  = {_f(world.sim_rate_mult)};",
         f"    const     float WALL_PERIOD    = DT / SIM_RATE_MULT;",
         "",
         "    manta::World w;",
@@ -101,18 +135,18 @@ def emit_main_cpp(craft: Craft) -> str:
     # Planets — added to World, then the (single) scene anchors to the first.
     # Each planet contributes its own field disturbances inside add_planet's
     # call to register_disturbances, so user-level field registration only
-    # needs to cover whatever the user explicitly listed in craft.fields.
-    for i, p in enumerate(craft.planets):
+    # needs to cover whatever the user explicitly listed in world.fields.
+    for i, p in enumerate(world.planets):
         var = f"planet_{i}"
         lines.append(f"    auto& {var} = w.add_planet<{p.cpp_class}>("
                      f"{p.emit_constructor_args()});")
-    if craft.planets:
+    if world.planets:
         lines.append(f"    scene.set_planet(&planet_0);")
 
     # Field instances live with static storage in main; register with the World.
     # Concrete-type registration is implicit via template deduction; additional
     # base slots from `register_as` get explicit `register_field<Base>(...)`.
-    for i, f in enumerate(craft.fields):
+    for i, f in enumerate(world.fields):
         var = f"field_{i}"
         lines.append(f"    {f.emit_construction(var)}")
         lines.append(f"    w.register_field({var});")
@@ -121,7 +155,7 @@ def emit_main_cpp(craft: Craft) -> str:
 
     lines += [
         f"    {cls} craft;",
-        f"    scene.add_craft(craft, {craft.emit_initial_state_cpp()});",
+        f"    scene.add_craft(craft, {_initial_state_literal(entry)});",
         "",
         "    zenoh::Config cfg = zenoh::Config::create_default();",
         "    auto session = zenoh::Session::open(std::move(cfg));",

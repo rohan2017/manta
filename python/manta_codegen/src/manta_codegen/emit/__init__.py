@@ -16,7 +16,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from ..core import Craft
+from ..core import Craft, World, world_from_craft
 from .craft import emit_craft_hpp, emit_craft_cpp
 from .config import emit_config_h
 from .telemetry import emit_telemetry_hpp
@@ -25,7 +25,7 @@ from .real_data_main import emit_real_data_main_cpp
 from .cmake import emit_cmake_fragment
 
 
-def emit(craft: Craft,
+def emit(craft_or_world: Craft | World,
          out_dir: str | os.PathLike,
          workflow: str = "library",
          topics: dict[str, str] | None = None) -> None:
@@ -48,6 +48,14 @@ def emit(craft: Craft,
     if workflow == "real_data" and not topics:
         raise ValueError("workflow='real_data' requires a non-empty `topics` mapping")
 
+    # Normalize input → World. Per-craft emitters take the primary craft;
+    # emit_main_cpp also consults World for dt / sim_rate_mult / initial state.
+    world = (craft_or_world if isinstance(craft_or_world, World)
+             else world_from_craft(craft_or_world))
+    if not world.crafts:
+        raise RuntimeError("emit(): World has no crafts")
+    craft = world.crafts[0].craft
+
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
@@ -63,7 +71,7 @@ def emit(craft: Craft,
     if workflow in ("library", "binary"):
         files[f"{name}_telemetry.hpp"] = emit_telemetry_hpp(craft)
     if workflow == "binary":
-        files[f"{name}_main.cpp"] = emit_main_cpp(craft)
+        files[f"{name}_main.cpp"] = emit_main_cpp(craft, world=world)
     if workflow == "real_data":
         files[f"{name}_main.cpp"] = emit_real_data_main_cpp(craft, topics or {})
 
