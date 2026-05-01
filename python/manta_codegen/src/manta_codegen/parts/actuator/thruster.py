@@ -4,24 +4,28 @@ from __future__ import annotations
 
 from ..._format import cpp_float as _f
 from ...core import PartDescriptor
+from ...signal import scalar_in_signal, scalar_out_signal
 
 
 class Thruster(PartDescriptor):
     """A thruster that applies a force along `direction` in part frame, scaled
     by throttle ∈ [0, 1].
 
+    Bindable signals:
+      * `throttle`     (out, 1 float) — current throttle value.
+      * `set_throttle` (in,  1 float) — sets throttle (clamped to [0,1] internally).
+
     Required fields: none.
-
-    Default I/O:
-        publish_state    : True   — publishes `{throttle}`
-        subscribe_command: True   — receives a single float in [0,1]
-
-    Telemetry: throttle (float).
     """
 
     cpp_class          = "manta::parts::Thruster"
     cpp_class_template = "manta::parts::ThrusterT"
     cpp_header         = "manta/parts/actuator/thruster.hpp"
+
+    signals = [
+        scalar_out_signal("throttle",     "throttle"),
+        scalar_in_signal ("set_throttle", "set_throttle"),
+    ]
 
     def __init__(self,
                  name: str,

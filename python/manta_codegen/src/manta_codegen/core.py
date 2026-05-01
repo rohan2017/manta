@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import ClassVar, Iterator
 
 from ._format import cpp_float as _f
+from .signal import BoundSignal, Signal
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +134,11 @@ class PartDescriptor:
     # validates that the craft has a planet of this type registered. The
     # part's update() can then call `craft().planet<CppPlanetClass>()`.
     requires_planet: ClassVar[type | None] = None
+    # Bindable signals exposed by this part. Each Signal becomes a same-named
+    # attribute on the instance after construction, returning a BoundSignal
+    # the user passes to Craft.publish/subscribe. Subclasses override; default
+    # is empty (the part exposes no publishable/subscribable values).
+    signals: ClassVar[list[Signal]] = []
 
     def __init__(self,
                  name: str,
@@ -147,12 +153,23 @@ class PartDescriptor:
         self.name = name
         self.transform = transform or StaticTransform()
         self.static = static
+        # Legacy flag-based pub/sub. Phase 2 of the API redesign replaces these
+        # with explicit Craft.publish(BoundSignal, topic) / subscribe calls;
+        # both paths coexist until all examples migrate, then these go away.
         self.publish_state = publish_state
         self.state_topic = state_topic
         self.subscribe_command = subscribe_command
         self.command_topic = command_topic
         # Filled by Craft.add() / CompositePartRef.add()
         self._children: list[PartDescriptor] = []
+        # Attach a BoundSignal for each declared signal. Names are pre-validated
+        # at signal-list-declaration time (Signal.__post_init__).
+        for sig in type(self).signals:
+            if hasattr(self, sig.name):
+                raise TypeError(
+                    f"Part {type(self).__name__}: signal {sig.name!r} collides "
+                    f"with an existing attribute on the descriptor")
+            object.__setattr__(self, sig.name, BoundSignal(part_name=name, signal=sig))
 
     # ---- subclass override hooks ----
     #
@@ -277,6 +294,11 @@ class Craft:
         # parts in the craft must have `cpp_class_template` set; codegen
         # raises if any part lacks it.
         self.scalar_templated: bool = False
+        # Explicit pub/sub bindings (phase 2 of the API redesign). Each entry
+        # is (BoundSignal, topic, protocol). Codegen iterates these to emit
+        # one publisher / subscriber per binding; replaces the older
+        # publish_state / subscribe_command flag-based path.
+        self.bindings: list[tuple[BoundSignal, str, str]] = []
 
     def initial_state(self,
                       position:    tuple[float, float, float] = (0.0, 0.0, 0.0),
@@ -327,6 +349,39 @@ class Craft:
             f"manta::geom::Vec3<manta::CraftFrame>{{{_f(wx)}, {_f(wy)}, {_f(wz)}}}"
             "}"
         )
+
+    # ---- pub/sub binding API (phase 2) ----
+
+    def publish(self,
+                signal: BoundSignal,
+                topic: str | None = None,
+                protocol: str = "zenoh") -> "Craft":
+        """Register an outgoing binding: codegen emits a publisher for `signal`
+        on `topic`. The signal must be `direction == "out"` (the part exposes
+        a value the user wants to broadcast). When `topic` is None, codegen
+        defaults to `f"{craft.topic_prefix}/{part_name}/{signal_name}"`."""
+        if signal.direction != "out":
+            raise ValueError(
+                f"Craft.publish: signal {signal.name!r} on part {signal.part_name!r} "
+                f"has direction='in' — use Craft.subscribe instead")
+        topic = topic if topic is not None else f"{self.topic_prefix}/{signal.part_name}/{signal.name}"
+        self.bindings.append((signal, topic, protocol))
+        return self
+
+    def subscribe(self,
+                  signal: BoundSignal,
+                  topic: str | None = None,
+                  protocol: str = "zenoh") -> "Craft":
+        """Register an incoming binding: codegen emits a subscriber on `topic`
+        whose payload is forwarded into `signal` (which must be
+        `direction == "in"` — the part has a setter that consumes it)."""
+        if signal.direction != "in":
+            raise ValueError(
+                f"Craft.subscribe: signal {signal.name!r} on part {signal.part_name!r} "
+                f"has direction='out' — use Craft.publish instead")
+        topic = topic if topic is not None else f"{self.topic_prefix}/{signal.part_name}/{signal.name}"
+        self.bindings.append((signal, topic, protocol))
+        return self
 
     # ---- iteration helpers used by emitters ----
 
