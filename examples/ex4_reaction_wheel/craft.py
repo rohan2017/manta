@@ -35,18 +35,30 @@ WHEEL_MOI  = (WHEEL_IZZ * 0.5, WHEEL_IZZ * 0.5, WHEEL_IZZ)  # disc: I_xx = I_yy 
 
 
 def make_craft() -> Craft:
-    c = Craft("ex4")  # no fields — free space, no gravity
-
-    c.root.add(PointMass("body", mass=BODY_MASS, moi=BODY_MOI))
-
-    motor = c.root.add(Motor(
+    body  = PointMass("body", mass=BODY_MASS, moi=BODY_MOI)
+    motor = Motor(
         "wheel",
         axis=(0.0, 0.0, 1.0),
         stall_torque=2.0,        # N·m
         damping=0.0,
-        subscribe_command=True,  # accept torque commands on manta/ex4/wheel/cmd
-    ))
-    # Attach the flywheel as a child of the motor's joint output.
-    motor.add(PointMass("flywheel", mass=WHEEL_MASS, moi=WHEEL_MOI))
+    )
+    flywheel = PointMass("flywheel", mass=WHEEL_MASS, moi=WHEEL_MOI)
+
+    c = Craft("ex4")  # no fields — free space, no gravity
+    c.root.add(body)
+    c.root.add(motor)
+    motor.add(flywheel)          # flywheel rides the motor's joint output
+
+    # Bundled state with body pose + flat per-signal motor fields. Each motor
+    # signal lives at its own struct key (no nested objects in the new wire
+    # format) — the smoke test reads `state["wheel_rate"][0]` etc.
+    c.publish({
+        "p": c.position,         "q": c.orientation,
+        "v": c.vel_linear,       "w": c.vel_angular,
+        "wheel_angle": motor.angle,
+        "wheel_rate":  motor.rate,
+        "wheel_accel": motor.accel,
+    }, "manta/ex4/state")
+    c.subscribe(motor.set_torque, "manta/ex4/wheel/cmd")
 
     return c

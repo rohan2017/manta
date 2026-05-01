@@ -50,7 +50,7 @@ def main() -> int:
 
     initial = LATEST[-1]
     print(f"initial body angular vel z = {initial['w'][2]:+.4f} rad/s")
-    print(f"initial wheel rate          = {initial.get('wheel', {}).get('rate', 0):+.4f} rad/s")
+    print(f"initial wheel rate          = {initial.get('wheel_rate', [0])[0]:+.4f} rad/s")
 
     # Pulse +0.5 N·m for 1 second, then 0 for 0.3s.
     print("pulsing +0.5 N·m motor torque for 1.0 s...")
@@ -63,7 +63,7 @@ def main() -> int:
 
     final = LATEST[-1]
     body_wz   = final["w"][2]
-    wheel_rate = final.get("wheel", {}).get("rate", 0.0)
+    wheel_rate = final.get("wheel_rate", [0.0])[0]
     print(f"final body angular vel z = {body_wz:+.4f} rad/s")
     print(f"final wheel rate          = {wheel_rate:+.4f} rad/s")
 

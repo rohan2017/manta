@@ -60,22 +60,21 @@ int main() {
     zenoh::Config cfg = zenoh::Config::create_default();
     auto session = zenoh::Session::open(std::move(cfg));
 
-    std::mutex wheel_cmd_mtx;
-    std::vector<float> wheel_cmd;
-    auto wheel_sub = session.declare_subscriber(
+    std::mutex bind_1_mtx;
+    std::vector<float> bind_1_payload;
+    auto bind_1_sub = session.declare_subscriber(
         zenoh::KeyExpr("manta/ex4/wheel/cmd"),
         [&](const zenoh::Sample& s) {
             std::vector<float> v;
             std::string payload(s.get_payload().as_string());
-            if (parse_float_array(payload, v)) {
-                std::lock_guard<std::mutex> lk(wheel_cmd_mtx);
-                wheel_cmd = std::move(v);
+            if (parse_float_array(payload, v) && v.size() >= 1) {
+                std::lock_guard<std::mutex> lk(bind_1_mtx);
+                bind_1_payload = std::move(v);
             }
         }, zenoh::closures::none);
-    auto state_pub = session.declare_publisher(zenoh::KeyExpr("manta/ex4/state"));
-    auto wheel_pub = session.declare_publisher(zenoh::KeyExpr("manta/ex4/wheel/state"));
+    auto pub_0 = session.declare_publisher(zenoh::KeyExpr("manta/ex4/state"));
 
-    std::printf("ex4: ready. State on 'manta/ex4/state'.\n");
+    std::printf("ex4: ready. 2 explicit binding(s).\n");
 
     auto next = std::chrono::steady_clock::now();
     const auto period = std::chrono::microseconds(int64_t(WALL_PERIOD * 1e6));
@@ -83,18 +82,56 @@ int main() {
     const int pub_every = 20;  // ~50 Hz publish
 
     while (g_run.load()) {
-        { std::lock_guard<std::mutex> lk(wheel_cmd_mtx);
-          if (!wheel_cmd.empty()) {
-              if (!wheel_cmd.empty()) craft.wheel().set_torque(wheel_cmd[0]);
+        { std::lock_guard<std::mutex> lk(bind_1_mtx);
+          if (bind_1_payload.size() >= 1) {
+              craft.wheel().set_torque(bind_1_payload[0]);    // member: set_torque
+              bind_1_payload.clear();
           } }
 
         w.update();
 
         if (++pub_decim >= pub_every) {
             pub_decim = 0;
-            Ex4CraftTelemetry telem;
-            capture_ex4_telemetry(craft, w.clock().time(), telem);
-            state_pub.put(zenoh::Bytes(telem.to_json()));
+            { std::string _json = "{";
+              _json += "\"p\":[";
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.scene_to_craft().position().raw()(0))); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().position().raw()(1))); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().position().raw()(2))); _json += _b; }
+              _json += "]";
+              _json += ",";
+              _json += "\"q\":[";
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.scene_to_craft().orientation().raw().w())); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().orientation().raw().x())); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().orientation().raw().y())); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().orientation().raw().z())); _json += _b; }
+              _json += "]";
+              _json += ",";
+              _json += "\"v\":[";
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.scene_to_craft().vel_linear().raw()(0))); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().vel_linear().raw()(1))); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().vel_linear().raw()(2))); _json += _b; }
+              _json += "]";
+              _json += ",";
+              _json += "\"w\":[";
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.scene_to_craft().vel_angular().raw()(0))); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().vel_angular().raw()(1))); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().vel_angular().raw()(2))); _json += _b; }
+              _json += "]";
+              _json += ",";
+              _json += "\"wheel_angle\":[";
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.wheel().angle())); _json += _b; }
+              _json += "]";
+              _json += ",";
+              _json += "\"wheel_rate\":[";
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.wheel().rate())); _json += _b; }
+              _json += "]";
+              _json += ",";
+              _json += "\"wheel_accel\":[";
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.wheel().accel())); _json += _b; }
+              _json += "]";
+              _json += "}";
+              pub_0.put(zenoh::Bytes(_json));
+            }
         }
 
         next += period;

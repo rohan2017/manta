@@ -66,24 +66,21 @@ int main() {
     zenoh::Config cfg = zenoh::Config::create_default();
     auto session = zenoh::Session::open(std::move(cfg));
 
-    std::mutex aft_thrust_cmd_mtx;
-    std::vector<float> aft_thrust_cmd;
-    auto aft_thrust_sub = session.declare_subscriber(
+    std::mutex bind_1_mtx;
+    std::vector<float> bind_1_payload;
+    auto bind_1_sub = session.declare_subscriber(
         zenoh::KeyExpr("manta/ex5/aft_thrust/cmd"),
         [&](const zenoh::Sample& s) {
             std::vector<float> v;
             std::string payload(s.get_payload().as_string());
-            if (parse_float_array(payload, v)) {
-                std::lock_guard<std::mutex> lk(aft_thrust_cmd_mtx);
-                aft_thrust_cmd = std::move(v);
+            if (parse_float_array(payload, v) && v.size() >= 1) {
+                std::lock_guard<std::mutex> lk(bind_1_mtx);
+                bind_1_payload = std::move(v);
             }
         }, zenoh::closures::none);
-    auto state_pub = session.declare_publisher(zenoh::KeyExpr("manta/ex5/state"));
-    auto imu_pub = session.declare_publisher(zenoh::KeyExpr("manta/ex5/imu/state"));
-    auto dvl_pub = session.declare_publisher(zenoh::KeyExpr("manta/ex5/dvl/state"));
-    auto aft_thrust_pub = session.declare_publisher(zenoh::KeyExpr("manta/ex5/aft_thrust/state"));
+    auto pub_0 = session.declare_publisher(zenoh::KeyExpr("manta/ex5/state"));
 
-    std::printf("ex5: ready. State on 'manta/ex5/state'.\n");
+    std::printf("ex5: ready. 2 explicit binding(s).\n");
 
     auto next = std::chrono::steady_clock::now();
     const auto period = std::chrono::microseconds(int64_t(WALL_PERIOD * 1e6));
@@ -91,18 +88,66 @@ int main() {
     const int pub_every = 20;  // ~50 Hz publish
 
     while (g_run.load()) {
-        { std::lock_guard<std::mutex> lk(aft_thrust_cmd_mtx);
-          if (!aft_thrust_cmd.empty()) {
-              craft.aft_thrust().set_throttle(aft_thrust_cmd[0]);
+        { std::lock_guard<std::mutex> lk(bind_1_mtx);
+          if (bind_1_payload.size() >= 1) {
+              craft.aft_thrust().set_throttle(bind_1_payload[0]);    // member: set_throttle
+              bind_1_payload.clear();
           } }
 
         w.update();
 
         if (++pub_decim >= pub_every) {
             pub_decim = 0;
-            Ex5CraftTelemetry telem;
-            capture_ex5_telemetry(craft, w.clock().time(), telem);
-            state_pub.put(zenoh::Bytes(telem.to_json()));
+            { std::string _json = "{";
+              _json += "\"p\":[";
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.scene_to_craft().position().raw()(0))); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().position().raw()(1))); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().position().raw()(2))); _json += _b; }
+              _json += "]";
+              _json += ",";
+              _json += "\"q\":[";
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.scene_to_craft().orientation().raw().w())); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().orientation().raw().x())); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().orientation().raw().y())); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().orientation().raw().z())); _json += _b; }
+              _json += "]";
+              _json += ",";
+              _json += "\"v\":[";
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.scene_to_craft().vel_linear().raw()(0))); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().vel_linear().raw()(1))); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().vel_linear().raw()(2))); _json += _b; }
+              _json += "]";
+              _json += ",";
+              _json += "\"w\":[";
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.scene_to_craft().vel_angular().raw()(0))); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().vel_angular().raw()(1))); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().vel_angular().raw()(2))); _json += _b; }
+              _json += "]";
+              _json += ",";
+              _json += "\"imu_accel\":[";
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.imu().last_accel().raw()(0))); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.imu().last_accel().raw()(1))); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.imu().last_accel().raw()(2))); _json += _b; }
+              _json += "]";
+              _json += ",";
+              _json += "\"imu_gyro\":[";
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.imu().last_gyro().raw()(0))); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.imu().last_gyro().raw()(1))); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.imu().last_gyro().raw()(2))); _json += _b; }
+              _json += "]";
+              _json += ",";
+              _json += "\"dvl_vel\":[";
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.dvl().last_velocity().raw()(0))); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.dvl().last_velocity().raw()(1))); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.dvl().last_velocity().raw()(2))); _json += _b; }
+              _json += "]";
+              _json += ",";
+              _json += "\"throttle\":[";
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.aft_thrust().throttle())); _json += _b; }
+              _json += "]";
+              _json += "}";
+              pub_0.put(zenoh::Bytes(_json));
+            }
         }
 
         next += period;

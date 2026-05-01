@@ -60,29 +60,35 @@ def make_craft() -> Craft:
     Iyy = (1/12.0) * MASS * (3 * RADIUS * RADIUS + LENGTH * LENGTH)
     Izz = Iyy
 
-    hull = c.root.add(Hull("hull",
-                           volume=VOLUME,
-                           sample_points=SAMPLE_POINTS,
-                           publish_state=False))
-    # Hull doesn't carry mass on its own (it's a buoyancy-only model). We
-    # bolt the mass onto the hull part itself by post-construction.
+    hull       = Hull("hull", volume=VOLUME, sample_points=SAMPLE_POINTS)
+    body       = PointMass("body", mass=MASS, moi=(Ixx, Iyy, Izz))
+    gravity    = GravityPart("gravity")
+    imu        = IMU("imu", accel_sigma=0.05, gyro_sigma=0.005)
+    dvl        = DVL("dvl", velocity_sigma=0.02)
+    aft_thrust = Thruster("aft_thrust",
+                          max_thrust=MAX_THRUST,
+                          direction=(1.0, 0.0, 0.0),
+                          transform=tf((-LENGTH/2, 0.0, 0.0)))
 
-    # Sensors and actuator. The Hull is mass-less (buoyancy-only model);
-    # lump the body mass and inertia into a dedicated PointMass.
-    c.root.add(PointMass("body", mass=MASS, moi=(Ixx, Iyy, Izz)))
+    c.root.add(hull)
+    c.root.add(body)
+    c.root.add(gravity)
+    c.root.add(imu)
+    c.root.add(dvl)
+    c.root.add(aft_thrust)
 
-    # Gravity: Hull only reads g for the buoyancy direction; we need a
-    # separate GravityPart to apply mg to the body.
-    c.root.add(GravityPart("gravity"))
-
-    c.root.add(IMU("imu", accel_sigma=0.05, gyro_sigma=0.005))
-    c.root.add(DVL("dvl", velocity_sigma=0.02))
-
-    # Aft thruster on the −x face, pointing +x (along forward axis).
-    c.root.add(Thruster("aft_thrust",
-                        max_thrust=MAX_THRUST,
-                        direction=(1.0, 0.0, 0.0),
-                        transform=tf((-LENGTH/2, 0.0, 0.0))))
+    # Bundled state: pose + sensor signals + thrust. Smoke test only reads
+    # `state["p"]` and `state["v"]` so the legacy wire shape is preserved
+    # for those fields; sensor data uses flat per-signal keys.
+    c.publish({
+        "p": c.position,         "q": c.orientation,
+        "v": c.vel_linear,       "w": c.vel_angular,
+        "imu_accel": imu.last_accel,
+        "imu_gyro":  imu.last_gyro,
+        "dvl_vel":   dvl.last_velocity,
+        "throttle":  aft_thrust.throttle,
+    }, "manta/ex5/state")
+    c.subscribe(aft_thrust.set_throttle, "manta/ex5/aft_thrust/cmd")
 
     # Initial state: 0.5 m below sea surface, at rest.
     c.initial_state(position=(0.0, 0.0, -0.5))
