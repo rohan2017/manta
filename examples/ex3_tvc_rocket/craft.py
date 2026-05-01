@@ -9,7 +9,7 @@ Generate from the repo root:
         python -m manta_codegen.cli examples/ex3_tvc_rocket/craft.py --workflow library
 """
 
-from manta_codegen import Craft, tf
+from manta_codegen import Craft, World, tf
 from manta_codegen.parts  import GimbaledThruster, GravityPart, IMU, PointMass
 from manta_codegen.fields import GravityField
 
@@ -22,17 +22,19 @@ ENGINE_Z     = -1.0                # 1 m below CoM
 MAX_GIMBAL   = 0.15                # ~8.6 deg
 
 
-def make_craft() -> Craft:
-    c = Craft("ex3", fields=[GravityField()])
+def make_world() -> World:
+    c = Craft("ex3")
 
     # Pencil-shaped rocket inertia: Ix=Iy >> Iz.
-    c.root.add(PointMass("body", mass=MASS, moi=(0.8, 0.8, 0.05)))
-    c.root.add(GimbaledThruster(
+    c.add(PointMass("body", mass=MASS, moi=(0.8, 0.8, 0.05)))
+    c.add(GimbaledThruster(
         "engine",
         max_thrust=MAX_THRUST,
         max_angle=MAX_GIMBAL,
         transform=tf((0.0, 0.0, ENGINE_Z)),
     ))
-    c.root.add(GravityPart("grav"))
-    c.root.add(IMU("imu"))
-    return c
+    c.add(GravityPart("grav"))
+    c.add(IMU("imu"))
+
+    # Library workflow: user main does pub/sub manually.
+    return World().add_field(GravityField()).add_craft(c)

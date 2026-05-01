@@ -9,7 +9,7 @@ Generate from the repo root:
         python -m manta_codegen.cli examples/ex2_quadcopter/craft.py --workflow library
 """
 
-from manta_codegen import Craft, tf
+from manta_codegen import Craft, World, tf
 from manta_codegen.parts  import GravityPart, IMU, PointMass, PropThruster
 from manta_codegen.fields import GravityField
 
@@ -20,11 +20,11 @@ KT    = 0.02     # counter-torque coefficient
 MAX_THRUST_PER_PROP = 2 * (MASS * 9.81) / 4  # 2× hover thrust per prop
 
 
-def make_craft() -> Craft:
-    c = Craft("ex2", fields=[GravityField()])
+def make_world() -> World:
+    c = Craft("ex2")
 
     # Pencil-shaped body inertia: lump everything into the central PointMass.
-    c.root.add(PointMass("body", mass=MASS, moi=(0.01, 0.01, 0.02)))
+    c.add(PointMass("body", mass=MASS, moi=(0.01, 0.01, 0.02)))
 
     # X-config: looking down +z,
     #   front-right (+x,-y) : CCW
@@ -38,7 +38,7 @@ def make_craft() -> Craft:
         ("br", -ARM_L, -ARM_L, True),
     ]
     for name, x, y, cw in layout:
-        c.root.add(PropThruster(
+        c.add(PropThruster(
             name,
             max_thrust=MAX_THRUST_PER_PROP,
             kt=KT,
@@ -46,6 +46,9 @@ def make_craft() -> Craft:
             transform=tf((x, y, 0)),
         ))
 
-    c.root.add(GravityPart("grav"))
-    c.root.add(IMU("imu"))
-    return c
+    c.add(GravityPart("grav"))
+    c.add(IMU("imu"))
+
+    # Library workflow: user main does pub/sub manually. World still owns the
+    # field registration so codegen can emit any required headers/glue.
+    return World().add_field(GravityField()).add_craft(c)

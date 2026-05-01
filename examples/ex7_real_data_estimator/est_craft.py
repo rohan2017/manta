@@ -16,11 +16,11 @@ Codegen:
             --workflow library
 """
 
-from manta_codegen import Craft
+from manta_codegen import Craft, World
 from manta_codegen.parts import DVL, IMU, PointMass
 
 
-def make_craft() -> Craft:
+def make_world() -> World:
     c = Craft("ex7_est")
     c.scalar_templated = True
 
@@ -28,9 +28,9 @@ def make_craft() -> Craft:
     # the IMU's reading already accounts for the inertial acceleration
     # (the EKF's process model integrates it directly), so the estimator
     # doesn't separately apply gravity.
-    c.root.add(PointMass("body", mass=1.0, moi=(0.05, 0.05, 0.05)))
+    c.add(PointMass("body", mass=1.0, moi=(0.05, 0.05, 0.05)))
 
-    c.root.add(IMU("imu", accel_sigma=0.05, gyro_sigma=0.005))
-    c.root.add(DVL("dvl", velocity_sigma=0.02))
+    c.add(IMU("imu", accel_sigma=0.05, gyro_sigma=0.005))
+    c.add(DVL("dvl", velocity_sigma=0.02))
 
-    return c
+    return World().add_craft(c)

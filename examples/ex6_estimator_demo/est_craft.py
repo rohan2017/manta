@@ -17,26 +17,23 @@ Codegen:
             --workflow library
 """
 
-from manta_codegen import Craft
+from manta_codegen import Craft, World
 from manta_codegen.parts  import DVL, GravityPart, IMU, PointMass, Thruster
 from manta_codegen.fields import GravityField
 
 
-def make_craft() -> Craft:
-    c = Craft("ex6_est", fields=[GravityField()])
+def make_world() -> World:
+    c = Craft("ex6_est")
     # Opt in to templated codegen — required for CraftEKF wrapping.
     c.scalar_templated = True
 
-    c.root.add(PointMass("body", mass=1.0, moi=(0.05, 0.05, 0.05)))
-    c.root.add(GravityPart("gravity"))
-    c.root.add(IMU("imu", accel_sigma=0.05, gyro_sigma=0.005))
-    c.root.add(DVL("dvl", velocity_sigma=0.02))
-    # No subscribe_command on the est-side thruster — the EKF doesn't pilot.
-    # We still keep the part so the inertia and any geometric offsets match
-    # the sim model.
-    c.root.add(Thruster("thrust",
-                        max_thrust=15.0,
-                        direction=(1.0, 1.0, 0.5),
-                        subscribe_command=False))
+    c.add(PointMass("body", mass=1.0, moi=(0.05, 0.05, 0.05)))
+    c.add(GravityPart("gravity"))
+    c.add(IMU("imu", accel_sigma=0.05, gyro_sigma=0.005))
+    c.add(DVL("dvl", velocity_sigma=0.02))
+    # The estimator-side thruster has no command path — the EKF doesn't pilot.
+    # We still keep the part so inertia and geometric offsets match the sim
+    # model.
+    c.add(Thruster("thrust", max_thrust=15.0, direction=(1.0, 1.0, 0.5)))
 
-    return c
+    return World().add_field(GravityField()).add_craft(c)

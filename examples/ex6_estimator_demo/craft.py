@@ -18,31 +18,28 @@ Codegen:
             --workflow library
 """
 
-from manta_codegen import Craft
+from manta_codegen import Craft, World
 from manta_codegen.parts  import DVL, GravityPart, IMU, PointMass, Thruster
 from manta_codegen.fields import GravityField
 
 
-def make_craft() -> Craft:
-    c = Craft("ex6", fields=[GravityField()])
+def make_world() -> World:
+    c = Craft("ex6")
 
     # Body inertia: lumped point with small diagonal MOI.
-    c.root.add(PointMass("body", mass=1.0, moi=(0.05, 0.05, 0.05)))
+    c.add(PointMass("body", mass=1.0, moi=(0.05, 0.05, 0.05)))
 
     # Gravity drives the dynamics down at -9.81 m/s².
-    c.root.add(GravityPart("gravity"))
+    c.add(GravityPart("gravity"))
 
     # Sensors. Modest noise — enough to be realistic, not so much that the
     # EKF can't lock on within a few seconds.
-    c.root.add(IMU("imu", accel_sigma=0.05, gyro_sigma=0.005))
-    c.root.add(DVL("dvl", velocity_sigma=0.02))
+    c.add(IMU("imu", accel_sigma=0.05, gyro_sigma=0.005))
+    c.add(DVL("dvl", velocity_sigma=0.02))
 
     # A diagonal aft thruster — pulse to drive 3-axis motion. Commanded by
     # the user main via Zenoh ('manta/ex6/thrust/cmd').
-    c.root.add(Thruster("thrust",
-                        max_thrust=15.0,
-                        direction=(1.0, 1.0, 0.5),
-                        subscribe_command=True))
+    c.add(Thruster("thrust", max_thrust=15.0, direction=(1.0, 1.0, 0.5)))
 
-    # Publish initial state at the origin, at rest.
-    return c
+    # Library workflow: user main does Zenoh I/O + EKF wiring.
+    return World().add_field(GravityField()).add_craft(c)

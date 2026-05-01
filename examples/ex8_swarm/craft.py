@@ -12,15 +12,17 @@ Codegen:
             --workflow library
 """
 
-from manta_codegen import Craft
+from manta_codegen import Craft, World
 from manta_codegen.parts import PointMass, Thruster
 
 
-def make_craft() -> Craft:
+def make_world() -> World:
     c = Craft("ex8")  # no fields — drag-free vacuum
-    c.root.add(PointMass("body", mass=1.0))
-    c.root.add(Thruster("forward",
-                        max_thrust=2.0,
-                        direction=(1.0, 0.0, 0.0),
-                        subscribe_command=False))   # commands set per-instance
-    return c
+    c.add(PointMass("body", mass=1.0))
+    c.add(Thruster("forward",
+                   max_thrust=2.0,
+                   direction=(1.0, 0.0, 0.0),
+                   subscribe_command=False))   # commands set per-instance by user main
+
+    # Library workflow: user main does multi-instance pub/sub via tethers.
+    return World().add_craft(c)

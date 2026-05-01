@@ -7,4 +7,4 @@
 // Feature-test macros for fields registered with this craft. Force-included
 // into every TU of the craft target via the generated CMake fragment.
 
-#define MANTA_HAS_GRAVITY_FIELD 1
+// (No fields registered for this craft.)
