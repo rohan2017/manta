@@ -501,6 +501,119 @@ class Craft:
         return list(self.fields)
 
 
+# ---------------------------------------------------------------------------
+# World — top-level simulation container (phase 3 of the API redesign).
+
+@dataclass
+class _CraftEntry:
+    craft: "Craft"
+    on: "PlanetDescriptor | None" = None
+    position:    tuple[float, float, float]                = (0.0, 0.0, 0.0)
+    orientation: tuple[float, float, float, float]         = (1.0, 0.0, 0.0, 0.0)
+    vel_linear:  tuple[float, float, float]                = (0.0, 0.0, 0.0)
+    vel_angular: tuple[float, float, float]                = (0.0, 0.0, 0.0)
+
+
+class World:
+    """The simulation top-level. Holds fields, planets, crafts, and the sim
+    loop config (dt, rate multiplier). Each craft is added with its own
+    initial state in a chosen frame (`on=planet` for a planet-frame anchor,
+    or default to WorldFrame).
+
+    Typical usage:
+
+        earth = Earth()
+        drone = make_drone()        # a Craft
+
+        w = World()
+        w.add_planet(earth)
+        w.add_craft(drone, on=earth, pos=(0, 0, 100.0))
+        w.run(dt=0.001, sim_rate_mult=1.0)
+
+    Backward compatibility: the codegen CLI also accepts make_craft() that
+    returns a Craft — it wraps the Craft in a synthetic World built from
+    the Craft's deprecated `fields`, `planets`, `dt`, `sim_rate_mult`,
+    and `_initial_state` fields. Once all examples migrate to World those
+    Craft-level fields go away.
+    """
+
+    def __init__(self) -> None:
+        self.fields: list[FieldDescriptor] = []
+        self.planets: list[PlanetDescriptor] = []
+        self.crafts: list[_CraftEntry] = []
+        self.dt: float = 0.001
+        self.sim_rate_mult: float = 1.0
+
+    def add_field(self, f: FieldDescriptor) -> "World":
+        self.fields.append(f)
+        return self
+
+    def add_planet(self, p: PlanetDescriptor) -> "World":
+        self.planets.append(p)
+        return self
+
+    def add_craft(self,
+                  craft: "Craft",
+                  on: PlanetDescriptor | None = None,
+                  pos:         tuple[float, float, float]                = (0.0, 0.0, 0.0),
+                  ori:         tuple[float, float, float, float]         = (1.0, 0.0, 0.0, 0.0),
+                  vel:         tuple[float, float, float]                = (0.0, 0.0, 0.0),
+                  vel_angular: tuple[float, float, float]                = (0.0, 0.0, 0.0)) -> "World":
+        """Attach a craft with its initial state in the chosen reference frame.
+
+        `on=None` (default) → pos/vel are in WorldFrame (= scene frame when
+        no planet anchor is set).
+        `on=planet` → pos/vel are in the planet's PlanetFrame, and the
+        scene anchors to that planet so the craft co-rotates with it.
+
+        For now the implementation assumes one scene per World, with
+        planet_to_scene = identity; multi-scene / scene-rebasing comes later.
+        """
+        if on is not None and on not in self.planets:
+            raise ValueError(
+                f"World.add_craft: planet {on!r} is not registered with this World; "
+                f"call world.add_planet(planet) first")
+        self.crafts.append(_CraftEntry(
+            craft=craft, on=on,
+            position=tuple(float(x) for x in pos),                 # type: ignore[arg-type]
+            orientation=tuple(float(x) for x in ori),              # type: ignore[arg-type]
+            vel_linear=tuple(float(x) for x in vel),               # type: ignore[arg-type]
+            vel_angular=tuple(float(x) for x in vel_angular),      # type: ignore[arg-type]
+        ))
+        return self
+
+    def run(self, dt: float = 0.001, sim_rate_mult: float = 1.0) -> "World":
+        """Configure the sim loop:
+            dt              : sim step (seconds)
+            sim_rate_mult   : ratio of sim seconds to wall seconds (1.0 = realtime)
+        """
+        self.dt = float(dt)
+        self.sim_rate_mult = float(sim_rate_mult)
+        return self
+
+
+def world_from_craft(craft: "Craft") -> World:
+    """Backward-compat shim: synthesize a World from a legacy Craft. Reads
+    the Craft's own fields/planets/dt/sim_rate_mult/_initial_state. Used by
+    the codegen CLI when make_craft() returns a Craft instead of a World."""
+    w = World()
+    w.fields  = list(craft.fields)
+    w.planets = list(craft.planets)
+    w.dt = craft.dt
+    w.sim_rate_mult = craft.sim_rate_mult
+
+    init = craft._initial_state
+    pos = init.get("position",    (0.0, 0.0, 0.0))
+    ori = init.get("orientation", (1.0, 0.0, 0.0, 0.0))
+    vel = init.get("vel_linear",  (0.0, 0.0, 0.0))
+    vw  = init.get("vel_angular", (0.0, 0.0, 0.0))
+    w.crafts.append(_CraftEntry(
+        craft=craft, on=None,
+        position=pos, orientation=ori, vel_linear=vel, vel_angular=vw,
+    ))
+    return w
+
+
 class _RootProxy:
     """The `craft.root` handle. Holds direct children; doesn't itself emit C++
     (the C++ root is `Craft::root()`)."""

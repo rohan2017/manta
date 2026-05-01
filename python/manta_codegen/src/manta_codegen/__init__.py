@@ -6,7 +6,9 @@ from .core import (
     Craft,
     PartDescriptor,
     FieldDescriptor,
+    PlanetDescriptor,
     StaticTransform,
+    World,
     tf,
 )
 from .emit import emit
@@ -15,7 +17,9 @@ __all__ = [
     "Craft",
     "PartDescriptor",
     "FieldDescriptor",
+    "PlanetDescriptor",
     "StaticTransform",
+    "World",
     "tf",
     "emit",
 ]

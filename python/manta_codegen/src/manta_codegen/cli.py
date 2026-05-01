@@ -4,8 +4,12 @@ Usage:
     manta-codegen path/to/craft.py [--out OUT_DIR] [--workflow library|binary]
 
 The craft module must expose either:
-  * A top-level `CRAFT` variable bound to a `manta_codegen.Craft`, OR
-  * A factory function named `make_craft()` that returns a Craft.
+  * A top-level `CRAFT` or `WORLD` variable, OR
+  * A factory function `make_craft()` or `make_world()` returning the same.
+
+Returning a Craft (legacy) is still supported — the CLI wraps it in a
+synthetic World built from the Craft's deprecated fields/planets/dt/
+initial_state. Prefer returning a World via make_world() in new code.
 """
 
 from __future__ import annotations
@@ -15,11 +19,11 @@ import importlib.util
 import sys
 from pathlib import Path
 
-from .core import Craft
+from .core import Craft, World, world_from_craft
 from .emit import emit
 
 
-def _load_craft(module_path: Path) -> Craft:
+def _load_world(module_path: Path) -> World:
     spec = importlib.util.spec_from_file_location("user_craft_spec", module_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Could not load Python module at {module_path}")
@@ -27,16 +31,35 @@ def _load_craft(module_path: Path) -> Craft:
     sys.modules["user_craft_spec"] = module
     spec.loader.exec_module(module)
 
-    if hasattr(module, "CRAFT"):
-        craft = module.CRAFT
+    # Preferred: a World handle, either named WORLD or returned by make_world().
+    obj = None
+    if hasattr(module, "WORLD"):
+        obj = module.WORLD
+    elif hasattr(module, "make_world"):
+        obj = module.make_world()
+    elif hasattr(module, "CRAFT"):
+        obj = module.CRAFT
     elif hasattr(module, "make_craft"):
-        craft = module.make_craft()
+        obj = module.make_craft()
     else:
         raise RuntimeError(
-            f"{module_path} must define `CRAFT` or `make_craft()` returning a Craft.")
-    if not isinstance(craft, Craft):
-        raise TypeError(f"Loaded object is not a Craft (got {type(craft).__name__}).")
-    return craft
+            f"{module_path} must define WORLD/make_world() or CRAFT/make_craft().")
+
+    if isinstance(obj, World):
+        return obj
+    if isinstance(obj, Craft):
+        return world_from_craft(obj)
+    raise TypeError(
+        f"Loaded object must be a World or Craft (got {type(obj).__name__}).")
+
+
+# Back-compat shim used by emit/CLI internals: when callers want the
+# (single) primary craft handle, they can grab world.crafts[0].craft.
+def _load_craft(module_path: Path) -> Craft:
+    w = _load_world(module_path)
+    if not w.crafts:
+        raise RuntimeError(f"{module_path}: World has no crafts")
+    return w.crafts[0].craft
 
 
 def _parse_topics(s: str) -> dict[str, str]:
