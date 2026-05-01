@@ -78,8 +78,8 @@ Atomic unit of simulation. Each part exposes:
 
 Stock parts: `PointMass`, `Mass`, `Hull` (buoyancy), `Surface1..4` (drag),
 `PointBuoy`, `Thruster`, `PropThruster`, `GimbaledThruster`, `IMU`, `DVL`,
-`Motor` (1-DOF revolute joint), `GravityPart`, `PointGravityPart`,
-`TetherEndpoint`.
+`Magnetometer`, `Motor` (1-DOF revolute joint), `GravityPart`,
+`PointGravityPart`, `TetherEndpoint`.
 
 ### Bindings
 Each `c.publish(...)` and `c.subscribe(...)` records a `Binding`:
@@ -194,6 +194,7 @@ The codegen has two output modes:
 | ex8 | library | Multi-craft swarm: 3 drones tethered in a chain |
 | ex9 | binary  | Minimal demo of the explicit Binding API |
 | ex10| binary  | Multi-craft codegen — two Crafts in one binary |
+| ex11| binary  | Codegen-driven Tether between two crafts |
 
 ## Building
 
@@ -212,15 +213,15 @@ Early/active development. The public API is stable enough for examples
 ex0..ex10 to drive it without back-compat shims, but any of it can still
 move. Notable items not yet built:
 
-- Multi-craft Tether codegen — independent multi-craft works (ex10) but
-  ex8's tether-chain swarm is still hand-written because there's no
-  Python descriptor for `coupling::Tether` yet.
-- A first-class system-ID layer (the proof-of-concept is in
-  `tests/test_system_id.cpp`; the API for batch parameter fitting is
-  not yet wrapped).
 - Distributed Field backend over Zenoh (cross-process FluidField sharing).
-- A magnetometer Part to consume `MagField` (the field exists; no Part
-  reads it yet).
+  Held for design discussion.
+- A first-class system-ID API. The technique is demonstrated end-to-end
+  in `tests/test_system_id.cpp` (mass fit + drag-coefficient fit on
+  Surface1), but is not yet wrapped in a `ParameterFit<MyCraftT, NParams>`
+  template — users currently write the Ceres residual functor by hand.
+- ex8's hand-written 3-drone tether chain has not yet been migrated to
+  the codegen-driven Tether API (ex11 demonstrates the pattern; ex8
+  works fine as-is).
 
 ## Design docs
 
