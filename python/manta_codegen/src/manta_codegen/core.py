@@ -61,6 +61,14 @@ _CRAFT_SIGNALS: list[Signal] = [
             "{accessor}.scene_to_craft().vel_angular().raw()(2)",
         ),
     ),
+    # World-clock time (seconds since sim start). Reads through the craft's
+    # World handle — convenient single-field signal for telemetry timestamps.
+    Signal(
+        name="time",
+        direction="out",
+        n_floats=1,
+        cpp_read_exprs=("{accessor}.world().clock().time()",),
+    ),
 ]
 
 

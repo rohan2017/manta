@@ -48,6 +48,7 @@ def make_world() -> World:
     motor.add(flywheel)          # flywheel rides the motor's joint output
 
     c.publish({
+        "t": c.time,
         "p": c.position,         "q": c.orientation,
         "v": c.vel_linear,       "w": c.vel_angular,
         "wheel_angle": motor.angle,

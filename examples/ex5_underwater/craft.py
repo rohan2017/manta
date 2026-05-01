@@ -77,6 +77,7 @@ def make_world() -> World:
     # `state["p"]` and `state["v"]` so the legacy wire shape is preserved
     # for those fields; sensor data uses flat per-signal keys.
     c.publish({
+        "t": c.time,
         "p": c.position,         "q": c.orientation,
         "v": c.vel_linear,       "w": c.vel_angular,
         "imu_accel": imu.last_accel,

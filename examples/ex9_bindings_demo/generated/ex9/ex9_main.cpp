@@ -138,9 +138,8 @@ int main() {
               { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().vel_angular().raw()(2))); _json += _b; }
               _json += "]";
               _json += ",";
-              _json += "\"throttle\":[";
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.thrust().throttle())); _json += _b; }
-              _json += "]";
+              _json += "\"throttle\":";
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%g", double(craft.thrust().throttle())); _json += _b; }
               _json += "}";
               pub_2.put(zenoh::Bytes(_json));
             }

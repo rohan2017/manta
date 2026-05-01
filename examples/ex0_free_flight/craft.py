@@ -34,6 +34,7 @@ def make_world() -> World:
         c.add(t)
 
     state = {
+        "t": c.time,
         "p": c.position, "q": c.orientation,
         "v": c.vel_linear, "w": c.vel_angular,
     }

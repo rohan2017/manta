@@ -48,6 +48,7 @@ def make_world() -> World:
     # Bundled state topic: craft pose + per-thruster throttles. Wire format
     # matches what the viewer expects (top-level "p","q","v","w" arrays).
     state = {
+        "t": c.time,
         "p": c.position, "q": c.orientation,
         "v": c.vel_linear, "w": c.vel_angular,
     }

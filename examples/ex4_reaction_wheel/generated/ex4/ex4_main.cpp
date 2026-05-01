@@ -93,6 +93,9 @@ int main() {
         if (++pub_decim >= pub_every) {
             pub_decim = 0;
             { std::string _json = "{";
+              _json += "\"t\":";
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%g", double(craft.world().clock().time())); _json += _b; }
+              _json += ",";
               _json += "\"p\":[";
               { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.scene_to_craft().position().raw()(0))); _json += _b; }
               { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().position().raw()(1))); _json += _b; }
@@ -118,17 +121,14 @@ int main() {
               { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().vel_angular().raw()(2))); _json += _b; }
               _json += "]";
               _json += ",";
-              _json += "\"wheel_angle\":[";
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.wheel().angle())); _json += _b; }
-              _json += "]";
+              _json += "\"wheel_angle\":";
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%g", double(craft.wheel().angle())); _json += _b; }
               _json += ",";
-              _json += "\"wheel_rate\":[";
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.wheel().rate())); _json += _b; }
-              _json += "]";
+              _json += "\"wheel_rate\":";
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%g", double(craft.wheel().rate())); _json += _b; }
               _json += ",";
-              _json += "\"wheel_accel\":[";
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.wheel().accel())); _json += _b; }
-              _json += "]";
+              _json += "\"wheel_accel\":";
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%g", double(craft.wheel().accel())); _json += _b; }
               _json += "}";
               pub_0.put(zenoh::Bytes(_json));
             }

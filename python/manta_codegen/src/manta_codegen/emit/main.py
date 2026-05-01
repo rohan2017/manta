@@ -268,15 +268,25 @@ def _emit_binding_publish(lines: list[str], i: int, b: Binding) -> None:
         if not first_member:
             lines.append('              _json += ",";')
         first_member = False
-        lines.append(f'              _json += "\\"{member_name}\\":[";')
-        for k, expr in enumerate(sig.signal.cpp_read_exprs):
-            cpp_expr = expr.format(accessor=accessor)
-            sep = '","' if k > 0 else '""'
+        # Scalar (n=1) members emit bare numbers; multi-component members
+        # emit JSON arrays. Both shapes are idiomatic for downstream parsers.
+        if n == 1:
+            cpp_expr = sig.signal.cpp_read_exprs[0].format(accessor=accessor)
+            lines.append(f'              _json += "\\"{member_name}\\":";')
             lines.append(
-                f"              {{ char _b[32]; std::snprintf(_b, sizeof(_b), \"%s%g\", "
-                f"{sep}, double({cpp_expr})); _json += _b; }}"
+                f"              {{ char _b[32]; std::snprintf(_b, sizeof(_b), \"%g\", "
+                f"double({cpp_expr})); _json += _b; }}"
             )
-        lines.append('              _json += "]";')
+        else:
+            lines.append(f'              _json += "\\"{member_name}\\":[";')
+            for k, expr in enumerate(sig.signal.cpp_read_exprs):
+                cpp_expr = expr.format(accessor=accessor)
+                sep = '","' if k > 0 else '""'
+                lines.append(
+                    f"              {{ char _b[32]; std::snprintf(_b, sizeof(_b), \"%s%g\", "
+                    f"{sep}, double({cpp_expr})); _json += _b; }}"
+                )
+            lines.append('              _json += "]";')
     lines += [
         '              _json += "}";',
         f"              pub_{i}.put(zenoh::Bytes(_json));",
