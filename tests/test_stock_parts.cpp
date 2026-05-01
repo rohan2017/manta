@@ -1,7 +1,7 @@
 // Tests for the new stock part models added 2026-04-29:
 //   * Mass            — point mass with full MOI
 //   * PointBuoy       — single-point buoyancy
-//   * Surface<N>      — N-power velocity-driven force/torque
+//   * Surface1..4     — N-power velocity-driven force/torque
 //   * DVL             — Doppler velocity log sensor
 
 #include <array>
@@ -79,7 +79,7 @@ TEST_CASE("PointBuoy: zero volume → zero force") {
     CHECK(test::approx_equal(c.root().net_wrench().force(), Vec3<PartFrame>::zero()));
 }
 
-// ---- Surface<N> ----
+// ---- Surface1..Surface4 ----
 
 namespace {
 Mat3<PartFrame> diag_mat(float a, float b, float cc) {
@@ -89,21 +89,21 @@ Mat3<PartFrame> diag_mat(float a, float b, float cc) {
 }
 }
 
-TEST_CASE("Surface<1>: linear drag — F = -k * v_rel") {
+TEST_CASE("Surface1: linear drag — F = -k * v_rel") {
     // Fluid at rest, body at rest → no relative motion → no force.
     UniformFluidField fluid(1.0f);  // density doesn't enter Surface
     Craft c("test");
     c.register_field<FluidField>(fluid);
     auto A = std::array<Mat3<PartFrame>, 1>{ diag_mat(-2.0f, -2.0f, -2.0f) };
     auto B = std::array<Mat3<PartFrame>, 1>{ diag_mat( 0.0f,  0.0f,  0.0f) };
-    c.root().add<Surface<1>>("surf", A, B);
+    c.root().add<Surface1>("surf", A, B);
     c.root().compute_params();
 
     c.update();
     CHECK(test::approx_equal(c.root().net_wrench().force(), Vec3<PartFrame>::zero()));
 }
 
-TEST_CASE("Surface<1>: fluid moving relative to body → force") {
+TEST_CASE("Surface1: fluid moving relative to body → force") {
     // Wind +x at 5 m/s, body at rest. v_rel_part = (5, 0, 0).
     // A = diag(-2,-2,-2). F_part = -2 * (5,0,0) = (-10, 0, 0).
     UniformFluidField wind(1.0f, Vec3<SceneFrame>{5.0f, 0, 0});
@@ -111,7 +111,7 @@ TEST_CASE("Surface<1>: fluid moving relative to body → force") {
     c.register_field<FluidField>(wind);
     auto A = std::array<Mat3<PartFrame>, 1>{ diag_mat(-2.0f, -2.0f, -2.0f) };
     auto B = std::array<Mat3<PartFrame>, 1>{ diag_mat( 0.0f,  0.0f,  0.0f) };
-    c.root().add<Surface<1>>("surf", A, B);
+    c.root().add<Surface1>("surf", A, B);
     c.root().compute_params();
     c.update();
     auto F = c.root().net_wrench().force();
@@ -120,7 +120,7 @@ TEST_CASE("Surface<1>: fluid moving relative to body → force") {
     CHECK(F.z() == doctest::Approx(  0.0f).epsilon(1e-4f));
 }
 
-TEST_CASE("Surface<2>: linear + quadratic — A*v + B*v² accumulate") {
+TEST_CASE("Surface2: linear + quadratic — A*v + B*v² accumulate") {
     UniformFluidField wind(1.0f, Vec3<SceneFrame>{3.0f, 0, 0});
     Craft c("test");
     c.register_field<FluidField>(wind);
@@ -130,13 +130,13 @@ TEST_CASE("Surface<2>: linear + quadratic — A*v + B*v² accumulate") {
                                       diag_mat(-0.5f, -0.5f, -0.5f) };
     std::array<Mat3<PartFrame>, 2> B{ diag_mat( 0.0f,  0.0f,  0.0f),
                                       diag_mat( 0.0f,  0.0f,  0.0f) };
-    c.root().add<Surface<2>>("surf", A, B);
+    c.root().add<Surface2>("surf", A, B);
     c.root().compute_params();
     c.update();
     CHECK(c.root().net_wrench().force().x() == doctest::Approx(-7.5f).epsilon(1e-4f));
 }
 
-TEST_CASE("Surface<1>: torque tensor produces torque from velocity") {
+TEST_CASE("Surface1: torque tensor produces torque from velocity") {
     // Body moving +x at 2 m/s in still fluid → v_rel_part = (-2, 0, 0).
     // B = identity → torque = v_rel_part = (-2, 0, 0).
     UniformFluidField fluid(1.0f);
@@ -144,7 +144,7 @@ TEST_CASE("Surface<1>: torque tensor produces torque from velocity") {
     c.register_field<FluidField>(fluid);
     std::array<Mat3<PartFrame>, 1> A{ diag_mat(0.0f, 0.0f, 0.0f) };
     std::array<Mat3<PartFrame>, 1> B{ diag_mat(1.0f, 1.0f, 1.0f) };
-    c.root().add<Surface<1>>("surf", A, B);
+    c.root().add<Surface1>("surf", A, B);
     c.root().compute_params();
     c.set_vel_linear(Vec3<SceneFrame>{2, 0, 0});
     c.update();

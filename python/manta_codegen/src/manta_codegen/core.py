@@ -115,15 +115,15 @@ class PartDescriptor:
     cpp_header: ClassVar[str] = ""
     # If non-empty, this is the C++ class TEMPLATE (e.g. `manta::parts::PointMassT`)
     # that the part should be instantiated through when generating a Scalar-
-    # templated craft. If empty, this part is not yet Scalar-templated and the
-    # codegen falls back to the bare cpp_class (which forces Real). When ALL
-    # parts in a craft have cpp_class_template set, the codegen emits the
-    # craft as a class template; otherwise it emits the non-templated form.
-    #
-    # Most parts use the default `cpp_class_template_instantiation`, which
-    # produces `f"{cpp_class_template}<{scalar}>"`. Parts with extra template
-    # parameters beyond Scalar (e.g. `SurfaceT<N, Scalar>`) override the
-    # method to splice in their additional parameters.
+    # templated craft. The codegen emits `cpp_class_template<Scalar>` so the
+    # template MUST take Scalar as its single parameter — parts that need
+    # multiple variants (e.g. force-tensor count) should expose them as
+    # separate descriptors backed by separate concrete C++ classes (e.g.
+    # `Surface1T<Scalar>`, `Surface2T<Scalar>`), not as extra template args.
+    # If empty, this part is not yet Scalar-templated and the codegen falls
+    # back to the bare cpp_class (which forces Real). When ALL parts in a
+    # craft have cpp_class_template set, the codegen emits the craft as a
+    # class template; otherwise it emits the non-templated form.
     cpp_class_template: ClassVar[str] = ""
     # List of FieldDescriptor subclasses this part requires. Codegen verifies
     # all of these are registered with the craft and emits `static_assert`s on
@@ -160,14 +160,6 @@ class PartDescriptor:
     # numeric scalar. Default `"manta::Real"` produces the original (Real-typed)
     # output; the templated codegen passes `"Scalar"` to generate code valid
     # inside a `template <class Scalar> class ...` body.
-
-    def cpp_class_template_instantiation(self, scalar: str) -> str:
-        """The C++ template instantiation to use inside `parent.template add<...>(...)`
-        when emitting a Scalar-templated craft. Default: `cpp_class_template<scalar>`.
-        Override for parts that have additional template parameters (e.g. Surface
-        adds an `int N` before Scalar). Only called when `cpp_class_template` is
-        non-empty."""
-        return f"{self.cpp_class_template}<{scalar}>"
 
     def emit_constructor_args(self, scalar: str = "manta::Real") -> str:
         """C++ argument list for `parent.add<CppClass>(...)`. Subclasses override.

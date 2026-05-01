@@ -8,7 +8,7 @@ from .actuator.gimbaled_thruster import GimbaledThruster
 from .structure.point_mass import PointMass
 from .structure.mass import Mass
 from .structure.hull import Hull
-from .structure.surface import Surface
+from .structure.surface import Surface1, Surface2, Surface3, Surface4
 from .structure.point_buoy import PointBuoy
 
 from .field_src.gravity_part import GravityPart
@@ -30,7 +30,10 @@ __all__ = [
     "PointGravityPart",
     "PointMass",
     "PropThruster",
-    "Surface",
+    "Surface1",
+    "Surface2",
+    "Surface3",
+    "Surface4",
     "TetherEndpoint",
     "Thruster",
 ]

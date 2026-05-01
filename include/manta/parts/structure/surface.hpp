@@ -8,25 +8,31 @@
 
 namespace manta::parts {
 
-// A flat-plate / control-surface / drag-body abstraction parameterized by N
-// velocity-power terms. See header notes below for the algorithm.
+// Flat-plate / control-surface / drag-body abstraction. Each tick computes
+// v_rel (fluid velocity − own velocity) in part frame and accumulates:
+//     F = sum_{k=1..N} A_k * v_rel^(k)
+//     τ = sum_{k=1..N} B_k * v_rel^(k)
+// where v^(k) means component-wise k-th power.
 //
-// Templated on (N, Scalar). The user-facing alias `Surface<N>` keeps the
-// existing single-parameter shape: it's `SurfaceT<N, Real>`. The Scalar
-// parameter activates for templated estimator crafts (Scalar = Jet).
+// Concrete user-facing classes are `Surface1`..`Surface4` (and Scalar-
+// templated `Surface1T<Scalar>`..`Surface4T<Scalar>` for estimator use).
+// `Surface1` is plain linear drag/lift; `Surface2` adds a quadratic term;
+// higher orders are typically overkill (capped at 4).
 //
 // Required fields: FluidField (not Scalar-templated; queried via Real
 // bridge — same pattern as Hull / PointBuoy / GravityPart).
-template <int N, class Scalar = Real>
-class SurfaceT : public PartT<Scalar> {
+namespace detail {
+
+template <int N, class Scalar>
+class SurfaceImpl : public PartT<Scalar> {
 public:
-    static_assert(N >= 1 && N <= 4, "SurfaceT<N>: N must be in [1, 4]");
+    static_assert(N >= 1 && N <= 4, "SurfaceImpl<N>: N must be in [1, 4]");
 
     using Tensor = geom::Mat3<PartFrame, PartFrame, Scalar>;
 
-    SurfaceT(std::string name,
-             const std::array<Tensor, N>& force_tensors,
-             const std::array<Tensor, N>& torque_tensors)
+    SurfaceImpl(std::string name,
+                const std::array<Tensor, N>& force_tensors,
+                const std::array<Tensor, N>& torque_tensors)
         : PartT<Scalar>(std::move(name))
         , A_(force_tensors)
         , B_(torque_tensors) {}
@@ -80,9 +86,25 @@ private:
     std::array<Tensor, N> B_;
 };
 
-// Backwards-compat alias — `Surface<N>` keeps the existing one-template-arg
-// signature for non-templated user code.
-template <int N>
-using Surface = SurfaceT<N, Real>;
+} // namespace detail
+
+// Concrete user-facing classes — one template parameter (Scalar) each.
+template <class Scalar = Real> class Surface1T : public detail::SurfaceImpl<1, Scalar> {
+public: using detail::SurfaceImpl<1, Scalar>::SurfaceImpl;
+};
+template <class Scalar = Real> class Surface2T : public detail::SurfaceImpl<2, Scalar> {
+public: using detail::SurfaceImpl<2, Scalar>::SurfaceImpl;
+};
+template <class Scalar = Real> class Surface3T : public detail::SurfaceImpl<3, Scalar> {
+public: using detail::SurfaceImpl<3, Scalar>::SurfaceImpl;
+};
+template <class Scalar = Real> class Surface4T : public detail::SurfaceImpl<4, Scalar> {
+public: using detail::SurfaceImpl<4, Scalar>::SurfaceImpl;
+};
+
+using Surface1 = Surface1T<Real>;
+using Surface2 = Surface2T<Real>;
+using Surface3 = Surface3T<Real>;
+using Surface4 = Surface4T<Real>;
 
 } // namespace manta::parts

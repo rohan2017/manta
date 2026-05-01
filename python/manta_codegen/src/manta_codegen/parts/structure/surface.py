@@ -1,12 +1,15 @@
-"""Surface<N> — generalized drag/lift, N velocity-power tensors.
+"""Surface1..Surface4 — generalized drag/lift, fixed velocity-power count.
 
 Each tick the part computes v_rel_part (fluid velocity − own velocity in part
 frame) and accumulates:
     F = sum_{k=1..N} A_k * v_rel_part^(k)
     τ = sum_{k=1..N} B_k * v_rel_part^(k)
 
-Surface<1> is plain linear drag/lift; Surface<2> adds a quadratic term;
-higher orders are typically overkill (max N = 4).
+Surface1 is plain linear drag/lift; Surface2 adds a quadratic term; Surface3
+and Surface4 round out the family. Higher orders are typically overkill — pick
+the smallest one that captures the regime you care about.
+
+Tensors are either 3-tuples (diagonal) or 9-tuples (full row-major).
 """
 
 from __future__ import annotations
@@ -39,17 +42,22 @@ def _diag_to_full(d: tuple[float, float, float]) -> tuple[float, ...]:
             0.0, 0.0, c)
 
 
-class Surface(PartDescriptor):
-    """Pass N orders' worth of force tensors and torque tensors. N is inferred
-    from `len(force_tensors)`. Each tensor is either a 3-tuple (diagonal) or a
-    9-tuple (full row-major).
+def _normalize(t: tuple[float, ...]) -> tuple[float, ...]:
+    if len(t) == 3:
+        return _diag_to_full(tuple(float(x) for x in t))
+    elif len(t) == 9:
+        return tuple(float(x) for x in t)
+    else:
+        raise ValueError("each tensor must be a 3-tuple (diagonal) or 9-tuple (full)")
 
-    Required fields: FluidField.
-    """
+
+class _SurfaceBase(PartDescriptor):
+    """Shared logic for SurfaceN. Subclasses set `N` (the fixed velocity-power
+    count) and the C++ class names."""
+
+    N: int = 0    # subclasses override
 
     cpp_header = "manta/parts/structure/surface.hpp"
-    # `cpp_class` and `cpp_class_template` are set per-instance in __init__
-    # since they bake the integer N into the C++ template arguments.
 
     def __init__(self,
                  name: str,
@@ -57,32 +65,14 @@ class Surface(PartDescriptor):
                  torque_tensors: list[tuple[float, ...]],
                  **kwargs) -> None:
         super().__init__(name=name, **kwargs)
-        if not force_tensors or not torque_tensors:
-            raise ValueError("Surface needs at least one force and torque tensor")
-        if len(force_tensors) != len(torque_tensors):
-            raise ValueError("force_tensors and torque_tensors must have the same length (N)")
-        if len(force_tensors) > 4:
-            raise ValueError("Surface<N>: N must be in [1, 4]")
-
-        def normalize(t):
-            if len(t) == 3:
-                return _diag_to_full(tuple(float(x) for x in t))
-            elif len(t) == 9:
-                return tuple(float(x) for x in t)
-            else:
-                raise ValueError("each tensor must be a 3-tuple (diagonal) or 9-tuple (full)")
-
-        self.force_tensors  = [normalize(t) for t in force_tensors]
-        self.torque_tensors = [normalize(t) for t in torque_tensors]
-        self.N = len(force_tensors)
-        # Per-instance class names: bake N in.
-        self.cpp_class          = f"manta::parts::Surface<{self.N}>"
-        self.cpp_class_template = "manta::parts::SurfaceT"
-
-    # SurfaceT has TWO template parameters: int N and class Scalar. Override
-    # the default instantiation to splice N in before Scalar.
-    def cpp_class_template_instantiation(self, scalar: str) -> str:
-        return f"manta::parts::SurfaceT<{self.N}, {scalar}>"
+        if len(force_tensors) != self.N or len(torque_tensors) != self.N:
+            raise ValueError(
+                f"{type(self).__name__} requires exactly {self.N} force_tensors "
+                f"and {self.N} torque_tensors (got "
+                f"{len(force_tensors)}, {len(torque_tensors)})"
+            )
+        self.force_tensors  = [_normalize(t) for t in force_tensors]
+        self.torque_tensors = [_normalize(t) for t in torque_tensors]
 
     def emit_constructor_args(self, scalar: str = "manta::Real") -> str:
         n = self.N
@@ -93,3 +83,31 @@ class Surface(PartDescriptor):
         return (f'"{self.name}", '
                 f'{ftype}{{{f_arr}}}, '
                 f'{ftype}{{{t_arr}}}')
+
+
+class Surface1(_SurfaceBase):
+    """Linear drag/lift: F = A_1 * v_rel, τ = B_1 * v_rel."""
+    N = 1
+    cpp_class          = "manta::parts::Surface1"
+    cpp_class_template = "manta::parts::Surface1T"
+
+
+class Surface2(_SurfaceBase):
+    """Linear + quadratic: F = A_1*v + A_2*v², τ = B_1*v + B_2*v²."""
+    N = 2
+    cpp_class          = "manta::parts::Surface2"
+    cpp_class_template = "manta::parts::Surface2T"
+
+
+class Surface3(_SurfaceBase):
+    """Up to cubic velocity-power terms."""
+    N = 3
+    cpp_class          = "manta::parts::Surface3"
+    cpp_class_template = "manta::parts::Surface3T"
+
+
+class Surface4(_SurfaceBase):
+    """Up to quartic velocity-power terms."""
+    N = 4
+    cpp_class          = "manta::parts::Surface4"
+    cpp_class_template = "manta::parts::Surface4T"
