@@ -52,13 +52,3 @@ class DVL(PartDescriptor):
 
     def emit_telemetry_reads(self) -> list[tuple[str, str]]:
         return [("velocity", f"craft.{self.name}().last_velocity()")]
-
-    def emit_measurement_decode(self, part_accessor: str, payload_var: str) -> str:
-        # DVL measurement payload: 3 floats — [vx, vy, vz].
-        return (
-            f"if ({payload_var}.size() >= 3) {{ "
-            f"{part_accessor}.set_measurement("
-            f"manta::geom::Vec3<manta::PartFrame>{{"
-            f"{payload_var}[0], {payload_var}[1], {payload_var}[2]}}); "
-            f"}}"
-        )

@@ -62,8 +62,3 @@ class Motor(PartDescriptor):
         return [("angle", f"craft.{self.name}().angle()"),
                 ("rate",  f"craft.{self.name}().rate()"),
                 ("accel", f"craft.{self.name}().accel()")]
-
-    def emit_command_apply(self, part_accessor: str, payload_var: str) -> str:
-        # Single-float payload: commanded torque.
-        return (f"if (!{payload_var}.empty()) "
-                f"{part_accessor}.set_torque({payload_var}[0]);")

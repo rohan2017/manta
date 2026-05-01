@@ -250,23 +250,6 @@ class PartDescriptor:
         Default: empty list (matches `telemetry_fields()` returning empty)."""
         return []
 
-    def emit_command_apply(self, part_accessor: str, payload_var: str) -> str:
-        """C++ statements that apply a parsed command (`payload_var`, a
-        `std::vector<float>` known to be non-empty) to this part. The part is
-        accessed via `part_accessor` (e.g. `craft.motor_0()`). Default: empty."""
-        return ""
-
-    def emit_measurement_decode(self, part_accessor: str, payload_var: str) -> str:
-        """C++ statements that parse `payload_var` (a `std::vector<float>`) as
-        a measurement payload and call this part's `set_measurement(...)`.
-        Used by the real_data workflow to emit Zenoh-driven estimator mains.
-
-        Default: empty (non-sensor parts have no measurement input).
-        Sensor part descriptors override; e.g. IMU emits a 6-float decode,
-        DVL emits a 3-float decode.
-        """
-        return ""
-
     def render(self, telemetry: dict, path: str) -> None:
         """Log this part's geometry/state to rerun under `path`. Default: a small
         labeled coordinate axis. Subclasses override."""

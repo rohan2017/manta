@@ -70,15 +70,3 @@ class IMU(PartDescriptor):
             ("accel", f"craft.{self.name}().last_accel()"),
             ("gyro",  f"craft.{self.name}().last_gyro()"),
         ]
-
-    def emit_measurement_decode(self, part_accessor: str, payload_var: str) -> str:
-        # IMU measurement payload: 6 floats — [ax, ay, az, gx, gy, gz].
-        return (
-            f"if ({payload_var}.size() >= 6) {{ "
-            f"{part_accessor}.set_measurement("
-            f"manta::geom::Vec3<manta::PartFrame>{{"
-            f"{payload_var}[0], {payload_var}[1], {payload_var}[2]}}, "
-            f"manta::geom::Vec3<manta::PartFrame>{{"
-            f"{payload_var}[3], {payload_var}[4], {payload_var}[5]}}); "
-            f"}}"
-        )

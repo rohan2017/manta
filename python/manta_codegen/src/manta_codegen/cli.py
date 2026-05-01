@@ -61,23 +61,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", default=None,
                         help="Output directory (default: <craft_py_dir>/generated/<craft_name>).")
     parser.add_argument("--workflow",
-                        choices=("library", "binary", "real_data"),
+                        choices=("library", "binary"),
                         default="library")
     parser.add_argument("--topics", type=_parse_topics, default=None,
-                        help="For --workflow real_data: comma-separated "
-                             "part=topic pairs, e.g. "
-                             "'imu=robot/imu/cooked,dvl=robot/dvl/vel'. "
-                             "Each part must exist in the craft and have a "
-                             "measurement decoder (sensor parts do; non-sensor "
-                             "parts will fail at codegen time).")
+                        help="Reserved for future protocol-specific knobs.")
     args = parser.parse_args(argv)
 
     craft_py = Path(args.craft_py).resolve()
     if not craft_py.exists():
         parser.error(f"file not found: {craft_py}")
-
-    if args.workflow == "real_data" and not args.topics:
-        parser.error("--workflow real_data requires --topics")
 
     world = _load_world(craft_py)
     if not world.crafts:

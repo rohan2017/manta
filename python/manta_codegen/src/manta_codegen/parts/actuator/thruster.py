@@ -48,11 +48,6 @@ class Thruster(PartDescriptor):
     def emit_telemetry_reads(self) -> list[tuple[str, str]]:
         return [("throttle", f"craft.{self.name}().throttle()")]
 
-    def emit_command_apply(self, part_accessor: str, payload_var: str) -> str:
-        # Single-float command: throttle ∈ [0,1]. The emitted main wraps this in
-        # an `if (!payload_var.empty())` guard already.
-        return f"{part_accessor}.set_throttle({payload_var}[0]);"
-
     def render(self, telemetry: dict, path: str) -> None:
         try:
             import rerun as rr
