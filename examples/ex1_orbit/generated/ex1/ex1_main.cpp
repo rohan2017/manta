@@ -63,87 +63,81 @@ int main() {
     zenoh::Config cfg = zenoh::Config::create_default();
     auto session = zenoh::Session::open(std::move(cfg));
 
-    std::mutex tx_p_cmd_mtx;
-    std::vector<float> tx_p_cmd;
-    auto tx_p_sub = session.declare_subscriber(
+    std::mutex bind_1_mtx;
+    std::vector<float> bind_1_payload;
+    auto bind_1_sub = session.declare_subscriber(
         zenoh::KeyExpr("manta/ex1/tx_p/cmd"),
         [&](const zenoh::Sample& s) {
             std::vector<float> v;
             std::string payload(s.get_payload().as_string());
-            if (parse_float_array(payload, v)) {
-                std::lock_guard<std::mutex> lk(tx_p_cmd_mtx);
-                tx_p_cmd = std::move(v);
+            if (parse_float_array(payload, v) && v.size() >= 1) {
+                std::lock_guard<std::mutex> lk(bind_1_mtx);
+                bind_1_payload = std::move(v);
             }
         }, zenoh::closures::none);
-    std::mutex tx_n_cmd_mtx;
-    std::vector<float> tx_n_cmd;
-    auto tx_n_sub = session.declare_subscriber(
+    std::mutex bind_2_mtx;
+    std::vector<float> bind_2_payload;
+    auto bind_2_sub = session.declare_subscriber(
         zenoh::KeyExpr("manta/ex1/tx_n/cmd"),
         [&](const zenoh::Sample& s) {
             std::vector<float> v;
             std::string payload(s.get_payload().as_string());
-            if (parse_float_array(payload, v)) {
-                std::lock_guard<std::mutex> lk(tx_n_cmd_mtx);
-                tx_n_cmd = std::move(v);
+            if (parse_float_array(payload, v) && v.size() >= 1) {
+                std::lock_guard<std::mutex> lk(bind_2_mtx);
+                bind_2_payload = std::move(v);
             }
         }, zenoh::closures::none);
-    std::mutex ty_p_cmd_mtx;
-    std::vector<float> ty_p_cmd;
-    auto ty_p_sub = session.declare_subscriber(
+    std::mutex bind_3_mtx;
+    std::vector<float> bind_3_payload;
+    auto bind_3_sub = session.declare_subscriber(
         zenoh::KeyExpr("manta/ex1/ty_p/cmd"),
         [&](const zenoh::Sample& s) {
             std::vector<float> v;
             std::string payload(s.get_payload().as_string());
-            if (parse_float_array(payload, v)) {
-                std::lock_guard<std::mutex> lk(ty_p_cmd_mtx);
-                ty_p_cmd = std::move(v);
+            if (parse_float_array(payload, v) && v.size() >= 1) {
+                std::lock_guard<std::mutex> lk(bind_3_mtx);
+                bind_3_payload = std::move(v);
             }
         }, zenoh::closures::none);
-    std::mutex ty_n_cmd_mtx;
-    std::vector<float> ty_n_cmd;
-    auto ty_n_sub = session.declare_subscriber(
+    std::mutex bind_4_mtx;
+    std::vector<float> bind_4_payload;
+    auto bind_4_sub = session.declare_subscriber(
         zenoh::KeyExpr("manta/ex1/ty_n/cmd"),
         [&](const zenoh::Sample& s) {
             std::vector<float> v;
             std::string payload(s.get_payload().as_string());
-            if (parse_float_array(payload, v)) {
-                std::lock_guard<std::mutex> lk(ty_n_cmd_mtx);
-                ty_n_cmd = std::move(v);
+            if (parse_float_array(payload, v) && v.size() >= 1) {
+                std::lock_guard<std::mutex> lk(bind_4_mtx);
+                bind_4_payload = std::move(v);
             }
         }, zenoh::closures::none);
-    std::mutex tz_p_cmd_mtx;
-    std::vector<float> tz_p_cmd;
-    auto tz_p_sub = session.declare_subscriber(
+    std::mutex bind_5_mtx;
+    std::vector<float> bind_5_payload;
+    auto bind_5_sub = session.declare_subscriber(
         zenoh::KeyExpr("manta/ex1/tz_p/cmd"),
         [&](const zenoh::Sample& s) {
             std::vector<float> v;
             std::string payload(s.get_payload().as_string());
-            if (parse_float_array(payload, v)) {
-                std::lock_guard<std::mutex> lk(tz_p_cmd_mtx);
-                tz_p_cmd = std::move(v);
+            if (parse_float_array(payload, v) && v.size() >= 1) {
+                std::lock_guard<std::mutex> lk(bind_5_mtx);
+                bind_5_payload = std::move(v);
             }
         }, zenoh::closures::none);
-    std::mutex tz_n_cmd_mtx;
-    std::vector<float> tz_n_cmd;
-    auto tz_n_sub = session.declare_subscriber(
+    std::mutex bind_6_mtx;
+    std::vector<float> bind_6_payload;
+    auto bind_6_sub = session.declare_subscriber(
         zenoh::KeyExpr("manta/ex1/tz_n/cmd"),
         [&](const zenoh::Sample& s) {
             std::vector<float> v;
             std::string payload(s.get_payload().as_string());
-            if (parse_float_array(payload, v)) {
-                std::lock_guard<std::mutex> lk(tz_n_cmd_mtx);
-                tz_n_cmd = std::move(v);
+            if (parse_float_array(payload, v) && v.size() >= 1) {
+                std::lock_guard<std::mutex> lk(bind_6_mtx);
+                bind_6_payload = std::move(v);
             }
         }, zenoh::closures::none);
-    auto state_pub = session.declare_publisher(zenoh::KeyExpr("manta/ex1/state"));
-    auto tx_p_pub = session.declare_publisher(zenoh::KeyExpr("manta/ex1/tx_p/state"));
-    auto tx_n_pub = session.declare_publisher(zenoh::KeyExpr("manta/ex1/tx_n/state"));
-    auto ty_p_pub = session.declare_publisher(zenoh::KeyExpr("manta/ex1/ty_p/state"));
-    auto ty_n_pub = session.declare_publisher(zenoh::KeyExpr("manta/ex1/ty_n/state"));
-    auto tz_p_pub = session.declare_publisher(zenoh::KeyExpr("manta/ex1/tz_p/state"));
-    auto tz_n_pub = session.declare_publisher(zenoh::KeyExpr("manta/ex1/tz_n/state"));
+    auto pub_0 = session.declare_publisher(zenoh::KeyExpr("manta/ex1/state"));
 
-    std::printf("ex1: ready. State on 'manta/ex1/state'.\n");
+    std::printf("ex1: ready. 7 explicit binding(s).\n");
 
     auto next = std::chrono::steady_clock::now();
     const auto period = std::chrono::microseconds(int64_t(WALL_PERIOD * 1e6));
@@ -151,38 +145,93 @@ int main() {
     const int pub_every = 20;  // ~50 Hz publish
 
     while (g_run.load()) {
-        { std::lock_guard<std::mutex> lk(tx_p_cmd_mtx);
-          if (!tx_p_cmd.empty()) {
-              craft.tx_p().set_throttle(tx_p_cmd[0]);
+        { std::lock_guard<std::mutex> lk(bind_1_mtx);
+          if (bind_1_payload.size() >= 1) {
+              craft.tx_p().set_throttle(bind_1_payload[0]);    // member: set_throttle
+              bind_1_payload.clear();
           } }
-        { std::lock_guard<std::mutex> lk(tx_n_cmd_mtx);
-          if (!tx_n_cmd.empty()) {
-              craft.tx_n().set_throttle(tx_n_cmd[0]);
+        { std::lock_guard<std::mutex> lk(bind_2_mtx);
+          if (bind_2_payload.size() >= 1) {
+              craft.tx_n().set_throttle(bind_2_payload[0]);    // member: set_throttle
+              bind_2_payload.clear();
           } }
-        { std::lock_guard<std::mutex> lk(ty_p_cmd_mtx);
-          if (!ty_p_cmd.empty()) {
-              craft.ty_p().set_throttle(ty_p_cmd[0]);
+        { std::lock_guard<std::mutex> lk(bind_3_mtx);
+          if (bind_3_payload.size() >= 1) {
+              craft.ty_p().set_throttle(bind_3_payload[0]);    // member: set_throttle
+              bind_3_payload.clear();
           } }
-        { std::lock_guard<std::mutex> lk(ty_n_cmd_mtx);
-          if (!ty_n_cmd.empty()) {
-              craft.ty_n().set_throttle(ty_n_cmd[0]);
+        { std::lock_guard<std::mutex> lk(bind_4_mtx);
+          if (bind_4_payload.size() >= 1) {
+              craft.ty_n().set_throttle(bind_4_payload[0]);    // member: set_throttle
+              bind_4_payload.clear();
           } }
-        { std::lock_guard<std::mutex> lk(tz_p_cmd_mtx);
-          if (!tz_p_cmd.empty()) {
-              craft.tz_p().set_throttle(tz_p_cmd[0]);
+        { std::lock_guard<std::mutex> lk(bind_5_mtx);
+          if (bind_5_payload.size() >= 1) {
+              craft.tz_p().set_throttle(bind_5_payload[0]);    // member: set_throttle
+              bind_5_payload.clear();
           } }
-        { std::lock_guard<std::mutex> lk(tz_n_cmd_mtx);
-          if (!tz_n_cmd.empty()) {
-              craft.tz_n().set_throttle(tz_n_cmd[0]);
+        { std::lock_guard<std::mutex> lk(bind_6_mtx);
+          if (bind_6_payload.size() >= 1) {
+              craft.tz_n().set_throttle(bind_6_payload[0]);    // member: set_throttle
+              bind_6_payload.clear();
           } }
 
         w.update();
 
         if (++pub_decim >= pub_every) {
             pub_decim = 0;
-            Ex1CraftTelemetry telem;
-            capture_ex1_telemetry(craft, w.clock().time(), telem);
-            state_pub.put(zenoh::Bytes(telem.to_json()));
+            { std::string _json = "{";
+              _json += "\"p\":[";
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.scene_to_craft().position().raw()(0))); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().position().raw()(1))); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().position().raw()(2))); _json += _b; }
+              _json += "]";
+              _json += ",";
+              _json += "\"q\":[";
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.scene_to_craft().orientation().raw().w())); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().orientation().raw().x())); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().orientation().raw().y())); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().orientation().raw().z())); _json += _b; }
+              _json += "]";
+              _json += ",";
+              _json += "\"v\":[";
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.scene_to_craft().vel_linear().raw()(0))); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().vel_linear().raw()(1))); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().vel_linear().raw()(2))); _json += _b; }
+              _json += "]";
+              _json += ",";
+              _json += "\"w\":[";
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.scene_to_craft().vel_angular().raw()(0))); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().vel_angular().raw()(1))); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().vel_angular().raw()(2))); _json += _b; }
+              _json += "]";
+              _json += ",";
+              _json += "\"tx_p\":[";
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.tx_p().throttle())); _json += _b; }
+              _json += "]";
+              _json += ",";
+              _json += "\"tx_n\":[";
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.tx_n().throttle())); _json += _b; }
+              _json += "]";
+              _json += ",";
+              _json += "\"ty_p\":[";
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.ty_p().throttle())); _json += _b; }
+              _json += "]";
+              _json += ",";
+              _json += "\"ty_n\":[";
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.ty_n().throttle())); _json += _b; }
+              _json += "]";
+              _json += ",";
+              _json += "\"tz_p\":[";
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.tz_p().throttle())); _json += _b; }
+              _json += "]";
+              _json += ",";
+              _json += "\"tz_n\":[";
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.tz_n().throttle())); _json += _b; }
+              _json += "]";
+              _json += "}";
+              pub_0.put(zenoh::Bytes(_json));
+            }
         }
 
         next += period;

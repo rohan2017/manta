@@ -25,8 +25,25 @@ THRUSTER_DIRS: list[tuple[str, tuple[float, float, float]]] = [
 
 
 def make_craft() -> Craft:
+    body      = PointMass("body", mass=1.0)
+    thrusters = [Thruster(name, max_thrust=5.0, direction=d) for name, d in THRUSTER_DIRS]
+
     c = Craft("ex0")  # no fields registered — zero-gravity
-    c.root.add(PointMass("body", mass=1.0))
-    for name, direction in THRUSTER_DIRS:
-        c.root.add(Thruster(name, max_thrust=5.0, direction=direction))
+    c.root.add(body)
+    for t in thrusters:
+        c.root.add(t)
+
+    # Bundled state with craft pose + per-thruster throttles.
+    state = {
+        "p": c.position, "q": c.orientation,
+        "v": c.vel_linear, "w": c.vel_angular,
+    }
+    for t in thrusters:
+        state[t.name] = t.throttle
+    c.publish(state, "manta/ex0/state")
+
+    # Per-thruster command subscribers.
+    for t in thrusters:
+        c.subscribe(t.set_throttle, f"manta/ex0/{t.name}/cmd")
+
     return c

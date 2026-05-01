@@ -35,11 +35,15 @@ THRUSTER_DIRS: list[tuple[str, tuple[float, float, float]]] = [
 
 
 def make_craft() -> Craft:
+    body      = PointMass("body", mass=1.0)
+    thrusters = [Thruster(name, max_thrust=5.0, direction=d) for name, d in THRUSTER_DIRS]
+    grav      = PointGravityPart("grav")
+
     c = Craft("ex1", fields=[PointGravityField(mu=MU)])
-    c.root.add(PointMass("body", mass=1.0))
-    for name, direction in THRUSTER_DIRS:
-        c.root.add(Thruster(name, max_thrust=5.0, direction=direction))
-    c.root.add(PointGravityPart("grav"))
+    c.root.add(body)
+    for t in thrusters:
+        c.root.add(t)
+    c.root.add(grav)
 
     # 200 sim-s per wall-s, 5 ms tick.
     c.sim_config(dt=0.005, sim_rate_mult=200.0)
@@ -49,4 +53,19 @@ def make_craft() -> Craft:
         position   = (ORBIT_R, 0.0, 0.0),
         vel_linear = (0.0, V_CIRC, 0.0),
     )
+
+    # Bundled state topic: craft pose + per-thruster throttles. Wire format
+    # matches what the viewer expects (top-level "p","q","v","w" arrays).
+    state = {
+        "p": c.position, "q": c.orientation,
+        "v": c.vel_linear, "w": c.vel_angular,
+    }
+    for t in thrusters:
+        state[t.name] = t.throttle
+    c.publish(state, "manta/ex1/state")
+
+    # Per-thruster command subscribers.
+    for t in thrusters:
+        c.subscribe(t.set_throttle, f"manta/ex1/{t.name}/cmd")
+
     return c
