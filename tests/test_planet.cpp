@@ -333,6 +333,60 @@ TEST_CASE("Earth: optional sidereal rotation pushes Coriolis through") {
     CHECK(s.world_to_scene().vel_angular().z() == doctest::Approx(1.0));
 }
 
+// ---- Optional gravity model on Earth ----
+
+TEST_CASE("Earth: gravity_mu activates a PointGravityField with optional J2") {
+    World w;
+    auto& earth = w.add_planet<manta::planets::Earth>(
+        /*sea_level=*/0.0f,
+        /*water_density=*/1000.0f,
+        /*air_density=*/1.225f,
+        /*rotation_rate=*/0.0f,
+        /*gravity_mu=*/manta::planets::Earth::kMu,
+        /*include_j2=*/true);
+
+    REQUIRE(earth.gravity() != nullptr);
+    CHECK(earth.gravity()->mu()  == doctest::Approx(manta::planets::Earth::kMu));
+    CHECK(earth.gravity()->j2()  == doctest::Approx(manta::planets::Earth::kJ2));
+    CHECK(earth.gravity()->eq_radius() == doctest::Approx(manta::planets::Earth::kEquatorialRadius));
+
+    auto* gf = w.field_ptr(typeid(manta::fields::PointGravityField));
+    REQUIRE(gf != nullptr);
+}
+
+TEST_CASE("Earth: gravity_mu=0 means no PointGravityField registered") {
+    World w;
+    auto& earth = w.add_planet<manta::planets::Earth>();
+    CHECK(earth.gravity() == nullptr);
+    CHECK(w.field_ptr(typeid(manta::fields::PointGravityField)) == nullptr);
+}
+
+// ---- Optional dipole magnetic model on Earth ----
+
+#include "../include/manta/fields/mag_field.hpp"
+
+TEST_CASE("Earth: dipole_moment activates a DipoleMagField under MagField slot") {
+    World w;
+    auto& earth = w.add_planet<manta::planets::Earth>(
+        /*sea_level=*/0.0f,
+        /*water_density=*/1000.0f,
+        /*air_density=*/1.225f,
+        /*rotation_rate=*/0.0f,
+        /*gravity_mu=*/0.0f,
+        /*include_j2=*/false,
+        /*dipole_moment=*/manta::planets::Earth::kDipoleMoment);
+
+    REQUIRE(earth.mag() != nullptr);
+    auto* mf_base = w.field_ptr(typeid(manta::fields::MagField));
+    REQUIRE(mf_base != nullptr);
+
+    // Polymorphism: looking up MagField gives back our DipoleMagField.
+    auto* dipole = dynamic_cast<manta::fields::DipoleMagField*>(mf_base);
+    REQUIRE(dipole != nullptr);
+    // moment is along -z by default.
+    CHECK(dipole->moment().z() == doctest::Approx(-manta::planets::Earth::kDipoleMoment));
+}
+
 // ---- Phase 5: craft().planet<P>() typed accessor ----
 
 TEST_CASE("Craft::planet<P>: returns the registered planet by concrete type") {
