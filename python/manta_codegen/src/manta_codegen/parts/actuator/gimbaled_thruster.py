@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ..._format import cpp_float as _f
+from ...signal import Signal, scalar_in_signal, scalar_out_signal
 from .thruster import Thruster
 
 
@@ -11,13 +12,30 @@ class GimbaledThruster(Thruster):
     base direction rotated by the configured gimbal angles, clamped to
     ±max_angle on each axis.
 
+    Bindable signals (in addition to the inherited Thruster signals
+    `throttle` / `set_throttle`):
+      * `pitch`       (out, 1 float) — current gimbal pitch (rad).
+      * `yaw`         (out, 1 float) — current gimbal yaw   (rad).
+      * `set_gimbal`  (in,  2 floats) — sets [pitch, yaw], clamped internally.
+
     Required fields: none.
-    Telemetry: throttle (float).
     """
 
     cpp_class          = "manta::parts::GimbaledThruster"
     cpp_class_template = "manta::parts::GimbaledThrusterT"
     cpp_header         = "manta/parts/actuator/gimbaled_thruster.hpp"
+
+    signals = [
+        *Thruster.signals,
+        scalar_out_signal("pitch", "pitch"),
+        scalar_out_signal("yaw",   "yaw"),
+        Signal(
+            name="set_gimbal",
+            direction="in",
+            n_floats=2,
+            cpp_write_stmt="{accessor}.set_gimbal({v0}, {v1});",
+        ),
+    ]
 
     def __init__(self,
                  name: str,

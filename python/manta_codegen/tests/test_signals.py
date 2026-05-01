@@ -21,7 +21,11 @@ if str(_SRC) not in sys.path:
 
 from manta_codegen.core import Craft
 from manta_codegen.parts.sensor.imu import IMU
+from manta_codegen.parts.sensor.dvl import DVL
 from manta_codegen.parts.actuator.thruster import Thruster
+from manta_codegen.parts.actuator.prop_thruster import PropThruster
+from manta_codegen.parts.actuator.gimbaled_thruster import GimbaledThruster
+from manta_codegen.parts.articulation.motor import Motor
 from manta_codegen.signal import Binding, BoundSignal
 
 
@@ -146,6 +150,38 @@ def test_subscribe_rejects_out_signal() -> None:
         raise AssertionError("subscribe on out-signal should have raised")
     except ValueError:
         pass
+
+
+def test_dvl_signals_attached() -> None:
+    d = DVL("dvl0")
+    _check(d.last_velocity.direction == "out", "DVL last_velocity must be out")
+    _check(d.set_measurement.direction == "in", "DVL set_measurement must be in")
+    _check(d.last_velocity.signal.n_floats == 3, "DVL velocity should be 3 floats")
+
+
+def test_motor_signals_attached() -> None:
+    m = Motor("hinge")
+    for name in ("angle", "rate", "accel"):
+        _check(getattr(m, name).direction == "out", f"Motor {name} must be out")
+    _check(m.set_torque.direction == "in", "Motor set_torque must be in")
+
+
+def test_prop_thruster_inherits_thruster_signals() -> None:
+    p = PropThruster("rotor", max_thrust=2.0)
+    _check(p.throttle.direction == "out", "PropThruster inherits throttle")
+    _check(p.set_throttle.direction == "in", "PropThruster inherits set_throttle")
+
+
+def test_gimbaled_thruster_extends_thruster_signals() -> None:
+    g = GimbaledThruster("gimbal", max_thrust=2.0)
+    # Inherited from Thruster:
+    _check(g.throttle.direction == "out", "GimbaledThruster inherits throttle")
+    _check(g.set_throttle.direction == "in", "GimbaledThruster inherits set_throttle")
+    # Added by GimbaledThruster:
+    _check(g.pitch.direction == "out", "pitch must be out")
+    _check(g.yaw.direction == "out", "yaw must be out")
+    _check(g.set_gimbal.direction == "in", "set_gimbal must be in")
+    _check(g.set_gimbal.signal.n_floats == 2, "set_gimbal should be 2 floats")
 
 
 def test_chaining_returns_craft() -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from ..._format import cpp_float as _f
 from ...core import PartDescriptor
+from ...signal import scalar_in_signal, scalar_out_signal
 
 
 def _emit_axis(axis: tuple[float, float, float]) -> str:
@@ -27,6 +28,13 @@ class Motor(PartDescriptor):
 
     cpp_class  = "manta::parts::Motor"
     cpp_header = "manta/parts/articulation/motor.hpp"
+
+    signals = [
+        scalar_out_signal("angle",     "angle"),
+        scalar_out_signal("rate",      "rate"),
+        scalar_out_signal("accel",     "accel"),
+        scalar_in_signal ("set_torque", "set_torque"),
+    ]
 
     def __init__(self,
                  name: str,
