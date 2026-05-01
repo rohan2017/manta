@@ -17,7 +17,6 @@
 #include "manta/core/scene.hpp"
 #include "manta/core/world.hpp"
 #include "ex4.hpp"
-#include "ex4_telemetry.hpp"
 
 namespace {
 std::atomic<bool> g_run{true};
@@ -74,7 +73,7 @@ int main() {
         }, zenoh::closures::none);
     auto pub_0 = session.declare_publisher(zenoh::KeyExpr("manta/ex4/state"));
 
-    std::printf("ex4: ready. 2 binding(s).\n");
+    std::printf("ex4: ready. 1 craft(s), 2 binding(s).\n");
 
     auto next = std::chrono::steady_clock::now();
     const auto period = std::chrono::microseconds(int64_t(WALL_PERIOD * 1e6));

@@ -17,7 +17,6 @@
 #include "manta/core/scene.hpp"
 #include "manta/core/world.hpp"
 #include "ex1.hpp"
-#include "ex1_telemetry.hpp"
 #include "manta/fields/point_gravity_field.hpp"
 
 namespace {
@@ -137,7 +136,7 @@ int main() {
         }, zenoh::closures::none);
     auto pub_0 = session.declare_publisher(zenoh::KeyExpr("manta/ex1/state"));
 
-    std::printf("ex1: ready. 7 binding(s).\n");
+    std::printf("ex1: ready. 1 craft(s), 7 binding(s).\n");
 
     auto next = std::chrono::steady_clock::now();
     const auto period = std::chrono::microseconds(int64_t(WALL_PERIOD * 1e6));

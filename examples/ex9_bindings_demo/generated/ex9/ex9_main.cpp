@@ -17,7 +17,6 @@
 #include "manta/core/scene.hpp"
 #include "manta/core/world.hpp"
 #include "ex9.hpp"
-#include "ex9_telemetry.hpp"
 
 namespace {
 std::atomic<bool> g_run{true};
@@ -76,7 +75,7 @@ int main() {
     auto pub_1 = session.declare_publisher(zenoh::KeyExpr("manta/ex9/imu/last_gyro"));
     auto pub_2 = session.declare_publisher(zenoh::KeyExpr("manta/ex9/state"));
 
-    std::printf("ex9: ready. 4 binding(s).\n");
+    std::printf("ex9: ready. 1 craft(s), 4 binding(s).\n");
 
     auto next = std::chrono::steady_clock::now();
     const auto period = std::chrono::microseconds(int64_t(WALL_PERIOD * 1e6));
