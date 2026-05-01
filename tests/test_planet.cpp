@@ -34,6 +34,14 @@ public:
     bool registered = false;
     void register_disturbances(World& /*w*/) override { registered = true; }
 
+    // Test-only access to world_to_planet_'s motion fields. Used by phase 6
+    // tests to exercise the translational and Euler pseudo-forces (which
+    // require setting acc_linear/acc_angular on the planet directly).
+    void set_acc_angular_z(Real alpha_z) noexcept {
+        world_to_planet_.set_acc_angular(
+            geom::Vec3<PlanetFrame>{Real(0), Real(0), alpha_z});
+    }
+
 private:
     Real omega_z_;
     int  update_count_ = 0;
@@ -168,6 +176,119 @@ TEST_CASE("Planet phase 3: Coriolis acceleration on a radially-moving craft") {
     INFO("a = (", a.x(), ",", a.y(), ",", a.z(), ")");
     CHECK(std::abs(a.x()) < 1e-3);
     CHECK(a.y() == doctest::Approx(-2.0).epsilon(1e-3));
+    CHECK(std::abs(a.z()) < 1e-3);
+}
+
+// ---- Phase 6: Euler + translational pseudo-forces ----
+//
+// Phase 3 covered Coriolis and centrifugal; phase 6 adds the two missing
+// terms in the non-inertial-scene fictitious-force decomposition:
+//   a_translational = -a_S        (scene origin's linear accel in world)
+//   a_euler         = -α × r      (scene's angular accel × craft position)
+
+// Translational pseudo-force: a planet rotating at ω with the scene anchored
+// at planet_to_scene = (R, 0, 0) puts the scene origin in centripetal motion
+// at distance R from the spin axis. For ω_z = 1, R = 2 the scene origin's
+// world-frame acceleration is a_S = -ω²R x̂ = (-2, 0, 0). The pseudo-force on
+// any craft (per unit mass) is -a_S = (2, 0, 0). With the craft sitting at
+// the scene origin (r = 0) and at rest (v = 0), centrifugal and Coriolis are
+// both zero — the only fictitious force is the translational one.
+TEST_CASE("Planet phase 6: translational pseudo-force from non-inertial scene origin") {
+    World w;
+    w.clock().set_dt(0.001f);
+    auto& p = w.add_planet<TestPlanet>("rotor", /*omega_z=*/Real(1.0));
+    auto& s = w.create_scene();
+    s.set_planet(&p);
+    s.set_planet_to_scene(geom::StaticLink<PlanetFrame, SceneFrame>{
+        Vec3<PlanetFrame>{Real(2.0), Real(0), Real(0)},
+        geom::Ori<PlanetFrame>::identity()});
+
+    Craft c("centered_craft");
+    c.root().add<manta::parts::PointMass>("body", 1.0f);
+    c.root().compute_params();
+
+    InitialState init;   // r=0, v=0 in scene
+    s.add_craft(c, init);
+
+    w.update();
+
+    auto a = c.scene_to_craft().acc_linear();
+    INFO("a = (", a.x(), ",", a.y(), ",", a.z(), ")");
+    CHECK(a.x() == doctest::Approx(2.0).epsilon(1e-3));
+    CHECK(std::abs(a.y()) < 1e-3);
+    CHECK(std::abs(a.z()) < 1e-3);
+}
+
+// Euler pseudo-force: α_z × r at r = (1, 0, 0) with α_z = 1 gives
+//   α × r = (0, 0, 1) × (1, 0, 0) = (0, 1, 0)
+// so a_euler = -α × r = (0, -1, 0). To isolate Euler we keep ω = 0
+// (no Coriolis or centrifugal) and put the scene origin at the planet
+// origin (no translational pseudo-force).
+TEST_CASE("Planet phase 6: Euler pseudo-force from angular acceleration") {
+    World w;
+    w.clock().set_dt(0.001f);
+    auto& p = w.add_planet<TestPlanet>("spinner", /*omega_z=*/Real(0));
+    p.set_acc_angular_z(Real(1.0));  // dω/dt = 1 rad/s² about z
+
+    auto& s = w.create_scene();
+    s.set_planet(&p);
+
+    Craft c("offset_craft");
+    c.root().add<manta::parts::PointMass>("body", 1.0f);
+    c.root().compute_params();
+
+    InitialState init;
+    init.position = Vec3<SceneFrame>{1.0f, 0.0f, 0.0f};
+    s.add_craft(c, init);
+
+    w.update();
+
+    auto a = c.scene_to_craft().acc_linear();
+    INFO("a = (", a.x(), ",", a.y(), ",", a.z(), ")");
+    CHECK(std::abs(a.x()) < 1e-3);
+    CHECK(a.y() == doctest::Approx(-1.0).epsilon(1e-3));
+    CHECK(std::abs(a.z()) < 1e-3);
+}
+
+// Integration test: translational + centrifugal compose correctly.
+//
+// On a rotating planet (ω_z = 1), put the scene at planet_to_scene = (3,0,0)
+// and a craft at scene-frame (1,0,0). The craft is at world-frame (4,0,0).
+//
+// In the inertial world frame, a free particle at (4,0,0) would need a
+// centripetal force toward the spin axis to stay co-rotating; in the
+// rotating scene frame, this manifests as an outward pseudo-acceleration of
+// ω² × 4 = 4 m/s² along scene-frame x̂. The decomposition is:
+//   * translational  = -a_S        = -(- ω²·3 x̂) = +3 x̂
+//   * centrifugal    = +ω² r_scene = +1 x̂
+// for a sum of (4, 0, 0) — independent of how we split the planet_to_scene
+// offset and the craft's scene-frame position. This is the key invariant:
+// the kinematic chain has to give the same answer regardless of where the
+// scene origin is anchored along the radial line.
+TEST_CASE("Planet phase 6: translational + centrifugal compose to expected total") {
+    World w;
+    w.clock().set_dt(0.001f);
+    auto& p = w.add_planet<TestPlanet>("rotor", /*omega_z=*/Real(1.0));
+    auto& s = w.create_scene();
+    s.set_planet(&p);
+    s.set_planet_to_scene(geom::StaticLink<PlanetFrame, SceneFrame>{
+        Vec3<PlanetFrame>{Real(3.0), Real(0), Real(0)},
+        geom::Ori<PlanetFrame>::identity()});
+
+    Craft c("co_rotating_craft");
+    c.root().add<manta::parts::PointMass>("body", 1.0f);
+    c.root().compute_params();
+
+    InitialState init;
+    init.position = Vec3<SceneFrame>{1.0f, 0.0f, 0.0f};   // world position (4,0,0) at t=0
+    s.add_craft(c, init);
+
+    w.update();
+
+    auto a = c.scene_to_craft().acc_linear();
+    INFO("a = (", a.x(), ",", a.y(), ",", a.z(), ")");
+    CHECK(a.x() == doctest::Approx(4.0).epsilon(1e-3));
+    CHECK(std::abs(a.y()) < 1e-3);
     CHECK(std::abs(a.z()) < 1e-3);
 }
 
