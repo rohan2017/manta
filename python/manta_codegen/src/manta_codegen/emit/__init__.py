@@ -26,16 +26,13 @@ from .cmake import emit_cmake_fragment
 
 def emit(world: World,
          out_dir: str | os.PathLike,
-         workflow: str = "library",
-         topics: dict[str, str] | None = None) -> None:
+         workflow: str = "library") -> None:
     """Render `world` to a directory of C++/CMake artifacts.
 
     workflow="library": emits Craft type, telemetry, config.h, CMake fragment.
                         User provides their own main.cpp.
     workflow="binary":  also emits a sim main with Zenoh I/O wired through
                         `craft.bindings`.
-
-    The `topics` parameter is reserved for future protocol-specific knobs.
 
     Existing files are overwritten. The output is intended to live in the user's
     project tree (committed to git), not in the build directory.

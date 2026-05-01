@@ -40,21 +40,6 @@ def _load_world(module_path: Path) -> World:
     return obj
 
 
-def _parse_topics(s: str) -> dict[str, str]:
-    """Parse 'name1=topic1,name2=topic2' into {name1: topic1, ...}."""
-    out: dict[str, str] = {}
-    for entry in s.split(","):
-        entry = entry.strip()
-        if not entry:
-            continue
-        if "=" not in entry:
-            raise argparse.ArgumentTypeError(
-                f"--topics entry {entry!r} must be name=topic")
-        name, topic = entry.split("=", 1)
-        out[name.strip()] = topic.strip()
-    return out
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="manta-codegen")
     parser.add_argument("craft_py", help="Python file describing the craft.")
@@ -63,8 +48,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--workflow",
                         choices=("library", "binary"),
                         default="library")
-    parser.add_argument("--topics", type=_parse_topics, default=None,
-                        help="Reserved for future protocol-specific knobs.")
     args = parser.parse_args(argv)
 
     craft_py = Path(args.craft_py).resolve()
@@ -81,7 +64,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         out_dir = craft_py.parent / "generated" / primary_craft_name
 
-    emit(world, out_dir=out_dir, workflow=args.workflow, topics=args.topics)
+    emit(world, out_dir=out_dir, workflow=args.workflow)
     print(f"manta-codegen: wrote {primary_craft_name} ({args.workflow}) → {out_dir}")
     return 0
 
