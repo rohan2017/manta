@@ -461,12 +461,24 @@ class World:
 
     """
 
-    def __init__(self) -> None:
+    def __init__(self, name: str | None = None) -> None:
+        # World name. Defaults to the first craft's name at codegen time;
+        # supplying it explicitly is required for multi-craft worlds (where
+        # the binary's name shouldn't be tied to one of the crafts).
+        self._explicit_name = name
         self.fields: list[FieldDescriptor] = []
         self.planets: list[PlanetDescriptor] = []
         self.crafts: list[_CraftEntry] = []
         self.dt: float = 0.001
         self.sim_rate_mult: float = 1.0
+
+    @property
+    def name(self) -> str:
+        if self._explicit_name is not None:
+            return self._explicit_name
+        if not self.crafts:
+            raise RuntimeError("World.name: no explicit name and no crafts registered")
+        return self.crafts[0].craft.name
 
     def add_field(self, f: FieldDescriptor) -> "World":
         self.fields.append(f)

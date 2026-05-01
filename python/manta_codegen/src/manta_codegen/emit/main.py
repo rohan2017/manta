@@ -42,12 +42,18 @@ def _initial_state_literal(entry) -> str:
     )
 
 
-def emit_main_cpp(craft: Craft, world: World) -> str:
-    cls = class_name_for_craft(craft.name)
-    entry = next((e for e in world.crafts if e.craft is craft), None)
-    if entry is None:
-        raise RuntimeError(
-            f"emit_main_cpp: craft {craft.name!r} not registered with the World")
+def emit_main_cpp(world: World) -> str:
+    if not world.crafts:
+        raise RuntimeError("emit_main_cpp: World has no crafts")
+
+    # Unique Craft objects (by Python identity) — each gets one .hpp include.
+    seen: set[int] = set()
+    unique_crafts: list[Craft] = []
+    for entry in world.crafts:
+        if id(entry.craft) not in seen:
+            seen.add(id(entry.craft))
+            unique_crafts.append(entry.craft)
+    primary = unique_crafts[0]
 
     lines: list[str] = [
         GENERATED_BANNER,
@@ -66,9 +72,10 @@ def emit_main_cpp(craft: Craft, world: World) -> str:
         "",
         "#include \"manta/core/scene.hpp\"",
         "#include \"manta/core/world.hpp\"",
-        f'#include "{craft.name}.hpp"',
-        f'#include "{craft.name}_telemetry.hpp"',
     ]
+    # One #include per unique Craft type.
+    for c in unique_crafts:
+        lines.append(f'#include "{c.name}.hpp"')
     for f in world.fields:
         lines.append(f'#include "{f.cpp_header}"')
     for p in world.planets:
@@ -133,31 +140,49 @@ def emit_main_cpp(craft: Craft, world: World) -> str:
         for base in getattr(f, "register_as", []) or []:
             lines.append(f"    w.register_field<{base}>({var});")
 
+    # Instantiate one C++ object per World.crafts entry. For a single-craft
+    # world the variable is named `craft`; for multi-craft it's
+    # craft_0, craft_1, .... Each is added to the scene with its own
+    # initial state literal.
+    multi = len(world.crafts) > 1
+    craft_var = lambda idx: "craft" if not multi else f"craft_{idx}"
+    for idx, entry in enumerate(world.crafts):
+        cls = class_name_for_craft(entry.craft.name)
+        var = craft_var(idx)
+        lines.append(f"    {cls} {var};")
+        lines.append(f"    scene.add_craft({var}, {_initial_state_literal(entry)});")
+
     lines += [
-        f"    {cls} craft;",
-        f"    scene.add_craft(craft, {_initial_state_literal(entry)});",
         "",
         "    zenoh::Config cfg = zenoh::Config::create_default();",
         "    auto session = zenoh::Session::open(std::move(cfg));",
         "",
     ]
 
-    # ---- Subscribers ----
-    for i, b in enumerate(craft.bindings):
-        if b.direction != "in":
-            continue
-        _emit_binding_subscriber(lines, i, b)
+    # Subscribers / publishers: per-craft, per-binding. Bindings are
+    # numbered globally across the World (bind_0 / bind_1 / ...) so each
+    # gets its own Zenoh handle and mutex.
+    bind_idx = 0
+    bind_assignments: list[tuple[int, int, "Binding"]] = []  # (bind_id, craft_idx, binding)
+    for cidx, entry in enumerate(world.crafts):
+        for b in entry.craft.bindings:
+            bind_assignments.append((bind_idx, cidx, b))
+            bind_idx += 1
 
-    # ---- Publishers ----
-    for i, b in enumerate(craft.bindings):
-        if b.direction != "out":
-            continue
-        lines.append(
-            f"    auto pub_{i} = session.declare_publisher(zenoh::KeyExpr({_quote(b.topic)}));")
+    for bid, cidx, b in bind_assignments:
+        if b.direction == "in":
+            _emit_binding_subscriber(lines, bid, b)
+    for bid, cidx, b in bind_assignments:
+        if b.direction == "out":
+            lines.append(
+                f"    auto pub_{bid} = session.declare_publisher("
+                f"zenoh::KeyExpr({_quote(b.topic)}));")
 
+    total_bindings = len(bind_assignments)
     lines += [
         "",
-        f'    std::printf("{craft.name}: ready. {len(craft.bindings)} binding(s).\\n");',
+        f'    std::printf("{world.name}: ready. {len(world.crafts)} craft(s),'
+        f' {total_bindings} binding(s).\\n");',
         "",
         "    auto next = std::chrono::steady_clock::now();",
         "    const auto period = std::chrono::microseconds(int64_t(WALL_PERIOD * 1e6));",
@@ -167,11 +192,10 @@ def emit_main_cpp(craft: Craft, world: World) -> str:
         "    while (g_run.load()) {",
     ]
 
-    # Apply commands.
-    for i, b in enumerate(craft.bindings):
-        if b.direction != "in":
-            continue
-        _emit_binding_apply(lines, i, b)
+    # Apply commands (in-bindings).
+    for bid, cidx, b in bind_assignments:
+        if b.direction == "in":
+            _emit_binding_apply(lines, bid, b, craft_var=craft_var(cidx))
 
     lines += [
         "",
@@ -181,10 +205,9 @@ def emit_main_cpp(craft: Craft, world: World) -> str:
         "            pub_decim = 0;",
     ]
 
-    for i, b in enumerate(craft.bindings):
-        if b.direction != "out":
-            continue
-        _emit_binding_publish(lines, i, b)
+    for bid, cidx, b in bind_assignments:
+        if b.direction == "out":
+            _emit_binding_publish(lines, bid, b, craft_var=craft_var(cidx))
 
     lines += [
         "        }",
@@ -193,7 +216,7 @@ def emit_main_cpp(craft: Craft, world: World) -> str:
         "        std::this_thread::sleep_until(next);",
         "    }",
         "",
-        f"    std::printf(\"{craft.name}: shutting down.\\n\");",
+        f"    std::printf(\"{world.name}: shutting down.\\n\");",
         "    return 0;",
         "}",
         "",
@@ -224,7 +247,20 @@ def _emit_binding_subscriber(lines: list[str], i: int, b: Binding) -> None:
     ]
 
 
-def _emit_binding_apply(lines: list[str], i: int, b: Binding) -> None:
+def _accessor_for_with_var(sig, craft_var: str) -> str:
+    """Like accessor_for() but with a configurable C++ craft variable name.
+    Replaces the hard-coded `craft` with `craft_var` so multi-craft mains
+    can use craft_0, craft_1, ... for distinct instances."""
+    base = accessor_for(sig)   # "craft" or "craft.<part>()"
+    if base == "craft":
+        return craft_var
+    # Otherwise base is "craft.<part>()" — replace the leading craft with var.
+    assert base.startswith("craft.")
+    return craft_var + base[len("craft"):]
+
+
+def _emit_binding_apply(lines: list[str], i: int, b: Binding,
+                        craft_var: str = "craft") -> None:
     """Inside the main loop: under the mutex, if the payload is fresh (matches
     expected width), substitute v0..v_{n-1} into each member's cpp_write_stmt
     and call. After consumption clears the buffer so re-runs don't re-apply."""
@@ -235,7 +271,7 @@ def _emit_binding_apply(lines: list[str], i: int, b: Binding) -> None:
     cursor = 0
     for member_name, sig in b.members.items():
         n = sig.signal.n_floats
-        accessor = accessor_for(sig)
+        accessor = _accessor_for_with_var(sig, craft_var)
         v_subs = {f"v{k}": f"bind_{i}_payload[{cursor + k}]" for k in range(n)}
         v_subs["accessor"] = accessor
         stmt = sig.signal.cpp_write_stmt.format(**v_subs)
@@ -247,7 +283,8 @@ def _emit_binding_apply(lines: list[str], i: int, b: Binding) -> None:
     ]
 
 
-def _emit_binding_publish(lines: list[str], i: int, b: Binding) -> None:
+def _emit_binding_publish(lines: list[str], i: int, b: Binding,
+                          craft_var: str = "craft") -> None:
     """Inside the decimated publish block: build the wire payload from the
     binding's read expressions and put() it on its publisher. JSON encoding
     today; binary will be a separate branch on b.encoding."""
@@ -264,7 +301,7 @@ def _emit_binding_publish(lines: list[str], i: int, b: Binding) -> None:
     first_member = True
     for member_name, sig in b.members.items():
         n = sig.signal.n_floats
-        accessor = accessor_for(sig)
+        accessor = _accessor_for_with_var(sig, craft_var)
         if not first_member:
             lines.append('              _json += ",";')
         first_member = False

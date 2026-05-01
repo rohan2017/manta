@@ -113,3 +113,7 @@ manta_ex8_apply(ex8_swarm)
 # (single-signal + bundled-struct on both directions). Codegen emits the
 # entire main, including all publishers/subscribers, from craft.bindings.
 include(${CMAKE_CURRENT_SOURCE_DIR}/ex9_bindings_demo/generated/ex9/ex9.cmake)
+
+# ex10 — multi-craft codegen: two distinct Craft types ticked by a single
+# binary. Codegen emits per-Craft .hpp/.cpp + a world-level main.
+include(${CMAKE_CURRENT_SOURCE_DIR}/ex10_multi_craft/generated/ex10/ex10.cmake)

@@ -41,28 +41,41 @@ def emit(world: World,
         raise ValueError(
             f"workflow must be 'library' or 'binary', got {workflow!r}")
 
-    # Per-craft emitters take the primary craft; emit_main_cpp consumes the
-    # World for dt / sim_rate_mult / initial state.
     if not world.crafts:
         raise RuntimeError("emit(): World has no crafts")
-    craft = world.crafts[0].craft
 
+    # Identify unique Craft objects (by Python identity). A multi-craft
+    # world that adds the same Craft instance multiple times shares a single
+    # set of generated files and bindings; multiple distinct Craft objects
+    # each get their own .hpp / .cpp / _telemetry / _config.
+    seen: set[int] = set()
+    unique_crafts: list[Craft] = []
+    for entry in world.crafts:
+        if id(entry.craft) not in seen:
+            seen.add(id(entry.craft))
+            unique_crafts.append(entry.craft)
+
+    multi = len(unique_crafts) > 1
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
-    name = craft.name
-    files: dict[str, str] = {
-        f"{name}.hpp":            emit_craft_hpp(craft),
-        f"{name}.cpp":            emit_craft_cpp(craft),
-        f"{name}_config.h":       emit_config_h(world),
-        f"{name}.cmake":          emit_cmake_fragment(craft, workflow=workflow),
-    }
-    # Telemetry only applies to sim-side workflows; an estimator-side craft
-    # doesn't publish its sensor outputs (it consumes them).
-    if workflow in ("library", "binary"):
-        files[f"{name}_telemetry.hpp"] = emit_telemetry_hpp(craft)
+    files: dict[str, str] = {}
+    # Per-craft files — one set per unique Craft.
+    for craft in unique_crafts:
+        n = craft.name
+        files[f"{n}.hpp"] = emit_craft_hpp(craft)
+        files[f"{n}.cpp"] = emit_craft_cpp(craft)
+        if workflow in ("library", "binary"):
+            files[f"{n}_telemetry.hpp"] = emit_telemetry_hpp(craft)
+
+    # World-level files (single-craft worlds preserve the legacy naming
+    # where the cmake fragment / config.h are named after the craft).
+    world_name = world.name
+    files[f"{world_name}_config.h"] = emit_config_h(world)
+    files[f"{world_name}.cmake"]    = emit_cmake_fragment(
+        world, workflow=workflow, multi=multi)
     if workflow == "binary":
-        files[f"{name}_main.cpp"] = emit_main_cpp(craft, world=world)
+        files[f"{world_name}_main.cpp"] = emit_main_cpp(world)
 
     for filename, contents in files.items():
         (out / filename).write_text(contents)
