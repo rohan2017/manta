@@ -11,7 +11,7 @@ Generate from the repo root:
 
 import math
 
-from manta_codegen import Craft
+from manta_codegen import Craft, World
 from manta_codegen.parts  import PointGravityPart, PointMass, Thruster
 from manta_codegen.fields import PointGravityField
 
@@ -34,25 +34,16 @@ THRUSTER_DIRS: list[tuple[str, tuple[float, float, float]]] = [
 ]
 
 
-def make_craft() -> Craft:
+def make_world() -> World:
     body      = PointMass("body", mass=1.0)
     thrusters = [Thruster(name, max_thrust=5.0, direction=d) for name, d in THRUSTER_DIRS]
     grav      = PointGravityPart("grav")
 
-    c = Craft("ex1", fields=[PointGravityField(mu=MU)])
+    c = Craft("ex1")
     c.root.add(body)
     for t in thrusters:
         c.root.add(t)
     c.root.add(grav)
-
-    # 200 sim-s per wall-s, 5 ms tick.
-    c.sim_config(dt=0.005, sim_rate_mult=200.0)
-
-    # Initial state: at (R, 0, 0), tangential velocity (0, V_circ, 0) → CCW orbit.
-    c.initial_state(
-        position   = (ORBIT_R, 0.0, 0.0),
-        vel_linear = (0.0, V_CIRC, 0.0),
-    )
 
     # Bundled state topic: craft pose + per-thruster throttles. Wire format
     # matches what the viewer expects (top-level "p","q","v","w" arrays).
@@ -63,9 +54,12 @@ def make_craft() -> Craft:
     for t in thrusters:
         state[t.name] = t.throttle
     c.publish(state, "manta/ex1/state")
-
-    # Per-thruster command subscribers.
     for t in thrusters:
         c.subscribe(t.set_throttle, f"manta/ex1/{t.name}/cmd")
 
-    return c
+    # Sim setup: gravity field on the world, craft at (R, 0, 0) with
+    # tangential velocity for a circular orbit. 200 sim-s per wall-s.
+    return (World()
+            .add_field(PointGravityField(mu=MU))
+            .add_craft(c, pos=(ORBIT_R, 0.0, 0.0), vel=(0.0, V_CIRC, 0.0))
+            .run(dt=0.005, sim_rate_mult=200.0))

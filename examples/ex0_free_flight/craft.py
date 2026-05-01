@@ -9,7 +9,7 @@ Run from the repo root:
 Output lands in `examples/ex0_free_flight/generated/ex0/`.
 """
 
-from manta_codegen import Craft
+from manta_codegen import Craft, World
 from manta_codegen.parts import PointMass, Thruster
 
 
@@ -24,16 +24,15 @@ THRUSTER_DIRS: list[tuple[str, tuple[float, float, float]]] = [
 ]
 
 
-def make_craft() -> Craft:
+def make_world() -> World:
     body      = PointMass("body", mass=1.0)
     thrusters = [Thruster(name, max_thrust=5.0, direction=d) for name, d in THRUSTER_DIRS]
 
-    c = Craft("ex0")  # no fields registered — zero-gravity
+    c = Craft("ex0")
     c.root.add(body)
     for t in thrusters:
         c.root.add(t)
 
-    # Bundled state with craft pose + per-thruster throttles.
     state = {
         "p": c.position, "q": c.orientation,
         "v": c.vel_linear, "w": c.vel_angular,
@@ -41,9 +40,10 @@ def make_craft() -> Craft:
     for t in thrusters:
         state[t.name] = t.throttle
     c.publish(state, "manta/ex0/state")
-
-    # Per-thruster command subscribers.
     for t in thrusters:
         c.subscribe(t.set_throttle, f"manta/ex0/{t.name}/cmd")
 
-    return c
+    # Zero-gravity free-flight: no fields, no planet. Default initial state.
+    return (World()
+            .add_craft(c)
+            .run(dt=0.001, sim_rate_mult=1.0))

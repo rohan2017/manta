@@ -18,7 +18,7 @@ Workflow: binary. Topics:
   manta/ex5/aft_thrust/cmd   — float[1] throttle [0,1]
 """
 
-from manta_codegen import Craft, tf
+from manta_codegen import Craft, World, tf
 from manta_codegen.parts   import DVL, GravityPart, Hull, IMU, PointMass, Thruster
 from manta_codegen.fields  import GravityField
 from manta_codegen.planets import Earth
@@ -43,16 +43,12 @@ SAMPLE_POINTS = [
 ]
 
 
-def make_craft() -> Craft:
+def make_world() -> World:
     # Earth registers an OceanAtmosField (under the FluidField slot) and a
     # FlatSeaSurface automatically — Hull picks both up. GravityField is
     # still a top-level world field (gravity isn't yet a planet-disturbance
     # in the architecture).
-    c = Craft(
-        "ex5",
-        fields=[GravityField()],
-        planets=[Earth(sea_level=0.0)],
-    )
+    c = Craft("ex5")
 
     # Hull: provides buoyancy + holds the bulk mass/MOI of the sub.
     # MOI of a uniform cylinder: I_xx = (1/2)·m·r², I_yy = I_zz = (1/12)·m·(3r²+L²).
@@ -90,6 +86,12 @@ def make_craft() -> Craft:
     }, "manta/ex5/state")
     c.subscribe(aft_thrust.set_throttle, "manta/ex5/aft_thrust/cmd")
 
-    # Initial state: 0.5 m below sea surface, at rest.
-    c.initial_state(position=(0.0, 0.0, -0.5))
-    return c
+    # World setup: gravity field + Earth planet (registers OceanAtmosField
+    # and FlatSeaSurface automatically). Craft starts 0.5 m below the sea
+    # surface, at rest.
+    earth = Earth(sea_level=0.0)
+    return (World()
+            .add_field(GravityField())
+            .add_planet(earth)
+            .add_craft(c, on=earth, pos=(0.0, 0.0, -0.5))
+            .run(dt=0.001, sim_rate_mult=1.0))

@@ -17,7 +17,7 @@ Workflow: binary — the generated main subscribes to a single command topic
 'manta/ex4/state' with the body pose, velocities, and the wheel angle/rate.
 """
 
-from manta_codegen import Craft
+from manta_codegen import Craft, World
 from manta_codegen.parts import Motor, PointMass
 
 
@@ -34,24 +34,19 @@ WHEEL_IZZ  = WHEEL_MASS * WHEEL_R * WHEEL_R   # 0.005 kg·m² ring approximation
 WHEEL_MOI  = (WHEEL_IZZ * 0.5, WHEEL_IZZ * 0.5, WHEEL_IZZ)  # disc: I_xx = I_yy = Izz/2
 
 
-def make_craft() -> Craft:
+def make_world() -> World:
     body  = PointMass("body", mass=BODY_MASS, moi=BODY_MOI)
-    motor = Motor(
-        "wheel",
-        axis=(0.0, 0.0, 1.0),
-        stall_torque=2.0,        # N·m
-        damping=0.0,
-    )
+    motor = Motor("wheel",
+                  axis=(0.0, 0.0, 1.0),
+                  stall_torque=2.0,
+                  damping=0.0)
     flywheel = PointMass("flywheel", mass=WHEEL_MASS, moi=WHEEL_MOI)
 
-    c = Craft("ex4")  # no fields — free space, no gravity
+    c = Craft("ex4")
     c.root.add(body)
     c.root.add(motor)
     motor.add(flywheel)          # flywheel rides the motor's joint output
 
-    # Bundled state with body pose + flat per-signal motor fields. Each motor
-    # signal lives at its own struct key (no nested objects in the new wire
-    # format) — the smoke test reads `state["wheel_rate"][0]` etc.
     c.publish({
         "p": c.position,         "q": c.orientation,
         "v": c.vel_linear,       "w": c.vel_angular,
@@ -61,4 +56,5 @@ def make_craft() -> Craft:
     }, "manta/ex4/state")
     c.subscribe(motor.set_torque, "manta/ex4/wheel/cmd")
 
-    return c
+    # Free space, no gravity, default initial state.
+    return World().add_craft(c).run(dt=0.001, sim_rate_mult=1.0)

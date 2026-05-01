@@ -18,7 +18,6 @@
 #include "manta/core/world.hpp"
 #include "ex1.hpp"
 #include "ex1_telemetry.hpp"
-#include "manta/fields/point_gravity_field.hpp"
 
 namespace {
 std::atomic<bool> g_run{true};
@@ -48,17 +47,15 @@ int main() {
     std::signal(SIGINT,  on_signal);
     std::signal(SIGTERM, on_signal);
 
-    constexpr float DT             = 0.005f;
-    constexpr float SIM_RATE_MULT  = 200.0f;
+    constexpr float DT             = 0.001f;
+    constexpr float SIM_RATE_MULT  = 1.0f;
     const     float WALL_PERIOD    = DT / SIM_RATE_MULT;
 
     manta::World w;
     w.clock().set_dt(DT);
     auto& scene = w.create_scene();
-    manta::fields::PointGravityField field_0{3.986004e+14f, manta::geom::Vec3<manta::SceneFrame>{0.0f, 0.0f, 0.0f}};
-    w.register_field(field_0);
     Ex1Craft craft;
-    scene.add_craft(craft, manta::InitialState{manta::geom::Vec3<manta::SceneFrame>{6372000.0f, 0.0f, 0.0f}, manta::geom::Ori<manta::SceneFrame>{Eigen::Quaternionf{1.0f, 0.0f, 0.0f, 0.0f}}, manta::geom::Vec3<manta::SceneFrame>{0.0f, 7909.172f, 0.0f}, manta::geom::Vec3<manta::CraftFrame>{0.0f, 0.0f, 0.0f}});
+    scene.add_craft(craft, manta::InitialState{});
 
     zenoh::Config cfg = zenoh::Config::create_default();
     auto session = zenoh::Session::open(std::move(cfg));

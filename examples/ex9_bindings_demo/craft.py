@@ -9,11 +9,11 @@ Regenerate from the repo root:
         --out examples/ex9_bindings_demo/generated/ex9
 """
 
-from manta_codegen import Craft
+from manta_codegen import Craft, World
 from manta_codegen.parts import IMU, PointMass, Thruster
 
 
-def make_craft() -> Craft:
+def make_world() -> World:
     body = PointMass("body", mass=1.0)
     imu  = IMU("imu")
     thr  = Thruster("thrust", max_thrust=5.0, direction=(1.0, 0.0, 0.0))
@@ -41,4 +41,4 @@ def make_craft() -> Craft:
     }, "manta/ex9/state")
     c.subscribe(thr.set_throttle, "manta/ex9/cmd")    # explicit topic name
 
-    return c
+    return World().add_craft(c).run(dt=0.001, sim_rate_mult=1.0)
