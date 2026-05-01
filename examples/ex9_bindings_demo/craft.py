@@ -26,10 +26,19 @@ def make_craft() -> Craft:
     # Explicit bindings — replaces the legacy publish_state / subscribe_command
     # flag-based defaults. Single-signal binding picks up the default topic;
     # bundled-struct binding requires an explicit topic.
+    #
+    # Craft-level signals (c.position, c.orientation, c.vel_linear,
+    # c.vel_angular) cover the kinematic state that the legacy bundled-state
+    # topic used to expose; mix them with part signals in any combination.
     c.publish(imu.last_accel)                         # → manta/ex9/imu/last_accel
     c.publish(imu.last_gyro)                          # → manta/ex9/imu/last_gyro
-    c.publish({"throttle": thr.throttle},             # → manta/ex9/state (bundled)
-              "manta/ex9/state")
+    c.publish({                                       # → manta/ex9/state (bundled)
+        "p": c.position,
+        "q": c.orientation,
+        "v": c.vel_linear,
+        "w": c.vel_angular,
+        "throttle": thr.throttle,
+    }, "manta/ex9/state")
     c.subscribe(thr.set_throttle, "manta/ex9/cmd")    # explicit topic name
 
     return c

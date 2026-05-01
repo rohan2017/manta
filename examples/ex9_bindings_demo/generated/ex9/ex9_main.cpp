@@ -113,6 +113,31 @@ int main() {
               pub_1.put(zenoh::Bytes(_json));
             }
             { std::string _json = "{";
+              _json += "\"p\":[";
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.scene_to_craft().position().raw()(0))); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().position().raw()(1))); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().position().raw()(2))); _json += _b; }
+              _json += "]";
+              _json += ",";
+              _json += "\"q\":[";
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.scene_to_craft().orientation().raw().w())); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().orientation().raw().x())); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().orientation().raw().y())); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().orientation().raw().z())); _json += _b; }
+              _json += "]";
+              _json += ",";
+              _json += "\"v\":[";
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.scene_to_craft().vel_linear().raw()(0))); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().vel_linear().raw()(1))); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().vel_linear().raw()(2))); _json += _b; }
+              _json += "]";
+              _json += ",";
+              _json += "\"w\":[";
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.scene_to_craft().vel_angular().raw()(0))); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().vel_angular().raw()(1))); _json += _b; }
+              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().vel_angular().raw()(2))); _json += _b; }
+              _json += "]";
+              _json += ",";
               _json += "\"throttle\":[";
               { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.thrust().throttle())); _json += _b; }
               _json += "]";

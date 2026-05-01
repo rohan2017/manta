@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from .._format import cpp_float as _f
 from ..core import Craft
-from ..signal import Binding
+from ..signal import Binding, accessor_for
 from ._util import GENERATED_BANNER, class_name_for_craft
 
 
@@ -271,7 +271,7 @@ def _emit_binding_apply(lines: list[str], i: int, b: Binding) -> None:
     cursor = 0
     for member_name, sig in b.members.items():
         n = sig.signal.n_floats
-        accessor = f"craft.{sig.part_name}()"
+        accessor = accessor_for(sig)
         v_subs = {f"v{k}": f"bind_{i}_payload[{cursor + k}]" for k in range(n)}
         v_subs["accessor"] = accessor
         stmt = sig.signal.cpp_write_stmt.format(**v_subs)
@@ -300,7 +300,7 @@ def _emit_binding_publish(lines: list[str], i: int, b: Binding) -> None:
     first_member = True
     for member_name, sig in b.members.items():
         n = sig.signal.n_floats
-        accessor = f"craft.{sig.part_name}()"
+        accessor = accessor_for(sig)
         if not first_member:
             lines.append('              _json += ",";')
         first_member = False

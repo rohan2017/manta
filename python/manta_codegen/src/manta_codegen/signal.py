@@ -136,6 +136,24 @@ def scalar_in_signal(name: str, setter_method: str) -> Signal:
 
 
 # ---------------------------------------------------------------------------
+# Craft-level signal sentinel — distinguishes craft-pose/velocity signals
+# (which the emitter accesses via plain `craft.scene_to_craft()...`) from
+# part signals (accessed via `craft.<part_name>().last_accel()`).
+
+CRAFT_SENTINEL = "$craft"
+
+
+def is_craft_signal(b: BoundSignal) -> bool:
+    return b.part_name == CRAFT_SENTINEL
+
+
+def accessor_for(b: BoundSignal) -> str:
+    """Return the C++ accessor expression to substitute for `{accessor}` in
+    the signal's cpp_read_exprs / cpp_write_stmt."""
+    return "craft" if is_craft_signal(b) else f"craft.{b.part_name}()"
+
+
+# ---------------------------------------------------------------------------
 # Binding — what gets recorded on a Craft for codegen to consume.
 
 @dataclass

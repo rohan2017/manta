@@ -84,6 +84,21 @@ def test_emit_main_legacy_path_still_active_when_no_bindings() -> None:
     _check("state_pub" in src, "legacy state_pub disappeared without bindings")
 
 
+def test_publish_craft_pose_emits_bare_craft_accessor() -> None:
+    """Craft-level signals (part_name == CRAFT_SENTINEL) must use plain `craft`
+    as the accessor, not `craft.<part>()`."""
+    c = Craft("ex_pose")
+    c.publish({"p": c.position, "q": c.orientation}, "manta/ex_pose/state")
+    src = emit_main_cpp(c)
+    _check("craft.scene_to_craft().position().raw()(0)" in src,
+           "craft pose read expression must reference plain craft accessor")
+    _check("craft.scene_to_craft().orientation().raw().w()" in src,
+           "craft orientation w() accessor missing")
+    # Make sure no `craft.position()` slipped through (which would only exist
+    # if the emitter mistakenly treated it as a part signal).
+    _check("craft.position()." not in src, "craft.position() should not appear")
+
+
 def test_apply_substitutes_payload_indices_per_member() -> None:
     """Bundle two scalar in-signals → expect bind_0_payload[0] for the first
     member and bind_0_payload[1] for the second."""

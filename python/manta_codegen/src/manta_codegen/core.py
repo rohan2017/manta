@@ -11,7 +11,57 @@ from dataclasses import dataclass, field
 from typing import ClassVar, Iterator
 
 from ._format import cpp_float as _f
-from .signal import Binding, BoundSignal, Signal
+from .signal import Binding, BoundSignal, CRAFT_SENTINEL, Signal
+
+
+# Craft-level signals exposed on every Craft instance. These read off the
+# craft's scene_to_craft kinematic state — the emitter substitutes "craft"
+# (not "craft.<part>()") for `{accessor}` because part_name is the
+# CRAFT_SENTINEL. Part signals and craft signals share the same Binding /
+# emitter machinery; only the accessor differs.
+_CRAFT_SIGNALS: list[Signal] = [
+    Signal(
+        name="position",
+        direction="out",
+        n_floats=3,
+        cpp_read_exprs=(
+            "{accessor}.scene_to_craft().position().raw()(0)",
+            "{accessor}.scene_to_craft().position().raw()(1)",
+            "{accessor}.scene_to_craft().position().raw()(2)",
+        ),
+    ),
+    Signal(
+        name="orientation",
+        direction="out",
+        n_floats=4,           # (w, x, y, z) quaternion order
+        cpp_read_exprs=(
+            "{accessor}.scene_to_craft().orientation().raw().w()",
+            "{accessor}.scene_to_craft().orientation().raw().x()",
+            "{accessor}.scene_to_craft().orientation().raw().y()",
+            "{accessor}.scene_to_craft().orientation().raw().z()",
+        ),
+    ),
+    Signal(
+        name="vel_linear",
+        direction="out",
+        n_floats=3,
+        cpp_read_exprs=(
+            "{accessor}.scene_to_craft().vel_linear().raw()(0)",
+            "{accessor}.scene_to_craft().vel_linear().raw()(1)",
+            "{accessor}.scene_to_craft().vel_linear().raw()(2)",
+        ),
+    ),
+    Signal(
+        name="vel_angular",
+        direction="out",
+        n_floats=3,
+        cpp_read_exprs=(
+            "{accessor}.scene_to_craft().vel_angular().raw()(0)",
+            "{accessor}.scene_to_craft().vel_angular().raw()(1)",
+            "{accessor}.scene_to_craft().vel_angular().raw()(2)",
+        ),
+    ),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -302,6 +352,14 @@ class Craft:
         # Binding; replaces the older publish_state / subscribe_command
         # flag-based path.
         self.bindings: list[Binding] = []
+        # Craft-level signals (pose + velocity) exposed as attributes for
+        # symmetry with `imu.last_accel`-style part signal access. Each is a
+        # BoundSignal pointing at the craft itself (part_name = CRAFT_SENTINEL);
+        # the emitter recognizes the sentinel and substitutes plain `craft`
+        # for the accessor.
+        for sig in _CRAFT_SIGNALS:
+            object.__setattr__(self, sig.name,
+                               BoundSignal(part_name=CRAFT_SENTINEL, signal=sig))
 
     def initial_state(self,
                       position:    tuple[float, float, float] = (0.0, 0.0, 0.0),

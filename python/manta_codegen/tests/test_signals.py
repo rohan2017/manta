@@ -184,6 +184,30 @@ def test_gimbaled_thruster_extends_thruster_signals() -> None:
     _check(g.set_gimbal.signal.n_floats == 2, "set_gimbal should be 2 floats")
 
 
+def test_craft_level_signals_attached() -> None:
+    c = Craft("ex_test")
+    for name in ("position", "orientation", "vel_linear", "vel_angular"):
+        sig = getattr(c, name)
+        _check(isinstance(sig, BoundSignal), f"craft.{name} not bound")
+        _check(sig.direction == "out", f"craft.{name} must be out")
+        _check(sig.part_name == "$craft", f"craft.{name} must use CRAFT_SENTINEL")
+    _check(c.position.signal.n_floats == 3, "position is a Vec3")
+    _check(c.orientation.signal.n_floats == 4, "orientation is a quaternion (4 floats)")
+
+
+def test_publish_craft_pose_bundle() -> None:
+    c = Craft("ex_test")
+    c.publish({
+        "p": c.position,
+        "q": c.orientation,
+        "v": c.vel_linear,
+        "w": c.vel_angular,
+    }, "manta/ex_test/state")
+    b = c.bindings[0]
+    _check(b.total_floats == 3 + 4 + 3 + 3, f"unexpected total_floats {b.total_floats}")
+    _check(b.direction == "out", "all-out craft pose bundle")
+
+
 def test_chaining_returns_craft() -> None:
     imu = IMU("imu0")
     t = Thruster("fwd", max_thrust=1.0)
