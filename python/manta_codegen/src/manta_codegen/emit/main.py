@@ -80,6 +80,9 @@ def emit_main_cpp(world: World) -> str:
         lines.append(f'#include "{f.cpp_header}"')
     for p in world.planets:
         lines.append(f'#include "{p.cpp_header}"')
+    if world.tethers:
+        lines.append('#include "manta/coupling/tether.hpp"')
+        lines.append('#include "manta/parts/coupling/tether_endpoint.hpp"')
     lines += [
         "",
         "namespace {",
@@ -150,6 +153,47 @@ def emit_main_cpp(world: World) -> str:
         cls = class_name_for_craft(entry.craft.name)
         var = craft_var(idx)
         lines.append(f"    {cls} {var};")
+
+    # Tethers + endpoints. Each endpoint is added to the craft's root
+    # AFTER craft construction (the per-Craft .cpp doesn't know about
+    # cross-craft tethers). compute_params() must re-run on each affected
+    # craft to fold the new endpoint's mass/MOI into the rigid-body params.
+    if world.tethers:
+        lines.append("")
+        lines.append("    // ---- Tethers ----")
+        # Need <coupling/tether.hpp> + tether endpoint. They're already
+        # included transitively via craft.hpp -> part.hpp; explicit include
+        # for clarity.
+        # Find the craft index for a given Craft Python object.
+        craft_idx_of = {}
+        for ci, e in enumerate(world.crafts):
+            if id(e.craft) not in craft_idx_of:
+                craft_idx_of[id(e.craft)] = ci
+        affected_crafts: set[int] = set()
+        for ti, te in enumerate(world.tethers):
+            tname = f"tether_{ti}"
+            t = te.tether
+            lines.append(
+                f"    manta::coupling::Tether {tname}("
+                f"{_f(t.rest_length)}, {_f(t.stiffness)}, {_f(t.damping)});"
+            )
+            for ep, is_a in ((te.endpoint_a, True), (te.endpoint_b, False)):
+                ep_craft, ep_name = ep
+                ci = craft_idx_of[id(ep_craft)]
+                affected_crafts.add(ci)
+                lines.append(
+                    f"    {craft_var(ci)}.root().add<manta::parts::TetherEndpoint>("
+                    f'"{ep_name}", {tname}, {"true" if is_a else "false"});'
+                )
+        # Re-run compute_params on each craft we touched so the new
+        # endpoint's mass/MOI/COM contribution lands in the cached
+        # rigid-body params.
+        for ci in sorted(affected_crafts):
+            lines.append(f"    {craft_var(ci)}.root().compute_params();")
+        lines.append("")
+
+    for idx, entry in enumerate(world.crafts):
+        var = craft_var(idx)
         lines.append(f"    scene.add_craft({var}, {_initial_state_literal(entry)});")
 
     lines += [

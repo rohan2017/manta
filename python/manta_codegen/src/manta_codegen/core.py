@@ -443,6 +443,27 @@ class _CraftEntry:
     vel_angular: tuple[float, float, float]                = (0.0, 0.0, 0.0)
 
 
+@dataclass
+class Tether:
+    """Spring-damper tether between two TetherEndpoints. Lives at world level
+    (the tether spans crafts), so it's owned by World rather than by a Craft.
+    Use World.add_tether() to register it; codegen emits the C++
+    `manta::coupling::Tether` instance + the two endpoint hookups in main.cpp.
+    """
+    rest_length: float
+    stiffness:   float
+    damping:     float = 0.0
+
+
+@dataclass
+class _TetherEntry:
+    tether: Tether
+    # (craft, endpoint_part_name) for each end. The endpoint Part is added to
+    # the craft AT MAIN-TIME (after construct), not in the per-Craft .cpp.
+    endpoint_a: tuple["Craft", str]
+    endpoint_b: tuple["Craft", str]
+
+
 class World:
     """The simulation top-level. Holds fields, planets, crafts, and the sim
     loop config (dt, rate multiplier). Each craft is added with its own
@@ -469,6 +490,7 @@ class World:
         self.fields: list[FieldDescriptor] = []
         self.planets: list[PlanetDescriptor] = []
         self.crafts: list[_CraftEntry] = []
+        self.tethers: list[_TetherEntry] = []
         self.dt: float = 0.001
         self.sim_rate_mult: float = 1.0
 
@@ -516,6 +538,36 @@ class World:
             vel_linear=tuple(float(x) for x in vel),               # type: ignore[arg-type]
             vel_angular=tuple(float(x) for x in vel_angular),      # type: ignore[arg-type]
         ))
+        return self
+
+    def add_tether(self,
+                   tether: Tether,
+                   endpoint_a: tuple["Craft", str],
+                   endpoint_b: tuple["Craft", str]) -> "World":
+        """Register a Tether between two crafts. Each endpoint is a
+        (craft, name) tuple — codegen emits a TetherEndpoint Part with the
+        given name onto each craft's root after construction, then wires
+        the endpoints to the shared Tether instance.
+
+        Same-craft tethers are allowed: pass the same Craft twice with
+        distinct endpoint names.
+        """
+        for slot, ep in (("endpoint_a", endpoint_a), ("endpoint_b", endpoint_b)):
+            if not (isinstance(ep, tuple) and len(ep) == 2):
+                raise TypeError(
+                    f"World.add_tether: {slot} must be (craft, name) tuple")
+            craft, name = ep
+            if not isinstance(craft, Craft):
+                raise TypeError(
+                    f"World.add_tether: {slot} craft must be a Craft")
+            if not (isinstance(name, str) and name.isidentifier()):
+                raise ValueError(
+                    f"World.add_tether: {slot} name {name!r} must be a valid identifier")
+            if not any(e.craft is craft for e in self.crafts):
+                raise ValueError(
+                    f"World.add_tether: {slot} craft is not registered with this World; "
+                    f"call world.add_craft(c) first")
+        self.tethers.append(_TetherEntry(tether, endpoint_a, endpoint_b))
         return self
 
     def run(self, dt: float = 0.001, sim_rate_mult: float = 1.0) -> "World":

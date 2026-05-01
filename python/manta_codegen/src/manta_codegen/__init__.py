@@ -8,6 +8,7 @@ from .core import (
     FieldDescriptor,
     PlanetDescriptor,
     StaticTransform,
+    Tether,
     World,
     tf,
 )
@@ -19,6 +20,7 @@ __all__ = [
     "FieldDescriptor",
     "PlanetDescriptor",
     "StaticTransform",
+    "Tether",
     "World",
     "tf",
     "emit",
