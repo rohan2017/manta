@@ -18,8 +18,10 @@
 #include <doctest/doctest.h>
 
 #include "../include/manta/core/craft.hpp"
+#include "../include/manta/fields/uniform_fluid_field.hpp"
 #include "../include/manta/parts/actuator/thruster.hpp"
 #include "../include/manta/parts/structure/point_mass.hpp"
+#include "../include/manta/parts/structure/surface.hpp"
 
 using namespace manta;
 using namespace manta::parts;
@@ -119,4 +121,120 @@ TEST_CASE("System ID: fit mass from a recorded thruster-driven trajectory") {
     INFO("ceres summary: ", summary.BriefReport());
     CHECK(summary.IsSolutionUsable());
     CHECK(mass == doctest::Approx(TRUE_MASS).epsilon(1e-3));
+}
+
+
+// Second case: fit a linear-drag coefficient on a Surface1 part. A point mass
+// with diagonal drag −k in a steady wind +x at 5 m/s relaxes exponentially
+// toward the wind speed with time constant τ = m/k. Recovering k from the
+// observed velocity trajectory exercises:
+//   * The Surface1T<Scalar> instantiation under Jet<double, 1>.
+//   * The Real-bridge inside Surface's update() that queries the (non-
+//     templated) FluidField. This is the integration test for
+//     "autodiff-through-non-templated-field-queries" — proves we don't
+//     accidentally lose the parameter's derivative when the field's value
+//     gets cast to Real in the bridge.
+
+namespace {
+template <class Scalar>
+std::vector<Scalar> simulate_drag_trajectory(Scalar drag_k,
+                                             double mass,
+                                             double wind_x,
+                                             double dt,
+                                             int    n_steps) {
+    using DCraft = CraftT<Scalar>;
+    using DPM    = PointMassT<Scalar>;
+    using DSurf  = Surface1T<Scalar>;
+    using TensorT = geom::Mat3<PartFrame, PartFrame, Scalar>;
+
+    DCraft c("drag_fit");
+    c.root().template add<DPM>("body", Scalar(mass));
+
+    // Build a diagonal +k drag tensor. Surface's F = A · v_rel where
+    // v_rel = v_fluid − v_self, so a positive diagonal makes F point along
+    // (v_fluid − v_self), pulling the body toward the wind.
+    auto force_tensor  = TensorT::identity();
+    force_tensor.raw()(0, 0) = drag_k;
+    force_tensor.raw()(1, 1) = drag_k;
+    force_tensor.raw()(2, 2) = drag_k;
+    auto torque_tensor = TensorT::identity();
+    torque_tensor.raw()(0, 0) = Scalar(0);
+    torque_tensor.raw()(1, 1) = Scalar(0);
+    torque_tensor.raw()(2, 2) = Scalar(0);
+    std::array<TensorT, 1> A{force_tensor};
+    std::array<TensorT, 1> B{torque_tensor};
+    c.root().template add<DSurf>("drag", A, B);
+
+    // Register a uniform fluid moving in +x. Field is Real-only; the part
+    // bridges through it.
+    fields::UniformFluidField wind(Real(1.0),
+        geom::Vec3<SceneFrame>{Real(wind_x), Real(0), Real(0)});
+    c.template register_field<fields::FluidField>(wind);
+
+    c.root().compute_params();
+
+    typename DCraft::RigidState x;
+    x.setZero();
+    x(3) = Scalar(1);
+
+    std::vector<Scalar> vx;
+    vx.reserve(n_steps);
+    for (int k = 0; k < n_steps; ++k) {
+        x = c.evaluate(x, Scalar(dt));
+        vx.push_back(x(7));   // v_x of rigid state
+    }
+    return vx;
+}
+
+struct DragFitCost {
+    DragFitCost(const std::vector<double>& observed_vx,
+                double mass, double wind_x, double dt)
+        : observed_(observed_vx), mass_(mass), wind_x_(wind_x), dt_(dt) {}
+
+    template <class T>
+    bool operator()(const T* k, T* residual) const {
+        auto pred = simulate_drag_trajectory(k[0], mass_, wind_x_, dt_,
+                                             static_cast<int>(observed_.size()));
+        for (size_t i = 0; i < observed_.size(); ++i) {
+            residual[i] = pred[i] - T(observed_[i]);
+        }
+        return true;
+    }
+
+    const std::vector<double>& observed_;
+    double mass_, wind_x_, dt_;
+};
+}  // namespace
+
+TEST_CASE("System ID: fit drag coefficient on a Surface1 in flowing wind") {
+    constexpr double TRUE_K = 2.0;
+    constexpr double MASS   = 1.0;
+    constexpr double WIND   = 5.0;
+    constexpr double DT     = 0.01;
+    constexpr int    NS     = 100;
+
+    auto observed = simulate_drag_trajectory<double>(TRUE_K, MASS, WIND, DT, NS);
+    // Sanity: τ = m/k = 0.5 s. After 1 s, v_x ≈ WIND·(1 − e^{-2}) ≈ 4.32.
+    CHECK(observed.back() == doctest::Approx(4.32).epsilon(0.05));
+
+    double k = 0.5;   // start far below
+    ceres::Problem problem;
+    auto* cost = new ceres::AutoDiffCostFunction<DragFitCost,
+                                                 ceres::DYNAMIC,
+                                                 1>(
+        new DragFitCost(observed, MASS, WIND, DT), NS);
+    problem.AddResidualBlock(cost, nullptr, &k);
+    problem.SetParameterLowerBound(&k, 0, 0.01);
+
+    ceres::Solver::Options options;
+    options.linear_solver_type = ceres::DENSE_QR;
+    options.minimizer_progress_to_stdout = false;
+    options.max_num_iterations = 50;
+    ceres::Solver::Summary summary;
+    ceres::Solve(options, &problem, &summary);
+
+    INFO("converged k = ", k, " (true ", TRUE_K, ")");
+    INFO("ceres summary: ", summary.BriefReport());
+    CHECK(summary.IsSolutionUsable());
+    CHECK(k == doctest::Approx(TRUE_K).epsilon(1e-3));
 }
