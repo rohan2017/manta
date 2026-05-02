@@ -4,7 +4,7 @@
 #include "../include/manta/core/scene.hpp"
 #include "../include/manta/core/world.hpp"
 #include "../include/manta/parts/articulation/motor.hpp"
-#include "../include/manta/parts/structure/point_mass.hpp"
+#include "../include/manta/parts/structure/mass.hpp"
 #include "test_helpers.hpp"
 
 using namespace manta;
@@ -23,7 +23,7 @@ TEST_CASE("Motor: at-rest Motor with no children has zero joint accel") {
 }
 
 TEST_CASE("Motor: passive joint with axial child torque accelerates") {
-    // PointMass at +x offset from motor's joint output. Apply a torque about
+    // Mass at +x offset from motor's joint output. Apply a torque about
     // the motor's z axis directly to the point-mass's wrench accumulator. The
     // motor's resolve() should compute axial accel = τ_axial / I_axial, and
     // the joint should advance accordingly after one tick.
@@ -31,12 +31,12 @@ TEST_CASE("Motor: passive joint with axial child torque accelerates") {
     auto& motor = c.root().add<Motor>("m", Vec3<PartFrame>{0, 0, 1});
 
     // Child mass: 1 kg at (0.5, 0, 0) in motor's joint-output frame.
-    auto& mass = motor.add<PointMass>("p", 1.0f);
+    auto& mass = motor.add<Mass>("p", 1.0f);
     mass.set_transform(StaticLink<ParentFrame, PartFrame>{
         Vec3<ParentFrame>{0.5f, 0.0f, 0.0f},
         Ori<ParentFrame>::identity()});
 
-    // Add a synthetic torque on the mass directly. PointMass::update() is a
+    // Add a synthetic torque on the mass directly. Mass::update() is a
     // no-op so we apply the torque from outside via the public API on the
     // mass before calling update.
     motor.set_passive();
@@ -73,7 +73,7 @@ TEST_CASE("Motor: saturating mode applies actuator torque, clamped to stall") {
     Craft c("test");
     auto& motor = c.root().add<Motor>("m", Vec3<PartFrame>{0, 0, 1},
                                        /*stall_torque=*/0.5f);
-    auto& mass = motor.add<PointMass>("p", 1.0f);
+    auto& mass = motor.add<Mass>("p", 1.0f);
     mass.set_transform(StaticLink<ParentFrame, PartFrame>{
         Vec3<ParentFrame>{0.5f, 0.0f, 0.0f},
         Ori<ParentFrame>::identity()});
@@ -120,11 +120,11 @@ TEST_CASE("Articulation invariant: balanced Motor preserves COM and Lz") {
 
     auto& motor = c.root().add<Motor>("motor", Vec3<PartFrame>{0, 0, 1},
                                       /*stall=*/10.0f);
-    auto& mL = motor.add<PointMass>("mL", m);
+    auto& mL = motor.add<Mass>("mL", m);
     mL.set_transform(StaticLink<ParentFrame, PartFrame>{
         Vec3<ParentFrame>{-r, 0, 0},
         Ori<ParentFrame>::identity()});
-    auto& mR = motor.add<PointMass>("mR", m);
+    auto& mR = motor.add<Mass>("mR", m);
     mR.set_transform(StaticLink<ParentFrame, PartFrame>{
         Vec3<ParentFrame>{+r, 0, 0},
         Ori<ParentFrame>::identity()});
@@ -185,14 +185,14 @@ TEST_CASE("Articulation invariant: asymmetric Motor preserves COM and Lz") {
     auto& scene = w.create_scene();
     Craft c("asymmetric_motor");
 
-    auto& m1 = c.root().add<PointMass>("m1", m);
+    auto& m1 = c.root().add<Mass>("m1", m);
     m1.set_transform(StaticLink<ParentFrame, PartFrame>{
         Vec3<ParentFrame>{+r, 0, 0},
         Ori<ParentFrame>::identity()});
 
     auto& motor = c.root().add<Motor>("motor", Vec3<PartFrame>{0, 0, 1},
                                        /*stall=*/10.0f);
-    auto& m2 = motor.add<PointMass>("m2", m);
+    auto& m2 = motor.add<Mass>("m2", m);
     m2.set_transform(StaticLink<ParentFrame, PartFrame>{
         Vec3<ParentFrame>{-r, 0, 0},
         Ori<ParentFrame>::identity()});

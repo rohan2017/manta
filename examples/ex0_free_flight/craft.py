@@ -10,7 +10,7 @@ Output lands in `examples/ex0_free_flight/generated/ex0/`.
 """
 
 from manta_codegen import Craft, World
-from manta_codegen.parts import PointMass, Thruster
+from manta_codegen.parts import Mass, Thruster
 
 
 # Six unit-vector directions: ±x, ±y, ±z. Iterate to keep the Python tidy.
@@ -25,7 +25,7 @@ THRUSTER_DIRS: list[tuple[str, tuple[float, float, float]]] = [
 
 
 def make_world() -> World:
-    body      = PointMass("body", mass=1.0)
+    body      = Mass("body", mass=1.0)
     thrusters = [Thruster(name, max_thrust=5.0, direction=d) for name, d in THRUSTER_DIRS]
 
     c = Craft("ex0")

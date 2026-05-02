@@ -5,35 +5,52 @@
 
 
 #include "manta/core/craft.hpp"
-#include "manta/parts/structure/hull.hpp"
-#include "manta/parts/structure/point_mass.hpp"
-#include "manta/parts/field_src/gravity_part.hpp"
+#include "manta/parts/structure/mass.hpp"
 #include "manta/parts/sensor/imu.hpp"
 #include "manta/parts/sensor/dvl.hpp"
 #include "manta/parts/actuator/thruster.hpp"
+#include "manta/parts/structure/point_buoy.hpp"
 
 class Ex5Craft : public manta::Craft {
 public:
     Ex5Craft();
 
-    manta::parts::Hull& hull() { return *hull_; }
-    const manta::parts::Hull& hull() const { return *hull_; }
-    manta::parts::PointMass& body() { return *body_; }
-    const manta::parts::PointMass& body() const { return *body_; }
-    manta::parts::GravityPart& gravity() { return *gravity_; }
-    const manta::parts::GravityPart& gravity() const { return *gravity_; }
+    manta::parts::Mass& body() { return *body_; }
+    const manta::parts::Mass& body() const { return *body_; }
     manta::parts::IMU& imu() { return *imu_; }
     const manta::parts::IMU& imu() const { return *imu_; }
     manta::parts::DVL& dvl() { return *dvl_; }
     const manta::parts::DVL& dvl() const { return *dvl_; }
-    manta::parts::Thruster& aft_thrust() { return *aft_thrust_; }
-    const manta::parts::Thruster& aft_thrust() const { return *aft_thrust_; }
+    manta::parts::Thruster1& aft_thrust() { return *aft_thrust_; }
+    const manta::parts::Thruster1& aft_thrust() const { return *aft_thrust_; }
+    manta::parts::PointBuoy& buoy_0() { return *buoy_0_; }
+    const manta::parts::PointBuoy& buoy_0() const { return *buoy_0_; }
+    manta::parts::PointBuoy& buoy_1() { return *buoy_1_; }
+    const manta::parts::PointBuoy& buoy_1() const { return *buoy_1_; }
+    manta::parts::PointBuoy& buoy_2() { return *buoy_2_; }
+    const manta::parts::PointBuoy& buoy_2() const { return *buoy_2_; }
+    manta::parts::PointBuoy& buoy_3() { return *buoy_3_; }
+    const manta::parts::PointBuoy& buoy_3() const { return *buoy_3_; }
+    manta::parts::PointBuoy& buoy_4() { return *buoy_4_; }
+    const manta::parts::PointBuoy& buoy_4() const { return *buoy_4_; }
+    manta::parts::PointBuoy& buoy_5() { return *buoy_5_; }
+    const manta::parts::PointBuoy& buoy_5() const { return *buoy_5_; }
+    manta::parts::PointBuoy& buoy_6() { return *buoy_6_; }
+    const manta::parts::PointBuoy& buoy_6() const { return *buoy_6_; }
+    manta::parts::PointBuoy& buoy_7() { return *buoy_7_; }
+    const manta::parts::PointBuoy& buoy_7() const { return *buoy_7_; }
 
 private:
-    manta::parts::Hull* hull_ = nullptr;
-    manta::parts::PointMass* body_ = nullptr;
-    manta::parts::GravityPart* gravity_ = nullptr;
+    manta::parts::Mass* body_ = nullptr;
     manta::parts::IMU* imu_ = nullptr;
     manta::parts::DVL* dvl_ = nullptr;
-    manta::parts::Thruster* aft_thrust_ = nullptr;
+    manta::parts::Thruster1* aft_thrust_ = nullptr;
+    manta::parts::PointBuoy* buoy_0_ = nullptr;
+    manta::parts::PointBuoy* buoy_1_ = nullptr;
+    manta::parts::PointBuoy* buoy_2_ = nullptr;
+    manta::parts::PointBuoy* buoy_3_ = nullptr;
+    manta::parts::PointBuoy* buoy_4_ = nullptr;
+    manta::parts::PointBuoy* buoy_5_ = nullptr;
+    manta::parts::PointBuoy* buoy_6_ = nullptr;
+    manta::parts::PointBuoy* buoy_7_ = nullptr;
 };

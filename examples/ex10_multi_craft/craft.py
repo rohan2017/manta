@@ -20,11 +20,11 @@ Regenerate from the repo root:
 """
 
 from manta_codegen import Craft, World
-from manta_codegen.parts import PointMass, Thruster
+from manta_codegen.parts import Mass, Thruster
 
 
 def make_drone(name: str, thrust_dir: tuple) -> Craft:
-    body = PointMass("body", mass=1.0)
+    body = Mass("body", mass=1.0)
     thr  = Thruster("thrust", max_thrust=2.0, direction=thrust_dir)
 
     c = Craft(name)

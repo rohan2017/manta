@@ -16,6 +16,16 @@ struct Ex3CraftTelemetry {
     float q[4] = {1,0,0,0};   // (w, x, y, z)
     float v[3] = {0,0,0};
     float w[3] = {0,0,0};
+    struct Yaw_motorT {
+        manta::Real angle{};
+        manta::Real rate{};
+        manta::Real accel{};
+    } yaw_motor;
+    struct Pitch_motorT {
+        manta::Real angle{};
+        manta::Real rate{};
+        manta::Real accel{};
+    } pitch_motor;
     struct EngineT {
         float throttle{};
     } engine;
@@ -41,6 +51,16 @@ inline std::string Ex3CraftTelemetry::to_json() const {
         (double)v[0], (double)v[1], (double)v[2],
         (double)w[0], (double)w[1], (double)w[2]);
     s += buf;
+    s += ",\"yaw_motor\":{";
+    { char b[64]; std::snprintf(b, sizeof(b), "\"angle\":%.6f", (double)yaw_motor.angle); s += b; }
+    { char b[64]; std::snprintf(b, sizeof(b), ",\"rate\":%.6f", (double)yaw_motor.rate); s += b; }
+    { char b[64]; std::snprintf(b, sizeof(b), ",\"accel\":%.6f", (double)yaw_motor.accel); s += b; }
+    s += "}";
+    s += ",\"pitch_motor\":{";
+    { char b[64]; std::snprintf(b, sizeof(b), "\"angle\":%.6f", (double)pitch_motor.angle); s += b; }
+    { char b[64]; std::snprintf(b, sizeof(b), ",\"rate\":%.6f", (double)pitch_motor.rate); s += b; }
+    { char b[64]; std::snprintf(b, sizeof(b), ",\"accel\":%.6f", (double)pitch_motor.accel); s += b; }
+    s += "}";
     s += ",\"engine\":{";
     { char b[64]; std::snprintf(b, sizeof(b), "\"throttle\":%.6f", (double)engine.throttle); s += b; }
     s += "}";
@@ -62,6 +82,12 @@ inline void capture_ex3_telemetry(const Ex3Craft& craft, double t_sec, Ex3CraftT
     telem.q[0]=q.w(); telem.q[1]=q.x(); telem.q[2]=q.y(); telem.q[3]=q.z();
     telem.v[0]=v.x(); telem.v[1]=v.y(); telem.v[2]=v.z();
     telem.w[0]=w.x(); telem.w[1]=w.y(); telem.w[2]=w.z();
+    telem.yaw_motor.angle = craft.yaw_motor().angle();
+    telem.yaw_motor.rate = craft.yaw_motor().rate();
+    telem.yaw_motor.accel = craft.yaw_motor().accel();
+    telem.pitch_motor.angle = craft.pitch_motor().angle();
+    telem.pitch_motor.rate = craft.pitch_motor().rate();
+    telem.pitch_motor.accel = craft.pitch_motor().accel();
     telem.engine.throttle = craft.engine().throttle();
     telem.imu.accel = craft.imu().last_accel();
     telem.imu.gyro = craft.imu().last_gyro();

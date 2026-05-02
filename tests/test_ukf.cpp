@@ -10,7 +10,7 @@
 #include "../include/manta/estimation/ukf.hpp"
 #include "../include/manta/estimation/craft_ukf.hpp"
 #include "../include/manta/core/craft.hpp"
-#include "../include/manta/parts/structure/point_mass.hpp"
+#include "../include/manta/parts/structure/mass.hpp"
 
 using namespace manta;
 using namespace manta::estimation;
@@ -97,7 +97,7 @@ template <class Scalar>
 class FreeBodyCraftU : public manta::CraftT<Scalar> {
 public:
     FreeBodyCraftU() : manta::CraftT<Scalar>("ukf_test") {
-        this->root().template add<manta::parts::PointMassT<Scalar>>("body", Scalar(1.0));
+        this->root().template add<manta::parts::MassT<Scalar>>("body", Scalar(1.0));
         this->root().compute_params();
     }
 };
@@ -157,7 +157,7 @@ TEST_CASE("CraftUKF: position measurement pulls state toward observation") {
 
 TEST_CASE("CraftUKF: works with a non-templated Craft via CraftUKFOf") {
     // Minimal non-templated craft: inherits manta::Craft (= CraftT<Real> =
-    // CraftT<float>) and adds a PointMass. Demonstrates that UKF doesn't
+    // CraftT<float>) and adds a Mass. Demonstrates that UKF doesn't
     // require Scalar templating; CraftUKFOf casts state at the float boundary.
     //
     // Key parameter choice: alpha=1.0 keeps sigma weights well-conditioned
@@ -167,7 +167,7 @@ TEST_CASE("CraftUKF: works with a non-templated Craft via CraftUKFOf") {
     class PlainCraft : public manta::Craft {
     public:
         PlainCraft() : manta::Craft("plain") {
-            this->root().add<manta::parts::PointMass>("body", 1.0f);
+            this->root().add<manta::parts::Mass>("body", 1.0f);
             this->root().compute_params();
         }
     };

@@ -5,8 +5,10 @@
 #include <atomic>
 #include <chrono>
 #include <csignal>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -17,7 +19,7 @@
 #include "manta/core/scene.hpp"
 #include "manta/core/world.hpp"
 #include "ex1.hpp"
-#include "manta/fields/point_gravity_field.hpp"
+#include "manta/fields/gravity_field.hpp"
 
 namespace {
 std::atomic<bool> g_run{true};
@@ -54,7 +56,8 @@ int main() {
     manta::World w;
     w.clock().set_dt(DT);
     auto& scene = w.create_scene();
-    manta::fields::PointGravityField field_0{3.986004e+14f, manta::geom::Vec3<manta::SceneFrame>{0.0f, 0.0f, 0.0f}};
+    manta::fields::GravityField field_0{};
+    field_0.add(manta::fields::GravityField::Disturbance::point_mass(manta::geom::Vec3<manta::SceneFrame>{0.0f, 0.0f, 0.0f}, manta::Real(3.986004e+14f)), manta::fields::PERSISTENT);
     w.register_field(field_0);
     Ex1Craft craft;
     scene.add_craft(craft, manta::InitialState{manta::geom::Vec3<manta::SceneFrame>{6372000.0f, 0.0f, 0.0f}, manta::geom::Ori<manta::SceneFrame>{Eigen::Quaternionf{1.0f, 0.0f, 0.0f, 0.0f}}, manta::geom::Vec3<manta::SceneFrame>{0.0f, 7909.172f, 0.0f}, manta::geom::Vec3<manta::CraftFrame>{0.0f, 0.0f, 0.0f}});
@@ -135,6 +138,32 @@ int main() {
             }
         }, zenoh::closures::none);
     auto pub_0 = session.declare_publisher(zenoh::KeyExpr("manta/ex1/state"));
+    auto pub_field_0 = session.declare_publisher(zenoh::KeyExpr("manta/ex1/field_0/disturbance"));
+    field_0.set_tx_hook([&pub_field_0](std::uint16_t tag, const manta::fields::GravityField::Params& params, int lifetime) {
+        std::vector<std::uint8_t> buf;
+        buf.resize(2 + 2 + 4 + params.size());
+        std::uint16_t ver = 1;
+        std::memcpy(buf.data() + 0, &ver,      2);
+        std::memcpy(buf.data() + 2, &tag,      2);
+        std::memcpy(buf.data() + 4, &lifetime, 4);
+        std::memcpy(buf.data() + 8, params.data(), params.size());
+        pub_field_0.put(zenoh::Bytes(std::move(buf)));
+    });
+    auto sub_field_0 = session.declare_subscriber(
+        zenoh::KeyExpr("manta/ex1/field_0/disturbance"),
+        [&](const zenoh::Sample& s) {
+            auto payload = s.get_payload().as_vector();
+            if (payload.size() < 8 + manta::fields::GravityField::kParamsBytes) return;
+            std::uint16_t ver = 0, tag = 0;
+            std::int32_t  lifetime = 0;
+            std::memcpy(&ver,      payload.data() + 0, 2);
+            std::memcpy(&tag,      payload.data() + 2, 2);
+            std::memcpy(&lifetime, payload.data() + 4, 4);
+            if (ver != 1) return;
+            manta::fields::GravityField::Params p{};
+            std::memcpy(p.data(), payload.data() + 8, p.size());
+            field_0.receive(tag, p, lifetime);
+        }, zenoh::closures::none);
 
     std::printf("ex1: ready. 1 craft(s), 7 binding(s).\n");
 

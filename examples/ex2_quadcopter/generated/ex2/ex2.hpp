@@ -5,36 +5,32 @@
 
 
 #include "manta/core/craft.hpp"
-#include "manta/parts/structure/point_mass.hpp"
-#include "manta/parts/actuator/prop_thruster.hpp"
-#include "manta/parts/field_src/gravity_part.hpp"
+#include "manta/parts/structure/mass.hpp"
+#include "manta/parts/actuator/thruster.hpp"
 #include "manta/parts/sensor/imu.hpp"
 
 class Ex2Craft : public manta::Craft {
 public:
     Ex2Craft();
 
-    manta::parts::PointMass& body() { return *body_; }
-    const manta::parts::PointMass& body() const { return *body_; }
-    manta::parts::PropThruster& fr() { return *fr_; }
-    const manta::parts::PropThruster& fr() const { return *fr_; }
-    manta::parts::PropThruster& fl() { return *fl_; }
-    const manta::parts::PropThruster& fl() const { return *fl_; }
-    manta::parts::PropThruster& bl() { return *bl_; }
-    const manta::parts::PropThruster& bl() const { return *bl_; }
-    manta::parts::PropThruster& br() { return *br_; }
-    const manta::parts::PropThruster& br() const { return *br_; }
-    manta::parts::GravityPart& grav() { return *grav_; }
-    const manta::parts::GravityPart& grav() const { return *grav_; }
+    manta::parts::Mass& body() { return *body_; }
+    const manta::parts::Mass& body() const { return *body_; }
+    manta::parts::Thruster1& fr() { return *fr_; }
+    const manta::parts::Thruster1& fr() const { return *fr_; }
+    manta::parts::Thruster1& fl() { return *fl_; }
+    const manta::parts::Thruster1& fl() const { return *fl_; }
+    manta::parts::Thruster1& bl() { return *bl_; }
+    const manta::parts::Thruster1& bl() const { return *bl_; }
+    manta::parts::Thruster1& br() { return *br_; }
+    const manta::parts::Thruster1& br() const { return *br_; }
     manta::parts::IMU& imu() { return *imu_; }
     const manta::parts::IMU& imu() const { return *imu_; }
 
 private:
-    manta::parts::PointMass* body_ = nullptr;
-    manta::parts::PropThruster* fr_ = nullptr;
-    manta::parts::PropThruster* fl_ = nullptr;
-    manta::parts::PropThruster* bl_ = nullptr;
-    manta::parts::PropThruster* br_ = nullptr;
-    manta::parts::GravityPart* grav_ = nullptr;
+    manta::parts::Mass* body_ = nullptr;
+    manta::parts::Thruster1* fr_ = nullptr;
+    manta::parts::Thruster1* fl_ = nullptr;
+    manta::parts::Thruster1* bl_ = nullptr;
+    manta::parts::Thruster1* br_ = nullptr;
     manta::parts::IMU* imu_ = nullptr;
 };

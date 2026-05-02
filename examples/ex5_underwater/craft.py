@@ -19,7 +19,7 @@ Workflow: binary. Topics:
 """
 
 from manta_codegen import Craft, World, tf
-from manta_codegen.parts   import DVL, GravityPart, Hull, IMU, PointMass, Thruster
+from manta_codegen.parts   import DVL, IMU, Mass, PointBuoy, Thruster
 from manta_codegen.fields  import GravityField
 from manta_codegen.planets import Earth
 
@@ -44,21 +44,19 @@ SAMPLE_POINTS = [
 
 
 def make_world() -> World:
-    # Earth registers an OceanAtmosField (under the FluidField slot) and a
-    # FlatSeaSurface automatically — Hull picks both up. GravityField is
-    # still a top-level world field (gravity isn't yet a planet-disturbance
-    # in the architecture).
+    # Earth registers a FluidField (water below sea level + atmosphere above).
+    # The user adds a separate GravityField on the world so Mass auto-applies
+    # weight; buoyancy is composed from N PointBuoy parts distributed along
+    # the cylinder axis (replaces the old `Hull` part — same physical idea
+    # built from atomic primitives).
     c = Craft("ex5")
 
-    # Hull: provides buoyancy + holds the bulk mass/MOI of the sub.
-    # MOI of a uniform cylinder: I_xx = (1/2)·m·r², I_yy = I_zz = (1/12)·m·(3r²+L²).
+    # Body inertia of a uniform cylinder.
     Ixx = 0.5 * MASS * RADIUS * RADIUS
     Iyy = (1/12.0) * MASS * (3 * RADIUS * RADIUS + LENGTH * LENGTH)
     Izz = Iyy
 
-    hull       = Hull("hull", volume=VOLUME, sample_points=SAMPLE_POINTS)
-    body       = PointMass("body", mass=MASS, moi=(Ixx, Iyy, Izz))
-    gravity    = GravityPart("gravity")
+    body       = Mass("body", mass=MASS, moi=(Ixx, Iyy, Izz))
     imu        = IMU("imu", accel_sigma=0.05, gyro_sigma=0.005)
     dvl        = DVL("dvl", velocity_sigma=0.02)
     aft_thrust = Thruster("aft_thrust",
@@ -66,12 +64,17 @@ def make_world() -> World:
                           direction=(1.0, 0.0, 0.0),
                           transform=tf((-LENGTH/2, 0.0, 0.0)))
 
-    c.add(hull)
     c.add(body)
-    c.add(gravity)
     c.add(imu)
     c.add(dvl)
     c.add(aft_thrust)
+
+    # Distribute volume across N PointBuoys to mimic the old Hull's
+    # sample-points buoyancy. Each carries V/N volume; placed at the same
+    # offsets so righting moments behave the same.
+    V_per = VOLUME / N_SAMPLES
+    for i, pt in enumerate(SAMPLE_POINTS):
+        c.add(PointBuoy(f"buoy_{i}", volume=V_per, transform=tf(pt)))
 
     # Bundled state: pose + sensor signals + thrust. Smoke test only reads
     # `state["p"]` and `state["v"]` so the legacy wire shape is preserved

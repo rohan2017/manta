@@ -5,22 +5,22 @@
 
 
 #include "manta/core/craft.hpp"
-#include "manta/parts/structure/point_mass.hpp"
+#include "manta/parts/structure/mass.hpp"
 #include "manta/parts/articulation/motor.hpp"
 
 class Ex4Craft : public manta::Craft {
 public:
     Ex4Craft();
 
-    manta::parts::PointMass& body() { return *body_; }
-    const manta::parts::PointMass& body() const { return *body_; }
+    manta::parts::Mass& body() { return *body_; }
+    const manta::parts::Mass& body() const { return *body_; }
     manta::parts::Motor& wheel() { return *wheel_; }
     const manta::parts::Motor& wheel() const { return *wheel_; }
-    manta::parts::PointMass& flywheel() { return *flywheel_; }
-    const manta::parts::PointMass& flywheel() const { return *flywheel_; }
+    manta::parts::Mass& flywheel() { return *flywheel_; }
+    const manta::parts::Mass& flywheel() const { return *flywheel_; }
 
 private:
-    manta::parts::PointMass* body_ = nullptr;
+    manta::parts::Mass* body_ = nullptr;
     manta::parts::Motor* wheel_ = nullptr;
-    manta::parts::PointMass* flywheel_ = nullptr;
+    manta::parts::Mass* flywheel_ = nullptr;
 };

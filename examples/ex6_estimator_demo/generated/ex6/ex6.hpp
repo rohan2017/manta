@@ -5,8 +5,7 @@
 
 
 #include "manta/core/craft.hpp"
-#include "manta/parts/structure/point_mass.hpp"
-#include "manta/parts/field_src/gravity_part.hpp"
+#include "manta/parts/structure/mass.hpp"
 #include "manta/parts/sensor/imu.hpp"
 #include "manta/parts/sensor/dvl.hpp"
 #include "manta/parts/actuator/thruster.hpp"
@@ -15,21 +14,18 @@ class Ex6Craft : public manta::Craft {
 public:
     Ex6Craft();
 
-    manta::parts::PointMass& body() { return *body_; }
-    const manta::parts::PointMass& body() const { return *body_; }
-    manta::parts::GravityPart& gravity() { return *gravity_; }
-    const manta::parts::GravityPart& gravity() const { return *gravity_; }
+    manta::parts::Mass& body() { return *body_; }
+    const manta::parts::Mass& body() const { return *body_; }
     manta::parts::IMU& imu() { return *imu_; }
     const manta::parts::IMU& imu() const { return *imu_; }
     manta::parts::DVL& dvl() { return *dvl_; }
     const manta::parts::DVL& dvl() const { return *dvl_; }
-    manta::parts::Thruster& thrust() { return *thrust_; }
-    const manta::parts::Thruster& thrust() const { return *thrust_; }
+    manta::parts::Thruster1& thrust() { return *thrust_; }
+    const manta::parts::Thruster1& thrust() const { return *thrust_; }
 
 private:
-    manta::parts::PointMass* body_ = nullptr;
-    manta::parts::GravityPart* gravity_ = nullptr;
+    manta::parts::Mass* body_ = nullptr;
     manta::parts::IMU* imu_ = nullptr;
     manta::parts::DVL* dvl_ = nullptr;
-    manta::parts::Thruster* thrust_ = nullptr;
+    manta::parts::Thruster1* thrust_ = nullptr;
 };

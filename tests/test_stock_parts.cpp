@@ -1,8 +1,11 @@
-// Tests for the new stock part models added 2026-04-29:
-//   * Mass            — point mass with full MOI
+// Tests for the surviving stock part models after the 2026-05 cleanup:
+//   * Mass            — point mass / full MOI, with optional auto-gravity
 //   * PointBuoy       — single-point buoyancy
 //   * Surface1..4     — N-power velocity-driven force/torque
 //   * DVL             — Doppler velocity log sensor
+//
+// `Hull` and `PointMass` were removed (Hull replaced by PointBuoy compositions;
+// PointMass replaced by `Mass(name, mass)` shorthand with zero MOI).
 
 #include <array>
 #include <cmath>
@@ -11,8 +14,8 @@
 #include "manta/core/craft.hpp"
 #include "manta/core/scene.hpp"
 #include "manta/core/world.hpp"
+#include "manta/fields/fluid_field.hpp"
 #include "manta/fields/gravity_field.hpp"
-#include "manta/fields/uniform_fluid_field.hpp"
 #include "manta/parts/sensor/dvl.hpp"
 #include "manta/parts/structure/mass.hpp"
 #include "manta/parts/structure/point_buoy.hpp"
@@ -25,23 +28,33 @@ using namespace manta::geom;
 using namespace manta::parts;
 using namespace manta::fields;
 
+namespace {
+FluidField uniform_water(Real density = Real(1000.0f),
+                         Vec3<SceneFrame> velocity = Vec3<SceneFrame>::zero()) {
+    FluidField f;
+    f.add(FluidField::Disturbance::uniform_incompressible(density, velocity),
+          PERSISTENT);
+    return f;
+}
+}
+
 // ---- Mass ----
 
 TEST_CASE("Mass: contributes mass and MOI to root compute_params") {
     Craft c("test");
     Mat3<PartFrame> I = Mat3<PartFrame>::identity();
     I.raw()(0,0) = 0.5f; I.raw()(1,1) = 0.7f; I.raw()(2,2) = 0.9f;
-    c.root().add<Mass>("body", 2.0f, I);
+    c.root().add<Mass>("body", 2.0f, I, /*apply_gravity=*/false);
     c.root().compute_params();
     CHECK(c.root().get_mass() == doctest::Approx(2.0f));
     CHECK(c.root().get_moi().raw()(0,0) == doctest::Approx(0.5f));
     CHECK(c.root().get_moi().raw()(2,2) == doctest::Approx(0.9f));
 }
 
-TEST_CASE("Mass: passive — no wrench applied") {
+TEST_CASE("Mass: passive when apply_gravity=false and no field registered") {
     Craft c("test");
     Mat3<PartFrame> I = Mat3<PartFrame>::identity();
-    c.root().add<Mass>("body", 1.0f, I);
+    c.root().add<Mass>("body", 1.0f, I, /*apply_gravity=*/false);
     c.update();
     CHECK(test::approx_equal(c.root().net_wrench().force(),  Vec3<PartFrame>::zero()));
     CHECK(test::approx_equal(c.root().net_wrench().torque(), Vec3<PartFrame>::zero()));
@@ -50,33 +63,73 @@ TEST_CASE("Mass: passive — no wrench applied") {
 // ---- PointBuoy ----
 
 TEST_CASE("PointBuoy: F = -ρ·V·g, opposes gravity in fluid") {
-    UniformFluidField water(1000.0f);
+    auto water = uniform_water();
     GravityField gf{Vec3<SceneFrame>{0, 0, -9.81f}};
 
     Craft c("test");
-    c.register_field<FluidField>(water);
+    c.register_field(water);
     c.register_field(gf);
-    c.root().add<Mass>("body", 0.0f, Mat3<PartFrame>::identity());  // ignore weight
-    c.root().add<PointBuoy>("buoy", 0.001f);  // 1 liter
+    c.root().add<Mass>("body", 0.0f, Mat3<PartFrame>::identity(),
+                       /*apply_gravity=*/false);
+    c.root().add<PointBuoy>("buoy", 0.001f);
     c.root().compute_params();
     c.update();
 
     auto F = c.root().net_wrench().force();
-    // Expected: 1000 * 0.001 * 9.81 = 9.81 N upward
     CHECK(F.z() == doctest::Approx(9.81f).epsilon(1e-4f));
     CHECK(F.x() == doctest::Approx(0.0f).epsilon(1e-4f));
 }
 
 TEST_CASE("PointBuoy: zero volume → zero force") {
-    UniformFluidField water(1000.0f);
-    GravityField gf;
+    auto water = uniform_water();
+    GravityField gf{Vec3<SceneFrame>{0, 0, -9.81f}};
     Craft c("test");
-    c.register_field<FluidField>(water);
+    c.register_field(water);
     c.register_field(gf);
     c.root().add<PointBuoy>("buoy", 0.0f);
     c.root().compute_params();
     c.update();
     CHECK(test::approx_equal(c.root().net_wrench().force(), Vec3<PartFrame>::zero()));
+}
+
+TEST_CASE("PointBuoy composition: 4 buoys ~ neutral buoyancy at depth") {
+    // 4 buoys of 0.00025 m^3 each = 0.001 m^3 total, with a 1 kg body.
+    // Underwater: F_buoy = 1000 · 0.001 · 9.81 = 9.81 N up; weight = 9.81 N
+    // down → net zero, craft stays put.
+    auto water = uniform_water();
+    GravityField gf{Vec3<SceneFrame>{0, 0, -9.81f}};
+
+    World w;
+    w.register_field(water);
+    w.register_field(gf);
+    w.clock().set_dt(0.01f);
+
+    auto& scene = w.create_scene();
+    Craft c("boat");
+    c.root().add<Mass>("body", 1.0f);   // auto-gravity on
+    // Four PointBuoys evenly spaced — same-symmetry as the deleted Hull's
+    // 4-sample column, but composed from atomic parts.
+    Real V_per = Real(0.001f / 4.0f);
+    auto& b1 = c.root().add<PointBuoy>("b1", V_per);
+    auto& b2 = c.root().add<PointBuoy>("b2", V_per);
+    auto& b3 = c.root().add<PointBuoy>("b3", V_per);
+    auto& b4 = c.root().add<PointBuoy>("b4", V_per);
+    StaticLink<ParentFrame, PartFrame> tf1{Vec3<ParentFrame>{0, 0,  0.05f}, Ori<ParentFrame>::identity()};
+    StaticLink<ParentFrame, PartFrame> tf2{Vec3<ParentFrame>{0, 0,  0.02f}, Ori<ParentFrame>::identity()};
+    StaticLink<ParentFrame, PartFrame> tf3{Vec3<ParentFrame>{0, 0, -0.02f}, Ori<ParentFrame>::identity()};
+    StaticLink<ParentFrame, PartFrame> tf4{Vec3<ParentFrame>{0, 0, -0.05f}, Ori<ParentFrame>::identity()};
+    b1.set_transform(tf1); b2.set_transform(tf2);
+    b3.set_transform(tf3); b4.set_transform(tf4);
+    c.root().compute_params();
+    c.set_position(Vec3<SceneFrame>{0, 0, -1.0f});
+    scene.add_craft(c);
+
+    for (int i = 0; i < 100; ++i) w.update();
+
+    auto v = c.scene_to_craft().vel_linear();
+    auto p = c.scene_to_craft().position();
+    CHECK(v.z() == doctest::Approx(0.0f).epsilon(1e-3f));
+    CHECK(p.z() == doctest::Approx(-1.0f).epsilon(1e-3f));
 }
 
 // ---- Surface1..Surface4 ----
@@ -90,25 +143,21 @@ Mat3<PartFrame> diag_mat(float a, float b, float cc) {
 }
 
 TEST_CASE("Surface1: linear drag — F = -k * v_rel") {
-    // Fluid at rest, body at rest → no relative motion → no force.
-    UniformFluidField fluid(1.0f);  // density doesn't enter Surface
+    auto fluid = uniform_water(Real(1.0f));
     Craft c("test");
-    c.register_field<FluidField>(fluid);
+    c.register_field(fluid);
     auto A = std::array<Mat3<PartFrame>, 1>{ diag_mat(-2.0f, -2.0f, -2.0f) };
     auto B = std::array<Mat3<PartFrame>, 1>{ diag_mat( 0.0f,  0.0f,  0.0f) };
     c.root().add<Surface1>("surf", A, B);
     c.root().compute_params();
-
     c.update();
     CHECK(test::approx_equal(c.root().net_wrench().force(), Vec3<PartFrame>::zero()));
 }
 
 TEST_CASE("Surface1: fluid moving relative to body → force") {
-    // Wind +x at 5 m/s, body at rest. v_rel_part = (5, 0, 0).
-    // A = diag(-2,-2,-2). F_part = -2 * (5,0,0) = (-10, 0, 0).
-    UniformFluidField wind(1.0f, Vec3<SceneFrame>{5.0f, 0, 0});
+    auto wind = uniform_water(Real(1.0f), Vec3<SceneFrame>{5.0f, 0, 0});
     Craft c("test");
-    c.register_field<FluidField>(wind);
+    c.register_field(wind);
     auto A = std::array<Mat3<PartFrame>, 1>{ diag_mat(-2.0f, -2.0f, -2.0f) };
     auto B = std::array<Mat3<PartFrame>, 1>{ diag_mat( 0.0f,  0.0f,  0.0f) };
     c.root().add<Surface1>("surf", A, B);
@@ -121,11 +170,9 @@ TEST_CASE("Surface1: fluid moving relative to body → force") {
 }
 
 TEST_CASE("Surface2: linear + quadratic — A*v + B*v² accumulate") {
-    UniformFluidField wind(1.0f, Vec3<SceneFrame>{3.0f, 0, 0});
+    auto wind = uniform_water(Real(1.0f), Vec3<SceneFrame>{3.0f, 0, 0});
     Craft c("test");
-    c.register_field<FluidField>(wind);
-    // A_1 = diag(-1,-1,-1); A_2 = diag(-0.5,-0.5,-0.5).
-    // Expected F = -1*(3,0,0) + -0.5*(9,0,0) = (-3 + -4.5, 0, 0) = (-7.5, 0, 0).
+    c.register_field(wind);
     std::array<Mat3<PartFrame>, 2> A{ diag_mat(-1.0f, -1.0f, -1.0f),
                                       diag_mat(-0.5f, -0.5f, -0.5f) };
     std::array<Mat3<PartFrame>, 2> B{ diag_mat( 0.0f,  0.0f,  0.0f),
@@ -137,11 +184,9 @@ TEST_CASE("Surface2: linear + quadratic — A*v + B*v² accumulate") {
 }
 
 TEST_CASE("Surface1: torque tensor produces torque from velocity") {
-    // Body moving +x at 2 m/s in still fluid → v_rel_part = (-2, 0, 0).
-    // B = identity → torque = v_rel_part = (-2, 0, 0).
-    UniformFluidField fluid(1.0f);
+    auto fluid = uniform_water(Real(1.0f));
     Craft c("test");
-    c.register_field<FluidField>(fluid);
+    c.register_field(fluid);
     std::array<Mat3<PartFrame>, 1> A{ diag_mat(0.0f, 0.0f, 0.0f) };
     std::array<Mat3<PartFrame>, 1> B{ diag_mat(1.0f, 1.0f, 1.0f) };
     c.root().add<Surface1>("surf", A, B);
@@ -159,12 +204,11 @@ TEST_CASE("DVL: at rest → zero velocity reading (no noise)") {
     auto& dvl = c.root().add<DVL>("dvl");
     c.root().compute_params();
     c.update(0.01f);
-    c.update(0.01f);  // two ticks: scene_to_part populated
+    c.update(0.01f);
     CHECK(test::approx_equal(dvl.last_velocity(), Vec3<PartFrame>::zero()));
 }
 
 TEST_CASE("DVL: reads body velocity in part frame") {
-    // 1 kg craft, 1 N thrust → v = 1 m/s after 1s.
     Craft c("test");
     auto& t = c.root().add<Thruster>("t", 1.0f);
     auto& dvl = c.root().add<DVL>("dvl");
@@ -172,13 +216,11 @@ TEST_CASE("DVL: reads body velocity in part frame") {
     t.set_mass(1.0f);
     c.root().compute_params();
 
-    c.update(1.0f);   // velocity reaches 1 m/s
-    c.update(0.0f);   // refresh kinematic cache, dvl reads it
+    c.update(1.0f);
+    c.update(0.0f);
 
     CHECK(dvl.last_velocity().z() == doctest::Approx(1.0f).epsilon(1e-2f));
 }
-
-// ---- Sensor measurement-input hooks (estimator path) ----
 
 #include "manta/parts/sensor/imu.hpp"
 
@@ -187,15 +229,11 @@ TEST_CASE("DVL: set_measurement injects external reading, bypasses update()") {
     auto& dvl = c.root().add<DVL>("dvl");
     c.root().compute_params();
 
-    // Inject an external measurement — what an estimator-side DVL would do
-    // when fed by a sim sensor reading or a real driver.
     dvl.set_measurement(Vec3<PartFrame>{1.5f, -0.5f, 0.25f});
 
     CHECK(dvl.last_velocity().x() == doctest::Approx( 1.5f));
     CHECK(dvl.last_velocity().y() == doctest::Approx(-0.5f));
     CHECK(dvl.last_velocity().z() == doctest::Approx( 0.25f));
-
-    // No call to c.update() — the estimator path doesn't run kinematic_pass.
 }
 
 TEST_CASE("IMU: set_measurement injects external accel + gyro") {

@@ -5,7 +5,7 @@
 
 Ex8Craft::Ex8Craft()
     : manta::Craft("ex8") {
-    body_ = &this->root().add<manta::parts::PointMass>("body", manta::Real(1.0f));
-    forward_ = &this->root().add<manta::parts::Thruster>("forward", manta::Real(2.0f), manta::geom::Vec3<manta::PartFrame, manta::Real>{manta::Real(1.0f), manta::Real(0.0f), manta::Real(0.0f)});
+    body_ = &this->root().add<manta::parts::Mass>("body", manta::Real(1.0f), true);
+    forward_ = &this->root().add<manta::parts::Thruster1>("forward", std::array<manta::geom::Vec3<manta::PartFrame, manta::Real>, 1>{manta::geom::Vec3<manta::PartFrame, manta::Real>{manta::Real(2.0f), manta::Real(0.0f), manta::Real(0.0f)}}, std::array<manta::geom::Vec3<manta::PartFrame, manta::Real>, 1>{manta::geom::Vec3<manta::PartFrame, manta::Real>{manta::Real(0.0f), manta::Real(0.0f), manta::Real(0.0f)}});
     this->root().compute_params();
 }

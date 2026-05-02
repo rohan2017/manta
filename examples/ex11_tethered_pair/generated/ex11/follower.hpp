@@ -5,15 +5,15 @@
 
 
 #include "manta/core/craft.hpp"
-#include "manta/parts/structure/point_mass.hpp"
+#include "manta/parts/structure/mass.hpp"
 
 class FollowerCraft : public manta::Craft {
 public:
     FollowerCraft();
 
-    manta::parts::PointMass& body() { return *body_; }
-    const manta::parts::PointMass& body() const { return *body_; }
+    manta::parts::Mass& body() { return *body_; }
+    const manta::parts::Mass& body() const { return *body_; }
 
 private:
-    manta::parts::PointMass* body_ = nullptr;
+    manta::parts::Mass* body_ = nullptr;
 };

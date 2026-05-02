@@ -55,8 +55,8 @@ int main() {
     w.clock().set_dt(DT);
     auto& scene = w.create_scene();
     AlphaCraft craft_0;
-    scene.add_craft(craft_0, manta::InitialState{});
     BetaCraft craft_1;
+    scene.add_craft(craft_0, manta::InitialState{});
     scene.add_craft(craft_1, manta::InitialState{manta::geom::Vec3<manta::SceneFrame>{2.0f, 0.0f, 0.0f}, manta::geom::Ori<manta::SceneFrame>{Eigen::Quaternionf{1.0f, 0.0f, 0.0f, 0.0f}}, manta::geom::Vec3<manta::SceneFrame>{0.0f, 0.0f, 0.0f}, manta::geom::Vec3<manta::CraftFrame>{0.0f, 0.0f, 0.0f}});
 
     zenoh::Config cfg = zenoh::Config::create_default();

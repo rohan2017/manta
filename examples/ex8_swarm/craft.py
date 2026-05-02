@@ -13,12 +13,12 @@ Codegen:
 """
 
 from manta_codegen import Craft, World
-from manta_codegen.parts import PointMass, Thruster
+from manta_codegen.parts import Mass, Thruster
 
 
 def make_world() -> World:
     c = Craft("ex8")  # no fields — drag-free vacuum
-    c.add(PointMass("body", mass=1.0))
+    c.add(Mass("body", mass=1.0))
     c.add(Thruster("forward",
                    max_thrust=2.0,
                    direction=(1.0, 0.0, 0.0)))

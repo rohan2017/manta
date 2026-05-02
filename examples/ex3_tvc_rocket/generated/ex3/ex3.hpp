@@ -5,27 +5,30 @@
 
 
 #include "manta/core/craft.hpp"
-#include "manta/parts/structure/point_mass.hpp"
-#include "manta/parts/actuator/gimbaled_thruster.hpp"
-#include "manta/parts/field_src/gravity_part.hpp"
+#include "manta/parts/structure/mass.hpp"
+#include "manta/parts/articulation/motor.hpp"
+#include "manta/parts/actuator/thruster.hpp"
 #include "manta/parts/sensor/imu.hpp"
 
 class Ex3Craft : public manta::Craft {
 public:
     Ex3Craft();
 
-    manta::parts::PointMass& body() { return *body_; }
-    const manta::parts::PointMass& body() const { return *body_; }
-    manta::parts::GimbaledThruster& engine() { return *engine_; }
-    const manta::parts::GimbaledThruster& engine() const { return *engine_; }
-    manta::parts::GravityPart& grav() { return *grav_; }
-    const manta::parts::GravityPart& grav() const { return *grav_; }
+    manta::parts::Mass& body() { return *body_; }
+    const manta::parts::Mass& body() const { return *body_; }
+    manta::parts::Motor& yaw_motor() { return *yaw_motor_; }
+    const manta::parts::Motor& yaw_motor() const { return *yaw_motor_; }
+    manta::parts::Motor& pitch_motor() { return *pitch_motor_; }
+    const manta::parts::Motor& pitch_motor() const { return *pitch_motor_; }
+    manta::parts::Thruster1& engine() { return *engine_; }
+    const manta::parts::Thruster1& engine() const { return *engine_; }
     manta::parts::IMU& imu() { return *imu_; }
     const manta::parts::IMU& imu() const { return *imu_; }
 
 private:
-    manta::parts::PointMass* body_ = nullptr;
-    manta::parts::GimbaledThruster* engine_ = nullptr;
-    manta::parts::GravityPart* grav_ = nullptr;
+    manta::parts::Mass* body_ = nullptr;
+    manta::parts::Motor* yaw_motor_ = nullptr;
+    manta::parts::Motor* pitch_motor_ = nullptr;
+    manta::parts::Thruster1* engine_ = nullptr;
     manta::parts::IMU* imu_ = nullptr;
 };

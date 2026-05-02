@@ -18,9 +18,9 @@
 #include <doctest/doctest.h>
 
 #include "../include/manta/core/craft.hpp"
-#include "../include/manta/fields/uniform_fluid_field.hpp"
+#include "../include/manta/fields/fluid_field.hpp"
 #include "../include/manta/parts/actuator/thruster.hpp"
-#include "../include/manta/parts/structure/point_mass.hpp"
+#include "../include/manta/parts/structure/mass.hpp"
 #include "../include/manta/parts/structure/surface.hpp"
 
 using namespace manta;
@@ -39,7 +39,7 @@ std::vector<Scalar> simulate_trajectory(Scalar mass,
                                         double dt,
                                         int    n_steps) {
     using DCraft = CraftT<Scalar>;
-    using DPM    = PointMassT<Scalar>;
+    using DPM    = MassT<Scalar>;
     using DThr   = ThrusterT<Scalar>;
 
     DCraft c("sysid");
@@ -143,7 +143,7 @@ std::vector<Scalar> simulate_drag_trajectory(Scalar drag_k,
                                              double dt,
                                              int    n_steps) {
     using DCraft = CraftT<Scalar>;
-    using DPM    = PointMassT<Scalar>;
+    using DPM    = MassT<Scalar>;
     using DSurf  = Surface1T<Scalar>;
     using TensorT = geom::Mat3<PartFrame, PartFrame, Scalar>;
 
@@ -165,10 +165,13 @@ std::vector<Scalar> simulate_drag_trajectory(Scalar drag_k,
     std::array<TensorT, 1> B{torque_tensor};
     c.root().template add<DSurf>("drag", A, B);
 
-    // Register a uniform fluid moving in +x. Field is Real-only; the part
-    // bridges through it.
-    fields::UniformFluidField wind(Real(1.0),
-        geom::Vec3<SceneFrame>{Real(wind_x), Real(0), Real(0)});
+    // Register a uniform incompressible fluid moving in +x as a single
+    // PERSISTENT disturbance. Field is Real-only; the part bridges through it.
+    fields::FluidField wind;
+    wind.add(fields::FluidField::Disturbance::uniform_incompressible(
+                 Real(1.0),
+                 geom::Vec3<SceneFrame>{Real(wind_x), Real(0), Real(0)}),
+             fields::PERSISTENT);
     c.template register_field<fields::FluidField>(wind);
 
     c.root().compute_params();

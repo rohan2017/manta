@@ -5,8 +5,7 @@
 
 
 #include "manta/core/craft.hpp"
-#include "manta/parts/structure/point_mass.hpp"
-#include "manta/parts/field_src/gravity_part.hpp"
+#include "manta/parts/structure/mass.hpp"
 #include "manta/parts/sensor/imu.hpp"
 #include "manta/parts/sensor/dvl.hpp"
 #include "manta/parts/actuator/thruster.hpp"
@@ -15,32 +14,27 @@ template <class Scalar = manta::Real>
 class Ex6EstCraftT : public manta::CraftT<Scalar> {
 public:
     Ex6EstCraftT() : manta::CraftT<Scalar>("ex6_est") {
-        body_ = &this->root().template add<manta::parts::PointMassT<Scalar>>("body", Scalar(1.0f));
-        { manta::geom::Mat3<manta::PartFrame, manta::PartFrame, Scalar> _moi = manta::geom::Mat3<manta::PartFrame, manta::PartFrame, Scalar>::identity(); _moi.raw()(0,0) = Scalar(0.05f); _moi.raw()(1,1) = Scalar(0.05f); _moi.raw()(2,2) = Scalar(0.05f); body_->set_moi(_moi); }
-        gravity_ = &this->root().template add<manta::parts::GravityPartT<Scalar>>("gravity");
+        body_ = &this->root().template add<manta::parts::MassT<Scalar>>("body", Scalar(1.0f), []{ manta::geom::Mat3<manta::PartFrame, manta::PartFrame, Scalar> m = manta::geom::Mat3<manta::PartFrame, manta::PartFrame, Scalar>::identity(); m.raw()(0,0)=Scalar(0.05f); m.raw()(1,1)=Scalar(0.05f); m.raw()(2,2)=Scalar(0.05f); return m; }(), true);
         imu_ = &this->root().template add<manta::parts::IMUT<Scalar>>("imu", manta::parts::ImuNoiseParams{0.05f, 0.005f});
         dvl_ = &this->root().template add<manta::parts::DVLT<Scalar>>("dvl", manta::parts::DvlNoiseParams{0.02f});
-        thrust_ = &this->root().template add<manta::parts::ThrusterT<Scalar>>("thrust", Scalar(15.0f), manta::geom::Vec3<manta::PartFrame, Scalar>{Scalar(1.0f), Scalar(1.0f), Scalar(0.5f)});
+        thrust_ = &this->root().template add<manta::parts::Thruster1T<Scalar>>("thrust", std::array<manta::geom::Vec3<manta::PartFrame, Scalar>, 1>{manta::geom::Vec3<manta::PartFrame, Scalar>{Scalar(15.0f), Scalar(15.0f), Scalar(7.5f)}}, std::array<manta::geom::Vec3<manta::PartFrame, Scalar>, 1>{manta::geom::Vec3<manta::PartFrame, Scalar>{Scalar(0.0f), Scalar(0.0f), Scalar(0.0f)}});
         this->root().compute_params();
     }
 
-    manta::parts::PointMassT<Scalar>& body() { return *body_; }
-    const manta::parts::PointMassT<Scalar>& body() const { return *body_; }
-    manta::parts::GravityPartT<Scalar>& gravity() { return *gravity_; }
-    const manta::parts::GravityPartT<Scalar>& gravity() const { return *gravity_; }
+    manta::parts::MassT<Scalar>& body() { return *body_; }
+    const manta::parts::MassT<Scalar>& body() const { return *body_; }
     manta::parts::IMUT<Scalar>& imu() { return *imu_; }
     const manta::parts::IMUT<Scalar>& imu() const { return *imu_; }
     manta::parts::DVLT<Scalar>& dvl() { return *dvl_; }
     const manta::parts::DVLT<Scalar>& dvl() const { return *dvl_; }
-    manta::parts::ThrusterT<Scalar>& thrust() { return *thrust_; }
-    const manta::parts::ThrusterT<Scalar>& thrust() const { return *thrust_; }
+    manta::parts::Thruster1T<Scalar>& thrust() { return *thrust_; }
+    const manta::parts::Thruster1T<Scalar>& thrust() const { return *thrust_; }
 
 private:
-    manta::parts::PointMassT<Scalar>* body_ = nullptr;
-    manta::parts::GravityPartT<Scalar>* gravity_ = nullptr;
+    manta::parts::MassT<Scalar>* body_ = nullptr;
     manta::parts::IMUT<Scalar>* imu_ = nullptr;
     manta::parts::DVLT<Scalar>* dvl_ = nullptr;
-    manta::parts::ThrusterT<Scalar>* thrust_ = nullptr;
+    manta::parts::Thruster1T<Scalar>* thrust_ = nullptr;
 };
 
 using Ex6EstCraft = Ex6EstCraftT<manta::Real>;

@@ -5,38 +5,34 @@
 
 
 #include "manta/core/craft.hpp"
-#include "manta/parts/structure/point_mass.hpp"
+#include "manta/parts/structure/mass.hpp"
 #include "manta/parts/actuator/thruster.hpp"
-#include "manta/parts/field_src/point_gravity_part.hpp"
 
 class Ex1Craft : public manta::Craft {
 public:
     Ex1Craft();
 
-    manta::parts::PointMass& body() { return *body_; }
-    const manta::parts::PointMass& body() const { return *body_; }
-    manta::parts::Thruster& tx_p() { return *tx_p_; }
-    const manta::parts::Thruster& tx_p() const { return *tx_p_; }
-    manta::parts::Thruster& tx_n() { return *tx_n_; }
-    const manta::parts::Thruster& tx_n() const { return *tx_n_; }
-    manta::parts::Thruster& ty_p() { return *ty_p_; }
-    const manta::parts::Thruster& ty_p() const { return *ty_p_; }
-    manta::parts::Thruster& ty_n() { return *ty_n_; }
-    const manta::parts::Thruster& ty_n() const { return *ty_n_; }
-    manta::parts::Thruster& tz_p() { return *tz_p_; }
-    const manta::parts::Thruster& tz_p() const { return *tz_p_; }
-    manta::parts::Thruster& tz_n() { return *tz_n_; }
-    const manta::parts::Thruster& tz_n() const { return *tz_n_; }
-    manta::parts::PointGravityPart& grav() { return *grav_; }
-    const manta::parts::PointGravityPart& grav() const { return *grav_; }
+    manta::parts::Mass& body() { return *body_; }
+    const manta::parts::Mass& body() const { return *body_; }
+    manta::parts::Thruster1& tx_p() { return *tx_p_; }
+    const manta::parts::Thruster1& tx_p() const { return *tx_p_; }
+    manta::parts::Thruster1& tx_n() { return *tx_n_; }
+    const manta::parts::Thruster1& tx_n() const { return *tx_n_; }
+    manta::parts::Thruster1& ty_p() { return *ty_p_; }
+    const manta::parts::Thruster1& ty_p() const { return *ty_p_; }
+    manta::parts::Thruster1& ty_n() { return *ty_n_; }
+    const manta::parts::Thruster1& ty_n() const { return *ty_n_; }
+    manta::parts::Thruster1& tz_p() { return *tz_p_; }
+    const manta::parts::Thruster1& tz_p() const { return *tz_p_; }
+    manta::parts::Thruster1& tz_n() { return *tz_n_; }
+    const manta::parts::Thruster1& tz_n() const { return *tz_n_; }
 
 private:
-    manta::parts::PointMass* body_ = nullptr;
-    manta::parts::Thruster* tx_p_ = nullptr;
-    manta::parts::Thruster* tx_n_ = nullptr;
-    manta::parts::Thruster* ty_p_ = nullptr;
-    manta::parts::Thruster* ty_n_ = nullptr;
-    manta::parts::Thruster* tz_p_ = nullptr;
-    manta::parts::Thruster* tz_n_ = nullptr;
-    manta::parts::PointGravityPart* grav_ = nullptr;
+    manta::parts::Mass* body_ = nullptr;
+    manta::parts::Thruster1* tx_p_ = nullptr;
+    manta::parts::Thruster1* tx_n_ = nullptr;
+    manta::parts::Thruster1* ty_p_ = nullptr;
+    manta::parts::Thruster1* ty_n_ = nullptr;
+    manta::parts::Thruster1* tz_p_ = nullptr;
+    manta::parts::Thruster1* tz_n_ = nullptr;
 };

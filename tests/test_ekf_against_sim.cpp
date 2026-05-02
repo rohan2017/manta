@@ -15,11 +15,11 @@
 #include "../include/manta/core/world.hpp"
 #include "../include/manta/estimation/ekf.hpp"
 #include "../include/manta/fields/gravity_field.hpp"
-#include "../include/manta/parts/field_src/gravity_part.hpp"
+#include "../include/manta/parts/structure/mass.hpp"
 #include "../include/manta/parts/actuator/thruster.hpp"
 #include "../include/manta/parts/sensor/dvl.hpp"
 #include "../include/manta/parts/sensor/imu.hpp"
-#include "../include/manta/parts/structure/point_mass.hpp"
+#include "../include/manta/parts/structure/mass.hpp"
 
 using namespace manta;
 using namespace manta::estimation;
@@ -80,9 +80,8 @@ TEST_CASE("EKF: tracks 1-D free-fall sim using IMU + DVL") {
     w.register_field(grav);
 
     Craft sim("freefall_sim");
-    auto& body = sim.root().add<PointMass>("body", 1.0f);
+    auto& body = sim.root().add<Mass>("body", 1.0f);
     (void)body;
-    sim.root().add<GravityPart>("gravity");
     auto& imu = sim.root().add<IMU>("imu",
         ImuNoiseParams{.accel_sigma = IMU_SIGMA, .gyro_sigma = 0.0f});
     auto& dvl = sim.root().add<DVL>("dvl",
@@ -211,9 +210,8 @@ TEST_CASE("EKF: estimates IMU bias as augmented state") {
     w.register_field(grav);
 
     Craft sim("biased_imu_sim");
-    auto& body = sim.root().add<PointMass>("body", 1.0f);
+    auto& body = sim.root().add<Mass>("body", 1.0f);
     (void)body;
-    sim.root().add<GravityPart>("gravity");
     auto& imu = sim.root().add<IMU>("imu",
         ImuNoiseParams{.accel_sigma = IMU_SIGMA, .gyro_sigma = 0.0f});
     auto& dvl = sim.root().add<DVL>("dvl",
@@ -321,8 +319,7 @@ TEST_CASE("EKF: 3-D pose tracker against thrust+gravity sim") {
     w.register_field(grav);
 
     Craft sim("pose3d_sim");
-    sim.root().add<PointMass>("body", 1.0f);
-    sim.root().add<GravityPart>("gravity");
+    sim.root().add<Mass>("body", 1.0f);
     auto& imu = sim.root().add<IMU>("imu",
         ImuNoiseParams{.accel_sigma = IMU_SIGMA, .gyro_sigma = 0.0f});
     auto& dvl = sim.root().add<DVL>("dvl",
@@ -395,10 +392,10 @@ TEST_CASE("EKF: 3-D pose tracker against thrust+gravity sim") {
 
 TEST_CASE("CraftT<double>: builds and ticks identically to CraftT<Real>") {
     using DCraft     = manta::CraftT<double>;
-    using DPointMass = manta::parts::PointMassT<double>;
+    using DMass = manta::parts::MassT<double>;
 
     DCraft c("dbl");
-    auto& body = c.root().add<DPointMass>("body", 1.0);
+    auto& body = c.root().add<DMass>("body", 1.0);
     (void)body;
     c.root().compute_params();
 
@@ -430,7 +427,7 @@ TEST_CASE("CraftT<Jet>: autodiff yields process Jacobian from evaluate()") {
     constexpr int N = 13;  // CraftT::kRigidStateDim
     using Jet      = ceres::Jet<double, N>;
     using JCraft   = manta::CraftT<Jet>;
-    using JPoint   = manta::parts::PointMassT<Jet>;
+    using JPoint   = manta::parts::MassT<Jet>;
 
     JCraft craft("est");
     craft.root().add<JPoint>("body", Jet(1.0));
@@ -448,7 +445,7 @@ TEST_CASE("CraftT<Jet>: autodiff yields process Jacobian from evaluate()") {
     constexpr double dt = 0.01;
     auto x_new = craft.evaluate(x, Jet(dt));
 
-    // For a free PointMass with no wrench applied:
+    // For a free Mass with no wrench applied:
     //   p_new = p_old + v_old * dt    (acceleration is zero → no quadratic term)
     //   v_new = v_old
     //
@@ -484,7 +481,7 @@ template <class Scalar>
 class FreeBodyCraft : public manta::CraftT<Scalar> {
 public:
     FreeBodyCraft() : manta::CraftT<Scalar>("est") {
-        this->root().template add<manta::parts::PointMassT<Scalar>>("body", Scalar(1.0));
+        this->root().template add<manta::parts::MassT<Scalar>>("body", Scalar(1.0));
         this->root().compute_params();
     }
 };

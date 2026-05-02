@@ -1,4 +1,4 @@
-"""Mass — point mass with a full 3x3 moment of inertia."""
+"""Mass — point mass with optional MOI tensor and auto-gravity."""
 
 from __future__ import annotations
 
@@ -7,12 +7,21 @@ from ...core import PartDescriptor
 
 
 class Mass(PartDescriptor):
-    """A lump with both scalar mass AND a configurable MOI tensor (in part
-    frame, about the part origin).
+    """A lump with scalar mass and (optional) full 3x3 moment of inertia in
+    part frame. Replaces the deleted `PointMass`: pass `moi=None` (the default)
+    to model a point mass with zero MOI, or supply a tuple for a body whose
+    rotational inertia matters.
 
     `moi` accepts either:
-        * a 3-tuple (Ixx, Iyy, Izz) for a diagonal MOI tensor, or
-        * a 9-tuple in row-major order for a full 3x3 MOI tensor.
+        * a 3-tuple (Ixx, Iyy, Izz) for a diagonal MOI tensor,
+        * a 9-tuple in row-major order for a full 3x3 MOI tensor,
+        * None for zero MOI (point-mass shorthand).
+
+    If a `GravityField` is registered on the world (or the craft), the part
+    queries it at its CoM each tick and applies m·g to itself. Pass
+    `apply_gravity=False` to opt out (e.g. for ballast inside a sealed
+    compartment whose buoyancy is already modeled, or estimator crafts that
+    don't represent gravity).
 
     Required fields: none.
     Telemetry: none.
@@ -25,15 +34,22 @@ class Mass(PartDescriptor):
     def __init__(self,
                  name: str,
                  mass: float,
-                 moi: tuple[float, ...],
+                 moi: tuple[float, ...] | None = None,
+                 apply_gravity: bool = True,
                  **kwargs) -> None:
         super().__init__(name=name, **kwargs)
-        if len(moi) not in (3, 9):
+        if moi is not None and len(moi) not in (3, 9):
             raise ValueError("Mass.moi must be a 3-tuple (diagonal) or 9-tuple (full)")
-        self.mass = float(mass)
-        self.moi  = tuple(float(x) for x in moi)
+        self.mass: float = float(mass)
+        self.moi: tuple[float, ...] | None = (
+            tuple(float(x) for x in moi) if moi is not None else None
+        )
+        self.apply_gravity: bool = bool(apply_gravity)
 
     def emit_constructor_args(self, scalar: str = "manta::Real") -> str:
+        ag = "true" if self.apply_gravity else "false"
+        if self.moi is None:
+            return f'"{self.name}", {scalar}({_f(self.mass)}), {ag}'
         mat3 = f"manta::geom::Mat3<manta::PartFrame, manta::PartFrame, {scalar}>"
         if len(self.moi) == 3:
             ixx, iyy, izz = self.moi
@@ -51,4 +67,13 @@ class Mass(PartDescriptor):
                 f"m.raw()(2,0)={scalar}({_f(m[6])}); m.raw()(2,1)={scalar}({_f(m[7])}); m.raw()(2,2)={scalar}({_f(m[8])}); "
                 "return m; }()"
             )
-        return f'"{self.name}", {scalar}({_f(self.mass)}), {moi_expr}'
+        return f'"{self.name}", {scalar}({_f(self.mass)}), {moi_expr}, {ag}'
+
+    def render(self, telemetry: dict, path: str) -> None:
+        try:
+            import rerun as rr
+        except ImportError:
+            return
+        rr.log(path, rr.Points3D(positions=[[0, 0, 0]],
+                                 radii=[0.05],
+                                 colors=[[180, 180, 180]]))

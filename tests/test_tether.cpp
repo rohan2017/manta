@@ -5,7 +5,7 @@
 #include "../include/manta/core/craft.hpp"
 #include "../include/manta/core/scene.hpp"
 #include "../include/manta/core/world.hpp"
-#include "../include/manta/parts/structure/point_mass.hpp"
+#include "../include/manta/parts/structure/mass.hpp"
 #include "../include/manta/parts/coupling/tether_endpoint.hpp"
 #include "test_helpers.hpp"
 
@@ -99,13 +99,13 @@ TEST_CASE("TetherEndpoint: stretched between two crafts → force pulls them tog
     auto& scene = w.create_scene();
 
     Craft c1("a"), c2("b");
-    c1.root().add<PointMass>("body", 1.0f);
+    c1.root().add<Mass>("body", 1.0f);
     c1.root().add<TetherEndpoint>("end", tether, /*is_a=*/true);
     c1.root().compute_params();
     c1.set_position(Vec3<SceneFrame>{0, 0, 0});
     scene.add_craft(c1);
 
-    c2.root().add<PointMass>("body", 1.0f);
+    c2.root().add<Mass>("body", 1.0f);
     c2.root().add<TetherEndpoint>("end", tether, /*is_a=*/false);
     c2.root().compute_params();
     c2.set_position(Vec3<SceneFrame>{12, 0, 0});
@@ -133,14 +133,14 @@ TEST_CASE("TetherEndpoint: slack → no force, crafts drift independently") {
     auto& scene = w.create_scene();
 
     Craft c1("a"), c2("b");
-    c1.root().add<PointMass>("body", 1.0f);
+    c1.root().add<Mass>("body", 1.0f);
     c1.root().add<TetherEndpoint>("end", tether, true);
     c1.root().compute_params();
     c1.set_position   (Vec3<SceneFrame>{0, 0, 0});
     c1.set_vel_linear (Vec3<SceneFrame>{1, 0, 0});  // drift +x
     scene.add_craft(c1);
 
-    c2.root().add<PointMass>("body", 1.0f);
+    c2.root().add<Mass>("body", 1.0f);
     c2.root().add<TetherEndpoint>("end", tether, false);
     c2.root().compute_params();
     c2.set_position(Vec3<SceneFrame>{5, 0, 0});
@@ -167,7 +167,7 @@ TEST_CASE("TetherEndpoint: same-craft tether between two parts produces zero net
     auto& scene = w.create_scene();
 
     Craft c("rigid");
-    c.root().add<PointMass>("body", 1.0f);
+    c.root().add<Mass>("body", 1.0f);
 
     auto& a = c.root().add<TetherEndpoint>("a", tether, true);
     StaticLink<ParentFrame, PartFrame> tf_a{

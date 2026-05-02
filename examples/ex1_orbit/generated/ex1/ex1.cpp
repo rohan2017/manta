@@ -5,13 +5,12 @@
 
 Ex1Craft::Ex1Craft()
     : manta::Craft("ex1") {
-    body_ = &this->root().add<manta::parts::PointMass>("body", manta::Real(1.0f));
-    tx_p_ = &this->root().add<manta::parts::Thruster>("tx_p", manta::Real(5.0f), manta::geom::Vec3<manta::PartFrame, manta::Real>{manta::Real(1.0f), manta::Real(0.0f), manta::Real(0.0f)});
-    tx_n_ = &this->root().add<manta::parts::Thruster>("tx_n", manta::Real(5.0f), manta::geom::Vec3<manta::PartFrame, manta::Real>{manta::Real(-1.0f), manta::Real(0.0f), manta::Real(0.0f)});
-    ty_p_ = &this->root().add<manta::parts::Thruster>("ty_p", manta::Real(5.0f), manta::geom::Vec3<manta::PartFrame, manta::Real>{manta::Real(0.0f), manta::Real(1.0f), manta::Real(0.0f)});
-    ty_n_ = &this->root().add<manta::parts::Thruster>("ty_n", manta::Real(5.0f), manta::geom::Vec3<manta::PartFrame, manta::Real>{manta::Real(0.0f), manta::Real(-1.0f), manta::Real(0.0f)});
-    tz_p_ = &this->root().add<manta::parts::Thruster>("tz_p", manta::Real(5.0f), manta::geom::Vec3<manta::PartFrame, manta::Real>{manta::Real(0.0f), manta::Real(0.0f), manta::Real(1.0f)});
-    tz_n_ = &this->root().add<manta::parts::Thruster>("tz_n", manta::Real(5.0f), manta::geom::Vec3<manta::PartFrame, manta::Real>{manta::Real(0.0f), manta::Real(0.0f), manta::Real(-1.0f)});
-    grav_ = &this->root().add<manta::parts::PointGravityPart>("grav");
+    body_ = &this->root().add<manta::parts::Mass>("body", manta::Real(1.0f), true);
+    tx_p_ = &this->root().add<manta::parts::Thruster1>("tx_p", std::array<manta::geom::Vec3<manta::PartFrame, manta::Real>, 1>{manta::geom::Vec3<manta::PartFrame, manta::Real>{manta::Real(5.0f), manta::Real(0.0f), manta::Real(0.0f)}}, std::array<manta::geom::Vec3<manta::PartFrame, manta::Real>, 1>{manta::geom::Vec3<manta::PartFrame, manta::Real>{manta::Real(0.0f), manta::Real(0.0f), manta::Real(0.0f)}});
+    tx_n_ = &this->root().add<manta::parts::Thruster1>("tx_n", std::array<manta::geom::Vec3<manta::PartFrame, manta::Real>, 1>{manta::geom::Vec3<manta::PartFrame, manta::Real>{manta::Real(-5.0f), manta::Real(0.0f), manta::Real(0.0f)}}, std::array<manta::geom::Vec3<manta::PartFrame, manta::Real>, 1>{manta::geom::Vec3<manta::PartFrame, manta::Real>{manta::Real(0.0f), manta::Real(0.0f), manta::Real(0.0f)}});
+    ty_p_ = &this->root().add<manta::parts::Thruster1>("ty_p", std::array<manta::geom::Vec3<manta::PartFrame, manta::Real>, 1>{manta::geom::Vec3<manta::PartFrame, manta::Real>{manta::Real(0.0f), manta::Real(5.0f), manta::Real(0.0f)}}, std::array<manta::geom::Vec3<manta::PartFrame, manta::Real>, 1>{manta::geom::Vec3<manta::PartFrame, manta::Real>{manta::Real(0.0f), manta::Real(0.0f), manta::Real(0.0f)}});
+    ty_n_ = &this->root().add<manta::parts::Thruster1>("ty_n", std::array<manta::geom::Vec3<manta::PartFrame, manta::Real>, 1>{manta::geom::Vec3<manta::PartFrame, manta::Real>{manta::Real(0.0f), manta::Real(-5.0f), manta::Real(0.0f)}}, std::array<manta::geom::Vec3<manta::PartFrame, manta::Real>, 1>{manta::geom::Vec3<manta::PartFrame, manta::Real>{manta::Real(0.0f), manta::Real(0.0f), manta::Real(0.0f)}});
+    tz_p_ = &this->root().add<manta::parts::Thruster1>("tz_p", std::array<manta::geom::Vec3<manta::PartFrame, manta::Real>, 1>{manta::geom::Vec3<manta::PartFrame, manta::Real>{manta::Real(0.0f), manta::Real(0.0f), manta::Real(5.0f)}}, std::array<manta::geom::Vec3<manta::PartFrame, manta::Real>, 1>{manta::geom::Vec3<manta::PartFrame, manta::Real>{manta::Real(0.0f), manta::Real(0.0f), manta::Real(0.0f)}});
+    tz_n_ = &this->root().add<manta::parts::Thruster1>("tz_n", std::array<manta::geom::Vec3<manta::PartFrame, manta::Real>, 1>{manta::geom::Vec3<manta::PartFrame, manta::Real>{manta::Real(0.0f), manta::Real(0.0f), manta::Real(-5.0f)}}, std::array<manta::geom::Vec3<manta::PartFrame, manta::Real>, 1>{manta::geom::Vec3<manta::PartFrame, manta::Real>{manta::Real(0.0f), manta::Real(0.0f), manta::Real(0.0f)}});
     this->root().compute_params();
 }

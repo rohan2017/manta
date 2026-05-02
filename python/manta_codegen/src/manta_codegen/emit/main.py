@@ -61,8 +61,10 @@ def emit_main_cpp(world: World) -> str:
         "#include <atomic>",
         "#include <chrono>",
         "#include <csignal>",
+        "#include <cstdint>",
         "#include <cstdio>",
         "#include <cstdlib>",
+        "#include <cstring>",
         "#include <mutex>",
         "#include <string>",
         "#include <thread>",
@@ -136,12 +138,17 @@ def emit_main_cpp(world: World) -> str:
     # Field instances live with static storage in main; register with the World.
     # Concrete-type registration is implicit via template deduction; additional
     # base slots from `register_as` get explicit `register_field<Base>(...)`.
+    sync_field_idxs: list[int] = []
     for i, f in enumerate(world.fields):
         var = f"field_{i}"
         lines.append(f"    {f.emit_construction(var)}")
+        for stmt in (f.emit_extra_setup(var) if hasattr(f, "emit_extra_setup") else []):
+            lines.append(f"    {stmt}")
         lines.append(f"    w.register_field({var});")
         for base in getattr(f, "register_as", []) or []:
             lines.append(f"    w.register_field<{base}>({var});")
+        if getattr(f, "synchronized", False):
+            sync_field_idxs.append(i)
 
     # Instantiate one C++ object per World.crafts entry. For a single-craft
     # world the variable is named `craft`; for multi-craft it's
@@ -222,6 +229,15 @@ def emit_main_cpp(world: World) -> str:
                 f"    auto pub_{bid} = session.declare_publisher("
                 f"zenoh::KeyExpr({_quote(b.topic)}));")
 
+    # Field sync: each field with `synchronized=True` gets a Zenoh pub +
+    # sub on `manta/<world>/field_<i>/disturbance`. The publisher fires
+    # from the field's tx_hook on every (non-USER) add(); the subscriber
+    # decodes the wire bytes and calls field_<i>.receive(...). The Field's
+    # internal recursion guard suppresses echo on the receiving side.
+    for i in sync_field_idxs:
+        topic = world.fields[i].sync_topic or f"manta/{world.name}/field_{i}/disturbance"
+        _emit_field_sync(lines, i, topic, world.fields[i].cpp_class)
+
     total_bindings = len(bind_assignments)
     lines += [
         "",
@@ -270,6 +286,48 @@ def emit_main_cpp(world: World) -> str:
 
 # ---------------------------------------------------------------------------
 # Binding emit helpers (phase 2)
+
+def _emit_field_sync(lines: list[str], i: int, topic: str, cpp_class: str) -> None:
+    """Emit Zenoh tx/rx wiring for a synchronized Field instance.
+
+    Wire layout (binary, little-endian, schema_version=1):
+        uint16  schema_version
+        uint16  tag
+        int32   lifetime
+        uint8[K] params         (K = field's kParamsBytes; currently 96)
+    """
+    lines += [
+        f"    auto pub_field_{i} = session.declare_publisher("
+        f"zenoh::KeyExpr({_quote(topic)}));",
+        f"    field_{i}.set_tx_hook("
+        f"[&pub_field_{i}](std::uint16_t tag, "
+        f"const {cpp_class}::Params& params, int lifetime) {{",
+        f"        std::vector<std::uint8_t> buf;",
+        f"        buf.resize(2 + 2 + 4 + params.size());",
+        f"        std::uint16_t ver = 1;",
+        f"        std::memcpy(buf.data() + 0, &ver,      2);",
+        f"        std::memcpy(buf.data() + 2, &tag,      2);",
+        f"        std::memcpy(buf.data() + 4, &lifetime, 4);",
+        f"        std::memcpy(buf.data() + 8, params.data(), params.size());",
+        f"        pub_field_{i}.put(zenoh::Bytes(std::move(buf)));",
+        f"    }});",
+        f"    auto sub_field_{i} = session.declare_subscriber(",
+        f"        zenoh::KeyExpr({_quote(topic)}),",
+        f"        [&](const zenoh::Sample& s) {{",
+        f"            auto payload = s.get_payload().as_vector();",
+        f"            if (payload.size() < 8 + {cpp_class}::kParamsBytes) return;",
+        f"            std::uint16_t ver = 0, tag = 0;",
+        f"            std::int32_t  lifetime = 0;",
+        f"            std::memcpy(&ver,      payload.data() + 0, 2);",
+        f"            std::memcpy(&tag,      payload.data() + 2, 2);",
+        f"            std::memcpy(&lifetime, payload.data() + 4, 4);",
+        f"            if (ver != 1) return;",
+        f"            {cpp_class}::Params p{{}};",
+        f"            std::memcpy(p.data(), payload.data() + 8, p.size());",
+        f"            field_{i}.receive(tag, p, lifetime);",
+        f"        }}, zenoh::closures::none);",
+    ]
+
 
 def _emit_binding_subscriber(lines: list[str], i: int, b: Binding) -> None:
     """Declare a Zenoh subscriber for an in-Binding. Stores the most recent

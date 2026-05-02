@@ -5,6 +5,6 @@
 
 FollowerCraft::FollowerCraft()
     : manta::Craft("follower") {
-    body_ = &this->root().add<manta::parts::PointMass>("body", manta::Real(1.0f));
+    body_ = &this->root().add<manta::parts::Mass>("body", manta::Real(1.0f), true);
     this->root().compute_params();
 }

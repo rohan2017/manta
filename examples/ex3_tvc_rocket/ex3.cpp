@@ -1,7 +1,13 @@
-// Example 3 — TVC rocket "hopper".
+// Example 3 — TVC rocket "hopper" (post-2026-05 redesign).
 //
-// Library workflow: Ex3Craft is codegen-emitted from craft.py. This file is
-// the user-written main: world/scene/Zenoh wiring, rate PIDs, gimbal mapping.
+// Library workflow: Ex3Craft is codegen-emitted from craft.py. The deleted
+// `GimbaledThruster` is now a stack of two `Motor`s (yaw outer, pitch inner)
+// hosting a `Thruster1` engine — same physics, expressed via composition.
+//
+// The old `engine.set_gimbal(pitch, yaw)` call set the gimbal angle
+// instantaneously. Motors are torque-controlled, so we run a stiff position
+// PD on each axis to track the desired gimbal angle. Stall torque on each
+// motor (100 N·m vs ~50 N peak from the engine) is plenty of headroom.
 //
 // Zenoh:
 //   subscribe 'manta/ex3/cmd'   = [thr, pitch_rate, yaw_rate]
@@ -35,16 +41,30 @@ using namespace manta::examples;
 namespace {
 std::atomic<bool> g_run{true};
 void on_signal(int) { g_run.store(false); }
+
+// Stiff position PD on a single Motor — emulates instantaneous angle tracking
+// the way the old GimbaledThruster did. Kp/Kd tuned for the 5 kg rocket
+// inertia: the gimbal converges to a step setpoint in ~10 ms.
+inline float gimbal_pd(parts::Motor& m, float angle_setpoint,
+                       float Kp = 50.0f, float Kd = 5.0f) {
+    float err     = angle_setpoint - m.angle();
+    float err_dot = -m.rate();
+    return Kp * err + Kd * err_dot;
+}
+
+constexpr float MAX_GIMBAL = 0.15f;   // rad — same envelope as old design
+
+inline float clamp(float v, float lim) { return v < -lim ? -lim : (v > lim ? lim : v); }
 }
 
 int main() {
     std::signal(SIGINT,  on_signal);
     std::signal(SIGTERM, on_signal);
 
-    constexpr float DT = 0.001f;  // 1 kHz
-    constexpr float HOVER_FRACTION = (5.0f * 9.81f) / (1.5f * 5.0f * 9.81f);  // = 0.667
+    constexpr float DT = 0.001f;
+    constexpr float HOVER_FRACTION = (5.0f * 9.81f) / (1.5f * 5.0f * 9.81f);
 
-    fields::GravityField gf;
+    fields::GravityField gf{Vec3<SceneFrame>{0, 0, -9.81f}};
     World w;
     w.register_field(gf);
     w.clock().set_dt(DT);
@@ -53,6 +73,7 @@ int main() {
     Ex3Craft craft;
     scene.add_craft(craft);
 
+    // Outer-loop rate PIDs (rate-error → desired gimbal angle).
     PID<float> pitch_pid(0.20f, 0.10f, 0.02f, /*ilim=*/0.5f);
     PID<float> yaw_pid  (0.20f, 0.10f, 0.02f, 0.5f);
 
@@ -92,16 +113,20 @@ int main() {
             thr = thr_sp; ps = pitch_sp; ys = yaw_sp;
         }
 
+        // Outer loop: rate error → desired gimbal-angle setpoint, clamped.
+        // Yaw rate is about body x; pitch rate about body y.
         auto gyro = craft.imu().last_gyro();
-        float pitch_err = ps - gyro.y();
-        float yaw_err   = ys - gyro.x();
+        float pitch_rate_err = ps - gyro.y();
+        float yaw_rate_err   = ys - gyro.x();
+        float pitch_angle_sp = clamp(pitch_pid.update(pitch_rate_err, DT), MAX_GIMBAL);
+        float yaw_angle_sp   = clamp(yaw_pid  .update(yaw_rate_err,   DT), MAX_GIMBAL);
 
-        float u_pitch = pitch_pid.update(pitch_err, DT);
-        float u_yaw   = yaw_pid  .update(yaw_err,   DT);
-
-        // Engine is below CoM: +pitch gimbal → +x thrust at z<0 → -y body torque.
-        // To increase +y body rate (positive u_pitch), need NEGATIVE gimbal pitch.
-        craft.engine().set_gimbal(/*pitch=*/-u_pitch, /*yaw=*/+u_yaw);
+        // Engine sits 1 m below CoM. With the old sign convention, +pitch
+        // gimbal pushed +x at z<0 → -y body torque. To increase +y body rate
+        // (positive PID output), we want NEGATIVE pitch gimbal — same as the
+        // old `set_gimbal(-u_pitch, +u_yaw)` mapping.
+        craft.pitch_motor().set_torque(gimbal_pd(craft.pitch_motor(), -pitch_angle_sp));
+        craft.yaw_motor()  .set_torque(gimbal_pd(craft.yaw_motor(),   +yaw_angle_sp));
         craft.engine().set_throttle(thr);
 
         w.update();

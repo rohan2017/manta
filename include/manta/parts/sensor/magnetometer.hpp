@@ -5,6 +5,7 @@
 #include "../../core/noise.hpp"
 #include "../../core/part.hpp"
 #include "../../fields/mag_field.hpp"
+#include "../../fields/templated_query.hpp"
 
 namespace manta::parts {
 
@@ -41,26 +42,16 @@ public:
             last_b_ = geom::Vec3<PartFrame, Scalar>::zero();
             return;
         }
-        const auto* mf = dynamic_cast<const fields::MagField*>(mf_base);
+        const auto* mf = static_cast<const fields::MagField*>(mf_base);
 
-        // Bridge: position is templated on Scalar; cast to Real for the
-        // (non-templated) field query, then back to Scalar.
+        // Templated query — Jet crafts get ∂B/∂pos automatically via finite
+        // difference; Real crafts take the fast cast-only path.
         auto p_scaled = this->template position<SceneFrame>();
-        Eigen::Matrix<Real, 3, 1> p_real;
-        if constexpr (std::is_floating_point_v<Scalar>) {
-            p_real = p_scaled.raw().template cast<Real>();
-        } else {
-            for (int i = 0; i < 3; ++i) p_real(i) = Real(p_scaled.raw()(i).a);
-        }
+        auto b_scene_v = fields::state_at_templated<Scalar>(*mf, p_scaled);
 
-        auto b_scene_real = mf->b_at(geom::Vec3<SceneFrame>::from_raw(p_real));
-        Eigen::Matrix<Scalar, 3, 1> b_scene =
-            b_scene_real.raw().template cast<Scalar>();
-
-        // Rotate scene → part.
         auto q_part_from_scene = this->template orientation<SceneFrame>().raw().conjugate();
-        Eigen::Matrix<Scalar, 3, 1> b_part_e = q_part_from_scene * b_scene;
-        auto b_part = geom::Vec3<PartFrame, Scalar>::from_raw(b_part_e);
+        auto b_part = geom::Vec3<PartFrame, Scalar>::from_raw(
+            q_part_from_scene * b_scene_v.raw());
 
         last_b_ = b_part + noise_;
     }

@@ -40,6 +40,9 @@ add_executable(manta_tests
     test_orbit.cpp
     test_tether.cpp
     test_fluid.cpp
+    test_field.cpp
+    test_field_templated.cpp
+    test_field_sync.cpp
     test_stock_parts.cpp
     test_articulation.cpp
     test_ekf.cpp

@@ -1,4 +1,4 @@
-"""Thruster — applies a force along a direction in part frame, scaled by throttle."""
+"""Thruster — polynomial-in-throttle force/torque actuator (1st through 4th order)."""
 
 from __future__ import annotations
 
@@ -7,20 +7,17 @@ from ...core import PartDescriptor
 from ...signal import scalar_in_signal, scalar_out_signal
 
 
-class Thruster(PartDescriptor):
-    """A thruster that applies a force along `direction` in part frame, scaled
-    by throttle ∈ [0, 1].
-
-    Bindable signals:
-      * `throttle`     (out, 1 float) — current throttle value.
-      * `set_throttle` (in,  1 float) — sets throttle (clamped to [0,1] internally).
-
-    Required fields: none.
+class _ThrusterBase(PartDescriptor):
+    """Common scaffolding for `Thruster1`..`Thruster4`. Each tick:
+        F = Σ_k F_k · throttle^k
+        τ = Σ_k τ_k · throttle^k
+    where F_k and τ_k are user-supplied 3-vectors in part frame.
     """
 
-    cpp_class          = "manta::parts::Thruster"
-    cpp_class_template = "manta::parts::ThrusterT"
-    cpp_header         = "manta/parts/actuator/thruster.hpp"
+    cpp_header  = "manta/parts/actuator/thruster.hpp"
+    _order:  int = 0   # set by subclass
+    _cpp_class_concrete:  str = ""
+    _cpp_class_template_: str = ""
 
     signals = [
         scalar_out_signal("throttle",     "throttle"),
@@ -29,24 +26,98 @@ class Thruster(PartDescriptor):
 
     def __init__(self,
                  name: str,
-                 max_thrust: float,
-                 direction: tuple[float, float, float] = (0.0, 0.0, 1.0),
+                 force_coefs:  list[tuple[float, float, float]],
+                 torque_coefs: list[tuple[float, float, float]] | None = None,
                  **kwargs) -> None:
         super().__init__(name=name, **kwargs)
-        self.max_thrust = float(max_thrust)
-        self.direction  = tuple(float(x) for x in direction)
+        if len(force_coefs) != self._order:
+            raise ValueError(f"{type(self).__name__} requires {self._order} force_coefs")
+        if torque_coefs is None:
+            torque_coefs = [(0.0, 0.0, 0.0)] * self._order
+        if len(torque_coefs) != self._order:
+            raise ValueError(f"{type(self).__name__} requires {self._order} torque_coefs")
+        self.force_coefs  = [tuple(float(x) for x in v) for v in force_coefs]
+        self.torque_coefs = [tuple(float(x) for x in v) for v in torque_coefs]
+
+    @property
+    def cpp_class(self) -> str: return self._cpp_class_concrete
+    @property
+    def cpp_class_template(self) -> str: return self._cpp_class_template_
+
+    def _vec_array_expr(self, coefs, scalar: str) -> str:
+        vec = f"manta::geom::Vec3<manta::PartFrame, {scalar}>"
+        elems = ", ".join(
+            f"{vec}{{{scalar}({_f(v[0])}), {scalar}({_f(v[1])}), {scalar}({_f(v[2])})}}"
+            for v in coefs)
+        return f"std::array<{vec}, {self._order}>{{{elems}}}"
 
     def emit_constructor_args(self, scalar: str = "manta::Real") -> str:
-        d = self.direction
-        return (f'"{self.name}", {scalar}({_f(self.max_thrust)}), '
-                f'manta::geom::Vec3<manta::PartFrame, {scalar}>{{'
-                f'{scalar}({_f(d[0])}), {scalar}({_f(d[1])}), {scalar}({_f(d[2])})}}')
+        return (f'"{self.name}", '
+                f'{self._vec_array_expr(self.force_coefs,  scalar)}, '
+                f'{self._vec_array_expr(self.torque_coefs, scalar)}')
 
     def telemetry_fields(self) -> list[tuple[str, str]]:
         return [("throttle", "float")]
 
     def emit_telemetry_reads(self) -> list[tuple[str, str]]:
         return [("throttle", f"craft.{self.name}().throttle()")]
+
+
+class Thruster1(_ThrusterBase):
+    """1st-order linear thruster: F = F_1 · t, τ = τ_1 · t.
+
+    Convenience constructor `Thruster1.linear(name, max_thrust, direction)`
+    builds F_1 = direction · max_thrust, τ_1 = 0 — the common case.
+    """
+    _order = 1
+    _cpp_class_concrete = "manta::parts::Thruster1"
+    _cpp_class_template_ = "manta::parts::Thruster1T"
+
+    @classmethod
+    def linear(cls,
+               name: str,
+               max_thrust: float,
+               direction: tuple[float, float, float] = (0.0, 0.0, 1.0),
+               **kwargs) -> "Thruster1":
+        d = tuple(float(x) for x in direction)
+        F1 = (d[0] * float(max_thrust), d[1] * float(max_thrust), d[2] * float(max_thrust))
+        return cls(name, [F1], None, **kwargs)
+
+
+class Thruster2(_ThrusterBase):
+    _order = 2
+    _cpp_class_concrete = "manta::parts::Thruster2"
+    _cpp_class_template_ = "manta::parts::Thruster2T"
+
+
+class Thruster3(_ThrusterBase):
+    _order = 3
+    _cpp_class_concrete = "manta::parts::Thruster3"
+    _cpp_class_template_ = "manta::parts::Thruster3T"
+
+
+class Thruster4(_ThrusterBase):
+    _order = 4
+    _cpp_class_concrete = "manta::parts::Thruster4"
+    _cpp_class_template_ = "manta::parts::Thruster4T"
+
+
+class Thruster(Thruster1):
+    """Backward-compat shim — `Thruster(name, max_thrust, direction)` is
+    equivalent to `Thruster1.linear(name, max_thrust, direction)`. Most
+    user code wants this one.
+    """
+
+    def __init__(self,
+                 name: str,
+                 max_thrust: float,
+                 direction: tuple[float, float, float] = (0.0, 0.0, 1.0),
+                 **kwargs) -> None:
+        d = tuple(float(x) for x in direction)
+        F1 = (d[0] * float(max_thrust), d[1] * float(max_thrust), d[2] * float(max_thrust))
+        super().__init__(name, [F1], None, **kwargs)
+        self.max_thrust = float(max_thrust)
+        self.direction  = d
 
     def render(self, telemetry: dict, path: str) -> None:
         try:

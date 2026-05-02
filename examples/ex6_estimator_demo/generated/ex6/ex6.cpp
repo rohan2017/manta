@@ -5,11 +5,9 @@
 
 Ex6Craft::Ex6Craft()
     : manta::Craft("ex6") {
-    body_ = &this->root().add<manta::parts::PointMass>("body", manta::Real(1.0f));
-    { manta::geom::Mat3<manta::PartFrame, manta::PartFrame, manta::Real> _moi = manta::geom::Mat3<manta::PartFrame, manta::PartFrame, manta::Real>::identity(); _moi.raw()(0,0) = manta::Real(0.05f); _moi.raw()(1,1) = manta::Real(0.05f); _moi.raw()(2,2) = manta::Real(0.05f); body_->set_moi(_moi); }
-    gravity_ = &this->root().add<manta::parts::GravityPart>("gravity");
+    body_ = &this->root().add<manta::parts::Mass>("body", manta::Real(1.0f), []{ manta::geom::Mat3<manta::PartFrame, manta::PartFrame, manta::Real> m = manta::geom::Mat3<manta::PartFrame, manta::PartFrame, manta::Real>::identity(); m.raw()(0,0)=manta::Real(0.05f); m.raw()(1,1)=manta::Real(0.05f); m.raw()(2,2)=manta::Real(0.05f); return m; }(), true);
     imu_ = &this->root().add<manta::parts::IMU>("imu", manta::parts::ImuNoiseParams{0.05f, 0.005f});
     dvl_ = &this->root().add<manta::parts::DVL>("dvl", manta::parts::DvlNoiseParams{0.02f});
-    thrust_ = &this->root().add<manta::parts::Thruster>("thrust", manta::Real(15.0f), manta::geom::Vec3<manta::PartFrame, manta::Real>{manta::Real(1.0f), manta::Real(1.0f), manta::Real(0.5f)});
+    thrust_ = &this->root().add<manta::parts::Thruster1>("thrust", std::array<manta::geom::Vec3<manta::PartFrame, manta::Real>, 1>{manta::geom::Vec3<manta::PartFrame, manta::Real>{manta::Real(15.0f), manta::Real(15.0f), manta::Real(7.5f)}}, std::array<manta::geom::Vec3<manta::PartFrame, manta::Real>, 1>{manta::geom::Vec3<manta::PartFrame, manta::Real>{manta::Real(0.0f), manta::Real(0.0f), manta::Real(0.0f)}});
     this->root().compute_params();
 }

@@ -10,11 +10,11 @@ Regenerate from the repo root:
 """
 
 from manta_codegen import Craft, World
-from manta_codegen.parts import IMU, PointMass, Thruster
+from manta_codegen.parts import IMU, Mass, Thruster
 
 
 def make_world() -> World:
-    body = PointMass("body", mass=1.0)
+    body = Mass("body", mass=1.0)
     imu  = IMU("imu")
     thr  = Thruster("thrust", max_thrust=5.0, direction=(1.0, 0.0, 0.0))
 

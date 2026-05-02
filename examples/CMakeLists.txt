@@ -58,7 +58,8 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/ex0_free_flight/generated/ex0/ex0.cmake)
 # ex1 — binary workflow (orbit, 200x realtime).
 include(${CMAKE_CURRENT_SOURCE_DIR}/ex1_orbit/generated/ex1/ex1.cmake)
 
-# ex2 — library workflow: codegen emits Ex2Craft + telemetry; user main below.
+# ex2 — library workflow: codegen emits Ex2Craft + telemetry; user main
+# does X-config mixing on the four Thruster1 rotors.
 include(${CMAKE_CURRENT_SOURCE_DIR}/ex2_quadcopter/generated/ex2/ex2.cmake)
 add_executable(ex2_quadcopter
     ex2_quadcopter/ex2.cpp
@@ -66,7 +67,9 @@ add_executable(ex2_quadcopter
 target_link_libraries(ex2_quadcopter PRIVATE manta_examples_shared)
 manta_ex2_apply(ex2_quadcopter)
 
-# ex3 — library workflow: codegen emits Ex3Craft + telemetry; user main below.
+# ex3 — library workflow: codegen emits Ex3Craft (Mass + yaw_motor +
+# pitch_motor + Thruster1 engine); user main runs gimbal position-PD +
+# rate PIDs.
 include(${CMAKE_CURRENT_SOURCE_DIR}/ex3_tvc_rocket/generated/ex3/ex3.cmake)
 add_executable(ex3_tvc_rocket
     ex3_tvc_rocket/ex3.cpp
@@ -121,3 +124,10 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/ex10_multi_craft/generated/ex10/ex10.cmake)
 # ex11 — codegen-driven tether between two crafts. Python Tether(...) +
 # World.add_tether(...) generates the C++ Tether instance + endpoint adds.
 include(${CMAKE_CURRENT_SOURCE_DIR}/ex11_tethered_pair/generated/ex11/ex11.cmake)
+
+# sync_smoke — Zenoh field-sync round-trip test. Spins up two Sessions in
+# one process, replicates a GravityField disturbance through the codegen's
+# wire format, verifies the receiver rebuilds the same Disturbance.
+add_executable(sync_smoke sync_smoke/sync_smoke.cpp)
+target_link_libraries(sync_smoke PRIVATE manta_examples_shared)
+add_test(NAME sync_smoke COMMAND sync_smoke)

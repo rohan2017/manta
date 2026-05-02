@@ -19,18 +19,16 @@ Codegen:
 """
 
 from manta_codegen import Craft, World
-from manta_codegen.parts  import DVL, GravityPart, IMU, PointMass, Thruster
+from manta_codegen.parts  import DVL, IMU, Mass, Thruster
 from manta_codegen.fields import GravityField
 
 
 def make_world() -> World:
     c = Craft("ex6")
 
-    # Body inertia: lumped point with small diagonal MOI.
-    c.add(PointMass("body", mass=1.0, moi=(0.05, 0.05, 0.05)))
-
-    # Gravity drives the dynamics down at -9.81 m/s².
-    c.add(GravityPart("gravity"))
+    # Body inertia: lumped point with small diagonal MOI. Mass auto-applies
+    # gravity from the registered GravityField each tick.
+    c.add(Mass("body", mass=1.0, moi=(0.05, 0.05, 0.05)))
 
     # Sensors. Modest noise — enough to be realistic, not so much that the
     # EKF can't lock on within a few seconds.

@@ -29,8 +29,6 @@ from manta_codegen.parts.sensor.imu import IMU
 from manta_codegen.parts.sensor.dvl import DVL
 from manta_codegen.parts.sensor.magnetometer import Magnetometer
 from manta_codegen.parts.actuator.thruster import Thruster
-from manta_codegen.parts.actuator.prop_thruster import PropThruster
-from manta_codegen.parts.actuator.gimbaled_thruster import GimbaledThruster
 from manta_codegen.parts.articulation.motor import Motor
 
 
@@ -44,8 +42,6 @@ FIXTURES: list[PartDescriptor] = [
     DVL("dvl"),
     Magnetometer("mag"),
     Thruster("thr", max_thrust=2.0),
-    PropThruster("prop", max_thrust=2.0),
-    GimbaledThruster("gimbal", max_thrust=2.0),
     Motor("motor"),
 ]
 

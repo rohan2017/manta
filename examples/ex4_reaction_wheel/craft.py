@@ -1,7 +1,7 @@
 """ex4 — satellite-style craft with a single reaction wheel.
 
-A central body (PointMass) hosts a Motor whose joint output carries a
-flywheel (heavy PointMass with high MOI about the motor axis). Commanding
+A central body (Mass) hosts a Motor whose joint output carries a
+flywheel (heavy Mass with high MOI about the motor axis). Commanding
 +τ on the motor spins the flywheel one way and, by Newton's third, the
 body the opposite way. That's the basic principle of a reaction wheel for
 satellite attitude control.
@@ -18,10 +18,10 @@ Workflow: binary — the generated main subscribes to a single command topic
 """
 
 from manta_codegen import Craft, World
-from manta_codegen.parts import Motor, PointMass
+from manta_codegen.parts import Motor, Mass
 
 
-# Body inertia: cylinder-ish, lumped into a single PointMass with a small
+# Body inertia: cylinder-ish, lumped into a single Mass with a small
 # diagonal MOI. Mass dominates linear motion (1 kg).
 BODY_MASS = 1.0
 BODY_MOI  = (0.02, 0.02, 0.02)   # kg·m²
@@ -35,12 +35,12 @@ WHEEL_MOI  = (WHEEL_IZZ * 0.5, WHEEL_IZZ * 0.5, WHEEL_IZZ)  # disc: I_xx = I_yy 
 
 
 def make_world() -> World:
-    body  = PointMass("body", mass=BODY_MASS, moi=BODY_MOI)
+    body  = Mass("body", mass=BODY_MASS, moi=BODY_MOI)
     motor = Motor("wheel",
                   axis=(0.0, 0.0, 1.0),
                   stall_torque=2.0,
                   damping=0.0)
-    flywheel = PointMass("flywheel", mass=WHEEL_MASS, moi=WHEEL_MOI)
+    flywheel = Mass("flywheel", mass=WHEEL_MASS, moi=WHEEL_MOI)
 
     c = Craft("ex4")
     c.add(body)

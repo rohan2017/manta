@@ -5,19 +5,19 @@
 
 
 #include "manta/core/craft.hpp"
-#include "manta/parts/structure/point_mass.hpp"
+#include "manta/parts/structure/mass.hpp"
 #include "manta/parts/actuator/thruster.hpp"
 
 class Ex8Craft : public manta::Craft {
 public:
     Ex8Craft();
 
-    manta::parts::PointMass& body() { return *body_; }
-    const manta::parts::PointMass& body() const { return *body_; }
-    manta::parts::Thruster& forward() { return *forward_; }
-    const manta::parts::Thruster& forward() const { return *forward_; }
+    manta::parts::Mass& body() { return *body_; }
+    const manta::parts::Mass& body() const { return *body_; }
+    manta::parts::Thruster1& forward() { return *forward_; }
+    const manta::parts::Thruster1& forward() const { return *forward_; }
 
 private:
-    manta::parts::PointMass* body_ = nullptr;
-    manta::parts::Thruster* forward_ = nullptr;
+    manta::parts::Mass* body_ = nullptr;
+    manta::parts::Thruster1* forward_ = nullptr;
 };

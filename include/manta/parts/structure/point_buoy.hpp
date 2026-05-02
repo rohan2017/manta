@@ -1,15 +1,18 @@
 #pragma once
 
+#include <type_traits>
+
 #include "../../core/craft.hpp"
 #include "../../fields/fluid_field.hpp"
 #include "../../fields/gravity_field.hpp"
+#include "../../fields/templated_query.hpp"
 
 namespace manta::parts {
 
-// Single-point buoyancy. F = -ρ(p_scene) * V * g_part at the part origin.
-// FluidField and GravityField are both Real-typed; we cast at the boundary
-// so this part works in templated estimator crafts (treating the field
-// values as constant inputs for autodiff purposes).
+// Single-point buoyancy. F = -ρ(p_scene) · V · g_part at the part origin,
+// where ρ is the local fluid density and g is the local gravitational
+// acceleration. Both fields are queried via the Real-bridge (treating their
+// outputs as constant inputs from the autodiff perspective).
 //
 // Required fields: FluidField, GravityField.
 template <class Scalar = Real>
@@ -26,7 +29,9 @@ public:
         auto& fluid = this->template field<fields::FluidField>();
         auto& gf    = this->template field<fields::GravityField>();
 
-        // Bridge templated position → Real for the field query.
+        // Density comes from the FluidField — currently treated as a constant
+        // input from the Jet perspective (no autodiff through ρ). Switch to
+        // templated FluidField queries when a use case demands ∂ρ/∂pos.
         auto p_scaled = this->template position<SceneFrame>();
         Eigen::Matrix<Real, 3, 1> p_real;
         if constexpr (std::is_floating_point_v<Scalar>) {
@@ -37,10 +42,12 @@ public:
         auto state = fluid.state_at(geom::Vec3<SceneFrame>::from_raw(p_real));
         Scalar rho = Scalar(state.density);
 
-        Eigen::Matrix<Scalar, 3, 1> g_scene = gf.g().raw().template cast<Scalar>();
+        // Gravity uses the templated query so Jet crafts pick up ∂g/∂pos.
+        auto g_scene_v = fields::state_at_templated<Scalar>(gf, p_scaled);
+
         auto q_part_from_scene = this->template orientation<SceneFrame>().raw().conjugate();
         auto g_part = geom::Vec3<PartFrame, Scalar>::from_raw(
-            q_part_from_scene * g_scene);
+            q_part_from_scene * g_scene_v.raw());
 
         this->apply_force_at(g_part * (-rho * volume_));
     }

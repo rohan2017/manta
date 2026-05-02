@@ -4,14 +4,13 @@ from __future__ import annotations
 
 from ..._format import cpp_float as _f
 from ...core import PartDescriptor
-from ...fields import GravityField
+from ...fields import FluidField, GravityField
 
 
 class PointBuoy(PartDescriptor):
     """Single-point buoyancy: F = -ρ(p) * V * g, applied at the part origin.
-    Density comes from the registered FluidField. For a body where the buoyant
-    distribution matters (boats crossing a surface, righting moments), prefer
-    Hull (sampled-points version).
+    Density comes from the registered FluidField; gravity from the registered
+    GravityField.
 
     Required fields: FluidField, GravityField.
     """
@@ -19,7 +18,7 @@ class PointBuoy(PartDescriptor):
     cpp_class          = "manta::parts::PointBuoy"
     cpp_class_template = "manta::parts::PointBuoyT"
     cpp_header         = "manta/parts/structure/point_buoy.hpp"
-    requires_fields    = [GravityField]
+    requires_fields    = [FluidField, GravityField]
 
     def __init__(self, name: str, volume: float, **kwargs) -> None:
         super().__init__(name=name, **kwargs)

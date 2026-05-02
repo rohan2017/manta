@@ -130,12 +130,28 @@ class FieldDescriptor:
 
     def __init__(self, **construction_args) -> None:
         self.construction_args = construction_args
+        # Cross-process disturbance replication. When True, codegen wires a
+        # Zenoh publisher + subscriber on `sync_topic` (defaults to
+        # `manta/<world>/<field_var>/disturbance`) and binds the Field's
+        # tx_hook + receive() so add()s on one process appear on all peers.
+        # Only stock-tagged disturbances replicate; user-defined lambdas
+        # (tag = USER) stay local. See manta/fields/gravity_field.hpp for
+        # the wire layout.
+        self.synchronized: bool = False
+        self.sync_topic: str | None = None  # default derived in emit_main
 
     def emit_construction(self, var_name: str) -> str:
         """Returns a C++ statement that constructs the field instance into `var_name`.
         Subclasses override when their constructors take typed args.
         """
         return f"{self.cpp_class} {var_name}{{}};"
+
+    def emit_extra_setup(self, var_name: str) -> list[str]:
+        """Optional follow-up C++ statements after construction — e.g. add()
+        calls for the new disturbance API. One statement per list entry; the
+        emitter handles indentation. Default is none.
+        """
+        return []
 
 
 # ---------------------------------------------------------------------------

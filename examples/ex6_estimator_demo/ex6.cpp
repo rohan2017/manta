@@ -98,8 +98,9 @@ int main() {
     // instances (double + Jet) and runs predict/update with autodiff.
     manta::estimation::CraftEKF<Ex6EstCraftT, 3> ekf;
 
-    // The est-side parts (GravityPart) need the gravity field visible to
-    // both internal crafts (value step + Jacobian step).
+    // The est-side Mass parts auto-apply gravity from a registered
+    // GravityField, so the field needs to be visible to both internal
+    // crafts (value step + Jacobian step).
     ekf.register_field(grav);
 
     // Initial state — at origin, identity quaternion, at rest.

@@ -18,7 +18,7 @@ Codegen:
 """
 
 from manta_codegen import Craft, World
-from manta_codegen.parts  import DVL, GravityPart, IMU, PointMass, Thruster
+from manta_codegen.parts  import DVL, IMU, Mass, Thruster
 from manta_codegen.fields import GravityField
 
 
@@ -27,8 +27,8 @@ def make_world() -> World:
     # Opt in to templated codegen — required for CraftEKF wrapping.
     c.scalar_templated = True
 
-    c.add(PointMass("body", mass=1.0, moi=(0.05, 0.05, 0.05)))
-    c.add(GravityPart("gravity"))
+    # Mass auto-applies gravity from the registered GravityField.
+    c.add(Mass("body", mass=1.0, moi=(0.05, 0.05, 0.05)))
     c.add(IMU("imu", accel_sigma=0.05, gyro_sigma=0.005))
     c.add(DVL("dvl", velocity_sigma=0.02))
     # The estimator-side thruster has no command path — the EKF doesn't pilot.

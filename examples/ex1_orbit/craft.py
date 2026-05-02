@@ -12,8 +12,8 @@ Generate from the repo root:
 import math
 
 from manta_codegen import Craft, World
-from manta_codegen.parts  import PointGravityPart, PointMass, Thruster
-from manta_codegen.fields import PointGravityField
+from manta_codegen.parts  import Mass, Thruster
+from manta_codegen.fields import GravityField
 
 
 # Earth.
@@ -35,15 +35,13 @@ THRUSTER_DIRS: list[tuple[str, tuple[float, float, float]]] = [
 
 
 def make_world() -> World:
-    body      = PointMass("body", mass=1.0)
+    body      = Mass("body", mass=1.0)
     thrusters = [Thruster(name, max_thrust=5.0, direction=d) for name, d in THRUSTER_DIRS]
-    grav      = PointGravityPart("grav")
 
     c = Craft("ex1")
     c.add(body)
     for t in thrusters:
         c.add(t)
-    c.add(grav)
 
     # Bundled state topic: craft pose + per-thruster throttles. Wire format
     # matches what the viewer expects (top-level "p","q","v","w" arrays).
@@ -60,7 +58,12 @@ def make_world() -> World:
 
     # Sim setup: gravity field on the world, craft at (R, 0, 0) with
     # tangential velocity for a circular orbit. 200 sim-s per wall-s.
+    # `synchronized=True` opts the gravity field into Zenoh disturbance
+    # replication — a second binary attached to the same fabric will
+    # see the same point-mass disturbance even though it didn't add it.
+    grav = GravityField().add_point_mass(mu=MU)
+    grav.synchronized = True
     return (World()
-            .add_field(PointGravityField(mu=MU))
+            .add_field(grav)
             .add_craft(c, pos=(ORBIT_R, 0.0, 0.0), vel=(0.0, V_CIRC, 0.0))
             .run(dt=0.005, sim_rate_mult=200.0))
