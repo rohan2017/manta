@@ -18,6 +18,7 @@
 #include <doctest/doctest.h>
 
 #include "../include/manta/core/craft.hpp"
+#include "../include/manta/estimation/parameter_fit.hpp"
 #include "../include/manta/fields/fluid_field.hpp"
 #include "../include/manta/parts/actuator/thruster.hpp"
 #include "../include/manta/parts/structure/mass.hpp"
@@ -99,28 +100,21 @@ TEST_CASE("System ID: fit mass from a recorded thruster-driven trajectory") {
     // Sanity: closed-form check. p(1s) = 0.5 * (F/m) * t² = 0.5 * 5 * 1 = 2.5 m.
     CHECK(observed.back() == doctest::Approx(2.5).epsilon(5e-2));
 
-    // Fit. Start far from the answer.
-    double mass = 5.0;
+    // Fit via the new ParameterFit wrapper. Start far from the answer; the
+    // wrapper hides the Ceres Problem / Solver / Summary boilerplate while
+    // still letting the user write the templated cost functor.
+    manta::estimation::ParameterFit<1> fit;
+    fit.set_lower_bound(0, 0.1);   // mass > 0.1 kg
 
-    ceres::Problem problem;
-    auto* cost = new ceres::AutoDiffCostFunction<MassFitCost,
-                                                 ceres::DYNAMIC,
-                                                 1>(
-        new MassFitCost(observed, MAX_THRUST, DT), N_STEPS);
-    problem.AddResidualBlock(cost, /*loss=*/nullptr, &mass);
-    problem.SetParameterLowerBound(&mass, 0, 0.1);   // mass is positive
+    auto result = fit.solve_dynamic(
+        /*initial_guess=*/{5.0},
+        new MassFitCost(observed, MAX_THRUST, DT),
+        /*n_residuals=*/N_STEPS);
 
-    ceres::Solver::Options options;
-    options.linear_solver_type = ceres::DENSE_QR;
-    options.minimizer_progress_to_stdout = false;
-    options.max_num_iterations = 50;
-    ceres::Solver::Summary summary;
-    ceres::Solve(options, &problem, &summary);
-
-    INFO("converged mass = ", mass, " (true ", TRUE_MASS, ")");
-    INFO("ceres summary: ", summary.BriefReport());
-    CHECK(summary.IsSolutionUsable());
-    CHECK(mass == doctest::Approx(TRUE_MASS).epsilon(1e-3));
+    INFO("converged mass = ", result.params[0], " (true ", TRUE_MASS, ")");
+    INFO("ceres summary: ", result.brief_report);
+    CHECK(result.success);
+    CHECK(result.params[0] == doctest::Approx(TRUE_MASS).epsilon(1e-3));
 }
 
 
@@ -220,24 +214,16 @@ TEST_CASE("System ID: fit drag coefficient on a Surface1 in flowing wind") {
     // Sanity: τ = m/k = 0.5 s. After 1 s, v_x ≈ WIND·(1 − e^{-2}) ≈ 4.32.
     CHECK(observed.back() == doctest::Approx(4.32).epsilon(0.05));
 
-    double k = 0.5;   // start far below
-    ceres::Problem problem;
-    auto* cost = new ceres::AutoDiffCostFunction<DragFitCost,
-                                                 ceres::DYNAMIC,
-                                                 1>(
-        new DragFitCost(observed, MASS, WIND, DT), NS);
-    problem.AddResidualBlock(cost, nullptr, &k);
-    problem.SetParameterLowerBound(&k, 0, 0.01);
+    manta::estimation::ParameterFit<1> fit;
+    fit.set_lower_bound(0, 0.01);
 
-    ceres::Solver::Options options;
-    options.linear_solver_type = ceres::DENSE_QR;
-    options.minimizer_progress_to_stdout = false;
-    options.max_num_iterations = 50;
-    ceres::Solver::Summary summary;
-    ceres::Solve(options, &problem, &summary);
+    auto result = fit.solve_dynamic(
+        /*initial_guess=*/{0.5},
+        new DragFitCost(observed, MASS, WIND, DT),
+        /*n_residuals=*/NS);
 
-    INFO("converged k = ", k, " (true ", TRUE_K, ")");
-    INFO("ceres summary: ", summary.BriefReport());
-    CHECK(summary.IsSolutionUsable());
-    CHECK(k == doctest::Approx(TRUE_K).epsilon(1e-3));
+    INFO("converged k = ", result.params[0], " (true ", TRUE_K, ")");
+    INFO("ceres summary: ", result.brief_report);
+    CHECK(result.success);
+    CHECK(result.params[0] == doctest::Approx(TRUE_K).epsilon(1e-3));
 }

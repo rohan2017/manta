@@ -131,3 +131,8 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/ex11_tethered_pair/generated/ex11/ex11.cmake
 add_executable(sync_smoke sync_smoke/sync_smoke.cpp)
 target_link_libraries(sync_smoke PRIVATE manta_examples_shared)
 add_test(NAME sync_smoke COMMAND sync_smoke)
+
+# wire_debug — interactive Zenoh subscriber that decodes field-sync
+# disturbance bytes for human inspection (gravity / mag / fluid).
+add_executable(wire_debug wire_debug/wire_debug.cpp)
+target_link_libraries(wire_debug PRIVATE manta_examples_shared)

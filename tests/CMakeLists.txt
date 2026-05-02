@@ -50,6 +50,7 @@ add_executable(manta_tests
     test_ukf.cpp
     test_planet.cpp
     test_system_id.cpp
+    test_parameter_fit.cpp
     "${_signal_sync_test_out}")
 
 target_link_libraries(manta_tests PRIVATE
