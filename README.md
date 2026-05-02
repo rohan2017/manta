@@ -14,8 +14,8 @@ templated C++ that compiles into a regular binary.
 ```
 include/manta/        C++ runtime: parts, fields, planets, scenes, EKF/UKF
 python/manta_codegen/ Python descriptors + emitter
-examples/             ex0..ex9 — increasing complexity
-tests/                doctest unit + integration tests (199 cases)
+examples/             ex0..ex11 + sync_smoke
+tests/                doctest unit + integration tests (219 cases)
 ```
 
 ## Quick example
@@ -26,10 +26,11 @@ on a single Zenoh topic and accepting throttle commands on another:
 ```python
 # my_craft.py
 from manta_codegen import Craft, World
-from manta_codegen.parts import IMU, PointMass, Thruster
+from manta_codegen.parts  import IMU, Mass, Thruster
+from manta_codegen.fields import GravityField
 
 def make_world() -> World:
-    body = PointMass("body", mass=1.0)
+    body = Mass("body", mass=1.0)              # auto-applies m·g if a GravityField is registered
     imu  = IMU("imu", accel_sigma=0.05, gyro_sigma=0.005)
     thr  = Thruster("fwd", max_thrust=5.0, direction=(1, 0, 0))
 
@@ -51,6 +52,7 @@ def make_world() -> World:
     c.subscribe(thr.set_throttle, "manta/my_craft/cmd")
 
     return (World()
+            .add_field(GravityField(g=(0, 0, -9.81)))
             .add_craft(c)
             .run(dt=0.001, sim_rate_mult=1.0))
 ```
@@ -76,10 +78,67 @@ Atomic unit of simulation. Each part exposes:
 - A signals table — values the user can publish or subscribe-into via
   bindings (e.g. `imu.last_accel`, `thruster.set_throttle`).
 
-Stock parts: `PointMass`, `Mass`, `Hull` (buoyancy), `Surface1..4` (drag),
-`PointBuoy`, `Thruster`, `PropThruster`, `GimbaledThruster`, `IMU`, `DVL`,
-`Magnetometer`, `Motor` (1-DOF revolute joint), `GravityPart`,
-`PointGravityPart`, `TetherEndpoint`.
+Stock parts:
+- **Structure**: `Mass` (with optional MOI tensor and auto-gravity),
+  `PointBuoy` (single-point buoyancy), `Surface1..4` (N-th order
+  velocity-driven force/torque tensors).
+- **Actuator**: `Thruster1..4` — polynomial-in-throttle force/torque
+  vectors (`F = Σ_k F_k · throttle^k`). `Thruster` is an alias for the
+  common `Thruster1` linear case with a `(name, max_thrust, direction)`
+  shorthand constructor.
+- **Sensor**: `IMU`, `DVL`, `Magnetometer`.
+- **Articulation**: `Motor` (1-DOF revolute joint, torque-controlled).
+- **Coupling**: `TetherEndpoint`.
+- **Field source**: `PointGravitySrc` — adds an inverse-square
+  disturbance to the registered `GravityField` (for self-gravitating
+  craft like asteroids or space stations).
+
+Compositions replace some deleted parts: a gimballed thruster is
+`Motor → Motor → Thruster1` (see ex3); a buoyant hull is a list of
+`PointBuoy`s along the body axis (see ex5); a propeller with reaction
+torque is `Thruster1` with explicit `F_1 = (0,0,K)` and
+`τ_1 = (0,0,±k_t·K)` (see ex2).
+
+### Fields
+A field is a single concrete class per physics (`GravityField`,
+`FluidField`, `MagField`) holding a list of additive `Disturbance`
+objects. Each Disturbance is `(origin, lambda, lifetime, tag)`:
+
+```python
+g = (GravityField()
+        .add_uniform((0, 0, -9.81))                          # flat-earth gravity
+        .add_point_mass(mu=3.986e14, origin=(0, 0, 0))       # + Earth point-mass
+        .add_point_mass(mu=4.9e12,   origin=(385e6, 0, 0)))  # + Moon
+```
+
+`state_at(query_pos)` walks all live disturbances and sums their
+contributions. Lifetime defaults to one tick (re-add per tick to track
+moving sources); `PERSISTENT` keeps a disturbance forever; finite N
+gives a fixed-duration disturbance (e.g. an explosion shock).
+
+Disturbances built by stock factories carry a `tag` and a serializable
+`params` POD blob — they can be replicated cross-process (see Field
+sync below). User-defined lambdas are local-only by default; register
+a custom factory to make them syncable.
+
+`FluidField` uses two pools: incompressible (`R = -1`, water-like) and
+gas (`R = R_specific`, follows `p = ρRT`). On query, gas pool wins if
+any gas disturbance is in influence and density is *derived* as
+`ρ = p / (RT)`; otherwise the incompressible pool sums directly. Lets
+a planet register both an ocean and an atmosphere on one field.
+
+### Field sync (cross-process)
+Set `field.synchronized = True` and codegen emits a Zenoh pub/sub on
+`manta/<world>/field_<i>/disturbance`. Stock-tagged disturbances added
+on one process replicate to all peers; the receiving side rebuilds the
+same Disturbance via a per-Field factory registry. A thread-local
+recursion guard prevents the rx side from echoing back to tx.
+
+Wire layout is binary (`uint16 schema | uint16 tag | int32 lifetime |
+uint8[96] params`, ~104 B/disturbance). User-defined kinds register
+their own factories at `tag >= USER_BASE` (1024) and replicate on the
+same path. See `tests/test_field_sync.cpp` and `examples/sync_smoke/`
+for the wire round-trip.
 
 ### Bindings
 Each `c.publish(...)` and `c.subscribe(...)` records a `Binding`:
@@ -102,10 +161,9 @@ Top-level container holding fields, planets, crafts (with their initial
 state), and the sim loop config:
 
 ```python
-earth = Earth(sea_level=0.0)
+earth = Earth(sea_level=0.0, gravity_mu=Earth.MU, include_j2=True)
 return (World()
         .add_planet(earth)
-        .add_field(GravityField())
         .add_craft(c, on=earth, pos=(0, 0, -0.5))
         .run(dt=0.001, sim_rate_mult=1.0))
 ```
@@ -114,6 +172,12 @@ return (World()
 the scene anchors to the planet and the craft co-rotates with it. Use
 `on=None` (default) for world-frame initial conditions.
 
+`Earth` automatically registers persistent ocean + atmosphere disturbances
+on its FluidField; optional `gravity_mu`, `include_j2`, and
+`dipole_moment` flags add point-mass(+J2) gravity and dipole magnetic
+disturbances. Use `earth.height_above_surface(p)` /
+`earth.height_above_sea_level(p)` for buoyancy / aero queries.
+
 Cartesian only — manta core doesn't know about LLA / orbital elements.
 Convert on the user side:
 
@@ -121,15 +185,18 @@ Convert on the user side:
 world.add_craft(drone, on=earth, pos=from_wgs84_lla(37.4, -122.1, 100))
 ```
 
-(`from_wgs84_lla` lives in user code or a future optional `manta.geodesy`
-helper. Core stays Cartesian.)
-
 ### Scalar templating
 Most parts are templated on `Scalar` so they work under both `double` (sim)
 and `ceres::Jet<double, N>` (autodiff Jacobians for the EKF). Set
 `craft.scalar_templated = True` to opt in; the codegen emits the craft as a
 class template with a `using FooCraft = FooCraftT<Real>` alias. Required to
 plug into `manta::estimation::CraftEKF<MyCraftT, MeasDim>`.
+
+For Jet-templated parts that query a Field, use
+`fields::state_at_templated<Scalar>(field, pos)` (already wired into
+`Mass`, `PointBuoy`, `Magnetometer`) — Real-Scalar takes the cast-only
+fast path; Jet-Scalar finite-diffs through the field's spatial gradient
+so EKF / system-ID Jacobians capture `∂g/∂pos` for orbital regimes.
 
 ### Estimators
 Two flavors share an API:
@@ -177,30 +244,31 @@ The codegen has two output modes:
 
 - **`--workflow binary`** — additionally emits a complete `<name>_main.cpp`
   with Zenoh I/O wired through `craft.bindings`. Used by ex0, ex1, ex4,
-  ex5, ex9.
+  ex5, ex9, ex10, ex11.
 
 ## Examples
 
 | Example | Workflow | Demonstrates |
 |--|--|--|
 | ex0 | binary  | 6-thruster free-flight, zero gravity |
-| ex1 | binary  | 1km circular orbit, point gravity, 200× sim rate |
-| ex2 | library | Quadcopter X-config, 4 PropThrusters, hand-tuned PIDs |
-| ex3 | library | TVC rocket hopper, 2-axis gimbaled engine |
+| ex1 | binary  | 1km circular orbit, point gravity (synced over Zenoh) |
+| ex2 | library | Quadcopter X-config, 4× Thruster1 with reaction torque |
+| ex3 | library | TVC rocket hopper, yaw-motor → pitch-motor → engine stack |
 | ex4 | binary  | Reaction wheel — Motor + flywheel, conservation of L |
-| ex5 | binary  | Underwater sub on Earth: Hull + IMU + DVL + sea surface |
+| ex5 | binary  | Underwater sub on Earth: PointBuoy column + IMU + DVL |
 | ex6 | library | Sim + EKF side-by-side, Pattern A (matching part names) |
 | ex7 | library | Real-data-only EKF, fed from external Zenoh topics |
 | ex8 | library | Multi-craft swarm: 3 drones tethered in a chain |
 | ex9 | binary  | Minimal demo of the explicit Binding API |
 | ex10| binary  | Multi-craft codegen — two Crafts in one binary |
 | ex11| binary  | Codegen-driven Tether between two crafts |
+| sync_smoke | — | Round-trips a GravityField disturbance through real Zenoh |
 
 ## Building
 
 ```bash
 cmake -S . -B build && cmake --build build -j
-./build/tests/manta_tests
+ctest --test-dir build       # 220 cases (219 doctest + sync_smoke)
 ```
 
 Each example has a CMake target named after its directory (e.g. `ex5`).
@@ -210,11 +278,9 @@ binary over Zenoh.
 ## Status
 
 Early/active development. The public API is stable enough for examples
-ex0..ex10 to drive it without back-compat shims, but any of it can still
+ex0..ex11 to drive it without back-compat shims, but any of it can still
 move. Notable items not yet built:
 
-- Distributed Field backend over Zenoh (cross-process FluidField sharing).
-  Held for design discussion.
 - A first-class system-ID API. The technique is demonstrated end-to-end
   in `tests/test_system_id.cpp` (mass fit + drag-coefficient fit on
   Surface1), but is not yet wrapped in a `ParameterFit<MyCraftT, NParams>`
@@ -222,9 +288,12 @@ move. Notable items not yet built:
 - ex8's hand-written 3-drone tether chain has not yet been migrated to
   the codegen-driven Tether API (ex11 demonstrates the pattern; ex8
   works fine as-is).
+- Per-disturbance exact `state_at_jet` opt-in. Today the templated
+  field query falls back to finite-diff for Jet scalars; an analytic
+  override slot on Disturbance can be added when a consumer wants it.
 
 ## Design docs
 
 `prompts/` holds design discussions on planet anchoring, estimation
-workflows, telemetry codec choice (JSON vs binary), and other decisions
-the code reflects but doesn't explain in line.
+workflows, telemetry codec choice, the disturbance redesign, and other
+decisions the code reflects but doesn't explain in line.
