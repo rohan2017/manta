@@ -8,10 +8,11 @@ data fed via Zenoh — typical robot deployment shape:
                               publishes  manta/ex6/estimate
 
 The Craft is `scalar_templated=True` so it plugs into
-`manta::estimation::CraftEKF<Ex6EstCraftT, MeasDim>`. Only the DVL is
-treated as a measurement update — the IMU's readings flow into
-`set_measurement` for the predict step but are not currently used as an
-EKF update (Phase-A codegen scope).
+`manta::estimation::CraftEKF<Ex6EstCraftT, MeasDim>`. Both the IMU and
+DVL drive measurement updates: the IMU under the no-net-force
+assumption (predicted accel_body = 0, gyro_body = state ω) and the DVL
+under R(q)^T · v_scene. Each sensor's `consume_fresh()` gates its own
+update inside the generated tick loop.
 
 Codegen:
     PYTHONPATH=python/manta_codegen/src \\
@@ -36,12 +37,12 @@ def make_config() -> MantaConfig:
 
     w = World("ex6_est").add_craft(c)
 
-    ekf = EKF(w, measurements=[dvl], process_noise=1e-6,
+    ekf = EKF(w, measurements=[imu, dvl], process_noise=1e-6,
               initial_covariance=1.0)
 
-    # Real-time sensor feed. IMU is fed in but does not currently drive an
-    # update (Phase-A: only DVL h(x) is implemented). DVL `consume_fresh()`
-    # gates the update step inside the generated tick loop.
+    # Real-time sensor feeds — each set_measurement call also flips the
+    # part's freshness bit, so the EKF's per-sensor `consume_fresh()` gate
+    # picks up the new reading on the next predict tick.
     subscribe(imu.set_measurement, "manta/ex6/imu")
     subscribe(dvl.set_measurement, "manta/ex6/dvl")
 

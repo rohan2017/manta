@@ -77,13 +77,15 @@ class _MeasFunctor:
 
     @classmethod
     def for_part(cls, part, ekf_var: str, part_var: str) -> "_MeasFunctor":
-        """Dispatch by part type. Phase-A only supports DVL.
+        """Dispatch by part type. Currently supported: DVL, IMU.
+        Magnetometer raises NotImplementedError (needs templated MagField
+        access, which the field machinery doesn't yet expose).
 
         `part_var` is the C++ accessor for the sensor (e.g. `ekf_0.craft().dvl()`).
         """
         cct = getattr(type(part), "cpp_class_template", "")
+        functor_name = f"_{ekf_var}_{part.name}_meas"
         if cct == "manta::parts::DVLT":
-            functor_name = f"_{ekf_var}_{part.name}_meas"
             body = (
                 f"// DVL: predicted body-frame velocity = R(q)^T * v_scene.\n"
                 f"struct {functor_name} {{\n"
@@ -101,10 +103,53 @@ class _MeasFunctor:
                 f"{part_var}.last_velocity().raw()(2)",
             ]
             return cls(n_floats=3, body=body, z_read=z_read)
+        if cct == "manta::parts::IMUT":
+            # IMU measurement model — free-flight / no-net-force assumption:
+            #   predicted accel_body = 0     (no thrusters / no gravity in
+            #                                 the est-side dynamics)
+            #   predicted gyro_body  = state.segment<3>(10)  (body ω is a
+            #                                                 direct state
+            #                                                 component)
+            # This is the right model when the est craft has only a Mass +
+            # IMU/DVL (the typical "drive-the-state-from-IMU" pattern). For
+            # crafts with explicit forces or gravity in the est dynamics,
+            # this h(x) underestimates accel and the user should override.
+            body = (
+                f"// IMU: predicted [accel_body=0; gyro_body=ω_body] under the\n"
+                f"// no-net-force / free-flight assumption (est dynamics has\n"
+                f"// no thrusters or gravity). gyro_body is a direct state\n"
+                f"// slice; accel_body is zero. For est crafts with active\n"
+                f"// forces, replace this functor.\n"
+                f"struct {functor_name} {{\n"
+                f"    template <class S>\n"
+                f"    Eigen::Matrix<S, 6, 1> operator()(const Eigen::Matrix<S, 13, 1>& x) const {{\n"
+                f"        Eigen::Matrix<S, 6, 1> z;\n"
+                f"        z(0) = S(0); z(1) = S(0); z(2) = S(0);\n"
+                f"        z(3) = x(10); z(4) = x(11); z(5) = x(12);\n"
+                f"        return z;\n"
+                f"    }}\n"
+                f"}};\n"
+            )
+            z_read = [
+                f"{part_var}.last_accel().raw()(0)",
+                f"{part_var}.last_accel().raw()(1)",
+                f"{part_var}.last_accel().raw()(2)",
+                f"{part_var}.last_gyro().raw()(0)",
+                f"{part_var}.last_gyro().raw()(1)",
+                f"{part_var}.last_gyro().raw()(2)",
+            ]
+            return cls(n_floats=6, body=body, z_read=z_read)
+        if cct == "manta::parts::MagnetometerT":
+            raise NotImplementedError(
+                f"EKF codegen: Magnetometer ({part.name!r}) as a measurement is "
+                f"not yet supported. h(x) needs to query the registered MagField "
+                f"in a templated context (R(q)^T · B(p)), and the field machinery "
+                f"isn't yet templated on the EKF's Jet scalar. Wire the "
+                f"magnetometer as an INPUT via subscribe(mag.set_measurement, ...) "
+                f"in the meantime.")
         raise NotImplementedError(
-            f"EKF codegen phase A: only DVL is supported as a measurement; "
-            f"got {type(part).__name__} ({part.name!r}). "
-            f"IMU/Magnetometer measurement-update support lands in a follow-up.")
+            f"EKF codegen: no measurement-functor template for "
+            f"{type(part).__name__} ({part.name!r}, cpp_class_template={cct!r}).")
 
     def functor_typename(self, ekf_var: str, part_name: str) -> str:
         return f"_{ekf_var}_{part_name}_meas"
@@ -115,6 +160,10 @@ class _MeasFunctor:
         if cct == "manta::parts::DVLT":
             s = float(getattr(part, "velocity_sigma", 0.0))
             return [s * s, s * s, s * s]
+        if cct == "manta::parts::IMUT":
+            sa = float(getattr(part, "accel_sigma", 0.0))
+            sg = float(getattr(part, "gyro_sigma", 0.0))
+            return [sa * sa, sa * sa, sa * sa, sg * sg, sg * sg, sg * sg]
         raise NotImplementedError(cct)
 
 
