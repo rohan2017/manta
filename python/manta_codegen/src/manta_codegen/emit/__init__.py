@@ -265,12 +265,30 @@ def _emit_filter_target(target, filter_obj, world, out_dir: Path,
 def _emit_sim_plus_filter_target(target, sim_world: World, filter_obj,
                                  out_dir: Path, workflow: str,
                                  kind: str = "ekf") -> None:
-    """Emit per-craft + main for a Target whose drives = [sim_world, filter].
+    """Emit per-craft + sub-harnesses + composed harness for a Target whose
+    drives = [sim_world, filter]. File layout (workflow=binary):
 
-    `kind` selects EKF vs UKF. File layout is identical between the two —
-    only the unified _main.cpp differs (filter wrapper type + ctor args).
+      Per-craft (both worlds):
+        <craft>_craft.hpp/.cpp/_telemetry.hpp
+
+      Sim sub-harness:
+        <sim_world>.hpp/.cpp        (no _main.cpp — composed owns main)
+
+      Filter sub-harness:
+        <filter_world>.hpp/.cpp     (no _main.cpp)
+
+      Composed harness:
+        <target>.hpp/.cpp/_main.cpp
+
+      Target-level:
+        <target>_config.h           (union of fields across both worlds)
+        <target>.cmake              (SOURCES = all .cpps; binary auto-emits
+                                     add_executable(<target>))
     """
-    from .sim_ekf_main import emit_sim_plus_ekf_main_cpp
+    from .main import emit_world_hpp, emit_world_cpp
+    from .ekf_main import emit_filter_hpp, emit_filter_cpp
+    from .sim_ekf_main import (emit_composed_hpp, emit_composed_cpp,
+                                emit_composed_main_cpp)
 
     if workflow not in ("library", "binary"):
         raise ValueError(
@@ -308,17 +326,38 @@ def _emit_sim_plus_filter_target(target, sim_world: World, filter_obj,
         files[f"{n}_craft.cpp"] = emit_craft_cpp(craft)
         files[f"{n}_telemetry.hpp"] = emit_telemetry_hpp(craft)
 
-    # Target-level files use the target name (not a world name) so the
-    # cmake target / config.h are addressable from the user's CMakeLists.
-    # The two worlds share the same feature-test macro set; we union their
-    # registered fields by passing a synthetic world to emit_config_h.
+    # Sub-harnesses + composed harness (binary workflow only). Library
+    # workflow stays craft-only so the user can write their own main.
+    if workflow == "binary":
+        files[f"{sim_world.name}.hpp"]    = emit_world_hpp(sim_world)
+        files[f"{sim_world.name}.cpp"]    = emit_world_cpp(sim_world)
+        files[f"{filter_obj.world.name}.hpp"] = emit_filter_hpp(
+            target, filter_obj, kind=kind)
+        files[f"{filter_obj.world.name}.cpp"] = emit_filter_cpp(
+            target, filter_obj, kind=kind)
+        files[f"{target.name}.hpp"]      = emit_composed_hpp(
+            target, sim_world, filter_obj)
+        files[f"{target.name}.cpp"]      = emit_composed_cpp(
+            target, sim_world, filter_obj, kind=kind)
+        files[f"{target.name}_main.cpp"] = emit_composed_main_cpp(target)
+
+    # Union config.h + cmake fragment named after the Target so the user's
+    # CMakeLists addresses one entity. The cmake fragment's SOURCES list
+    # includes every .cpp the build needs to link.
     union = _union_world_for_config(sim_world, filter_obj.world, target.name)
     files[f"{target.name}_config.h"]   = emit_config_h(union)
     files[f"{target.name}.cmake"]      = emit_cmake_fragment(
-        union, workflow=workflow, multi=len(unique_crafts) > 1)
-    if workflow == "binary":
-        files[f"{target.name}_main.cpp"] = emit_sim_plus_ekf_main_cpp(
-            target, sim_world, filter_obj, kind=kind)
+        union, workflow=workflow,
+        multi=len(unique_crafts) > 1,
+        composed_extra_cpps=(
+            [f"{sim_world.name}.cpp", f"{filter_obj.world.name}.cpp",
+             f"{target.name}.cpp"]
+            if workflow == "binary" else []),
+        composed_extra_hpps=(
+            [f"{sim_world.name}.hpp", f"{filter_obj.world.name}.hpp",
+             f"{target.name}.hpp"]
+            if workflow == "binary" else []),
+    )
 
     for filename, contents in files.items():
         (out_dir / filename).write_text(contents)

@@ -410,7 +410,13 @@ def emit_world_cpp(world: World) -> str:
     ]
 
     # Connect steps run after w.update() so propagated values are fresh.
+    # Only intra-world connects belong here — cross-world ones (e.g. ex5's
+    # sim.dvl → est.dvl) defer to a containing composed harness, which
+    # walks both worlds' connection lists.
+    intra_world_ids = {id(e.craft) for e in world.crafts}
     for conn in world.connections:
+        if id(conn.sink.craft_ref) not in intra_world_ids:
+            continue   # cross-world; defer to outer composed harness
         _emit_connection_step(lines, conn, craft_index_by_id, world)
 
     # Decimated publish.

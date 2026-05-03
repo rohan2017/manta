@@ -22,10 +22,21 @@ from __future__ import annotations
 from ..core import World
 
 
-def emit_cmake_fragment(world: World, workflow: str, multi: bool = False) -> str:
+def emit_cmake_fragment(world: World, workflow: str, multi: bool = False,
+                        composed_extra_cpps: list[str] | None = None,
+                        composed_extra_hpps: list[str] | None = None) -> str:
     """Emit the CMake fragment for a World. The `multi` flag is informational —
-    the per-Craft file list is computed from world.crafts directly."""
+    the per-Craft file list is computed from world.crafts directly.
+
+    `composed_extra_cpps` / `composed_extra_hpps` are extra source/header
+    filenames (relative to the generated dir) that get appended to the
+    SOURCES / HEADERS lists. Used by the sim+filter Target emit to
+    include the sub-harness pairs and the composed harness pair without
+    them being conflated with the per-craft ones.
+    """
     name = world.name
+    composed_extra_cpps = composed_extra_cpps or []
+    composed_extra_hpps = composed_extra_hpps or []
     # One unique-Craft .cpp/.hpp pair per generated craft.
     seen: set[int] = set()
     unique_crafts: list[str] = []
@@ -44,11 +55,16 @@ def emit_cmake_fragment(world: World, workflow: str, multi: bool = False) -> str
     for c in unique_crafts:
         lines.append(f"    ${{manta_{name}_DIR}}/{c}_craft.cpp")
     if workflow == "binary":
-        # World harness body (setup/tick + anonymous-namespace Zenoh
-        # state) + thin main. Library workflow leaves these out — users
-        # who want the harness should re-emit with --workflow binary.
-        lines.append(f"    ${{manta_{name}_DIR}}/{name}.cpp")
-        lines.append(f"    ${{manta_{name}_DIR}}/{name}_main.cpp")
+        if composed_extra_cpps:
+            # Composed sim+filter Target: sub-harness .cpps + composed .cpp
+            # + composed _main.cpp are passed in explicitly.
+            for f in composed_extra_cpps:
+                lines.append(f"    ${{manta_{name}_DIR}}/{f}")
+            lines.append(f"    ${{manta_{name}_DIR}}/{name}_main.cpp")
+        else:
+            # Plain (single-world) harness: <name>.cpp + <name>_main.cpp.
+            lines.append(f"    ${{manta_{name}_DIR}}/{name}.cpp")
+            lines.append(f"    ${{manta_{name}_DIR}}/{name}_main.cpp")
     lines += [
         ")",
         "",
@@ -57,7 +73,11 @@ def emit_cmake_fragment(world: World, workflow: str, multi: bool = False) -> str
     for c in unique_crafts:
         lines.append(f"    ${{manta_{name}_DIR}}/{c}_craft.hpp")
     if workflow == "binary":
-        lines.append(f"    ${{manta_{name}_DIR}}/{name}.hpp")
+        if composed_extra_hpps:
+            for f in composed_extra_hpps:
+                lines.append(f"    ${{manta_{name}_DIR}}/{f}")
+        else:
+            lines.append(f"    ${{manta_{name}_DIR}}/{name}.hpp")
     lines += [
         f"    ${{manta_{name}_DIR}}/{name}_config.h",
         ")",
