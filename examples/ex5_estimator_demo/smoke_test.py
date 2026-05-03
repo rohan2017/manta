@@ -44,7 +44,7 @@ def main() -> int:
     session = zenoh.open(cfg)
     sub_t = session.declare_subscriber("manta/ex5/state",    on_truth)
     sub_e = session.declare_subscriber("manta/ex5/estimate", on_estimate)
-    pub   = session.declare_publisher("manta/ex5/thrust/cmd")
+    pub   = session.declare_publisher("manta/ex5/cmd")
 
     print("waiting up to 3s for first messages...")
     for _ in range(60):
@@ -67,9 +67,11 @@ def main() -> int:
     truth = TRUTH[-1]
     est   = ESTIMATE[-1]
 
-    # Both should report at roughly the same time.
-    print(f"truth t={truth['t']:.2f}  v={truth['v']}")
-    print(f"est   t={est['t']:.2f}    v={est['v']}    P_diag={est['P']}")
+    # ex5 publishes:
+    #   manta/ex5/state    -> {p, q, v, w}            (truth from sim craft)
+    #   manta/ex5/estimate -> {p, v, p_stddev, v_stddev}  (EKF state slices)
+    print(f"truth p={truth['p']} v={truth['v']}")
+    print(f"est   p={est['p']}   v={est['v']}   v_stddev={est['v_stddev']}")
 
     failures = 0
     for axis in range(3):
@@ -77,12 +79,13 @@ def main() -> int:
         if abs(diff) > 0.10:
             print(f"FAIL: estimate v[{axis}] off by {diff:+.4f}", file=sys.stderr)
             failures += 1
-    # Velocity covariance entries are P[3..5]; should be well below the
-    # initial 1.0 (identity).
-    for i in (3, 4, 5):
-        if est["P"][i] > 0.1:
-            print(f"FAIL: P[{i}] = {est['P'][i]:.4f} did not shrink",
-                  file=sys.stderr)
+    # Velocity stddev should have shrunk below sqrt(initial covariance) = 1.
+    # ~0.32 corresponds to variance 0.1 — generous bound, EKF should beat it
+    # easily once the IMU + DVL updates start firing.
+    for axis in (0, 1, 2):
+        if est["v_stddev"][axis] > 0.32:
+            print(f"FAIL: v_stddev[{axis}] = {est['v_stddev'][axis]:.4f} "
+                  "did not shrink", file=sys.stderr)
             failures += 1
 
     sub_t.undeclare()

@@ -51,7 +51,7 @@ def main() -> int:
         time.sleep(0.05)
     if not LATEST:
         fake.terminate()
-        print("FAIL: no estimate stream from ex7. Is the binary running?",
+        print("FAIL: no estimate stream from ex6. Is the binary running?",
               file=sys.stderr)
         return 1
 

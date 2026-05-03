@@ -1,4 +1,4 @@
-"""Synthetic sensor publisher for ex7 (Pattern C).
+"""Synthetic sensor publisher for ex6 (Pattern C).
 
 Pretends to be a robot's sensor stack. Publishes:
   - manta/ex6/imu  : 6 floats [ax, ay, az, gx, gy, gz]  (250 Hz)
