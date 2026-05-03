@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from .._format import cpp_float as _f
 from ..signal import Binding, accessor_for
-from ._util import GENERATED_BANNER, class_name_for_craft
+from ._util import GENERATED_BANNER, CPP_INCLUDE_GUARD, class_name_for_craft
 from .main import (
     _emit_binding_subscriber,
     _emit_field_sync,
@@ -542,6 +542,562 @@ def emit_ukf_main_cpp(target, ukf) -> str:
     """Emit main.cpp for a Target whose driveable is a UKF descriptor.
     Thin wrapper that forwards to the shared filter emitter."""
     return emit_ekf_main_cpp(target, ukf, kind="ukf")
+
+
+# ---------------------------------------------------------------------------
+# Filter-harness split emit (Phase 2 of the harness redesign).
+#
+# A Filter Target now produces three artifacts:
+#
+#   <world>.hpp  — public surface in `namespace manta_gen::<world>`:
+#                  filter wrapper instance + field instances + DT
+#                  constants + setup/tick/shutdown declarations.
+#
+#   <world>.cpp  — definitions + setup/tick/shutdown bodies.
+#                  Anonymous namespace owns the Zenoh session, per-
+#                  binding state, R blocks, publish-decimation counter.
+#                  Per-sensor measurement functors live at file scope
+#                  (above the anonymous namespace) so `tick()` can name
+#                  their types without exposing them in the header.
+#
+#   <world>_main.cpp — thin pacing loop on top of setup/tick/shutdown.
+
+def _filter_collect(target, filter_obj, kind):
+    """Gather the per-target metadata both emit_filter_hpp and
+    emit_filter_cpp need: unique crafts, the C++ wrapper-class string,
+    a list of (part, _MeasFunctor) measurement specs, the meas_dim,
+    the bind-id assignments, and the field-sync indices."""
+    world = filter_obj.world
+    if not world.crafts:
+        raise RuntimeError(
+            f"emit_{kind}_main_cpp: filter's wrapped world has no crafts")
+    if len(world.crafts) > 1:
+        raise NotImplementedError(
+            f"emit_{kind}_main_cpp: only single-craft worlds are supported in v1.")
+    if world.planets:
+        raise NotImplementedError(
+            f"emit_{kind}_main_cpp: planets in a filter-wrapped world aren't "
+            f"supported yet (CraftEKF/CraftUKFOf don't own a Scene). "
+            f"Register fields directly via World.fields for now.")
+
+    unique_crafts = _world_unique_crafts(world)
+    primary = unique_crafts[0]
+    primary_class = _filter_concrete_craft_type(kind, primary)
+    templated_craft = bool(getattr(primary, "scalar_templated", False))
+
+    filter_var = filter_obj.cpp_var_name()
+    craft_var = f"{filter_var}.craft()"
+    mag_field_var = _first_mag_field_var(world)
+
+    meas_specs: list[tuple[object, _MeasFunctor]] = []
+    for m in filter_obj.measurements:
+        part_var = f"{craft_var}.{m.name}()"
+        spec = _MeasFunctor.for_part(m, filter_var, part_var,
+                                     mag_field_var=mag_field_var)
+        meas_specs.append((m, spec))
+
+    meas_dim = sum(s.n_floats for _, s in meas_specs) if meas_specs else 1
+    meas_dim = max(meas_dim, 1)
+
+    filter_header_inc, filter_ctor = _filter_construction(
+        kind, filter_obj, primary_class, filter_var, meas_dim)
+
+    bind_assignments = list(enumerate(world.bindings))
+    sync_field_idxs = [i for i, f in enumerate(world.fields)
+                       if getattr(f, "synchronized", False)]
+
+    return {
+        "world":             world,
+        "name":              world.name,
+        "kind":              kind,
+        "unique_crafts":     unique_crafts,
+        "primary_class":     primary_class,
+        "templated_craft":   templated_craft,
+        "filter_var":        filter_var,
+        "craft_var":         craft_var,
+        "filter_header_inc": filter_header_inc,
+        "filter_ctor":       filter_ctor,
+        "meas_specs":        meas_specs,
+        "meas_dim":          meas_dim,
+        "bind_assignments":  bind_assignments,
+        "sync_field_idxs":   sync_field_idxs,
+    }
+
+
+def emit_filter_hpp(target, filter_obj, kind: str = "ekf") -> str:
+    ctx = _filter_collect(target, filter_obj, kind)
+    name           = ctx["name"]
+    unique_crafts  = ctx["unique_crafts"]
+    filter_var     = ctx["filter_var"]
+    filter_inc     = ctx["filter_header_inc"]
+    filter_ctor    = ctx["filter_ctor"]
+    primary_class  = ctx["primary_class"]
+    meas_dim       = ctx["meas_dim"]
+    world          = ctx["world"]
+
+    # The filter wrapper's full type, taken from the ctor line. The ctor
+    # line is "manta::estimation::CraftXxx<...> filter_var(...);" — strip
+    # the var/initializer to recover the type for the extern decl.
+    filter_type = filter_ctor.split(" " + filter_var, 1)[0].strip()
+
+    lines: list[str] = [
+        GENERATED_BANNER, CPP_INCLUDE_GUARD, "",
+        filter_inc,
+    ]
+    for c in unique_crafts:
+        lines.append(f'#include "{c.name}_craft.hpp"')
+    seen: set[str] = set()
+    for f in world.fields:
+        if f.cpp_header not in seen:
+            seen.add(f.cpp_header)
+            lines.append(f'#include "{f.cpp_header}"')
+    lines += [
+        "",
+        f"namespace manta_gen::{name} {{",
+        "",
+        f"// Sim-tick parameters, frozen at codegen time.",
+        f"inline constexpr float DT             = {_f(target.dt)};",
+        f"inline constexpr float SIM_RATE_MULT  = {_f(target.sim_rate_mult)};",
+        "",
+        f"// {kind.upper()} wrapper. Owns the est-side craft pair (CraftEKF) or",
+        f"// single craft (CraftUKFOf) plus the {meas_dim}-dim measurement",
+        f"// state. Default-constructed; setup() initializes state + cov.",
+        f"extern {filter_type} {filter_var};",
+        "",
+    ]
+    if world.fields:
+        lines.append("// Registered fields. setup() populates disturbances + registers.")
+        for i, f in enumerate(world.fields):
+            lines.append(f"extern {f.cpp_class} field_{i};")
+        lines.append("")
+    lines += [
+        "// One-time initialization. Sets the filter's initial state +",
+        "// covariance, registers fields, opens Zenoh + declares pubs/subs.",
+        "void setup();",
+        "",
+        f"// One step: applies in-bindings, runs predict(), then for each",
+        f"// measurement sensor with consume_fresh()==true runs update_n<N>().",
+        f"// On every kPubEvery=20 ticks, publishes out-bindings.",
+        "void tick();",
+        "",
+        "// Tear down Zenoh state before main() returns. Required because",
+        "// destroying the Zenoh session at static-destruction time blows up",
+        "// inside Tokio's TLS.",
+        "void shutdown();",
+        "",
+        f"}}  // namespace manta_gen::{name}",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
+    ctx = _filter_collect(target, filter_obj, kind)
+    name             = ctx["name"]
+    filter_var       = ctx["filter_var"]
+    craft_var        = ctx["craft_var"]
+    filter_ctor      = ctx["filter_ctor"]
+    meas_specs       = ctx["meas_specs"]
+    bind_assignments = ctx["bind_assignments"]
+    sync_field_idxs  = ctx["sync_field_idxs"]
+    templated_craft  = ctx["templated_craft"]
+    world            = ctx["world"]
+
+    # Strip the `var(args);` suffix off the ctor line to get the bare type;
+    # we'll emit the full ctor line as the storage definition below.
+    lines: list[str] = [
+        GENERATED_BANNER, "",
+        f'#include "{name}.hpp"',
+        "",
+        "#include <cstdint>",
+        "#include <cstdio>",
+        "#include <cstdlib>",
+        "#include <cstring>",
+        "#include <mutex>",
+        "#include <optional>",
+        "#include <string>",
+        "#include <string_view>",
+        "#include <vector>",
+        "",
+        "#include <Eigen/Core>",
+        "#include <Eigen/Geometry>",
+        "#include <zenoh.hxx>",
+        "",
+    ]
+
+    # Per-sensor measurement functors at file scope (above any namespace).
+    for _, spec in meas_specs:
+        for ln in spec.body.rstrip("\n").split("\n"):
+            lines.append(ln)
+        lines.append("")
+
+    # Definitions inside the namespace.
+    lines += [
+        f"namespace manta_gen::{name} {{",
+        "",
+        # The ctor line produced by _filter_construction is the full
+        # definition (`manta::...::CraftXxx<...> filter_var(args);`).
+        filter_ctor,
+    ]
+    for i, f in enumerate(world.fields):
+        construction = f.emit_construction(f"field_{i}")
+        lines.append(construction)
+    lines += [
+        "",
+        f"}}  // namespace manta_gen::{name}",
+        "",
+    ]
+
+    # Anonymous-namespace file-private state.
+    lines += [
+        "namespace {",
+        "",
+        "bool parse_float_array(std::string_view s, std::vector<float>& out) {",
+        "    out.clear();",
+        "    auto lb = s.find('['); auto rb = s.rfind(']');",
+        "    if (lb == std::string_view::npos || rb == std::string_view::npos || rb <= lb) return false;",
+        "    std::string body(s.substr(lb + 1, rb - lb - 1));",
+        "    char* p = body.data(); char* end = body.data() + body.size();",
+        "    while (p < end) {",
+        "        while (p < end && (*p == ' ' || *p == ',' || *p == '\\t' || *p == '\\n')) ++p;",
+        "        if (p >= end) break;",
+        "        char* next = nullptr;",
+        "        float v = std::strtof(p, &next);",
+        "        if (next == p) return false;",
+        "        out.push_back(v);",
+        "        p = next;",
+        "    }",
+        "    return true;",
+        "}",
+        "",
+        "std::optional<zenoh::Session> g_session;",
+        "",
+    ]
+
+    # State / process-noise / R blocks.
+    lines += [
+        f"using EkfT = decltype(manta_gen::{name}::{filter_var});",
+        "EkfT::StateCov g_Q = EkfT::StateCov::Identity() * "
+        f"{_f(filter_obj.process_noise)};",
+        "",
+    ]
+    for m, spec in meas_specs:
+        diag = spec.sigma_squared_diag(m)
+        n = spec.n_floats
+        rname = f"R_{m.name}"
+        lines.append(f"Eigen::Matrix<double, {n}, {n}> {rname} = "
+                     f"Eigen::Matrix<double, {n}, {n}>::Zero();")
+        # Initializer is in setup() since the diagonal sigmas are constants.
+
+    if meas_specs:
+        lines.append("")
+
+    for bid, b in bind_assignments:
+        if b.direction == "in":
+            lines += [
+                f"std::mutex bind_{bid}_mtx;",
+                f"std::vector<float> bind_{bid}_payload;",
+                f"std::optional<zenoh::Subscriber<void>> bind_{bid}_sub;",
+            ]
+        else:
+            lines.append(f"std::optional<zenoh::Publisher> pub_{bid};")
+    if bind_assignments:
+        lines.append("")
+
+    for i in sync_field_idxs:
+        lines += [
+            f"std::optional<zenoh::Publisher>          pub_field_{i};",
+            f"std::optional<zenoh::Subscriber<void>>   sub_field_{i};",
+        ]
+    if sync_field_idxs:
+        lines.append("")
+
+    lines += [
+        "int g_pub_decim = 0;",
+        "constexpr int kPubEvery = 20;  // ~50 Hz publish",
+        "",
+        "}  // anonymous namespace",
+        "",
+    ]
+
+    # ---- setup() ----
+    lines += [
+        f"namespace manta_gen::{name} {{",
+        "",
+        "void setup() {",
+        f"    using EkfT = decltype({filter_var});",
+        "    EkfT::StateVec x0 = EkfT::StateVec::Zero();",
+        "    x0(3) = 1.0;     // identity quaternion w",
+        f"    EkfT::StateCov P0 = EkfT::StateCov::Identity() * "
+        f"{_f(filter_obj.initial_covariance)};",
+        f"    {filter_var}.set_state(x0);",
+        f"    {filter_var}.set_covariance(P0);",
+        "",
+    ]
+
+    # Initialize R diag entries inside setup() (file-private state init).
+    for m, spec in meas_specs:
+        diag = spec.sigma_squared_diag(m)
+        rname = f"R_{m.name}"
+        for i, v in enumerate(diag):
+            lines.append(f"    {rname}({i}, {i}) = {_f(v)};")
+    if meas_specs:
+        lines.append("")
+
+    # Field setup: extras + register on the filter wrapper.
+    for i, f in enumerate(world.fields):
+        var = f"field_{i}"
+        for stmt in (f.emit_extra_setup(var) if hasattr(f, "emit_extra_setup") else []):
+            lines.append(f"    {stmt}")
+        lines.append(f"    {filter_var}.register_field({var});")
+        for base in getattr(f, "register_as", []) or []:
+            lines.append(f"    {filter_var}.template register_field<{base}>({var});")
+
+    lines += [
+        "",
+        "    g_session.emplace(zenoh::Session::open(zenoh::Config::create_default()));",
+        "",
+    ]
+
+    for bid, b in bind_assignments:
+        if b.direction == "in":
+            _emit_subscriber_setup(lines, bid, b)
+        else:
+            lines.append(
+                f"    pub_{bid}.emplace(g_session->declare_publisher("
+                f"zenoh::KeyExpr({_quote(b.topic)})));")
+
+    for i in sync_field_idxs:
+        topic = world.fields[i].sync_topic or f"manta/{name}/field_{i}/disturbance"
+        _emit_field_sync_setup(lines, i, topic, world.fields[i].cpp_class)
+
+    lines += ["}", ""]
+
+    # ---- tick() ----
+    lines += ["void tick() {"]
+
+    # Apply in-bindings.
+    for bid, b in bind_assignments:
+        if b.direction == "in":
+            _emit_input_binding_apply_indented(
+                lines, bid, b, craft_var, filter_var,
+                templated_craft=templated_craft, indent="    ")
+
+    lines += [
+        "",
+        f"    {filter_var}.predict(DT, g_Q);",
+        "",
+    ]
+
+    for m, spec in meas_specs:
+        rname = f"R_{m.name}"
+        part_acc = f"{craft_var}.{m.name}()"
+        spec.emit_update_block(lines, filter_var, part_acc, rname, indent="    ")
+    if meas_specs:
+        lines.append("")
+
+    if any(b.direction == "out" for _, b in bind_assignments):
+        lines += [
+            "    if (++g_pub_decim >= kPubEvery) {",
+            "        g_pub_decim = 0;",
+        ]
+        for bid, b in bind_assignments:
+            if b.direction == "out":
+                _emit_output_binding_publish_indented(
+                    lines, bid, b, craft_var, filter_var, indent="        ")
+        lines.append("    }")
+
+    lines += ["}", ""]
+
+    # ---- shutdown() ----
+    lines += [
+        "void shutdown() {",
+    ]
+    for bid, b in bind_assignments:
+        if b.direction == "in":
+            lines.append(f"    bind_{bid}_sub.reset();")
+        else:
+            lines.append(f"    pub_{bid}.reset();")
+    for i in sync_field_idxs:
+        lines.append(f"    sub_field_{i}.reset();")
+        lines.append(f"    pub_field_{i}.reset();")
+    lines += [
+        "    g_session.reset();",
+        "}",
+        "",
+        f"}}  // namespace manta_gen::{name}",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def emit_filter_main_cpp(target, filter_obj, kind: str = "ekf") -> str:
+    name = filter_obj.world.name
+    n_meas = len(filter_obj.measurements)
+    n_bindings = len(filter_obj.world.bindings)
+    kind_label = kind.upper()
+
+    return "\n".join([
+        GENERATED_BANNER, "",
+        "#include <atomic>",
+        "#include <chrono>",
+        "#include <csignal>",
+        "#include <cstdint>",
+        "#include <cstdio>",
+        "#include <thread>",
+        "",
+        f'#include "{name}.hpp"',
+        "",
+        "namespace {",
+        "std::atomic<bool> g_run{true};",
+        "void on_signal(int) { g_run.store(false); }",
+        "}",
+        "",
+        "int main() {",
+        "    std::signal(SIGINT,  on_signal);",
+        "    std::signal(SIGTERM, on_signal);",
+        "",
+        f"    manta_gen::{name}::setup();",
+        f'    std::printf("{target.name}: ready ({kind_label}). 1 craft, '
+        f'{n_bindings} binding(s), {n_meas} measurement sensor(s).\\n");',
+        "",
+        f"    constexpr float WALL_PERIOD = manta_gen::{name}::DT "
+        f"/ manta_gen::{name}::SIM_RATE_MULT;",
+        "    auto next = std::chrono::steady_clock::now();",
+        "    const auto period = std::chrono::microseconds(int64_t(WALL_PERIOD * 1e6));",
+        "",
+        "    while (g_run.load()) {",
+        f"        manta_gen::{name}::tick();",
+        "        next += period;",
+        "        std::this_thread::sleep_until(next);",
+        "    }",
+        "",
+        f'    std::printf("{target.name}: shutting down.\\n");',
+        f"    manta_gen::{name}::shutdown();",
+        "    return 0;",
+        "}",
+        "",
+    ])
+
+
+# ---------------------------------------------------------------------------
+# Indented-form binding helpers — the harness's setup()/tick() bodies are at
+# 4-space indentation rather than the 8-space the legacy main-in-main path
+# used. Existing _emit_input_binding_apply / _emit_output_binding_publish
+# stay unchanged for back-compat with ekf_main_cpp; these wrappers re-emit
+# at the new indentation.
+
+def _emit_input_binding_apply_indented(lines: list[str], i: int, b: Binding,
+                                       craft_var: str, ekf_var: str,
+                                       templated_craft: bool,
+                                       indent: str) -> None:
+    lines += [
+        f"{indent}{{ std::lock_guard<std::mutex> lk(bind_{i}_mtx);",
+        f"{indent}  if (bind_{i}_payload.size() >= {b.total_floats}) {{",
+    ]
+    cursor = 0
+    for member_name, sig in b.members.items():
+        n = sig.signal.n_floats
+        accessor = _accessor_for_ekf_or_craft(sig, craft_var, ekf_var)
+        v_subs = {f"v{k}": f"bind_{i}_payload[{cursor + k}]" for k in range(n)}
+        v_subs["accessor"] = accessor
+        stmt = sig.signal.cpp_write_stmt.format(**v_subs)
+        if templated_craft:
+            stmt = _double_qualify_partframe(stmt)
+        lines.append(f"{indent}      {stmt}    // member: {member_name}")
+        cursor += n
+    lines += [
+        f"{indent}      bind_{i}_payload.clear();",
+        f"{indent}  }} }}",
+    ]
+
+
+def _emit_output_binding_publish_indented(lines: list[str], i: int, b: Binding,
+                                          craft_var: str, ekf_var: str,
+                                          indent: str) -> None:
+    if b.encoding != "json":
+        raise NotImplementedError(
+            f"Binding {b.topic!r}: encoding {b.encoding!r} not supported.")
+    lines.append(f"{indent}{{ std::string _json = \"{{\";")
+    first_member = True
+    for member_name, sig in b.members.items():
+        n = sig.signal.n_floats
+        accessor = _accessor_for_ekf_or_craft(sig, craft_var, ekf_var)
+        if not first_member:
+            lines.append(f'{indent}  _json += ",";')
+        first_member = False
+        if n == 1:
+            cpp_expr = sig.signal.cpp_read_exprs[0].format(accessor=accessor)
+            lines.append(f'{indent}  _json += "\\"{member_name}\\":";')
+            lines.append(
+                f"{indent}  {{ char _b[32]; std::snprintf(_b, sizeof(_b), \"%g\", "
+                f"double({cpp_expr})); _json += _b; }}"
+            )
+        else:
+            lines.append(f'{indent}  _json += "\\"{member_name}\\":[";')
+            for k, expr in enumerate(sig.signal.cpp_read_exprs):
+                cpp_expr = expr.format(accessor=accessor)
+                sep = '","' if k > 0 else '""'
+                lines.append(
+                    f"{indent}  {{ char _b[32]; std::snprintf(_b, sizeof(_b), \"%s%g\", "
+                    f"{sep}, double({cpp_expr})); _json += _b; }}"
+                )
+            lines.append(f'{indent}  _json += "]";')
+    lines += [
+        f'{indent}  _json += "}}";',
+        f"{indent}  pub_{i}->put(zenoh::Bytes(_json));",
+        f"{indent}}}",
+    ]
+
+
+# Helpers shared with the World harness emit (reused via cross-module import
+# in __init__.py). Defined locally here too so this module is self-contained.
+def _emit_subscriber_setup(lines: list[str], i: int, b: Binding) -> None:
+    lines += [
+        f"    bind_{i}_sub.emplace(g_session->declare_subscriber(",
+        f"        zenoh::KeyExpr({_quote(b.topic)}),",
+        f"        [](const zenoh::Sample& s) {{",
+        f"            std::vector<float> v;",
+        f"            std::string payload(s.get_payload().as_string());",
+        f"            if (parse_float_array(payload, v) && v.size() >= {b.total_floats}) {{",
+        f"                std::lock_guard<std::mutex> lk(bind_{i}_mtx);",
+        f"                bind_{i}_payload = std::move(v);",
+        f"            }}",
+        f"        }}, zenoh::closures::none));",
+    ]
+
+
+def _emit_field_sync_setup(lines: list[str], i: int, topic: str, cpp_class: str) -> None:
+    lines += [
+        f"    pub_field_{i}.emplace(g_session->declare_publisher("
+        f"zenoh::KeyExpr({_quote(topic)})));",
+        f"    field_{i}.set_tx_hook(",
+        f"        [](std::uint16_t tag, const {cpp_class}::Params& params, int lifetime) {{",
+        f"            std::vector<std::uint8_t> buf;",
+        f"            buf.resize(2 + 2 + 4 + params.size());",
+        f"            std::uint16_t ver = 1;",
+        f"            std::memcpy(buf.data() + 0, &ver,      2);",
+        f"            std::memcpy(buf.data() + 2, &tag,      2);",
+        f"            std::memcpy(buf.data() + 4, &lifetime, 4);",
+        f"            std::memcpy(buf.data() + 8, params.data(), params.size());",
+        f"            pub_field_{i}->put(zenoh::Bytes(std::move(buf)));",
+        f"        }});",
+        f"    sub_field_{i}.emplace(g_session->declare_subscriber(",
+        f"        zenoh::KeyExpr({_quote(topic)}),",
+        f"        [](const zenoh::Sample& s) {{",
+        f"            auto payload = s.get_payload().as_vector();",
+        f"            if (payload.size() < 8 + {cpp_class}::kParamsBytes) return;",
+        f"            std::uint16_t ver = 0, tag = 0;",
+        f"            std::int32_t  lifetime = 0;",
+        f"            std::memcpy(&ver,      payload.data() + 0, 2);",
+        f"            std::memcpy(&tag,      payload.data() + 2, 2);",
+        f"            std::memcpy(&lifetime, payload.data() + 4, 4);",
+        f"            if (ver != 1) return;",
+        f"            {cpp_class}::Params p{{}};",
+        f"            std::memcpy(p.data(), payload.data() + 8, p.size());",
+        f"            field_{i}.receive(tag, p, lifetime);",
+        f"        }}, zenoh::closures::none));",
+    ]
 
 
 # ---------------------------------------------------------------------------

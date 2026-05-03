@@ -4,25 +4,20 @@ set(manta_ukf_smoke_DIR ${CMAKE_CURRENT_LIST_DIR})
 
 set(manta_ukf_smoke_SOURCES
     ${manta_ukf_smoke_DIR}/ukf_smoke_craft.cpp
+    ${manta_ukf_smoke_DIR}/ukf_smoke.cpp
     ${manta_ukf_smoke_DIR}/ukf_smoke_main.cpp
 )
 
 set(manta_ukf_smoke_HEADERS
     ${manta_ukf_smoke_DIR}/ukf_smoke_craft.hpp
+    ${manta_ukf_smoke_DIR}/ukf_smoke.hpp
     ${manta_ukf_smoke_DIR}/ukf_smoke_config.h
 )
 
 set(manta_ukf_smoke_CONFIG_INCLUDE "-include${manta_ukf_smoke_DIR}/ukf_smoke_config.h")
 
-# Helper: apply this world's config-header force-include + include path
-# to a target. The user calls this on whichever target builds the
-# generated source. Required because the feature-test macros must be
-# uniform across every TU of the binary that contains parts using them.
-function(manta_ukf_smoke_apply target)
-    target_include_directories(${target} PRIVATE ${manta_ukf_smoke_DIR})
-    target_compile_options(${target} PRIVATE "SHELL:-include ${manta_ukf_smoke_DIR}/ukf_smoke_config.h")
-endfunction()
-
+# Zenoh deps — the harness's <name>.cpp uses zenoh.hxx for bindings
+# (subscribers + publishers + field-sync). Fetched once per build.
 if(NOT TARGET zenohcxx::zenohc)
     include(FetchContent)
     set(_manta_zenoh_version "1.9.0")
@@ -50,6 +45,14 @@ if(NOT TARGET zenohcxx::zenohc)
     FetchContent_MakeAvailable(zenohcxx)
 endif()
 
+# Helper: apply this world's config-header force-include + include path
+# + manta + zenoh links to a target. The user calls this on whichever
+# target builds the generated source.
+function(manta_ukf_smoke_apply target)
+    target_include_directories(${target} PRIVATE ${manta_ukf_smoke_DIR})
+    target_compile_options(${target} PRIVATE "SHELL:-include ${manta_ukf_smoke_DIR}/ukf_smoke_config.h")
+    target_link_libraries(${target} PRIVATE manta::manta zenohcxx::zenohc)
+endfunction()
+
 add_executable(ukf_smoke ${manta_ukf_smoke_SOURCES})
-target_link_libraries(ukf_smoke PRIVATE manta::manta zenohcxx::zenohc)
 manta_ukf_smoke_apply(ukf_smoke)

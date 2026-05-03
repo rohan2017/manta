@@ -7,203 +7,33 @@
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <mutex>
-#include <string>
 #include <thread>
-#include <vector>
 
-#include <Eigen/Core>
-#include <Eigen/Geometry>
-#include <zenoh.hxx>
-
-#include "manta/estimation/craft_ukf.hpp"
-#include "ukf_smoke_craft.hpp"
+#include "ukf_smoke.hpp"
 
 namespace {
 std::atomic<bool> g_run{true};
 void on_signal(int) { g_run.store(false); }
-
-// Tiny float-array parser for command payloads.
-bool parse_float_array(std::string_view s, std::vector<float>& out) {
-    out.clear();
-    auto lb = s.find('['); auto rb = s.rfind(']');
-    if (lb == std::string_view::npos || rb == std::string_view::npos || rb <= lb) return false;
-    std::string body(s.substr(lb + 1, rb - lb - 1));
-    char* p = body.data(); char* end = body.data() + body.size();
-    while (p < end) {
-        while (p < end && (*p == ' ' || *p == ',' || *p == '\t' || *p == '\n')) ++p;
-        if (p >= end) break;
-        char* next = nullptr;
-        float v = std::strtof(p, &next);
-        if (next == p) return false;
-        out.push_back(v);
-        p = next;
-    }
-    return true;
 }
-}
-
-// IMU: predicted [accel_body=0; gyro_body=ω_body] under the
-// no-net-force / free-flight assumption (est dynamics has
-// no thrusters or gravity). gyro_body is a direct state
-// slice; accel_body is zero. For est crafts with active
-// forces, replace this functor.
-struct _ukf_0_imu_meas {
-    template <class S>
-    Eigen::Matrix<S, 6, 1> operator()(const Eigen::Matrix<S, 13, 1>& x) const {
-        Eigen::Matrix<S, 6, 1> z;
-        z(0) = S(0); z(1) = S(0); z(2) = S(0);
-        z(3) = x(10); z(4) = x(11); z(5) = x(12);
-        return z;
-    }
-};
-
-// DVL: predicted body-frame velocity = R(q)^T * v_scene.
-struct _ukf_0_dvl_meas {
-    template <class S>
-    Eigen::Matrix<S, 3, 1> operator()(const Eigen::Matrix<S, 13, 1>& x) const {
-        Eigen::Quaternion<S> q(x(3), x(4), x(5), x(6));
-        Eigen::Matrix<S, 3, 1> v_scene(x(7), x(8), x(9));
-        return q.conjugate() * v_scene;
-    }
-};
 
 int main() {
     std::signal(SIGINT,  on_signal);
     std::signal(SIGTERM, on_signal);
 
-    constexpr float DT             = 0.001f;
-    constexpr float SIM_RATE_MULT  = 1.0f;
-    const     float WALL_PERIOD    = DT / SIM_RATE_MULT;
-
-    manta::estimation::CraftUKFOf<UkfSmokeCraft, 9> ukf_0(0.001f, 2.0f, 0.0f);
-
-    using EkfT = decltype(ukf_0);
-    EkfT::StateVec x0 = EkfT::StateVec::Zero();
-    x0(3) = 1.0;     // identity quaternion w
-    EkfT::StateCov P0 = EkfT::StateCov::Identity() * 1.0f;
-    EkfT::StateCov Q  = EkfT::StateCov::Identity() * 1e-06f;
-    ukf_0.set_state(x0);
-    ukf_0.set_covariance(P0);
-
-    Eigen::Matrix<double, 6, 6> R_imu = Eigen::Matrix<double, 6, 6>::Zero();
-    R_imu(0, 0) = 0.0025f;
-    R_imu(1, 1) = 0.0025f;
-    R_imu(2, 2) = 0.0025f;
-    R_imu(3, 3) = 2.5e-05f;
-    R_imu(4, 4) = 2.5e-05f;
-    R_imu(5, 5) = 2.5e-05f;
-
-    Eigen::Matrix<double, 3, 3> R_dvl = Eigen::Matrix<double, 3, 3>::Zero();
-    R_dvl(0, 0) = 0.0004f;
-    R_dvl(1, 1) = 0.0004f;
-    R_dvl(2, 2) = 0.0004f;
-
-    zenoh::Config cfg = zenoh::Config::create_default();
-    auto session = zenoh::Session::open(std::move(cfg));
-
-    std::mutex bind_0_mtx;
-    std::vector<float> bind_0_payload;
-    auto bind_0_sub = session.declare_subscriber(
-        zenoh::KeyExpr("manta/ukf_smoke/imu"),
-        [&](const zenoh::Sample& s) {
-            std::vector<float> v;
-            std::string payload(s.get_payload().as_string());
-            if (parse_float_array(payload, v) && v.size() >= 6) {
-                std::lock_guard<std::mutex> lk(bind_0_mtx);
-                bind_0_payload = std::move(v);
-            }
-        }, zenoh::closures::none);
-    std::mutex bind_1_mtx;
-    std::vector<float> bind_1_payload;
-    auto bind_1_sub = session.declare_subscriber(
-        zenoh::KeyExpr("manta/ukf_smoke/dvl"),
-        [&](const zenoh::Sample& s) {
-            std::vector<float> v;
-            std::string payload(s.get_payload().as_string());
-            if (parse_float_array(payload, v) && v.size() >= 3) {
-                std::lock_guard<std::mutex> lk(bind_1_mtx);
-                bind_1_payload = std::move(v);
-            }
-        }, zenoh::closures::none);
-    auto pub_2 = session.declare_publisher(zenoh::KeyExpr("manta/ukf_smoke/estimate"));
-
+    manta_gen::ukf_smoke::setup();
     std::printf("ukf_smoke: ready (UKF). 1 craft, 3 binding(s), 2 measurement sensor(s).\n");
 
+    constexpr float WALL_PERIOD = manta_gen::ukf_smoke::DT / manta_gen::ukf_smoke::SIM_RATE_MULT;
     auto next = std::chrono::steady_clock::now();
     const auto period = std::chrono::microseconds(int64_t(WALL_PERIOD * 1e6));
-    int pub_decim = 0;
-    const int pub_every = 20;  // ~50 Hz publish
 
     while (g_run.load()) {
-        { std::lock_guard<std::mutex> lk(bind_0_mtx);
-          if (bind_0_payload.size() >= 6) {
-              ukf_0.craft().imu().set_measurement(manta::geom::Vec3<manta::PartFrame>{bind_0_payload[0], bind_0_payload[1], bind_0_payload[2]}, manta::geom::Vec3<manta::PartFrame>{bind_0_payload[3], bind_0_payload[4], bind_0_payload[5]});    // member: set_measurement
-              bind_0_payload.clear();
-          } }
-        { std::lock_guard<std::mutex> lk(bind_1_mtx);
-          if (bind_1_payload.size() >= 3) {
-              ukf_0.craft().dvl().set_measurement(manta::geom::Vec3<manta::PartFrame>{bind_1_payload[0], bind_1_payload[1], bind_1_payload[2]});    // member: set_measurement
-              bind_1_payload.clear();
-          } }
-
-        ukf_0.predict(DT, Q);
-
-        if (ukf_0.craft().imu().consume_fresh()) {
-            Eigen::Matrix<double, 6, 1> z;
-            z(0) = ukf_0.craft().imu().last_accel().raw()(0);
-            z(1) = ukf_0.craft().imu().last_accel().raw()(1);
-            z(2) = ukf_0.craft().imu().last_accel().raw()(2);
-            z(3) = ukf_0.craft().imu().last_gyro().raw()(0);
-            z(4) = ukf_0.craft().imu().last_gyro().raw()(1);
-            z(5) = ukf_0.craft().imu().last_gyro().raw()(2);
-            ukf_0.template update_n<6>(_ukf_0_imu_meas{}, z, R_imu);
-        }
-        if (ukf_0.craft().dvl().consume_fresh()) {
-            Eigen::Matrix<double, 3, 1> z;
-            z(0) = ukf_0.craft().dvl().last_velocity().raw()(0);
-            z(1) = ukf_0.craft().dvl().last_velocity().raw()(1);
-            z(2) = ukf_0.craft().dvl().last_velocity().raw()(2);
-            ukf_0.template update_n<3>(_ukf_0_dvl_meas{}, z, R_dvl);
-        }
-
-        if (++pub_decim >= pub_every) {
-            pub_decim = 0;
-            { std::string _json = "{";
-              _json += "\"p\":[";
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(ukf_0.position()(0))); _json += _b; }
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ukf_0.position()(1))); _json += _b; }
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ukf_0.position()(2))); _json += _b; }
-              _json += "]";
-              _json += ",";
-              _json += "\"v\":[";
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(ukf_0.vel_linear()(0))); _json += _b; }
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ukf_0.vel_linear()(1))); _json += _b; }
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ukf_0.vel_linear()(2))); _json += _b; }
-              _json += "]";
-              _json += ",";
-              _json += "\"p_stddev\":[";
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(ukf_0.position_stddev()(0))); _json += _b; }
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ukf_0.position_stddev()(1))); _json += _b; }
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ukf_0.position_stddev()(2))); _json += _b; }
-              _json += "]";
-              _json += ",";
-              _json += "\"v_stddev\":[";
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(ukf_0.vel_linear_stddev()(0))); _json += _b; }
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ukf_0.vel_linear_stddev()(1))); _json += _b; }
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ukf_0.vel_linear_stddev()(2))); _json += _b; }
-              _json += "]";
-              _json += "}";
-              pub_2.put(zenoh::Bytes(_json));
-            }
-        }
-
+        manta_gen::ukf_smoke::tick();
         next += period;
         std::this_thread::sleep_until(next);
     }
 
     std::printf("ukf_smoke: shutting down.\n");
+    manta_gen::ukf_smoke::shutdown();
     return 0;
 }

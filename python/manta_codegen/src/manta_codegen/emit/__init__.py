@@ -218,11 +218,11 @@ def emit_config(cfg, base_out, workflow: str = "library") -> None:
 
 def _emit_filter_target(target, filter_obj, world, out_dir: Path,
                         workflow: str, kind: str = "ekf") -> None:
-    """Emit per-craft + main for a filter-driven Target (EKF or UKF).
-    Reuses the standard craft/telemetry/config/cmake emitters; substitutes
-    the main with the filter-driven variant. workflow="library" omits the
-    main entirely."""
-    from .ekf_main import emit_ekf_main_cpp
+    """Emit per-craft + filter harness + thin main for an EKF/UKF Target.
+    Library workflow emits craft/telemetry/config/cmake only; binary
+    additionally emits `<world>.hpp/.cpp/_main.cpp`."""
+    from .ekf_main import (emit_filter_hpp, emit_filter_cpp,
+                            emit_filter_main_cpp)
 
     if workflow not in ("library", "binary"):
         raise ValueError(
@@ -253,7 +253,9 @@ def _emit_filter_target(target, filter_obj, world, out_dir: Path,
     files[f"{world_name}.cmake"]    = emit_cmake_fragment(
         world, workflow=workflow, multi=multi)
     if workflow == "binary":
-        files[f"{world_name}_main.cpp"] = emit_ekf_main_cpp(
+        files[f"{world_name}.hpp"]      = emit_filter_hpp(target, filter_obj, kind=kind)
+        files[f"{world_name}.cpp"]      = emit_filter_cpp(target, filter_obj, kind=kind)
+        files[f"{world_name}_main.cpp"] = emit_filter_main_cpp(
             target, filter_obj, kind=kind)
 
     for filename, contents in files.items():
