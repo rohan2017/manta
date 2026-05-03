@@ -81,4 +81,82 @@ def emit(world: World,
         (out / filename).write_text(contents)
 
 
-__all__ = ["emit"]
+def emit_config(cfg, base_out, workflow: str = "library", flat_target=None) -> None:
+    """Emit a MantaConfig to disk. One subdirectory per Target under `base_out`.
+
+    `flat_target` is a backward-compat hook used by the CLI for single-Target
+    configs: when set, codegen writes directly into `base_out / flat_target.name`
+    using the existing single-world emit path.
+
+    Phase A: only Targets with exactly one World are supported. Multi-world
+    Targets and EKF-bearing Targets land in subsequent commits.
+    """
+    from ..core import World
+    from ..manifest import MantaConfig
+
+    if not isinstance(cfg, MantaConfig):
+        raise TypeError(f"emit_config: expected MantaConfig, got {type(cfg).__name__}")
+
+    base = Path(base_out)
+    targets = cfg.targets
+
+    # Phase-A guard: every Target must have exactly one World in `drives`,
+    # and no other Driveables (EKF, etc.) yet.
+    for t in targets:
+        worlds = [d for d in t.drives if isinstance(d, World)]
+        non_worlds = [d for d in t.drives if not isinstance(d, World)]
+        if len(worlds) != 1 or non_worlds:
+            raise NotImplementedError(
+                f"emit_config: Target {t.name!r} has "
+                f"{len(worlds)} worlds and {len(non_worlds)} other drives; "
+                f"only single-World Targets are supported in this build "
+                f"(multi-world + EKF support is in flight).")
+
+    # Validate no cross-target connect/binding spans.
+    target_for_world: dict[int, str] = {}
+    for t in targets:
+        for d in t.drives:
+            if isinstance(d, World):
+                target_for_world[id(d)] = t.name
+
+    def world_target_name(w):
+        try:
+            return target_for_world[id(w)]
+        except KeyError:
+            return None
+
+    def craft_target_name(c):
+        w = getattr(c, "_world", None)
+        return world_target_name(w) if w is not None else None
+
+    for t in targets:
+        for d in t.drives:
+            if isinstance(d, World):
+                for binding in d.bindings + []:
+                    pass   # bindings are already world-local; OK.
+                for conn in d.connections:
+                    src_t = craft_target_name(conn.source.craft_ref)
+                    snk_t = craft_target_name(conn.sink.craft_ref)
+                    if src_t is None or snk_t is None:
+                        raise RuntimeError(
+                            f"emit_config: connect() endpoint not in any Target "
+                            f"({conn.source.name} → {conn.sink.name})")
+                    if src_t != snk_t:
+                        raise RuntimeError(
+                            f"emit_config: connect({conn.source.name} → {conn.sink.name}) "
+                            f"crosses targets ({src_t!r} → {snk_t!r}); "
+                            f"use publish/subscribe across binaries instead.")
+
+    # Phase-A delegates each Target to the existing single-World emit.
+    for t in targets:
+        world = next(d for d in t.drives if isinstance(d, World))
+        # Cadence is now Target-level; copy onto the world for the legacy
+        # emitters that still read world.dt / world.sim_rate_mult.
+        world.dt = t.dt
+        world.sim_rate_mult = t.sim_rate_mult
+        target_dir = base / t.name
+        target_dir.mkdir(parents=True, exist_ok=True)
+        emit(world, out_dir=target_dir, workflow=workflow)
+
+
+__all__ = ["emit", "emit_config"]

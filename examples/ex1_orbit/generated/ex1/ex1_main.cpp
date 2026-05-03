@@ -61,7 +61,6 @@ int main() {
     w.register_field(field_0);
     Ex1Craft craft;
     scene.add_craft(craft, manta::InitialState{manta::geom::Vec3<manta::SceneFrame>{6372000.0f, 0.0f, 0.0f}, manta::geom::Ori<manta::SceneFrame>{Eigen::Quaternionf{1.0f, 0.0f, 0.0f, 0.0f}}, manta::geom::Vec3<manta::SceneFrame>{0.0f, 7909.172f, 0.0f}, manta::geom::Vec3<manta::CraftFrame>{0.0f, 0.0f, 0.0f}});
-
     zenoh::Config cfg = zenoh::Config::create_default();
     auto session = zenoh::Session::open(std::move(cfg));
 
