@@ -14,6 +14,6 @@ Ex2Craft::Ex2Craft()
     bl_->set_transform(manta::geom::StaticLink<manta::ParentFrame, manta::PartFrame, manta::Real>{manta::geom::Vec3<manta::ParentFrame, manta::Real>{manta::Real(-0.25f), manta::Real(0.25f), manta::Real(0.0f)}, manta::geom::Ori<manta::ParentFrame, manta::Real>{Eigen::Quaternionf{manta::Real(1.0f), manta::Real(0.0f), manta::Real(0.0f), manta::Real(0.0f)}}});
     br_ = &this->root().add<manta::parts::Thruster1>("br", std::array<manta::geom::Vec3<manta::PartFrame, manta::Real>, 1>{manta::geom::Vec3<manta::PartFrame, manta::Real>{manta::Real(0.0f), manta::Real(0.0f), manta::Real(4.905f)}}, std::array<manta::geom::Vec3<manta::PartFrame, manta::Real>, 1>{manta::geom::Vec3<manta::PartFrame, manta::Real>{manta::Real(0.0f), manta::Real(0.0f), manta::Real(0.0981f)}});
     br_->set_transform(manta::geom::StaticLink<manta::ParentFrame, manta::PartFrame, manta::Real>{manta::geom::Vec3<manta::ParentFrame, manta::Real>{manta::Real(-0.25f), manta::Real(-0.25f), manta::Real(0.0f)}, manta::geom::Ori<manta::ParentFrame, manta::Real>{Eigen::Quaternionf{manta::Real(1.0f), manta::Real(0.0f), manta::Real(0.0f), manta::Real(0.0f)}}});
-    imu_ = &this->root().add<manta::parts::IMU>("imu", manta::parts::ImuNoiseParams{0.0f, 0.0f});
+    imu_ = &this->root().add<manta::parts::IMU>("imu", manta::parts::ImuNoiseParams{0.0f, 0.0f}, manta::Real(0.0f));
     this->root().compute_params();
 }

@@ -11,7 +11,8 @@ Generate from the repo root:
 
 import math
 
-from manta_codegen import Craft, World
+from manta_codegen import (Craft, MantaConfig, Target, World, publish,
+                           subscribe)
 from manta_codegen.parts  import Mass, Thruster
 from manta_codegen.fields import GravityField
 
@@ -34,7 +35,7 @@ THRUSTER_DIRS: list[tuple[str, tuple[float, float, float]]] = [
 ]
 
 
-def make_world() -> World:
+def make_config() -> MantaConfig:
     body      = Mass("body", mass=1.0)
     thrusters = [Thruster(name, max_thrust=5.0, direction=d) for name, d in THRUSTER_DIRS]
 
@@ -57,8 +58,6 @@ def make_world() -> World:
 
     # Bundled state topic: craft pose + per-thruster throttles. Wire format
     # matches what the viewer expects (top-level "p","q","v","w" arrays).
-    # Bindings live at the World level (one fabric per binary, regardless of
-    # how many crafts share it).
     state = {
         "t": c.time,
         "p": c.position, "q": c.orientation,
@@ -66,8 +65,10 @@ def make_world() -> World:
     }
     for t in thrusters:
         state[t.name] = t.throttle
-    w.publish(state, "manta/ex1/state")
+    publish(state, "manta/ex1/state")
     for t in thrusters:
-        w.subscribe(t.set_throttle, f"manta/ex1/{t.name}/cmd")
+        subscribe(t.set_throttle, f"manta/ex1/{t.name}/cmd")
 
-    return w.run(dt=0.005, sim_rate_mult=200.0)
+    return MantaConfig(targets=[
+        Target("ex1", drives=[w], dt=0.005, sim_rate_mult=200.0),
+    ])

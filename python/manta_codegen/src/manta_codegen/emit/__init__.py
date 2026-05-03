@@ -81,12 +81,8 @@ def emit(world: World,
         (out / filename).write_text(contents)
 
 
-def emit_config(cfg, base_out, workflow: str = "library", flat_target=None) -> None:
+def emit_config(cfg, base_out, workflow: str = "library") -> None:
     """Emit a MantaConfig to disk. One subdirectory per Target under `base_out`.
-
-    `flat_target` is a backward-compat hook used by the CLI for single-Target
-    configs: when set, codegen writes directly into `base_out / flat_target.name`
-    using the existing single-world emit path.
 
     Supported Target shapes:
       * exactly one World in `drives` — emits the standard sim main.

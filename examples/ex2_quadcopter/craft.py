@@ -15,7 +15,7 @@ Generate from the repo root:
         python -m manta_codegen.cli examples/ex2_quadcopter/craft.py --workflow library
 """
 
-from manta_codegen import Craft, World, tf
+from manta_codegen import Craft, MantaConfig, Target, World, tf
 from manta_codegen.parts  import IMU, Mass, Thruster1
 from manta_codegen.fields import GravityField
 
@@ -38,7 +38,7 @@ def _prop(name: str, x: float, y: float, cw: bool) -> Thruster1:
                      transform=tf((x, y, 0)))
 
 
-def make_world() -> World:
+def make_config() -> MantaConfig:
     c = Craft("ex2")
 
     # Pencil-shaped body inertia: lump everything into one Mass at the root.
@@ -59,4 +59,5 @@ def make_world() -> World:
     c.add(IMU("imu"))
 
     # Library workflow: user main does pub/sub manually.
-    return World().add_field(GravityField(g=(0.0, 0.0, -9.81))).add_craft(c)
+    w = World().add_field(GravityField(g=(0.0, 0.0, -9.81))).add_craft(c)
+    return MantaConfig(targets=[Target("ex2", drives=[w])])

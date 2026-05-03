@@ -16,7 +16,8 @@ Regenerate from the repo root:
         --out examples/ex7_tethered_pair/generated/ex7
 """
 
-from manta_codegen import Craft, Tether, World
+from manta_codegen import (Craft, MantaConfig, Target, Tether, World, publish,
+                           subscribe)
 from manta_codegen.parts import Mass, Thruster
 
 
@@ -31,7 +32,7 @@ def make_drone(name: str, with_thruster: bool) -> tuple[Craft, "Thruster | None"
     return c, thr
 
 
-def make_world() -> World:
+def make_config() -> MantaConfig:
     leader,   leader_thr   = make_drone("leader",   with_thruster=True)
     follower, _            = make_drone("follower", with_thruster=False)
 
@@ -44,16 +45,17 @@ def make_world() -> World:
                         endpoint_a=(leader,   "hook"),
                         endpoint_b=(follower, "hook")))
 
-    # World-level bindings — same wire shape as before.
-    w.subscribe(leader_thr.set_throttle, "manta/ex7/leader/cmd")
-    w.publish({
+    subscribe(leader_thr.set_throttle, "manta/ex7/leader/cmd")
+    publish({
         "t": leader.time,
         "p": leader.position, "v": leader.vel_linear,
         "throttle": leader_thr.throttle,
     }, "manta/ex7/leader/state")
-    w.publish({
+    publish({
         "t": follower.time,
         "p": follower.position, "v": follower.vel_linear,
     }, "manta/ex7/follower/state")
 
-    return w.run(dt=0.001, sim_rate_mult=1.0)
+    return MantaConfig(targets=[
+        Target("ex7", drives=[w], dt=0.001, sim_rate_mult=1.0),
+    ])

@@ -625,15 +625,6 @@ class World:
         self.tethers.append(_TetherEntry(tether, endpoint_a, endpoint_b))
         return self
 
-    def run(self, dt: float = 0.001, sim_rate_mult: float = 1.0) -> "World":
-        """Configure the sim loop:
-            dt              : sim step (seconds)
-            sim_rate_mult   : ratio of sim seconds to wall seconds (1.0 = realtime)
-        """
-        self.dt = float(dt)
-        self.sim_rate_mult = float(sim_rate_mult)
-        return self
-
 
 class _RootProxy:
     """The `craft.root` handle. Holds direct children; doesn't itself emit C++

@@ -14,7 +14,7 @@ Generate from the repo root:
         python -m manta_codegen.cli examples/ex3_tvc_rocket/craft.py --workflow library
 """
 
-from manta_codegen import Craft, World, tf
+from manta_codegen import Craft, MantaConfig, Target, World, tf
 from manta_codegen.parts  import IMU, Mass, Motor, Thruster1
 from manta_codegen.fields import GravityField
 
@@ -27,7 +27,7 @@ ENGINE_Z     = -1.0                # 1 m below CoM
 GIMBAL_STALL = 100.0               # N·m — stiff enough to track angle commands
 
 
-def make_world() -> World:
+def make_config() -> MantaConfig:
     c = Craft("ex3")
 
     # Pencil-shaped rocket inertia: Ix=Iy >> Iz.
@@ -55,4 +55,5 @@ def make_world() -> World:
 
     c.add(IMU("imu"))
 
-    return World().add_field(GravityField(g=(0.0, 0.0, -G))).add_craft(c)
+    w = World().add_field(GravityField(g=(0.0, 0.0, -G))).add_craft(c)
+    return MantaConfig(targets=[Target("ex3", drives=[w])])

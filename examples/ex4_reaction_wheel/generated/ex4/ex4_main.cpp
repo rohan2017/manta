@@ -57,7 +57,6 @@ int main() {
     auto& scene = w.create_scene();
     Ex4Craft craft;
     scene.add_craft(craft, manta::InitialState{});
-
     zenoh::Config cfg = zenoh::Config::create_default();
     auto session = zenoh::Session::open(std::move(cfg));
 
