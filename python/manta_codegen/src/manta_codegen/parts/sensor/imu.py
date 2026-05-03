@@ -44,16 +44,21 @@ class IMU(PartDescriptor):
                  name: str,
                  accel_sigma: float = 0.0,
                  gyro_sigma:  float = 0.0,
+                 rate_hz: float = 0.0,
                  **kwargs) -> None:
         super().__init__(name=name, **kwargs)
         self.accel_sigma = float(accel_sigma)
         self.gyro_sigma  = float(gyro_sigma)
+        # rate_hz=0 (default) means "refresh every tick" — backward compat
+        # with code from before the rate-cap landing.
+        self.rate_hz     = float(rate_hz)
 
     def emit_constructor_args(self, scalar: str = "manta::Real") -> str:
         # ImuNoiseParams uses raw float fields (sim-side noise parameters);
         # they don't change with Scalar.
         return (f'"{self.name}", '
-                f'manta::parts::ImuNoiseParams{{{_f(self.accel_sigma)}, {_f(self.gyro_sigma)}}}')
+                f'manta::parts::ImuNoiseParams{{{_f(self.accel_sigma)}, {_f(self.gyro_sigma)}}}, '
+                f'manta::Real({_f(self.rate_hz)})')
 
     # Vec3 telemetry types are not yet handled by the scalar-only JSON encoder.
     # Declaring the fields anyway so the struct shape is right; values won't

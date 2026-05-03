@@ -40,10 +40,16 @@ class Magnetometer(PartDescriptor):
         ),
     ]
 
-    def __init__(self, name: str, sigma: float = 0.0, **kwargs) -> None:
+    def __init__(self,
+                 name: str,
+                 sigma: float = 0.0,
+                 rate_hz: float = 0.0,
+                 **kwargs) -> None:
         super().__init__(name=name, **kwargs)
-        self.sigma = float(sigma)
+        self.sigma   = float(sigma)
+        self.rate_hz = float(rate_hz)
 
     def emit_constructor_args(self, scalar: str = "manta::Real") -> str:
         return (f'"{self.name}", '
-                f'manta::parts::MagnetometerNoiseParams{{{_f(self.sigma)}}}')
+                f'manta::parts::MagnetometerNoiseParams{{{_f(self.sigma)}}}, '
+                f'manta::Real({_f(self.rate_hz)})')

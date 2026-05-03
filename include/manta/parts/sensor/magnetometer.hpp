@@ -6,6 +6,7 @@
 #include "../../core/part.hpp"
 #include "../../fields/mag_field.hpp"
 #include "../../fields/templated_query.hpp"
+#include "../../sim/rate_gate.hpp"
 
 namespace manta::parts {
 
@@ -32,20 +33,24 @@ template <class Scalar = Real>
 class MagnetometerT : public PartT<Scalar> {
 public:
     explicit MagnetometerT(std::string name,
-                           MagnetometerNoiseParams p = MagnetometerNoiseParams{})
+                           MagnetometerNoiseParams p = MagnetometerNoiseParams{},
+                           Real rate_hz = Real(0))
         : PartT<Scalar>(std::move(name))
-        , noise_{WhiteGaussian{p.sigma}} {}
+        , noise_{WhiteGaussian{p.sigma}}
+        , gate_{rate_hz} {}
 
     void update() override {
+        Real dt = (this->craft_ && this->craft_->has_world()) ? this->craft().world().clock().dt() : Real(0);
+        if (!gate_.tick(dt)) return;
+
         const auto* mf_base = this->field_ptr(typeid(fields::MagField));
         if (!mf_base) {
             last_b_ = geom::Vec3<PartFrame, Scalar>::zero();
+            fresh_ = true;
             return;
         }
         const auto* mf = static_cast<const fields::MagField*>(mf_base);
 
-        // Templated query — Jet crafts get ∂B/∂pos automatically via finite
-        // difference; Real crafts take the fast cast-only path.
         auto p_scaled = this->template position<SceneFrame>();
         auto b_scene_v = fields::state_at_templated<Scalar>(*mf, p_scaled);
 
@@ -54,12 +59,18 @@ public:
             q_part_from_scene * b_scene_v.raw());
 
         last_b_ = b_part + noise_;
+        fresh_ = true;
     }
 
-    // External-measurement seam (estimator path).
+    // External-measurement seam (estimator path). Always marks the reading
+    // as fresh — bypasses the rate gate.
     void set_measurement(const geom::Vec3<PartFrame, Scalar>& b) noexcept {
         last_b_ = b;
+        fresh_ = true;
     }
+
+    bool consume_fresh() noexcept { bool was = fresh_; fresh_ = false; return was; }
+    bool fresh() const noexcept { return fresh_; }
 
     const geom::Vec3<PartFrame, Scalar>& last_b() const noexcept { return last_b_; }
 
@@ -67,6 +78,8 @@ public:
 
 private:
     Noise<WhiteGaussian>           noise_;
+    sim::RateGate                  gate_;
+    bool                           fresh_ = false;
     geom::Vec3<PartFrame, Scalar>  last_b_;
 };
 
