@@ -43,8 +43,8 @@ target_link_libraries(manta_examples_shared INTERFACE
     zenohcxx::zenohc)
 
 # ---- examples ----
-# All four examples are codegen-driven. To regenerate any of them, run from
-# the repo root (replace the `--workflow` flag and craft.py path as needed):
+# Codegen examples regenerate from the repo root (replace --workflow and
+# the craft.py path):
 #
 #   PYTHONPATH=python/manta_codegen/src \
 #       python -m manta_codegen.cli examples/<dir>/craft.py --workflow binary
@@ -52,8 +52,9 @@ target_link_libraries(manta_examples_shared INTERFACE
 # The generated <name>.cmake fragment defines the target; user-written main.cpp
 # files (library workflow) are added by each example's CMake block below.
 
-# ex0 — binary workflow (codegen emits the entire main).
-include(${CMAKE_CURRENT_SOURCE_DIR}/ex0_free_flight/generated/ex0/ex0.cmake)
+# ex0 — pure C++, no codegen, no Zenoh. Drag-comparison freefall.
+add_executable(ex0_free_flight ex0_free_flight/ex0.cpp)
+target_link_libraries(ex0_free_flight PRIVATE manta::manta)
 
 # ex1 — binary workflow (orbit, 200x realtime).
 include(${CMAKE_CURRENT_SOURCE_DIR}/ex1_orbit/generated/ex1/ex1.cmake)
@@ -80,50 +81,30 @@ manta_ex3_apply(ex3_tvc_rocket)
 # ex4 — binary workflow: reaction wheel demo (Motor articulation).
 include(${CMAKE_CURRENT_SOURCE_DIR}/ex4_reaction_wheel/generated/ex4/ex4.cmake)
 
-# ex5 — binary workflow: underwater sub with Hull + OceanAtmosField + IMU + DVL.
-include(${CMAKE_CURRENT_SOURCE_DIR}/ex5_underwater/generated/ex5/ex5.cmake)
+# ex5 — library workflow: sim Craft + templated estimator Craft + CraftEKF.
+# Two codegen-emitted crafts: ex5 (sim) and ex5_est (templated estimator).
+include(${CMAKE_CURRENT_SOURCE_DIR}/ex5_estimator_demo/generated/ex5/ex5.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/ex5_estimator_demo/generated/ex5_est/ex5_est.cmake)
+add_executable(ex5_estimator_demo
+    ex5_estimator_demo/ex5.cpp
+    ${manta_ex5_SOURCES}
+    ${manta_ex5_est_SOURCES})
+target_link_libraries(ex5_estimator_demo PRIVATE manta_examples_shared)
+manta_ex5_apply(ex5_estimator_demo)
+manta_ex5_est_apply(ex5_estimator_demo)
 
-# ex6 — library workflow: sim Craft + templated estimator Craft + CraftEKF.
-# Two codegen-emitted crafts: ex6 (sim) and ex6_est (templated estimator).
-include(${CMAKE_CURRENT_SOURCE_DIR}/ex6_estimator_demo/generated/ex6/ex6.cmake)
-include(${CMAKE_CURRENT_SOURCE_DIR}/ex6_estimator_demo/generated/ex6_est/ex6_est.cmake)
-add_executable(ex6_estimator_demo
-    ex6_estimator_demo/ex6.cpp
-    ${manta_ex6_SOURCES}
-    ${manta_ex6_est_SOURCES})
-target_link_libraries(ex6_estimator_demo PRIVATE manta_examples_shared)
-manta_ex6_apply(ex6_estimator_demo)
-manta_ex6_est_apply(ex6_estimator_demo)
-
-# ex7 — Pattern C: real-data-only estimator (no sim Craft). Subscribes to
+# ex6 — Pattern C: real-data-only estimator (no sim Craft). Subscribes to
 # external Zenoh topics, runs CraftEKF, publishes estimate.
-include(${CMAKE_CURRENT_SOURCE_DIR}/ex7_real_data_estimator/generated/ex7_est/ex7_est.cmake)
-add_executable(ex7_real_data_estimator
-    ex7_real_data_estimator/ex7.cpp
-    ${manta_ex7_est_SOURCES})
-target_link_libraries(ex7_real_data_estimator PRIVATE manta_examples_shared)
-manta_ex7_est_apply(ex7_real_data_estimator)
+include(${CMAKE_CURRENT_SOURCE_DIR}/ex6_real_data_estimator/generated/ex6_est/ex6_est.cmake)
+add_executable(ex6_real_data_estimator
+    ex6_real_data_estimator/ex6.cpp
+    ${manta_ex6_est_SOURCES})
+target_link_libraries(ex6_real_data_estimator PRIVATE manta_examples_shared)
+manta_ex6_est_apply(ex6_real_data_estimator)
 
-# ex8 — multi-craft swarm: three Ex8Craft instances tethered in a chain.
-include(${CMAKE_CURRENT_SOURCE_DIR}/ex8_swarm/generated/ex8/ex8.cmake)
-add_executable(ex8_swarm
-    ex8_swarm/ex8.cpp
-    ${manta_ex8_SOURCES})
-target_link_libraries(ex8_swarm PRIVATE manta_examples_shared)
-manta_ex8_apply(ex8_swarm)
-
-# ex9 — binary workflow demo of the new explicit Binding pub/sub API
-# (single-signal + bundled-struct on both directions). Codegen emits the
-# entire main, including all publishers/subscribers, from craft.bindings.
-include(${CMAKE_CURRENT_SOURCE_DIR}/ex9_bindings_demo/generated/ex9/ex9.cmake)
-
-# ex10 — multi-craft codegen: two distinct Craft types ticked by a single
-# binary. Codegen emits per-Craft .hpp/.cpp + a world-level main.
-include(${CMAKE_CURRENT_SOURCE_DIR}/ex10_multi_craft/generated/ex10/ex10.cmake)
-
-# ex11 — codegen-driven tether between two crafts. Python Tether(...) +
+# ex7 — codegen-driven tether between two crafts. Python Tether(...) +
 # World.add_tether(...) generates the C++ Tether instance + endpoint adds.
-include(${CMAKE_CURRENT_SOURCE_DIR}/ex11_tethered_pair/generated/ex11/ex11.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/ex7_tethered_pair/generated/ex7/ex7.cmake)
 
 # sync_smoke — Zenoh field-sync round-trip test. Spins up two Sessions in
 # one process, replicates a GravityField disturbance through the codegen's

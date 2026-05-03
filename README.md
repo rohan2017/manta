@@ -14,14 +14,24 @@ templated C++ that compiles into a regular binary.
 ```
 include/manta/        C++ runtime: parts, fields, planets, scenes, EKF/UKF
 python/manta_codegen/ Python descriptors + emitter
-examples/             ex0..ex11 + sync_smoke
-tests/                doctest unit + integration tests (219 cases)
+examples/             ex0..ex7 + sync_smoke + wire_debug
+tests/                doctest unit + integration tests (223 cases)
 ```
 
 ## Quick example
 
-A minimal craft with a 6-axis IMU and one thruster, publishing telemetry
-on a single Zenoh topic and accepting throttle commands on another:
+The fastest "is this thing alive" check is `examples/ex0_free_flight` —
+pure C++, no codegen, no Zenoh. Build, run, watch a drag vs. no-drag
+comparison print to the terminal:
+
+```bash
+cmake -S . -B build && cmake --build build -j ex0_free_flight
+./build/examples/ex0_free_flight
+```
+
+A more realistic codegen-driven example: a craft with a 6-axis IMU and
+one thruster, publishing telemetry on a single Zenoh topic and accepting
+throttle commands on another:
 
 ```python
 # my_craft.py
@@ -238,37 +248,32 @@ The codegen has two output modes:
 
 - **`--workflow library`** — emits the typed Craft + telemetry + cmake
   fragment. The user provides their own `main.cpp` (e.g. for hand-tuned
-  controllers, EKF wiring, multi-craft instantiation). Used by examples
-  ex2, ex3, ex6 (with EKF), ex7 (with EKF on real Zenoh data), ex8
-  (multi-craft).
+  controllers, EKF wiring, multi-craft instantiation). Used by ex2, ex3,
+  ex5 (sim + EKF in one process), ex6 (EKF on real Zenoh data).
 
 - **`--workflow binary`** — additionally emits a complete `<name>_main.cpp`
-  with Zenoh I/O wired through `craft.bindings`. Used by ex0, ex1, ex4,
-  ex5, ex9, ex10, ex11.
+  with Zenoh I/O wired through `craft.bindings`. Used by ex1, ex4, ex7.
 
 ## Examples
 
 | Example | Workflow | Demonstrates |
 |--|--|--|
-| ex0 | binary  | 6-thruster free-flight, zero gravity |
-| ex1 | binary  | 1km circular orbit, point gravity (synced over Zenoh) |
+| ex0 | none (pure C++) | Drag-comparison freefall — minimal "manta in a terminal" demo |
+| ex1 | binary  | 1 km circular orbit, point gravity (synced over Zenoh) |
 | ex2 | library | Quadcopter X-config, 4× Thruster1 with reaction torque |
 | ex3 | library | TVC rocket hopper, yaw-motor → pitch-motor → engine stack |
 | ex4 | binary  | Reaction wheel — Motor + flywheel, conservation of L |
-| ex5 | binary  | Underwater sub on Earth: PointBuoy column + IMU + DVL |
-| ex6 | library | Sim + EKF side-by-side, Pattern A (matching part names) |
-| ex7 | library | Real-data-only EKF, fed from external Zenoh topics |
-| ex8 | library | Multi-craft swarm: 3 drones tethered in a chain |
-| ex9 | binary  | Minimal demo of the explicit Binding API |
-| ex10| binary  | Multi-craft codegen — two Crafts in one binary |
-| ex11| binary  | Codegen-driven Tether between two crafts |
+| ex5 | library | Sim + EKF side-by-side, Pattern A (matching part names) |
+| ex6 | library | Real-data-only EKF, fed from external Zenoh topics |
+| ex7 | binary  | Codegen-driven Tether between two crafts |
 | sync_smoke | — | Round-trips a GravityField disturbance through real Zenoh |
+| wire_debug | — | Pretty-prints field-sync disturbance bytes off the wire |
 
 ## Building
 
 ```bash
 cmake -S . -B build && cmake --build build -j
-ctest --test-dir build       # 220 cases (219 doctest + sync_smoke)
+ctest --test-dir build       # 224 cases (223 doctest + sync_smoke)
 ```
 
 Each example has a CMake target named after its directory (e.g. `ex5`).
@@ -277,17 +282,24 @@ binary over Zenoh.
 
 ## Status
 
-Early/active development. The public API is stable enough for examples
-ex0..ex11 to drive it without back-compat shims, but any of it can still
-move. Notable items not yet built:
+Early/active development. The public API is stable enough for ex0..ex7
+to drive it without back-compat shims, but any of it can still move.
+Notable items not yet built:
 
-- A first-class system-ID API. The technique is demonstrated end-to-end
-  in `tests/test_system_id.cpp` (mass fit + drag-coefficient fit on
-  Surface1), but is not yet wrapped in a `ParameterFit<MyCraftT, NParams>`
-  template — users currently write the Ceres residual functor by hand.
-- ex8's hand-written 3-drone tether chain has not yet been migrated to
-  the codegen-driven Tether API (ex11 demonstrates the pattern; ex8
-  works fine as-is).
+- Custom-signal codegen bindings (Python user-side struct ↔ Zenoh, no
+  per-binding boilerplate). Today bindings only cover part-defined
+  signals; user-defined command structs need hand-written pub/sub.
+- Same-process / signal-to-signal bindings (estimator-side parts driven
+  from sim-side parts without going through Zenoh).
+- Variable-rate sensors. Today IMU/DVL produce a fresh reading every
+  `update()`; real sensors have rate caps and irregular timing. Fold
+  refresh cadence into the part model and have EKF/UKF consume only
+  fresh measurements.
+- Estimator codegen — a Python descriptor for the estimator + measurement
+  piping rich enough that codegen produces the C++ wiring for ex5 and
+  ex6 (today both have hand-written .cpp).
+- A submarine demo (Ex8) — full thruster suite + IMU + DVL in the ocean,
+  bound to Zenoh for viewer + control.
 - Per-disturbance exact `state_at_jet` opt-in. Today the templated
   field query falls back to finite-diff for Jet scalars; an analytic
   override slot on Disturbance can be added when a consumer wants it.
