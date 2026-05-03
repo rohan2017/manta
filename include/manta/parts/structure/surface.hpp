@@ -65,15 +65,24 @@ public:
         Eigen::Matrix<Scalar, 3, 1> v_rel_part =
             q_part_from_scene * (v_fluid_scene - v_self_scene);
 
+        // Per-order multiplier for component i is sign(v_i) · |v_i|^k —
+        // i.e. v_i · |v_i|^(k-1). Magnitude grows like the k-th power but
+        // the sign is preserved, so a positive A_k tensor produces force
+        // pointing along v_rel (drag-like) regardless of which way the
+        // fluid is flowing relative to the body. Even-order terms with
+        // raw cwiseProduct would lose the sign and break this — that
+        // bug used to mean Surface2's quadratic term flipped its
+        // direction on a sign change.
         Eigen::Matrix<Scalar, 3, 1> F_part = Eigen::Matrix<Scalar, 3, 1>::Zero();
         Eigen::Matrix<Scalar, 3, 1> T_part = Eigen::Matrix<Scalar, 3, 1>::Zero();
-        Eigen::Matrix<Scalar, 3, 1> v_pow  = v_rel_part;   // v^1
+        Eigen::Matrix<Scalar, 3, 1> v_pow  = v_rel_part;     // sign(v) · |v|^1
+        Eigen::Matrix<Scalar, 3, 1> abs_v  = v_rel_part.cwiseAbs();
 
         for (int k = 0; k < N; ++k) {
             F_part += A_[k].raw() * v_pow;
             T_part += B_[k].raw() * v_pow;
             if (k + 1 < N) {
-                v_pow = v_pow.cwiseProduct(v_rel_part);
+                v_pow = v_pow.cwiseProduct(abs_v);           // → sign(v) · |v|^(k+1)
             }
         }
 

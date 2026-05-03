@@ -14,13 +14,11 @@
 // returns to z=0. Stops when both have come back down (or 60 s safety
 // timeout).
 //
-// Why Surface1 and not Surface2 (which the original spec-prompt called
-// out): Surface uses componentwise powers — `A_2 · v.cwiseProduct(v)` —
-// so for a craft going up *and* coming back down on a single axis, the
-// quadratic term loses its sign and pushes the craft *downward* during
-// both phases (drag should oppose motion, not reinforce it during fall).
-// Linear (`Surface1`) preserves sign and gives the symmetric
-// "slows ascent, slows descent" behavior we want to demonstrate.
+// Drag: Surface2 with a diagonal positive tensor. The k-th order term
+// scales as sign(v) · |v|^k, so a positive A_2 always points along
+// v_rel — i.e. drag opposes motion regardless of which axis or which
+// direction the body is moving. F_drag = A_1·v + A_2·sign(v)·v² in
+// each axis.
 
 #include <array>
 #include <cstdio>
@@ -45,7 +43,8 @@ namespace {
 constexpr float DT     = 0.001f;        // 1 kHz sim
 constexpr float MASS   = 1.0f;          // kg
 constexpr float THRUST = 20.0f;         // N — about 2g, plenty of altitude
-constexpr float DRAG_K = 0.5f;          // N·s/m, diagonal linear-drag coef
+constexpr float DRAG_K1 = 0.10f;        // N·s/m   — linear drag coef
+constexpr float DRAG_K2 = 0.05f;        // N·s²/m² — quadratic drag coef
 
 float prompt_burn_seconds(float fallback) {
     std::printf("Thrust burn duration in seconds [default %.1f]: ", fallback);
@@ -94,14 +93,17 @@ int main() {
     clean.root().compute_params();
     scene.add_craft(clean);
 
-    // Craft B — same as A plus a diagonal Surface1 linear-drag part.
+    // Craft B — same as A plus a Surface2 part with diagonal linear +
+    // quadratic drag tensors. Both A_1 and A_2 are positive, so each
+    // tensor produces force along v_rel = v_fluid − v_self (i.e.
+    // opposing the craft's motion through still air).
     Craft drag("drag");
     drag.root().add<Mass>("body", MASS);
     auto& thr_drag = drag.root().add<Thruster>("up", THRUST);
-    drag.root().add<Surface1>(
+    drag.root().add<Surface2>(
         "drag_plate",
-        std::array<Mat3<PartFrame>, 1>{diag(DRAG_K)},   // F = +k·(v_fluid − v_self) ⇒ drag opposes motion
-        std::array<Mat3<PartFrame>, 1>{diag(0.0f)});
+        std::array<Mat3<PartFrame>, 2>{diag(DRAG_K1), diag(DRAG_K2)},
+        std::array<Mat3<PartFrame>, 2>{diag(0.0f),    diag(0.0f)});
     drag.root().compute_params();
     scene.add_craft(drag);
 
@@ -145,8 +147,9 @@ int main() {
     std::printf("burn duration : %.2f s @ %.1f N (each craft, 1 kg)\n", burn, THRUST);
     std::printf("clean craft   : peak z = %7.2f m,  t_return = %5.2f s\n",
                 peak_clean, t_return_clean);
-    std::printf("drag craft    : peak z = %7.2f m,  t_return = %5.2f s   (drag k = %.2f N·s/m)\n",
-                peak_drag, t_return_drag, DRAG_K);
+    std::printf("drag craft    : peak z = %7.2f m,  t_return = %5.2f s   "
+                "(k1 = %.2f N·s/m, k2 = %.2f N·s²/m²)\n",
+                peak_drag, t_return_drag, DRAG_K1, DRAG_K2);
     std::printf("drag/clean    : peak ratio = %.1f%%\n",
                 (peak_clean > 0.0f) ? 100.0f * peak_drag / peak_clean : 0.0f);
     return 0;

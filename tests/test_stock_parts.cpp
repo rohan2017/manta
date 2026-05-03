@@ -183,6 +183,41 @@ TEST_CASE("Surface2: linear + quadratic — A*v + B*v² accumulate") {
     CHECK(c.root().net_wrench().force().x() == doctest::Approx(-7.5f).epsilon(1e-4f));
 }
 
+TEST_CASE("Surface2: sign of v_rel is preserved by the quadratic term") {
+    // A positive diagonal A_2 should produce force ALONG v_rel, regardless
+    // of sign on each axis. Componentwise rule: F_i = A_2.ii · sign(v_i) · v_i².
+    auto fluid = uniform_water(Real(1.0f));
+    std::array<Mat3<PartFrame>, 2> A{ diag_mat(0.0f, 0.0f, 0.0f),
+                                      diag_mat(1.0f, 1.0f, 1.0f) };   // pure quadratic
+    std::array<Mat3<PartFrame>, 2> B{ diag_mat(0.0f, 0.0f, 0.0f),
+                                      diag_mat(0.0f, 0.0f, 0.0f) };
+
+    // Body moving +z at 3 m/s in still fluid → v_rel_part = (0, 0, -3).
+    {
+        Craft c("test_pos");
+        c.register_field(fluid);
+        c.root().add<Surface2>("surf", A, B);
+        c.root().compute_params();
+        c.set_vel_linear(Vec3<SceneFrame>{0, 0, 3});
+        c.update();
+        auto F = c.root().net_wrench().force();
+        CHECK(F.z() == doctest::Approx(-9.0f).epsilon(1e-4f));   // sign(-3) · 9 = -9
+        CHECK(F.x() == doctest::Approx( 0.0f).epsilon(1e-4f));
+        CHECK(F.y() == doctest::Approx( 0.0f).epsilon(1e-4f));
+    }
+    // Same body moving -z at 3 m/s → v_rel_part = (0, 0, +3).
+    {
+        Craft c("test_neg");
+        c.register_field(fluid);
+        c.root().add<Surface2>("surf", A, B);
+        c.root().compute_params();
+        c.set_vel_linear(Vec3<SceneFrame>{0, 0, -3});
+        c.update();
+        auto F = c.root().net_wrench().force();
+        CHECK(F.z() == doctest::Approx(+9.0f).epsilon(1e-4f));   // sign(+3) · 9 = +9
+    }
+}
+
 TEST_CASE("Surface1: torque tensor produces torque from velocity") {
     auto fluid = uniform_water(Real(1.0f));
     Craft c("test");
