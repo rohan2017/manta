@@ -43,10 +43,29 @@ public:
 
     // External-measurement seam (estimator path). Always marks the reading
     // as fresh — bypasses the rate gate.
+    //
+    // Three forms:
+    //   * set_measurement(accel, gyro) — full 6-channel inject.
+    //   * set_measurement_accel(accel) — just the accelerometer half.
+    //   * set_measurement_gyro(gyro)   — just the gyro half.
+    //
+    // The split forms exist so single-channel `connect()` calls can wire
+    // sim → est cleanly without needing to bundle six floats into one
+    // signal: `w.connect(sim.imu.last_accel, est.imu.set_measurement_accel)`.
     void set_measurement(const geom::Vec3<PartFrame, Scalar>& accel,
                          const geom::Vec3<PartFrame, Scalar>& gyro) noexcept {
         last_accel_ = accel;
         last_gyro_  = gyro;
+        fresh_ = true;
+    }
+
+    void set_measurement_accel(const geom::Vec3<PartFrame, Scalar>& accel) noexcept {
+        last_accel_ = accel;
+        fresh_ = true;
+    }
+
+    void set_measurement_gyro(const geom::Vec3<PartFrame, Scalar>& gyro) noexcept {
+        last_gyro_ = gyro;
         fresh_ = true;
     }
 

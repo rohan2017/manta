@@ -38,6 +38,27 @@ class IMU(PartDescriptor):
                 "manta::geom::Vec3<manta::PartFrame>{{{v3}, {v4}, {v5}}});"
             ),
         ),
+        # Per-channel inputs — used when wiring sim→est via single-signal
+        # connect() calls (one for accel, one for gyro). Either form sets
+        # the IMU's freshness bit.
+        Signal(
+            name="set_measurement_accel",
+            direction="in",
+            n_floats=3,
+            cpp_write_stmt=(
+                "{accessor}.set_measurement_accel("
+                "manta::geom::Vec3<manta::PartFrame>{{{v0}, {v1}, {v2}}});"
+            ),
+        ),
+        Signal(
+            name="set_measurement_gyro",
+            direction="in",
+            n_floats=3,
+            cpp_write_stmt=(
+                "{accessor}.set_measurement_gyro("
+                "manta::geom::Vec3<manta::PartFrame>{{{v0}, {v1}, {v2}}});"
+            ),
+        ),
     ]
 
     def __init__(self,
