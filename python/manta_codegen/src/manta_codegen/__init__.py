@@ -12,6 +12,8 @@ from .core import (
     World,
     tf,
 )
+from .manifest import MantaConfig, Target
+from .bindings import connect, publish, subscribe
 from .emit import emit
 
 __all__ = [
@@ -22,6 +24,11 @@ __all__ = [
     "StaticTransform",
     "Tether",
     "World",
+    "MantaConfig",
+    "Target",
     "tf",
+    "connect",
+    "publish",
+    "subscribe",
     "emit",
 ]

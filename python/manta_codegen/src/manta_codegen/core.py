@@ -337,6 +337,10 @@ class Craft:
         # parts in the craft must have `cpp_class_template` set; codegen
         # raises if any part lacks it.
         self.scalar_templated: bool = False
+        # Set by World.add_craft(self) — used by module-level
+        # connect/publish/subscribe helpers to look up the owning world
+        # from a signal's craft_ref.
+        self._world = None
         # Craft-level signals (pose + velocity) exposed as attributes for
         # symmetry with `imu.last_accel`-style part signal access. Each is a
         # BoundSignal pointing at the craft itself (part_name = CRAFT_SENTINEL);
@@ -575,6 +579,13 @@ class World:
             raise ValueError(
                 f"World.add_craft: planet {on!r} is not registered with this World; "
                 f"call world.add_planet(planet) first")
+        if getattr(craft, "_world", None) not in (None, self):
+            raise ValueError(
+                f"World.add_craft: craft {craft.name!r} is already in another world; "
+                f"a craft can only belong to one World")
+        # Back-pointer used by module-level connect/publish/subscribe to find
+        # the owning world from a signal's craft_ref.
+        craft._world = self
         self.crafts.append(_CraftEntry(
             craft=craft, on=on,
             position=tuple(float(x) for x in pos),                 # type: ignore[arg-type]
