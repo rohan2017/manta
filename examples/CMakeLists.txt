@@ -109,6 +109,11 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/connect_demo/generated/connect_demo/connect_
 include(${CMAKE_CURRENT_SOURCE_DIR}/ukf_smoke/generated/ukf_smoke/ukf_smoke.cmake)
 target_link_libraries(ukf_smoke PRIVATE manta_examples_shared)
 
+# ex8 — submarine: AUV with full sensor suite (IMU + DVL + Magnetometer)
+# + buoyancy + drag + 2× thruster, sim+EKF in one binary.
+include(${CMAKE_CURRENT_SOURCE_DIR}/ex8_submarine/generated/ex8/ex8.cmake)
+target_link_libraries(ex8 PRIVATE manta_examples_shared)
+
 # sync_smoke — Zenoh field-sync round-trip test. Spins up two Sessions in
 # one process, replicates a GravityField disturbance through the codegen's
 # wire format, verifies the receiver rebuilds the same Disturbance.

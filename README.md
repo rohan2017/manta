@@ -341,6 +341,7 @@ The codegen has two output modes:
 | ex5 | binary  | Sim + EKF side-by-side, fully codegen — cross-world `connect()` |
 | ex6 | binary  | Real-data-only EKF, fed from external Zenoh topics (Pattern C) |
 | ex7 | binary  | Codegen-driven Tether between two crafts |
+| ex8 | binary  | Submarine — Mass + PointBuoy + Surface drag + 2× thruster + IMU/DVL/Mag, sim+EKF |
 | connect_demo | binary | Two-thruster `connect()` mirror — minimal in-process binding demo |
 | ukf_smoke | binary | Minimal UKF codegen smoke — Mass + IMU + DVL on a non-templated craft |
 | sync_smoke | — | Round-trips a GravityField disturbance through real Zenoh |
@@ -363,8 +364,6 @@ Early/active development. The public API is stable enough for ex0..ex7
 to drive it without back-compat shims, but any of it can still move.
 Notable items not yet built:
 
-- A submarine demo (Ex8) — full thruster suite + IMU + DVL in the ocean,
-  bound to Zenoh for viewer + control.
 - Per-disturbance exact `state_at_jet` opt-in. Today the templated
   field query falls back to finite-diff for Jet scalars; an analytic
   override slot on Disturbance can be added when a consumer wants it.
