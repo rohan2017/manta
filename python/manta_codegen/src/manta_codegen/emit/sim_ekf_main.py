@@ -31,7 +31,8 @@ from __future__ import annotations
 from .._format import cpp_float as _f
 from ..signal import Binding, accessor_for, is_craft_signal
 from ._util import GENERATED_BANNER, class_name_for_craft
-from .ekf_main import _MeasFunctor, _double_qualify_partframe, _is_ekf_signal
+from .ekf_main import (_MeasFunctor, _double_qualify_partframe,
+                        _first_mag_field_var, _is_ekf_signal)
 from .main import _emit_binding_subscriber, _emit_field_sync, _quote
 
 
@@ -124,11 +125,20 @@ def emit_sim_plus_ekf_main_cpp(target, sim_world, ekf) -> str:
     ctx.add_sim_craft(sim_craft, sim_craft_var)
     ctx.add_ekf(ekf, ekf_var)
 
+    # Field instances are constructed in main(); the same descriptor object
+    # may appear in both worlds, in which case it shares one C++ var.
+    # Resolve the MagField var (if any) so a Magnetometer measurement can
+    # name the right instance for its locally-constant-B capture.
+    field_var_for_id = _plan_field_vars(sim_world, ekf.world)
+    mag_field_var = (_first_mag_field_var(sim_world, field_var_for_id)
+                     or _first_mag_field_var(ekf.world, field_var_for_id))
+
     # Per-sensor measurement functors (one per part in ekf.measurements).
     meas_specs = []
     for m in ekf.measurements:
         part_var = f"{ekf_var}.craft().{m.name}()"
-        spec = _MeasFunctor.for_part(m, ekf_var, part_var)
+        spec = _MeasFunctor.for_part(m, ekf_var, part_var,
+                                     mag_field_var=mag_field_var)
         meas_specs.append((m, spec))
 
     meas_dim = sum(s.n_floats for _, s in meas_specs) if meas_specs else 1
@@ -238,13 +248,12 @@ def emit_sim_plus_ekf_main_cpp(target, sim_world, ekf) -> str:
     if sim_world.planets:
         lines.append("    sim_scene.set_planet(&sim_planet_0);")
 
-    # Sim fields. Track field instances we've already constructed so the
-    # est world can reuse them via register_field rather than re-creating.
+    # Sim fields. The same descriptor object may also appear in the est
+    # world; reuse the sim var via the precomputed `field_var_for_id` dict
+    # rather than re-constructing.
     sync_field_idxs: list[int] = []
-    field_var_for_id: dict[int, str] = {}   # Python id(field_descriptor) → var name
     for i, f in enumerate(sim_world.fields):
-        var = f"sim_field_{i}"
-        field_var_for_id[id(f)] = var
+        var = field_var_for_id[id(f)]
         lines.append(f"    {f.emit_construction(var)}")
         for stmt in (f.emit_extra_setup(var) if hasattr(f, "emit_extra_setup") else []):
             lines.append(f"    {stmt}")
@@ -275,16 +284,14 @@ def emit_sim_plus_ekf_main_cpp(target, sim_world, ekf) -> str:
         "",
     ]
 
-    # Construct any est-only fields (those NOT in sim) and register all
-    # est-needed fields on the EKF. Match by Python identity: if the user
-    # adds the SAME FieldDescriptor instance to both worlds, we reuse the
-    # sim-side variable; otherwise we make a fresh est_field_<i>.
+    # Construct est-only fields (those NOT in sim) and register all est-
+    # needed fields on the EKF. Var names come from `field_var_for_id` so
+    # any MagField found by `_first_mag_field_var` resolves to the same
+    # instance the codegen emits.
+    sim_field_ids = {id(f) for f in sim_world.fields}
     for i, f in enumerate(ekf.world.fields):
-        if id(f) in field_var_for_id:
-            var = field_var_for_id[id(f)]
-        else:
-            var = f"est_field_{i}"
-            field_var_for_id[id(f)] = var
+        var = field_var_for_id[id(f)]
+        if id(f) not in sim_field_ids:
             lines.append(f"    {f.emit_construction(var)}")
             for stmt in (f.emit_extra_setup(var) if hasattr(f, "emit_extra_setup") else []):
                 lines.append(f"    {stmt}")
@@ -375,20 +382,13 @@ def emit_sim_plus_ekf_main_cpp(target, sim_world, ekf) -> str:
         "",
     ]
 
-    # Per-sensor consume_fresh + update_n.
+    # Per-sensor consume_fresh + update_n. The spec emits its own block
+    # (Magnetometer adds a pre-update MagField lookup; others use the
+    # default form).
     for m, spec in meas_specs:
-        n = spec.n_floats
-        functor_t = spec.functor_typename(ekf_var, m.name)
         rname = f"R_{m.name}"
         part_acc = f"{ekf_var}.craft().{m.name}()"
-        lines.append(f"        if ({part_acc}.consume_fresh()) {{")
-        lines.append(f"            Eigen::Matrix<double, {n}, 1> z;")
-        for i, expr in enumerate(spec.z_read):
-            lines.append(f"            z({i}) = {expr};")
-        lines.append(
-            f"            {ekf_var}.template update_n<{n}>({functor_t}{{}}, z, {rname});"
-        )
-        lines.append("        }")
+        spec.emit_update_block(lines, ekf_var, part_acc, rname)
     if meas_specs:
         lines.append("")
 
@@ -494,3 +494,21 @@ def _emit_output_binding_publish(lines: list[str], i: int, b: Binding,
         f"              pub_{i}.put(zenoh::Bytes(_json));",
         "            }",
     ]
+
+
+def _plan_field_vars(sim_world, est_world) -> dict[int, str]:
+    """Plan C++ var names for every field across both worlds.
+
+    Sim fields get `sim_field_<i>`. Est-only fields get `est_field_<i>`.
+    A field descriptor that appears in BOTH worlds (Python identity)
+    shares the sim var, so `register_field` on the EKF refers to the
+    same C++ instance the sim is updating.
+    """
+    out: dict[int, str] = {}
+    for i, f in enumerate(sim_world.fields):
+        out[id(f)] = f"sim_field_{i}"
+    for i, f in enumerate(est_world.fields):
+        if id(f) in out:
+            continue
+        out[id(f)] = f"est_field_{i}"
+    return out

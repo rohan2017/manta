@@ -15,9 +15,10 @@ input bindings write into `ekf.craft().<sensor>().set_measurement(...)`,
 output bindings read from `ekf.craft().<part>().<getter>()` for craft-
 rooted signals or from `ekf.<accessor>()(i)` for EKF-rooted signals.
 
-Phase-A scope: only DVL is supported as a measurement. IMU and
-Magnetometer raise NotImplementedError when listed in `ekf.measurements`
-(they can still be wired as inputs via subscribe(...)).
+Phase-A scope: DVL, IMU, and Magnetometer measurement updates are
+supported. Magnetometer uses a locally-constant-B approximation (B
+captured from the registered MagField at update time; ∂h/∂q is exact,
+∂h/∂p is dropped — fine when |∇B|·|δp| << |B| over a tick).
 """
 
 from __future__ import annotations
@@ -60,28 +61,34 @@ def _accessor_for_ekf_or_craft(sig, craft_var: str, ekf_var: str) -> str:
 
 # ---------------------------------------------------------------------------
 # Per-sensor measurement-functor codegen.
-#
-# Each entry maps a sensor's PartDescriptor.cpp_class_template → (n_floats,
-# functor C++ definition, code that reads `z` from the part). The functor
-# is templated on the scalar so the EKF can run it through both double and
-# Jet evaluations.
 
 class _MeasFunctor:
-    """Bundle of (n_floats, functor decl, z-read) for one sensor type.
-    Functor name is f"{ekf_var}_{part_name}_meas".
+    """Per-sensor measurement-functor codegen bundle.
+
+    Carries (n_floats, file-scope functor decl, z-vector reads) and emits
+    its own `if (consume_fresh()) { ... update_n<N>(...); }` block via
+    `emit_update_block`. Most sensors use the simple form; Magnetometer
+    captures the registered MagField's value at the current state position
+    before each update (locally-constant-B approximation).
     """
-    def __init__(self, n_floats: int, body: str, z_read: list[str]):
+    def __init__(self, n_floats: int, body: str, z_read: list[str],
+                 functor_name: str,
+                 mag_field_var: str | None = None):
         self.n_floats = n_floats
         self.body = body
-        self.z_read = z_read   # list of n_floats C++ expressions returning double
+        self.z_read = z_read
+        self.functor_name = functor_name
+        self.mag_field_var = mag_field_var   # set for magnetometer specs only
 
     @classmethod
-    def for_part(cls, part, ekf_var: str, part_var: str) -> "_MeasFunctor":
-        """Dispatch by part type. Currently supported: DVL, IMU.
-        Magnetometer raises NotImplementedError (needs templated MagField
-        access, which the field machinery doesn't yet expose).
+    def for_part(cls, part, ekf_var: str, part_var: str,
+                 mag_field_var: str | None = None) -> "_MeasFunctor":
+        """Dispatch by part type. Supported: DVL, IMU, Magnetometer.
 
-        `part_var` is the C++ accessor for the sensor (e.g. `ekf_0.craft().dvl()`).
+        `part_var` is the sensor's C++ accessor (e.g. `ekf_0.craft().dvl()`).
+        `mag_field_var` is the C++ var name of the first registered MagField
+        in the surrounding scope — required if Magnetometer is among the
+        measurements; ignored otherwise.
         """
         cct = getattr(type(part), "cpp_class_template", "")
         functor_name = f"_{ekf_var}_{part.name}_meas"
@@ -102,18 +109,8 @@ class _MeasFunctor:
                 f"{part_var}.last_velocity().raw()(1)",
                 f"{part_var}.last_velocity().raw()(2)",
             ]
-            return cls(n_floats=3, body=body, z_read=z_read)
+            return cls(3, body, z_read, functor_name)
         if cct == "manta::parts::IMUT":
-            # IMU measurement model — free-flight / no-net-force assumption:
-            #   predicted accel_body = 0     (no thrusters / no gravity in
-            #                                 the est-side dynamics)
-            #   predicted gyro_body  = state.segment<3>(10)  (body ω is a
-            #                                                 direct state
-            #                                                 component)
-            # This is the right model when the est craft has only a Mass +
-            # IMU/DVL (the typical "drive-the-state-from-IMU" pattern). For
-            # crafts with explicit forces or gravity in the est dynamics,
-            # this h(x) underestimates accel and the user should override.
             body = (
                 f"// IMU: predicted [accel_body=0; gyro_body=ω_body] under the\n"
                 f"// no-net-force / free-flight assumption (est dynamics has\n"
@@ -138,21 +135,54 @@ class _MeasFunctor:
                 f"{part_var}.last_gyro().raw()(1)",
                 f"{part_var}.last_gyro().raw()(2)",
             ]
-            return cls(n_floats=6, body=body, z_read=z_read)
+            return cls(6, body, z_read, functor_name)
         if cct == "manta::parts::MagnetometerT":
-            raise NotImplementedError(
-                f"EKF codegen: Magnetometer ({part.name!r}) as a measurement is "
-                f"not yet supported. h(x) needs to query the registered MagField "
-                f"in a templated context (R(q)^T · B(p)), and the field machinery "
-                f"isn't yet templated on the EKF's Jet scalar. Wire the "
-                f"magnetometer as an INPUT via subscribe(mag.set_measurement, ...) "
-                f"in the meantime.")
+            if mag_field_var is None:
+                raise RuntimeError(
+                    f"EKF codegen: Magnetometer {part.name!r} requires a "
+                    f"`MagField` registered on the EKF's wrapped world. Add "
+                    f"`world.add_field(MagField()...)` (or wire one via "
+                    f"`Earth(dipole_moment=...)`) so the codegen can query "
+                    f"B at the current state position each update.")
+            # Locally-constant-B approximation: B(p) is treated as constant
+            # at update time — we read it once from the registered field at
+            # the current best-estimate position, then h(x) just rotates by
+            # R(q)^T. The Jacobian is exact in q (the dominant term) and
+            # zero in p (the small-position-gradient simplification). For
+            # most magnetometer applications |grad B|*|dp| << |B| over a
+            # single tick, so the loss is in the noise.
+            body = (
+                f"// Magnetometer: predicted body-frame B = R(q)^T * B(p_now).\n"
+                f"// B is captured at update-time from the registered MagField\n"
+                f"// (locally-constant-B approximation: dh/dq is exact,\n"
+                f"// dh/dp is dropped). Set b_scene_now before passing the\n"
+                f"// functor instance to update_n<3>.\n"
+                f"struct {functor_name} {{\n"
+                f"    Eigen::Matrix<double, 3, 1> b_scene_now;\n"
+                f"    template <class S>\n"
+                f"    Eigen::Matrix<S, 3, 1> operator()(const Eigen::Matrix<S, 13, 1>& x) const {{\n"
+                f"        Eigen::Quaternion<S> q(x(3), x(4), x(5), x(6));\n"
+                f"        Eigen::Matrix<S, 3, 1> b;\n"
+                f"        b(0) = S(b_scene_now(0));\n"
+                f"        b(1) = S(b_scene_now(1));\n"
+                f"        b(2) = S(b_scene_now(2));\n"
+                f"        return q.conjugate() * b;\n"
+                f"    }}\n"
+                f"}};\n"
+            )
+            z_read = [
+                f"{part_var}.last_b().raw()(0)",
+                f"{part_var}.last_b().raw()(1)",
+                f"{part_var}.last_b().raw()(2)",
+            ]
+            return cls(3, body, z_read, functor_name,
+                       mag_field_var=mag_field_var)
         raise NotImplementedError(
             f"EKF codegen: no measurement-functor template for "
             f"{type(part).__name__} ({part.name!r}, cpp_class_template={cct!r}).")
 
     def functor_typename(self, ekf_var: str, part_name: str) -> str:
-        return f"_{ekf_var}_{part_name}_meas"
+        return self.functor_name
 
     def sigma_squared_diag(self, part) -> list[float]:
         """Diagonal of R for this sensor — reads the part's noise sigma fields."""
@@ -164,7 +194,59 @@ class _MeasFunctor:
             sa = float(getattr(part, "accel_sigma", 0.0))
             sg = float(getattr(part, "gyro_sigma", 0.0))
             return [sa * sa, sa * sa, sa * sa, sg * sg, sg * sg, sg * sg]
+        if cct == "manta::parts::MagnetometerT":
+            s = float(getattr(part, "sigma", 0.0))
+            return [s * s, s * s, s * s]
         raise NotImplementedError(cct)
+
+    def emit_update_block(self, lines: list[str], ekf_var: str,
+                          part_var: str, rname: str,
+                          indent: str = "        ") -> None:
+        """Append the `if (consume_fresh()) { ... update_n<N>(...); }` block
+        for this sensor. Magnetometer adds a pre-update position lookup +
+        B capture step; everything else uses the default form."""
+        n = self.n_floats
+        lines.append(f"{indent}if ({part_var}.consume_fresh()) {{")
+        if self.mag_field_var is not None:
+            lines.append(f"{indent}    {self.functor_name} _h;")
+            lines.append(f"{indent}    auto _p_d = {ekf_var}.position();")
+            lines.append(f"{indent}    Eigen::Matrix<float, 3, 1> _p_f("
+                         f"float(_p_d(0)), float(_p_d(1)), float(_p_d(2)));")
+            lines.append(
+                f"{indent}    auto _b_now = {self.mag_field_var}.state_at("
+                f"manta::geom::Vec3<manta::SceneFrame>::from_raw(_p_f));"
+            )
+            lines.append(f"{indent}    _h.b_scene_now << "
+                         f"double(_b_now.x()), double(_b_now.y()), double(_b_now.z());")
+            lines.append(f"{indent}    Eigen::Matrix<double, {n}, 1> z;")
+            for i, expr in enumerate(self.z_read):
+                lines.append(f"{indent}    z({i}) = {expr};")
+            lines.append(
+                f"{indent}    {ekf_var}.template update_n<{n}>(_h, z, {rname});"
+            )
+        else:
+            lines.append(f"{indent}    Eigen::Matrix<double, {n}, 1> z;")
+            for i, expr in enumerate(self.z_read):
+                lines.append(f"{indent}    z({i}) = {expr};")
+            lines.append(
+                f"{indent}    {ekf_var}.template update_n<{n}>("
+                f"{self.functor_name}{{}}, z, {rname});"
+            )
+        lines.append(f"{indent}}}")
+
+
+def _first_mag_field_var(world, var_for_id: dict[int, str] | None = None) -> str | None:
+    """Return the C++ var name of the first MagField registered on `world`.
+
+    `var_for_id` maps `id(field_descriptor) -> var_name` (used by sim+ekf
+    paths where field vars are precomputed). When None, the EKF-only path
+    naming `field_<i>` is assumed."""
+    for i, f in enumerate(world.fields):
+        if getattr(f, "cpp_class", "") == "manta::fields::MagField":
+            if var_for_id is not None:
+                return var_for_id.get(id(f), f"field_{i}")
+            return f"field_{i}"
+    return None
 
 
 def emit_ekf_main_cpp(target, ekf) -> str:
@@ -186,12 +268,19 @@ def emit_ekf_main_cpp(target, ekf) -> str:
 
     ekf_var  = ekf.cpp_var_name()                # "ekf_<id>"
     craft_var = f"{ekf_var}.craft()"             # accessor for the wrapped craft
-    meas_dim = sum(_MeasFunctor.for_part(m, ekf_var,
-                                         f"{craft_var}.{m.name}()").n_floats
-                   for m in ekf.measurements) if ekf.measurements else 1
-    # CraftEKF<...> template still requires a positive MeasDim; if the user
-    # only listed inputs (no updates), default to 1 — update_n<N> is what
-    # actually drives every measurement, MeasDim is just a placeholder.
+
+    # Field var lookup so a Magnetometer measurement can name the right
+    # MagField instance for its locally-constant-B capture.
+    mag_field_var = _first_mag_field_var(world)
+
+    meas_specs: list[tuple[object, _MeasFunctor]] = []
+    for m in ekf.measurements:
+        part_var = f"{craft_var}.{m.name}()"
+        spec = _MeasFunctor.for_part(m, ekf_var, part_var,
+                                     mag_field_var=mag_field_var)
+        meas_specs.append((m, spec))
+
+    meas_dim = sum(s.n_floats for _, s in meas_specs) if meas_specs else 1
     if meas_dim < 1:
         meas_dim = 1
 
@@ -254,13 +343,8 @@ def emit_ekf_main_cpp(target, ekf) -> str:
         "",
     ]
 
-    # Per-sensor measurement functors emitted at file scope, keyed by ekf_var
-    # + part name so multiple EKFs in one binary don't collide.
-    meas_specs = []
-    for m in ekf.measurements:
-        part_var = f"{craft_var}.{m.name}()"
-        spec = _MeasFunctor.for_part(m, ekf_var, part_var)
-        meas_specs.append((m, spec))
+    # Per-sensor measurement functors emitted at file scope.
+    for m, spec in meas_specs:
         for ln in spec.body.rstrip("\n").split("\n"):
             lines.append(ln)
         lines.append("")
@@ -297,8 +381,6 @@ def emit_ekf_main_cpp(target, ekf) -> str:
             lines.append(f"    {rname}({i}, {i}) = {_f(v)};")
         lines.append("")
 
-    # Field instances live with static storage in main; register on the EKF
-    # (which forwards to both internal crafts).
     sync_field_idxs: list[int] = []
     for i, f in enumerate(world.fields):
         var = f"field_{i}"
@@ -317,9 +399,6 @@ def emit_ekf_main_cpp(target, ekf) -> str:
         "",
     ]
 
-    # Bindings: subscribers + publishers, identical wiring to emit_main_cpp
-    # but the craft variable for input/output accessor expansion is now
-    # `ekf_<id>.craft()` (or `ekf_<id>` for EKF-rooted output signals).
     bind_assignments: list[tuple[int, "Binding"]] = []
     for i, b in enumerate(world.bindings):
         bind_assignments.append((i, b))
@@ -351,32 +430,20 @@ def emit_ekf_main_cpp(target, ekf) -> str:
         "    while (g_run.load()) {",
     ]
 
-    # Apply input bindings — write into ekf.craft().<sensor>().set_measurement(...).
     for bid, b in bind_assignments:
         if b.direction == "in":
             _emit_input_binding_apply(lines, bid, b, craft_var, ekf_var)
 
-    # Predict step.
     lines += [
         "",
         f"        {ekf_var}.predict(DT, Q);",
         "",
     ]
 
-    # Per-sensor consume_fresh + update_n.
     for m, spec in meas_specs:
-        n = spec.n_floats
-        functor_t = spec.functor_typename(ekf_var, m.name)
         rname = f"R_{m.name}"
         part_acc = f"{craft_var}.{m.name}()"
-        lines.append(f"        if ({part_acc}.consume_fresh()) {{")
-        lines.append(f"            Eigen::Matrix<double, {n}, 1> z;")
-        for i, expr in enumerate(spec.z_read):
-            lines.append(f"            z({i}) = {expr};")
-        lines.append(
-            f"            {ekf_var}.template update_n<{n}>({functor_t}{{}}, z, {rname});"
-        )
-        lines.append("        }")
+        spec.emit_update_block(lines, ekf_var, part_acc, rname)
     if meas_specs:
         lines.append("")
 
