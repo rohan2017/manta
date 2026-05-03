@@ -47,7 +47,10 @@ def make_world() -> World:
     c.add(motor)
     motor.add(flywheel)          # flywheel rides the motor's joint output
 
-    c.publish({
+    # Free space, no gravity, default initial state. Bindings live at the
+    # World level — declared after add_craft so the craft is registered.
+    w = World().add_craft(c)
+    w.publish({
         "t": c.time,
         "p": c.position,         "q": c.orientation,
         "v": c.vel_linear,       "w": c.vel_angular,
@@ -55,7 +58,5 @@ def make_world() -> World:
         "wheel_rate":  motor.rate,
         "wheel_accel": motor.accel,
     }, "manta/ex4/state")
-    c.subscribe(motor.set_torque, "manta/ex4/wheel/cmd")
-
-    # Free space, no gravity, default initial state.
-    return World().add_craft(c).run(dt=0.001, sim_rate_mult=1.0)
+    w.subscribe(motor.set_torque, "manta/ex4/wheel/cmd")
+    return w.run(dt=0.001, sim_rate_mult=1.0)

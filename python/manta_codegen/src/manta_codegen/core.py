@@ -225,6 +225,11 @@ class PartDescriptor:
         self.static = static
         # Filled by Craft.add() / CompositePartRef.add()
         self._children: list[PartDescriptor] = []
+        # Set by `_stamp_craft_ref` when the part is attached to a craft.
+        # Used to propagate the craft reference to children added after
+        # this part has been hooked up (e.g. `motor.add(flywheel)` after
+        # `c.add(motor)`).
+        self._craft: object = None
         # Attach a BoundSignal for each declared signal. Names are pre-validated
         # at signal-list-declaration time (Signal.__post_init__).
         for sig in type(self).signals:
@@ -289,6 +294,11 @@ class PartDescriptor:
     def add(self, child: "PartDescriptor") -> "PartDescriptor":
         """Attach a child part. Returns the child so chaining is convenient."""
         self._children.append(child)
+        # Propagate this parent's craft ref to the child so World.publish /
+        # subscribe can resolve the right craft accessor for nested signals
+        # (e.g. a Mass attached under a Motor).
+        if self._craft is not None:
+            _stamp_craft_ref(child, self._craft)
         return child
 
     def walk(self) -> Iterator["PartDescriptor"]:
@@ -327,102 +337,20 @@ class Craft:
         # parts in the craft must have `cpp_class_template` set; codegen
         # raises if any part lacks it.
         self.scalar_templated: bool = False
-        # Explicit pub/sub bindings (phase 2 of the API redesign). Each entry
-        # is a Binding holding {member_name: BoundSignal}, a topic, a protocol,
-        # and an encoding. Single-signal and bundled-struct bindings are the
-        # same primitive; the single-signal case is just a one-member dict.
-        # Codegen iterates these to emit one publisher / subscriber per
-        # Binding; replaces the older publish_state / subscribe_command
-        # flag-based path.
-        self.bindings: list[Binding] = []
         # Craft-level signals (pose + velocity) exposed as attributes for
         # symmetry with `imu.last_accel`-style part signal access. Each is a
         # BoundSignal pointing at the craft itself (part_name = CRAFT_SENTINEL);
         # the emitter recognizes the sentinel and substitutes plain `craft`
-        # for the accessor.
+        # for the accessor. `craft_ref` is set to `self` so World-level
+        # binding APIs can disambiguate which craft each signal belongs to.
         for sig in _CRAFT_SIGNALS:
             object.__setattr__(self, sig.name,
-                               BoundSignal(part_name=CRAFT_SENTINEL, signal=sig))
+                               BoundSignal(part_name=CRAFT_SENTINEL, signal=sig,
+                                           craft_ref=self))
 
-    # ---- pub/sub binding API (phase 2) ----
-
-    def publish(self,
-                what: BoundSignal | dict[str, BoundSignal],
-                topic: str | None = None,
-                protocol: str = "zenoh",
-                encoding: str = "json") -> "Craft":
-        """Register an outgoing binding.
-
-        `what` is either:
-          * A single BoundSignal — wrapped to {signal.name: signal} and given
-            a default topic of `f"{topic_prefix}/{part_name}/{signal_name}"`
-            if `topic` is None.
-          * A dict[str, BoundSignal] — the keys become struct member names in
-            the published payload. `topic` is required; no good default.
-
-        All members (one or many) must have direction='out'.
-        """
-        members = self._normalize_binding_input(what, kind="publish")
-        topic   = self._resolve_topic(topic, members, what)
-        self.bindings.append(Binding(members=members, topic=topic,
-                                     protocol=protocol, encoding=encoding))
-        return self
-
-    def subscribe(self,
-                  what: BoundSignal | dict[str, BoundSignal],
-                  topic: str | None = None,
-                  protocol: str = "zenoh",
-                  encoding: str = "json") -> "Craft":
-        """Register an incoming binding. Symmetric to publish(); all members
-        must have direction='in'."""
-        members = self._normalize_binding_input(what, kind="subscribe")
-        topic   = self._resolve_topic(topic, members, what)
-        self.bindings.append(Binding(members=members, topic=topic,
-                                     protocol=protocol, encoding=encoding))
-        return self
-
-    def _normalize_binding_input(self,
-                                 what: BoundSignal | dict[str, BoundSignal],
-                                 kind: str) -> dict[str, BoundSignal]:
-        expect = "out" if kind == "publish" else "in"
-        opposite_method = "subscribe" if kind == "publish" else "publish"
-        if isinstance(what, BoundSignal):
-            members = {what.name: what}
-        elif isinstance(what, dict):
-            if not what:
-                raise ValueError(f"Craft.{kind}: empty struct dict")
-            for k, v in what.items():
-                if not isinstance(k, str) or not k.isidentifier():
-                    raise ValueError(
-                        f"Craft.{kind}: struct member name {k!r} must be a valid identifier")
-                if not isinstance(v, BoundSignal):
-                    raise TypeError(
-                        f"Craft.{kind}: struct member {k!r} must be a BoundSignal, got {type(v).__name__}")
-            members = dict(what)
-        else:
-            raise TypeError(
-                f"Craft.{kind}: expected BoundSignal or dict[str, BoundSignal], got {type(what).__name__}")
-        bad = [(k, v) for k, v in members.items() if v.direction != expect]
-        if bad:
-            names = ", ".join(f"{k!r}" for k, _ in bad)
-            raise ValueError(
-                f"Craft.{kind}: member(s) {names} have direction!='{expect}'; "
-                f"use Craft.{opposite_method} instead (or split the struct)")
-        return members
-
-    def _resolve_topic(self,
-                       topic: str | None,
-                       members: dict[str, BoundSignal],
-                       what: BoundSignal | dict[str, BoundSignal]) -> str:
-        if topic is not None:
-            return topic
-        # Default topic only makes sense for a single-signal binding — there's
-        # no good default for a multi-member struct.
-        if isinstance(what, BoundSignal):
-            return f"{self.topic_prefix}/{what.part_name}/{what.name}"
-        raise ValueError(
-            "Craft.publish/subscribe: a multi-member struct binding needs an "
-            "explicit `topic` argument (no good default for bundled structs)")
+    # Bindings live on the World now (since they can connect signals across
+    # crafts and to user-declared world-level signal slots). Use
+    # `world.publish(...)`, `world.subscribe(...)`, and `world.connect(...)`.
 
     def add(self, child: PartDescriptor) -> PartDescriptor:
         """Convenience shortcut for `c.root.add(child)`. Returns the child so
@@ -507,6 +435,12 @@ class World:
         self.planets: list[PlanetDescriptor] = []
         self.crafts: list[_CraftEntry] = []
         self.tethers: list[_TetherEntry] = []
+        # World-level pub/sub bindings. Each Binding holds a struct of
+        # BoundSignal members (single-signal bindings are the degenerate
+        # one-member case). Codegen iterates these to emit one Zenoh
+        # publisher/subscriber per Binding. The BoundSignal's `craft_ref`
+        # tells the emitter which craft owns each signal.
+        self.bindings: list[Binding] = []
         self.dt: float = 0.001
         self.sim_rate_mult: float = 1.0
 
@@ -521,6 +455,87 @@ class World:
     def add_field(self, f: FieldDescriptor) -> "World":
         self.fields.append(f)
         return self
+
+    # ---- pub/sub binding API ----
+
+    def publish(self,
+                what: BoundSignal | dict[str, BoundSignal],
+                topic: str | None = None,
+                protocol: str = "zenoh",
+                encoding: str = "json") -> "World":
+        """Register an outgoing binding from a craft signal (or bundled struct)
+        to a topic. `what` is either a single BoundSignal or a
+        `dict[str, BoundSignal]` for a bundled-struct payload. All members
+        must have direction='out'."""
+        members = self._normalize_binding_input(what, kind="publish")
+        topic   = self._resolve_topic(topic, members, what)
+        self.bindings.append(Binding(members=members, topic=topic,
+                                     protocol=protocol, encoding=encoding))
+        return self
+
+    def subscribe(self,
+                  what: BoundSignal | dict[str, BoundSignal],
+                  topic: str | None = None,
+                  protocol: str = "zenoh",
+                  encoding: str = "json") -> "World":
+        """Register an incoming binding from a topic to a craft signal.
+        Symmetric to publish(); all members must have direction='in'."""
+        members = self._normalize_binding_input(what, kind="subscribe")
+        topic   = self._resolve_topic(topic, members, what)
+        self.bindings.append(Binding(members=members, topic=topic,
+                                     protocol=protocol, encoding=encoding))
+        return self
+
+    def _normalize_binding_input(self,
+                                 what: BoundSignal | dict[str, BoundSignal],
+                                 kind: str) -> dict[str, BoundSignal]:
+        expect = "out" if kind == "publish" else "in"
+        opposite = "subscribe" if kind == "publish" else "publish"
+        if isinstance(what, BoundSignal):
+            members = {what.name: what}
+        elif isinstance(what, dict):
+            if not what:
+                raise ValueError(f"World.{kind}: empty struct dict")
+            for k, v in what.items():
+                if not isinstance(k, str) or not k.isidentifier():
+                    raise ValueError(
+                        f"World.{kind}: struct member name {k!r} must be a valid identifier")
+                if not isinstance(v, BoundSignal):
+                    raise TypeError(
+                        f"World.{kind}: struct member {k!r} must be a BoundSignal, "
+                        f"got {type(v).__name__}")
+            members = dict(what)
+        else:
+            raise TypeError(
+                f"World.{kind}: expected BoundSignal or dict[str, BoundSignal], "
+                f"got {type(what).__name__}")
+        bad = [(k, v) for k, v in members.items() if v.direction != expect]
+        if bad:
+            names = ", ".join(f"{k!r}" for k, _ in bad)
+            raise ValueError(
+                f"World.{kind}: member(s) {names} have direction!={expect!r}; "
+                f"use World.{opposite} instead")
+        # Every signal must point at a known craft.
+        for k, v in members.items():
+            if v.craft_ref is None:
+                raise ValueError(
+                    f"World.{kind}: signal {k!r} is not attached to any craft "
+                    f"(did you forget to call `c.add(part)` before binding?)")
+        return members
+
+    def _resolve_topic(self,
+                       topic: str | None,
+                       members: dict[str, BoundSignal],
+                       what: BoundSignal | dict[str, BoundSignal]) -> str:
+        if topic is not None:
+            return topic
+        if isinstance(what, BoundSignal):
+            craft = what.craft_ref
+            prefix = craft.topic_prefix
+            return f"{prefix}/{what.part_name}/{what.name}"
+        raise ValueError(
+            "World.publish/subscribe: a multi-member struct binding needs an "
+            "explicit `topic` argument (no good default for bundled structs)")
 
     def add_planet(self, p: PlanetDescriptor) -> "World":
         self.planets.append(p)
@@ -605,5 +620,23 @@ class _RootProxy:
         self.children: list[PartDescriptor] = []
 
     def add(self, child: PartDescriptor) -> PartDescriptor:
+        # Stamp the craft reference on every BoundSignal hanging off this
+        # part so World.publish/subscribe/connect can resolve which craft
+        # the signal belongs to in multi-craft worlds.
+        _stamp_craft_ref(child, self._craft)
         self.children.append(child)
         return child
+
+
+def _stamp_craft_ref(part: PartDescriptor, craft: "Craft") -> None:
+    """Walk a PartDescriptor's class-level signals table and set craft_ref
+    on each BoundSignal attribute. Also stamps the part's own `_craft`
+    field so any later `part.add(child)` call propagates the right ref.
+    Recurses into already-attached children."""
+    part._craft = craft
+    for sig in getattr(part, "signals", []) or []:
+        bs = getattr(part, sig.name, None)
+        if isinstance(bs, BoundSignal):
+            bs.craft_ref = craft
+    for child in getattr(part, "_children", []) or []:
+        _stamp_craft_ref(child, craft)

@@ -43,19 +43,6 @@ def make_world() -> World:
     for t in thrusters:
         c.add(t)
 
-    # Bundled state topic: craft pose + per-thruster throttles. Wire format
-    # matches what the viewer expects (top-level "p","q","v","w" arrays).
-    state = {
-        "t": c.time,
-        "p": c.position, "q": c.orientation,
-        "v": c.vel_linear, "w": c.vel_angular,
-    }
-    for t in thrusters:
-        state[t.name] = t.throttle
-    c.publish(state, "manta/ex1/state")
-    for t in thrusters:
-        c.subscribe(t.set_throttle, f"manta/ex1/{t.name}/cmd")
-
     # Sim setup: gravity field on the world, craft at (R, 0, 0) with
     # tangential velocity for a circular orbit. 200 sim-s per wall-s.
     # `synchronized=True` opts the gravity field into Zenoh disturbance
@@ -63,7 +50,24 @@ def make_world() -> World:
     # see the same point-mass disturbance even though it didn't add it.
     grav = GravityField().add_point_mass(mu=MU)
     grav.synchronized = True
-    return (World()
+
+    w = (World()
             .add_field(grav)
-            .add_craft(c, pos=(ORBIT_R, 0.0, 0.0), vel=(0.0, V_CIRC, 0.0))
-            .run(dt=0.005, sim_rate_mult=200.0))
+            .add_craft(c, pos=(ORBIT_R, 0.0, 0.0), vel=(0.0, V_CIRC, 0.0)))
+
+    # Bundled state topic: craft pose + per-thruster throttles. Wire format
+    # matches what the viewer expects (top-level "p","q","v","w" arrays).
+    # Bindings live at the World level (one fabric per binary, regardless of
+    # how many crafts share it).
+    state = {
+        "t": c.time,
+        "p": c.position, "q": c.orientation,
+        "v": c.vel_linear, "w": c.vel_angular,
+    }
+    for t in thrusters:
+        state[t.name] = t.throttle
+    w.publish(state, "manta/ex1/state")
+    for t in thrusters:
+        w.subscribe(t.set_throttle, f"manta/ex1/{t.name}/cmd")
+
+    return w.run(dt=0.005, sim_rate_mult=200.0)

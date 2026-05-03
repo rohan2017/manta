@@ -215,10 +215,28 @@ def emit_main_cpp(world: World) -> str:
     # gets its own Zenoh handle and mutex.
     bind_idx = 0
     bind_assignments: list[tuple[int, int, "Binding"]] = []  # (bind_id, craft_idx, binding)
-    for cidx, entry in enumerate(world.crafts):
-        for b in entry.craft.bindings:
-            bind_assignments.append((bind_idx, cidx, b))
-            bind_idx += 1
+    # Bindings live on the World now. Each binding carries a struct of
+    # BoundSignals; we look at the first member's craft_ref to pick the
+    # craft index for accessor emission. Bundled bindings whose members
+    # span multiple crafts aren't supported (a binding's payload represents
+    # one logical value tied to one craft); the validator below catches
+    # that case.
+    craft_index_by_id: dict[int, int] = {
+        id(entry.craft): cidx for cidx, entry in enumerate(world.crafts)
+    }
+    for b in world.bindings:
+        member_crafts = {id(m.craft_ref) for m in b.members.values()}
+        if len(member_crafts) != 1:
+            raise RuntimeError(
+                f"emit_main_cpp: binding on topic {b.topic!r} mixes signals "
+                f"from multiple crafts; split into one binding per craft.")
+        craft_id = next(iter(member_crafts))
+        if craft_id not in craft_index_by_id:
+            raise RuntimeError(
+                f"emit_main_cpp: binding on topic {b.topic!r} references a "
+                f"craft not registered with this world.")
+        bind_assignments.append((bind_idx, craft_index_by_id[craft_id], b))
+        bind_idx += 1
 
     for bid, cidx, b in bind_assignments:
         if b.direction == "in":

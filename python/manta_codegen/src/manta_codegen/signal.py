@@ -83,14 +83,21 @@ class Signal:
                     f"Signal {self.name!r}: in signals must not set cpp_read_exprs")
 
 
-@dataclass(frozen=True)
+@dataclass
 class BoundSignal:
     """A per-instance handle returned by `partdesc.<signal_name>` access. Carries
     enough information for codegen to emit the right C++ call without going
     back to the part descriptor — protocol emitters consume BoundSignal,
-    not Signal."""
+    not Signal.
+
+    `craft_ref` is set by `Craft.add(part)` (for part signals) or directly
+    in `Craft.__init__` (for craft-level pose / time signals). The world-
+    level binding API (`World.publish/subscribe/connect`) uses it to look
+    up which craft a signal belongs to in a multi-craft world.
+    """
     part_name: str       # e.g. "imu" — the Part's name within its Craft
     signal: Signal       # class-level metadata
+    craft_ref: object = None     # Craft | None, set when the part is attached
 
     @property
     def name(self) -> str:
