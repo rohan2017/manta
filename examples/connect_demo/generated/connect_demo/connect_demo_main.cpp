@@ -57,9 +57,6 @@ int main() {
     auto& scene = w.create_scene();
     ConnectDemoCraft craft;
     scene.add_craft(craft, manta::InitialState{});
-    // user-declared signal slots
-    std::atomic<float> user_signal_cmd{0.0f};
-
     zenoh::Config cfg = zenoh::Config::create_default();
     auto session = zenoh::Session::open(std::move(cfg));
 
@@ -87,17 +84,12 @@ int main() {
     while (g_run.load()) {
         { std::lock_guard<std::mutex> lk(bind_0_mtx);
           if (bind_0_payload.size() >= 1) {
-              user_signal_cmd.store(bind_0_payload[0]);    // member: cmd
+              craft.leader().set_throttle(bind_0_payload[0]);    // member: set_throttle
               bind_0_payload.clear();
           } }
 
         w.update();
 
-        // connect: $user/cmd.cmd → leader.set_throttle
-        {
-            const float v0 = user_signal_cmd.load();
-            craft.leader().set_throttle(v0);
-        }
         // connect: leader.throttle → follower.set_throttle
         {
             const float v0 = craft.leader().throttle();

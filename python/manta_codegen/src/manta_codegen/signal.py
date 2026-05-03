@@ -149,36 +149,14 @@ def scalar_in_signal(name: str, setter_method: str) -> Signal:
 
 CRAFT_SENTINEL = "$craft"
 
-# User-declared world-level signal slot. The part_name has the form
-# `$user/<slot_name>` and the accessor expression in the Signal's
-# cpp_read_exprs / cpp_write_stmt writes directly to the slot's storage
-# in main() — no craft is involved. Today only scalar (n=1) slots are
-# supported, backed by `std::atomic<float>`; larger slots can be added
-# later with a mutexed std::array.
-USER_SENTINEL_PREFIX = "$user/"
-
 
 def is_craft_signal(b: BoundSignal) -> bool:
     return b.part_name == CRAFT_SENTINEL
 
 
-def is_user_signal(b: BoundSignal) -> bool:
-    return b.part_name.startswith(USER_SENTINEL_PREFIX)
-
-
-def user_signal_slot_name(b: BoundSignal) -> str:
-    """Strip the `$user/` prefix; result is the slot's C++ identifier."""
-    assert is_user_signal(b)
-    return b.part_name[len(USER_SENTINEL_PREFIX):]
-
-
 def accessor_for(b: BoundSignal) -> str:
     """Return the C++ accessor expression to substitute for `{accessor}` in
-    the signal's cpp_read_exprs / cpp_write_stmt. User-signal slots resolve
-    to the slot variable directly (no `.method()` call), so the read/write
-    expressions are crafted to ignore `{accessor}`."""
-    if is_user_signal(b):
-        return ""   # signal's own expressions don't use {accessor}
+    the signal's cpp_read_exprs / cpp_write_stmt."""
     return "craft" if is_craft_signal(b) else f"craft.{b.part_name}()"
 
 
@@ -260,10 +238,7 @@ class Connection:
             raise ValueError(
                 f"Connection: source has n_floats={self.source.signal.n_floats}, "
                 f"sink has n_floats={self.sink.signal.n_floats} — must match")
-        # User-declared world-level signals don't have a craft_ref;
-        # everything else must be attached to one.
-        if (self.source.craft_ref is None and not is_user_signal(self.source)) or \
-           (self.sink.craft_ref   is None and not is_user_signal(self.sink)):
+        if self.source.craft_ref is None or self.sink.craft_ref is None:
             raise ValueError(
-                "Connection: signals must be attached to a craft "
-                "(call c.add(part) first), or come from world.declare_signal(...).")
+                "Connection: both signals must be attached to a craft "
+                "(call c.add(part) before connect()).")

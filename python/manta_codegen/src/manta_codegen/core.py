@@ -400,18 +400,6 @@ class Tether:
 
 
 @dataclass
-class SignalSlot:
-    """Handle returned by `World.declare_signal(...)`. Carries both
-    direction-flavored BoundSignals against the same underlying slot, so
-    one declaration can be used as a sink (Zenoh subscriber writes the
-    slot) and as a source (in-process connect reads it) in the same
-    world without re-declaring."""
-    in_signal:  "BoundSignal"
-    out_signal: "BoundSignal"
-    name:       str
-
-
-@dataclass
 class _TetherEntry:
     tether: Tether
     # (craft, endpoint_part_name) for each end. The endpoint Part is added to
@@ -456,12 +444,6 @@ class World:
         # In-process signal-to-signal links — `Connection(out, in)` pairs
         # codegen turns into a per-tick copy step (no Zenoh round-trip).
         self.connections: list = []
-        # User-declared world-level signal slots (n=1 scalars today).
-        # Each entry is a BoundSignal whose `part_name` starts with the
-        # `$user/` sentinel — codegen emits a std::atomic<float> in main()
-        # for each, plus reads/writes through it for any binding that
-        # references the slot.
-        self.user_signals: list[BoundSignal] = []
         self.dt: float = 0.001
         self.sim_rate_mult: float = 1.0
 
@@ -536,52 +518,13 @@ class World:
             raise ValueError(
                 f"World.{kind}: member(s) {names} have direction!={expect!r}; "
                 f"use World.{opposite} instead")
-        # Every craft signal must point at a known craft. User-declared
-        # world-level signals (`world.declare_signal(...)`) don't belong
-        # to a craft; their accessor sidesteps the craft variable in main.
-        from .signal import is_user_signal
+        # Every signal must point at a known craft.
         for k, v in members.items():
-            if v.craft_ref is None and not is_user_signal(v):
+            if v.craft_ref is None:
                 raise ValueError(
                     f"World.{kind}: signal {k!r} is not attached to any craft "
                     f"(did you forget to call `c.add(part)` before binding?)")
         return members
-
-    def declare_signal(self, name: str, n: int = 1) -> "SignalSlot":
-        """Declare a world-level signal slot — a small atomic value any
-        binding can read or write. Today only scalar slots (n=1) are wired
-        through codegen, backed by a std::atomic<float> in main();
-        multi-component slots can be added later with a mutexed array.
-
-        Returns a `SignalSlot` exposing both directions:
-
-            cmd = world.declare_signal("cmd")
-            world.subscribe(cmd.in_signal, "manta/.../cmd")     # Zenoh writes the slot
-            world.connect (cmd.out_signal, leader.set_throttle) # in-process reads it
-        """
-        from .signal import (
-            Signal, BoundSignal as BS, USER_SENTINEL_PREFIX,
-        )
-        if not name.isidentifier():
-            raise ValueError(f"World.declare_signal: name {name!r} must be a valid identifier")
-        if n != 1:
-            raise NotImplementedError(
-                "World.declare_signal: only scalar (n=1) slots are wired "
-                "through codegen today; multi-component slots are TODO.")
-        slot_var = f"user_signal_{name}"
-        in_sig = Signal(
-            name=name, direction="in", n_floats=1,
-            cpp_write_stmt=f"{slot_var}.store({{v0}});",
-        )
-        out_sig = Signal(
-            name=name, direction="out", n_floats=1,
-            cpp_read_exprs=(f"{slot_var}.load()",),
-        )
-        in_bs  = BS(part_name=USER_SENTINEL_PREFIX + name, signal=in_sig)
-        out_bs = BS(part_name=USER_SENTINEL_PREFIX + name, signal=out_sig)
-        # Track the slot once (it's the same atomic regardless of direction).
-        self.user_signals.append(in_bs)
-        return SignalSlot(in_signal=in_bs, out_signal=out_bs, name=name)
 
     def connect(self, source: BoundSignal, sink: BoundSignal) -> "World":
         """Wire an out-direction signal to an in-direction signal in the
@@ -597,13 +540,9 @@ class World:
                        topic: str | None,
                        members: dict[str, BoundSignal],
                        what: BoundSignal | dict[str, BoundSignal]) -> str:
-        from .signal import is_user_signal
         if topic is not None:
             return topic
         if isinstance(what, BoundSignal):
-            if is_user_signal(what):
-                # No craft prefix — fall back to a world-name-based default.
-                return f"manta/{self.name}/{what.name}"
             craft = what.craft_ref
             prefix = craft.topic_prefix
             return f"{prefix}/{what.part_name}/{what.name}"

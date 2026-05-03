@@ -1,11 +1,10 @@
 """connect_demo — minimal demo of world.connect() for in-process
 signal-to-signal binding.
 
-One craft with two thrusters. The leader's throttle is driven over
-Zenoh; the follower mirrors the leader via `w.connect(...)` — no
-Zenoh round-trip, just a per-tick assignment in the generated main.
-The output state topic publishes both throttles so a smoke test can
-verify they stay equal.
+One craft with two thrusters. The leader's set_throttle is fed from
+Zenoh; the follower mirrors the leader's current throttle via
+`w.connect(leader.throttle, follower.set_throttle)` — no Zenoh
+round-trip, just a per-tick assignment in the generated main.
 
 Regenerate from the repo root:
 
@@ -30,15 +29,11 @@ def make_world() -> World:
 
     w = World().add_craft(c)
 
-    # World-level user-signal slot — exposed to Zenoh as `cmd`. The slot
-    # is a std::atomic<float> in the generated main; both Zenoh and
-    # connect() can read/write it via the matching direction.
-    cmd = w.declare_signal("cmd", n=1)
-    w.subscribe(cmd.in_signal, "manta/connect_demo/cmd")
+    # Leader's throttle comes in over Zenoh.
+    w.subscribe(leader.set_throttle, "manta/connect_demo/cmd")
 
-    # Leader's throttle follows the user-declared slot, in-process.
-    w.connect(cmd.out_signal, leader.set_throttle)
-    # Follower mirrors leader, also in-process.
+    # Follower mirrors leader, in-process. Codegen emits a per-tick copy
+    # right after w.update().
     w.connect(leader.throttle, follower.set_throttle)
 
     # Publish both throttles so a smoke test can verify equality.

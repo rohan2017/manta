@@ -203,16 +203,6 @@ def emit_main_cpp(world: World) -> str:
         var = craft_var(idx)
         lines.append(f"    scene.add_craft({var}, {_initial_state_literal(entry)});")
 
-    # User-declared world-level signal slots, backed by std::atomic<float>.
-    # Bindings whose member is one of these slots read/write directly via
-    # the slot variable; no craft accessor involved.
-    if world.user_signals:
-        lines.append("    // user-declared signal slots")
-        for us in world.user_signals:
-            slot = us.part_name.split("/", 1)[1]
-            lines.append(f"    std::atomic<float> user_signal_{slot}{{0.0f}};")
-        lines.append("")
-
     lines += [
         "    zenoh::Config cfg = zenoh::Config::create_default();",
         "    auto session = zenoh::Session::open(std::move(cfg));",
@@ -233,19 +223,7 @@ def emit_main_cpp(world: World) -> str:
     craft_index_by_id: dict[int, int] = {
         id(entry.craft): cidx for cidx, entry in enumerate(world.crafts)
     }
-    from ..signal import is_user_signal
-    USER_BINDING = -1   # placeholder craft index for pure-user-signal bindings
     for b in world.bindings:
-        all_user = all(is_user_signal(m) for m in b.members.values())
-        any_user = any(is_user_signal(m) for m in b.members.values())
-        if all_user:
-            bind_assignments.append((bind_idx, USER_BINDING, b))
-            bind_idx += 1
-            continue
-        if any_user:
-            raise RuntimeError(
-                f"emit_main_cpp: binding on topic {b.topic!r} mixes user-"
-                f"declared signals with craft signals; split them.")
         member_crafts = {id(m.craft_ref) for m in b.members.values()}
         if len(member_crafts) != 1:
             raise RuntimeError(
@@ -427,13 +405,8 @@ def _emit_binding_subscriber(lines: list[str], i: int, b: Binding) -> None:
 def _accessor_for_with_var(sig, craft_var: str) -> str:
     """Like accessor_for() but with a configurable C++ craft variable name.
     Replaces the hard-coded `craft` with `craft_var` so multi-craft mains
-    can use craft_0, craft_1, ... for distinct instances. User-declared
-    world-level signals don't go through any craft accessor — they're
-    direct slot reads/writes — so we return an empty string that gets
-    silently ignored when their cpp_read/write_stmt formats."""
-    base = accessor_for(sig)   # "" / "craft" / "craft.<part>()"
-    if base == "":
-        return ""
+    can use craft_0, craft_1, ... for distinct instances."""
+    base = accessor_for(sig)   # "craft" or "craft.<part>()"
     if base == "craft":
         return craft_var
     assert base.startswith("craft.")
