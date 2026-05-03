@@ -18,7 +18,7 @@
 
 #include "manta/core/scene.hpp"
 #include "manta/core/world.hpp"
-#include "ex4.hpp"
+#include "ex4_craft.hpp"
 
 namespace {
 std::atomic<bool> g_run{true};

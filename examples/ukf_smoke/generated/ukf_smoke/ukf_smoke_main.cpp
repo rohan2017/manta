@@ -19,7 +19,7 @@
 #include <zenoh.hxx>
 
 #include "manta/estimation/craft_ukf.hpp"
-#include "ukf_smoke.hpp"
+#include "ukf_smoke_craft.hpp"
 
 namespace {
 std::atomic<bool> g_run{true};

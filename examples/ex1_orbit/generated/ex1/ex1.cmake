@@ -3,12 +3,12 @@
 set(manta_ex1_DIR ${CMAKE_CURRENT_LIST_DIR})
 
 set(manta_ex1_SOURCES
-    ${manta_ex1_DIR}/ex1.cpp
+    ${manta_ex1_DIR}/ex1_craft.cpp
     ${manta_ex1_DIR}/ex1_main.cpp
 )
 
 set(manta_ex1_HEADERS
-    ${manta_ex1_DIR}/ex1.hpp
+    ${manta_ex1_DIR}/ex1_craft.hpp
     ${manta_ex1_DIR}/ex1_config.h
 )
 

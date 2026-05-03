@@ -32,7 +32,7 @@ def emit_telemetry_hpp(craft: Craft) -> str:
         "#include <cstdio>",
         "#include <string>",
         "",
-        f'#include "{craft.name}.hpp"',
+        f'#include "{craft.name}_craft.hpp"',
         "",
         f"struct {cls}Telemetry {{",
         "    double t_sec = 0.0;",

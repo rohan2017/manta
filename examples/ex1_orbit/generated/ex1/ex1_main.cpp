@@ -18,7 +18,7 @@
 
 #include "manta/core/scene.hpp"
 #include "manta/core/world.hpp"
-#include "ex1.hpp"
+#include "ex1_craft.hpp"
 #include "manta/fields/gravity_field.hpp"
 
 namespace {

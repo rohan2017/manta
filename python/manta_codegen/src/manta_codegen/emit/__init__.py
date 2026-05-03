@@ -63,8 +63,8 @@ def emit(world: World,
     # Per-craft files — one set per unique Craft.
     for craft in unique_crafts:
         n = craft.name
-        files[f"{n}.hpp"] = emit_craft_hpp(craft)
-        files[f"{n}.cpp"] = emit_craft_cpp(craft)
+        files[f"{n}_craft.hpp"] = emit_craft_hpp(craft)
+        files[f"{n}_craft.cpp"] = emit_craft_cpp(craft)
         if workflow in ("library", "binary"):
             files[f"{n}_telemetry.hpp"] = emit_telemetry_hpp(craft)
 
@@ -237,8 +237,8 @@ def _emit_filter_target(target, filter_obj, world, out_dir: Path,
     files: dict[str, str] = {}
     for craft in unique_crafts:
         n = craft.name
-        files[f"{n}.hpp"] = emit_craft_hpp(craft)
-        files[f"{n}.cpp"] = emit_craft_cpp(craft)
+        files[f"{n}_craft.hpp"] = emit_craft_hpp(craft)
+        files[f"{n}_craft.cpp"] = emit_craft_cpp(craft)
         files[f"{n}_telemetry.hpp"] = emit_telemetry_hpp(craft)
 
     world_name = world.name
@@ -295,8 +295,8 @@ def _emit_sim_plus_filter_target(target, sim_world: World, filter_obj,
     files: dict[str, str] = {}
     for craft in unique_crafts:
         n = craft.name
-        files[f"{n}.hpp"] = emit_craft_hpp(craft)
-        files[f"{n}.cpp"] = emit_craft_cpp(craft)
+        files[f"{n}_craft.hpp"] = emit_craft_hpp(craft)
+        files[f"{n}_craft.cpp"] = emit_craft_cpp(craft)
         files[f"{n}_telemetry.hpp"] = emit_telemetry_hpp(craft)
 
     # Target-level files use the target name (not a world name) so the

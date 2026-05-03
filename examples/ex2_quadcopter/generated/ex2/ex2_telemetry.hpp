@@ -7,7 +7,7 @@
 #include <cstdio>
 #include <string>
 
-#include "ex2.hpp"
+#include "ex2_craft.hpp"
 
 struct Ex2CraftTelemetry {
     double t_sec = 0.0;

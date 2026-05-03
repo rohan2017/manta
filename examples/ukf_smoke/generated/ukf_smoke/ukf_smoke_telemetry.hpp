@@ -7,7 +7,7 @@
 #include <cstdio>
 #include <string>
 
-#include "ukf_smoke.hpp"
+#include "ukf_smoke_craft.hpp"
 
 struct UkfSmokeCraftTelemetry {
     double t_sec = 0.0;

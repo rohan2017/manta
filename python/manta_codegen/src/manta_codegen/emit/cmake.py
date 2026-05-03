@@ -42,7 +42,7 @@ def emit_cmake_fragment(world: World, workflow: str, multi: bool = False) -> str
         f"set(manta_{name}_SOURCES",
     ]
     for c in unique_crafts:
-        lines.append(f"    ${{manta_{name}_DIR}}/{c}.cpp")
+        lines.append(f"    ${{manta_{name}_DIR}}/{c}_craft.cpp")
     if workflow == "binary":
         lines.append(f"    ${{manta_{name}_DIR}}/{name}_main.cpp")
     lines += [
@@ -51,7 +51,7 @@ def emit_cmake_fragment(world: World, workflow: str, multi: bool = False) -> str
         f"set(manta_{name}_HEADERS",
     ]
     for c in unique_crafts:
-        lines.append(f"    ${{manta_{name}_DIR}}/{c}.hpp")
+        lines.append(f"    ${{manta_{name}_DIR}}/{c}_craft.hpp")
     lines += [
         f"    ${{manta_{name}_DIR}}/{name}_config.h",
         ")",

@@ -3,14 +3,14 @@
 set(manta_ex7_DIR ${CMAKE_CURRENT_LIST_DIR})
 
 set(manta_ex7_SOURCES
-    ${manta_ex7_DIR}/leader.cpp
-    ${manta_ex7_DIR}/follower.cpp
+    ${manta_ex7_DIR}/leader_craft.cpp
+    ${manta_ex7_DIR}/follower_craft.cpp
     ${manta_ex7_DIR}/ex7_main.cpp
 )
 
 set(manta_ex7_HEADERS
-    ${manta_ex7_DIR}/leader.hpp
-    ${manta_ex7_DIR}/follower.hpp
+    ${manta_ex7_DIR}/leader_craft.hpp
+    ${manta_ex7_DIR}/follower_craft.hpp
     ${manta_ex7_DIR}/ex7_config.h
 )
 

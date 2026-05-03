@@ -7,7 +7,7 @@
 #include <cstdio>
 #include <string>
 
-#include "follower.hpp"
+#include "follower_craft.hpp"
 
 struct FollowerCraftTelemetry {
     double t_sec = 0.0;

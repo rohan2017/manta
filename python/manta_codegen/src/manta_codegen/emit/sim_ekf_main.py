@@ -181,9 +181,9 @@ def emit_sim_plus_ekf_main_cpp(target, sim_world, filter_obj,
         "#include \"manta/core/world.hpp\"",
         filter_header,
     ]
-    lines.append(f'#include "{sim_craft.name}.hpp"')
+    lines.append(f'#include "{sim_craft.name}_craft.hpp"')
     if est_craft_obj.name != sim_craft.name:
-        lines.append(f'#include "{est_craft_obj.name}.hpp"')
+        lines.append(f'#include "{est_craft_obj.name}_craft.hpp"')
     seen_headers: set[str] = set()
     for f in list(sim_world.fields) + list(filter_obj.world.fields):
         if f.cpp_header not in seen_headers:

@@ -19,7 +19,7 @@
 #include <zenoh.hxx>
 
 #include "manta/estimation/craft_ekf.hpp"
-#include "ex6_est.hpp"
+#include "ex6_est_craft.hpp"
 
 namespace {
 std::atomic<bool> g_run{true};

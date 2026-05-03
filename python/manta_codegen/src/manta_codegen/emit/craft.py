@@ -40,8 +40,8 @@ def emit_craft_cpp(craft: Craft) -> str:
         cls = class_name_for_craft(craft.name)
         return (
             f"{GENERATED_BANNER}\n"
-            f"// {cls} is templated and emitted entirely in {craft.name}.hpp.\n"
-            f'#include "{craft.name}.hpp"\n'
+            f"// {cls} is templated and emitted entirely in {craft.name}_craft.hpp.\n"
+            f'#include "{craft.name}_craft.hpp"\n'
         )
     return _emit_craft_cpp_concrete(craft)
 
@@ -90,7 +90,7 @@ def _emit_craft_cpp_concrete(craft: Craft) -> str:
     cls = class_name_for_craft(craft.name)
     lines: list[str] = [
         GENERATED_BANNER,
-        f'#include "{craft.name}.hpp"',
+        f'#include "{craft.name}_craft.hpp"',
         "",
         f"{cls}::{cls}()",
         f'    : manta::Craft("{craft.name}") {{',

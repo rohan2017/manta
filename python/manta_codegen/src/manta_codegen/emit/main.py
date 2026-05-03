@@ -85,7 +85,7 @@ def emit_main_cpp(world: World) -> str:
     ]
     # One #include per unique Craft type.
     for c in unique_crafts:
-        lines.append(f'#include "{c.name}.hpp"')
+        lines.append(f'#include "{c.name}_craft.hpp"')
     for f in world.fields:
         lines.append(f'#include "{f.cpp_header}"')
     for p in world.planets:

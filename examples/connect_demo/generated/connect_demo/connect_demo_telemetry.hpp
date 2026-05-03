@@ -7,7 +7,7 @@
 #include <cstdio>
 #include <string>
 
-#include "connect_demo.hpp"
+#include "connect_demo_craft.hpp"
 
 struct ConnectDemoCraftTelemetry {
     double t_sec = 0.0;

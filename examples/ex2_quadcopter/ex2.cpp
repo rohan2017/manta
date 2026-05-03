@@ -23,7 +23,7 @@
 #include "manta/core/world.hpp"
 #include "manta/fields/gravity_field.hpp"
 
-#include "ex2.hpp"
+#include "ex2_craft.hpp"
 #include "ex2_telemetry.hpp"
 
 #include "sim_loop.hpp"

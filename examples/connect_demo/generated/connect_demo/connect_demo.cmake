@@ -3,12 +3,12 @@
 set(manta_connect_demo_DIR ${CMAKE_CURRENT_LIST_DIR})
 
 set(manta_connect_demo_SOURCES
-    ${manta_connect_demo_DIR}/connect_demo.cpp
+    ${manta_connect_demo_DIR}/connect_demo_craft.cpp
     ${manta_connect_demo_DIR}/connect_demo_main.cpp
 )
 
 set(manta_connect_demo_HEADERS
-    ${manta_connect_demo_DIR}/connect_demo.hpp
+    ${manta_connect_demo_DIR}/connect_demo_craft.hpp
     ${manta_connect_demo_DIR}/connect_demo_config.h
 )
 

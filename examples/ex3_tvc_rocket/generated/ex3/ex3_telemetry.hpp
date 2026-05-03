@@ -7,7 +7,7 @@
 #include <cstdio>
 #include <string>
 
-#include "ex3.hpp"
+#include "ex3_craft.hpp"
 
 struct Ex3CraftTelemetry {
     double t_sec = 0.0;

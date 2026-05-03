@@ -21,8 +21,8 @@
 #include "manta/core/scene.hpp"
 #include "manta/core/world.hpp"
 #include "manta/estimation/craft_ekf.hpp"
-#include "ex5.hpp"
-#include "ex5_est.hpp"
+#include "ex5_craft.hpp"
+#include "ex5_est_craft.hpp"
 #include "manta/fields/gravity_field.hpp"
 
 namespace {

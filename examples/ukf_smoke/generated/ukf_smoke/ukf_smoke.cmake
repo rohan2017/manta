@@ -3,12 +3,12 @@
 set(manta_ukf_smoke_DIR ${CMAKE_CURRENT_LIST_DIR})
 
 set(manta_ukf_smoke_SOURCES
-    ${manta_ukf_smoke_DIR}/ukf_smoke.cpp
+    ${manta_ukf_smoke_DIR}/ukf_smoke_craft.cpp
     ${manta_ukf_smoke_DIR}/ukf_smoke_main.cpp
 )
 
 set(manta_ukf_smoke_HEADERS
-    ${manta_ukf_smoke_DIR}/ukf_smoke.hpp
+    ${manta_ukf_smoke_DIR}/ukf_smoke_craft.hpp
     ${manta_ukf_smoke_DIR}/ukf_smoke_config.h
 )
 

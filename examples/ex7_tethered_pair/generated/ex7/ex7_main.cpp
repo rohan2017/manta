@@ -18,8 +18,8 @@
 
 #include "manta/core/scene.hpp"
 #include "manta/core/world.hpp"
-#include "leader.hpp"
-#include "follower.hpp"
+#include "leader_craft.hpp"
+#include "follower_craft.hpp"
 #include "manta/coupling/tether.hpp"
 #include "manta/parts/coupling/tether_endpoint.hpp"
 
