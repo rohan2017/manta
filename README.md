@@ -14,8 +14,8 @@ templated C++ that compiles into a regular binary.
 ```
 include/manta/        C++ runtime: parts, fields, planets, scenes, EKF/UKF
 python/manta_codegen/ Python descriptors + emitter
-examples/             ex0..ex7 + sync_smoke + wire_debug
-tests/                doctest unit + integration tests (223 cases)
+examples/             ex0..ex7 + connect_demo + sync_smoke + wire_debug
+tests/                doctest unit + integration tests (232 cases)
 ```
 
 ## Quick example
@@ -35,11 +35,12 @@ throttle commands on another:
 
 ```python
 # my_craft.py
-from manta_codegen import Craft, World
+from manta_codegen import (Craft, MantaConfig, Target, World,
+                           publish, subscribe)
 from manta_codegen.parts  import IMU, Mass, Thruster
 from manta_codegen.fields import GravityField
 
-def make_world() -> World:
+def make_config() -> MantaConfig:
     body = Mass("body", mass=1.0)              # auto-applies m·g if a GravityField is registered
     imu  = IMU("imu", accel_sigma=0.05, gyro_sigma=0.005)
     thr  = Thruster("fwd", max_thrust=5.0, direction=(1, 0, 0))
@@ -49,8 +50,12 @@ def make_world() -> World:
     c.add(imu)
     c.add(thr)
 
+    w = (World()
+            .add_field(GravityField(g=(0, 0, -9.81)))
+            .add_craft(c))
+
     # Bundled state topic — pose + sensor outputs + thrust.
-    c.publish({
+    publish({
         "p": c.position,        "q": c.orientation,
         "v": c.vel_linear,      "w": c.vel_angular,
         "imu_accel": imu.last_accel,
@@ -59,12 +64,11 @@ def make_world() -> World:
     }, "manta/my_craft/state")
 
     # Subscribe to throttle commands.
-    c.subscribe(thr.set_throttle, "manta/my_craft/cmd")
+    subscribe(thr.set_throttle, "manta/my_craft/cmd")
 
-    return (World()
-            .add_field(GravityField(g=(0, 0, -9.81)))
-            .add_craft(c)
-            .run(dt=0.001, sim_rate_mult=1.0))
+    return MantaConfig(targets=[
+        Target("my_craft", drives=[w], dt=0.001, sim_rate_mult=1.0),
+    ])
 ```
 
 Run codegen:
@@ -76,7 +80,8 @@ PYTHONPATH=python/manta_codegen/src python -m manta_codegen.cli \
 
 That writes `my_craft.hpp / .cpp / _main.cpp / _config.h / _telemetry.hpp /
 .cmake` — a complete sim binary that publishes the state struct as JSON
-over Zenoh and accepts throttle commands. Compile and run it.
+over Zenoh and accepts throttle commands. The cmake fragment auto-emits
+`add_executable(my_craft ...)` so the user just `include()`s it.
 
 ## Core concepts
 
@@ -151,36 +156,69 @@ same path. See `tests/test_field_sync.cpp` and `examples/sync_smoke/`
 for the wire round-trip.
 
 ### Bindings
-Each `c.publish(...)` and `c.subscribe(...)` records a `Binding`:
+Module-level `publish(...)` / `subscribe(...)` record a `Binding`:
 the (signal-or-struct → topic → encoding) mapping that codegen turns into
-a Zenoh publisher/subscriber. Single-signal and bundled-struct bindings
-share one path:
+a Zenoh publisher/subscriber. The owning World is found by walking the
+signal's `craft_ref._world` back-pointer, so the user never has to thread
+a world handle through their setup. Single-signal and bundled-struct
+bindings share one path:
 
 ```python
-c.publish(imu.last_accel)                       # one signal, default topic
-c.publish({"a": imu.last_accel}, "topic")       # one-member struct
-c.publish({"a": imu.last_accel,                 # multi-member bundle
-           "g": imu.last_gyro}, "manta/state")
+publish(imu.last_accel)                       # one signal, default topic
+publish({"a": imu.last_accel}, "topic")       # one-member struct
+publish({"a": imu.last_accel,                 # multi-member bundle
+         "g": imu.last_gyro}, "manta/state")
 ```
 
 Direction is enforced (publishing a direction-in signal raises). All
 members of a struct must agree on direction.
 
-### World
-Top-level container holding fields, planets, crafts (with their initial
-state), and the sim loop config:
+In-process signal-to-signal piping uses `connect(out, in)` — no Zenoh,
+no JSON, just a per-tick C++ copy step:
+
+```python
+connect(leader.thrust.throttle, follower.thrust.set_throttle)  # mirror cmd
+connect(sim.dvl.last_velocity,  est.dvl.set_measurement)       # sim → est
+```
+
+The two signals can live in different worlds in the same Target (used
+heavily by the sim+EKF shape — see ex5).
+
+### World, Target, MantaConfig
+A `World` holds fields, planets, crafts (with their initial state),
+tethers, bindings, and connections. A `Target` wraps one or more
+*drives* (a World, an EKF, or one of each in the same binary) plus the
+sim cadence. A `MantaConfig` is a list of Targets — one C++ binary per
+Target.
 
 ```python
 earth = Earth(sea_level=0.0, gravity_mu=Earth.MU, include_j2=True)
-return (World()
+w = (World()
         .add_planet(earth)
-        .add_craft(c, on=earth, pos=(0, 0, -0.5))
-        .run(dt=0.001, sim_rate_mult=1.0))
+        .add_craft(c, on=earth, pos=(0, 0, -0.5)))
+
+return MantaConfig(targets=[
+    Target("my_craft", drives=[w], dt=0.001, sim_rate_mult=1.0),
+])
 ```
 
 `on=planet` puts the craft's initial state in that planet's frame —
 the scene anchors to the planet and the craft co-rotates with it. Use
 `on=None` (default) for world-frame initial conditions.
+
+Three Target shapes are supported today:
+
+- **`drives=[World]`** — standard sim. Codegen emits the typed crafts +
+  a Zenoh main that drives `w.update()` per tick.
+- **`drives=[EKF]`** — pure estimator. The EKF wraps its own internal
+  World; codegen emits a `manta::estimation::CraftEKF<...>` main with
+  per-sensor `consume_fresh + update_n<N>` (Pattern C — real-data EKF
+  fed from external Zenoh topics, see ex6).
+- **`drives=[World, EKF]`** — sim + EKF in one binary, the two worlds
+  ticked from one wall clock. Cross-world `connect()` pipes sim sensor
+  outputs into the EKF craft's `set_measurement` hooks; the sim's
+  commanded throttle mirrors onto the est-side thruster so predict's
+  force model matches (Pattern A — see ex5).
 
 `Earth` automatically registers persistent ocean + atmosphere disturbances
 on its FluidField; optional `gravity_mu`, `include_j2`, and
@@ -222,8 +260,36 @@ Two flavors share an API:
   second-order nonlinearity. 2N+1 evaluates per predict step vs. EKF's
   one-evaluate-plus-Jet-pass.
 
-Same predict/update API on both. See `tests/test_ekf_against_sim.cpp` and
-`tests/test_ukf.cpp` for end-to-end demos.
+Same predict/update API on both, plus `update_n<N>(h, z, R)` for
+per-sensor updates with varying measurement width. See
+`tests/test_ekf_against_sim.cpp` and `tests/test_ukf.cpp` for the
+hand-wired API; ex5 / ex6 show the codegen path described next.
+
+### Estimator codegen
+An EKF descriptor wraps a World + a list of measurement parts:
+
+```python
+ekf = EKF(est_world, measurements=[imu, dvl, mag])
+```
+
+Codegen emits the `manta::estimation::CraftEKF<EstCraftT, MeasDim>`
+instance, the `predict(dt, Q)` per tick, and one
+`if (sensor.consume_fresh()) update_n<N>(...)` block per measurement
+part. Per-sensor measurement-functor templates are built in for:
+
+- **DVL** — `h(x) = R(q)^T · v_scene` (body-frame velocity).
+- **IMU** — `h(x) = [0; ω_body]` under the no-net-force assumption
+  (predicted accel zero, gyro from state). User overrides for crafts
+  with active forces.
+- **Magnetometer** — `h(x) = R(q)^T · B(p_now)` with B captured at
+  update-time from the registered MagField (locally-constant-B: ∂h/∂q
+  exact, ∂h/∂p dropped).
+
+R blocks are populated automatically from each part's noise sigmas.
+EKF state slices (`position`, `orientation`, `vel_linear`,
+`vel_angular`, plus per-component `*_stddev`) are exposed as
+BoundSignals — route them through the same `publish/connect` paths
+used for craft signals.
 
 ### Frame hierarchy
 `World → Planet → Scene → Craft → Part`. Frames are static type tags
@@ -247,12 +313,13 @@ chain — the user just sets up the planet's rotation rate.
 The codegen has two output modes:
 
 - **`--workflow library`** — emits the typed Craft + telemetry + cmake
-  fragment. The user provides their own `main.cpp` (e.g. for hand-tuned
-  controllers, EKF wiring, multi-craft instantiation). Used by ex2, ex3,
-  ex5 (sim + EKF in one process), ex6 (EKF on real Zenoh data).
+  fragment. The user provides their own `main.cpp` (for hand-tuned
+  controllers, multi-craft instantiation, etc.). Used by ex2, ex3.
 
 - **`--workflow binary`** — additionally emits a complete `<name>_main.cpp`
-  with Zenoh I/O wired through `craft.bindings`. Used by ex1, ex4, ex7.
+  with Zenoh I/O, in-process `connect()` steps, and (for EKF Targets) the
+  full estimator predict/update loop. Used by ex1, ex4, ex5, ex6, ex7,
+  connect_demo.
 
 ## Examples
 
@@ -263,9 +330,10 @@ The codegen has two output modes:
 | ex2 | library | Quadcopter X-config, 4× Thruster1 with reaction torque |
 | ex3 | library | TVC rocket hopper, yaw-motor → pitch-motor → engine stack |
 | ex4 | binary  | Reaction wheel — Motor + flywheel, conservation of L |
-| ex5 | library | Sim + EKF side-by-side, Pattern A (matching part names) |
-| ex6 | library | Real-data-only EKF, fed from external Zenoh topics |
+| ex5 | binary  | Sim + EKF side-by-side, fully codegen — cross-world `connect()` |
+| ex6 | binary  | Real-data-only EKF, fed from external Zenoh topics (Pattern C) |
 | ex7 | binary  | Codegen-driven Tether between two crafts |
+| connect_demo | binary | Two-thruster `connect()` mirror — minimal in-process binding demo |
 | sync_smoke | — | Round-trips a GravityField disturbance through real Zenoh |
 | wire_debug | — | Pretty-prints field-sync disturbance bytes off the wire |
 
@@ -273,7 +341,7 @@ The codegen has two output modes:
 
 ```bash
 cmake -S . -B build && cmake --build build -j
-ctest --test-dir build       # 224 cases (223 doctest + sync_smoke)
+ctest --test-dir build       # 233 cases (232 doctest + sync_smoke)
 ```
 
 Each example has a CMake target named after its directory (e.g. `ex5`).
@@ -286,23 +354,18 @@ Early/active development. The public API is stable enough for ex0..ex7
 to drive it without back-compat shims, but any of it can still move.
 Notable items not yet built:
 
-- Custom-signal codegen bindings (Python user-side struct ↔ Zenoh, no
-  per-binding boilerplate). Today bindings only cover part-defined
-  signals; user-defined command structs need hand-written pub/sub.
-- Same-process / signal-to-signal bindings (estimator-side parts driven
-  from sim-side parts without going through Zenoh).
-- Variable-rate sensors. Today IMU/DVL produce a fresh reading every
-  `update()`; real sensors have rate caps and irregular timing. Fold
-  refresh cadence into the part model and have EKF/UKF consume only
-  fresh measurements.
-- Estimator codegen — a Python descriptor for the estimator + measurement
-  piping rich enough that codegen produces the C++ wiring for ex5 and
-  ex6 (today both have hand-written .cpp).
+- UKF codegen — same shape as EKF codegen (descriptor + measurements
+  + per-sensor `update_n`), but for the sigma-point filter. Useful when
+  the craft can't be cleanly scalar-templated.
 - A submarine demo (Ex8) — full thruster suite + IMU + DVL in the ocean,
   bound to Zenoh for viewer + control.
 - Per-disturbance exact `state_at_jet` opt-in. Today the templated
   field query falls back to finite-diff for Jet scalars; an analytic
   override slot on Disturbance can be added when a consumer wants it.
+- Templated `MagField` for an exact `∂h/∂p` Jacobian in the
+  Magnetometer EKF update. Today the codegen captures B at update-time
+  and treats it locally constant — fine for typical magnetometer use
+  cases, lossy near steep field gradients (close-in dipoles).
 
 ## Design docs
 
