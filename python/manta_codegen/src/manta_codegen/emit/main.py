@@ -42,17 +42,25 @@ def _initial_state_literal(entry) -> str:
     )
 
 
+def _world_unique_crafts(world: World) -> list[Craft]:
+    """Walk a World's craft entries returning each unique Craft object once
+    (by Python identity), preserving insertion order. A multi-craft world
+    that adds the same Craft instance multiple times shares one set of
+    generated files, so codegen emits one #include per unique Craft."""
+    seen: set[int] = set()
+    out: list[Craft] = []
+    for entry in world.crafts:
+        if id(entry.craft) not in seen:
+            seen.add(id(entry.craft))
+            out.append(entry.craft)
+    return out
+
+
 def emit_main_cpp(world: World) -> str:
     if not world.crafts:
         raise RuntimeError("emit_main_cpp: World has no crafts")
 
-    # Unique Craft objects (by Python identity) — each gets one .hpp include.
-    seen: set[int] = set()
-    unique_crafts: list[Craft] = []
-    for entry in world.crafts:
-        if id(entry.craft) not in seen:
-            seen.add(id(entry.craft))
-            unique_crafts.append(entry.craft)
+    unique_crafts = _world_unique_crafts(world)
     primary = unique_crafts[0]
 
     lines: list[str] = [
