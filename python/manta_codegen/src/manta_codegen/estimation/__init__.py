@@ -8,7 +8,10 @@ update calls in the binary's tick loop.
 
 Public surface:
     EKF(world, measurements=[...], process_noise=..., initial_covariance=...)
+    UKF(world, measurements=[...], process_noise=..., initial_covariance=...,
+        alpha=1e-3, beta=2.0, kappa=0.0)
 """
 from .ekf import EKF
+from .ukf import UKF
 
-__all__ = ["EKF"]
+__all__ = ["EKF", "UKF"]

@@ -84,17 +84,18 @@ def emit(world: World,
 def emit_config(cfg, base_out, workflow: str = "library") -> None:
     """Emit a MantaConfig to disk. One subdirectory per Target under `base_out`.
 
-    Supported Target shapes:
-      * exactly one World in `drives` — emits the standard sim main.
-      * exactly one EKF in `drives`   — emits an EKF-driven main wrapping
-                                        the EKF's internal world.
-      * one World + one EKF in `drives` — emits an in-process two-world
-                                          main where sim outputs feed the
-                                          EKF via cross-world connect().
+    Supported Target shapes (drives = ...):
+      * `[World]`             — standard sim main.
+      * `[EKF]` or `[UKF]`    — filter-driven main wrapping the filter's
+                                internal world (Pattern C).
+      * `[World, EKF/UKF]`    — in-process sim + filter, sensor outputs
+                                fed to the filter via cross-world
+                                connect() (Pattern A).
     """
     from ..core import World
     from ..manifest import MantaConfig
     from ..estimation.ekf import EKF
+    from ..estimation.ukf import UKF
 
     if not isinstance(cfg, MantaConfig):
         raise TypeError(f"emit_config: expected MantaConfig, got {type(cfg).__name__}")
@@ -103,42 +104,53 @@ def emit_config(cfg, base_out, workflow: str = "library") -> None:
     targets = cfg.targets
 
     def _classify(t):
-        """Return ('world', World) | ('ekf', EKF) | ('sim+ekf', (World, EKF))."""
+        """Return one of:
+            ('world',   World)
+            ('ekf',     EKF)
+            ('ukf',     UKF)
+            ('sim+ekf', (World, EKF))
+            ('sim+ukf', (World, UKF))
+        """
         worlds = [d for d in t.drives if isinstance(d, World)]
         ekfs   = [d for d in t.drives if isinstance(d, EKF)]
+        ukfs   = [d for d in t.drives if isinstance(d, UKF)]
+        filters = ekfs + ukfs
         other  = [d for d in t.drives
-                  if not isinstance(d, World) and not isinstance(d, EKF)]
+                  if not isinstance(d, (World, EKF, UKF))]
         if other:
             raise NotImplementedError(
                 f"emit_config: Target {t.name!r} contains {len(other)} unsupported "
                 f"drive type(s) ({[type(d).__name__ for d in other]}). "
-                f"Supported: World, EKF.")
-        if len(worlds) == 1 and not ekfs:
+                f"Supported: World, EKF, UKF.")
+        if len(worlds) == 1 and not filters:
             return "world", worlds[0]
-        if len(ekfs) == 1 and not worlds:
-            return "ekf", ekfs[0]
-        if len(worlds) == 1 and len(ekfs) == 1:
-            return "sim+ekf", (worlds[0], ekfs[0])
+        if not worlds and len(filters) == 1:
+            f = filters[0]
+            return ("ekf", f) if isinstance(f, EKF) else ("ukf", f)
+        if len(worlds) == 1 and len(filters) == 1:
+            f = filters[0]
+            kind = "sim+ekf" if isinstance(f, EKF) else "sim+ukf"
+            return kind, (worlds[0], f)
         raise NotImplementedError(
-            f"emit_config: Target {t.name!r} has {len(worlds)} worlds and "
-            f"{len(ekfs)} EKFs; supported shapes are 1×World, 1×EKF, "
-            f"or 1×World+1×EKF (multiple sim worlds or multiple EKFs are "
-            f"not yet supported).")
+            f"emit_config: Target {t.name!r} has {len(worlds)} worlds, "
+            f"{len(ekfs)} EKFs, {len(ukfs)} UKFs; supported shapes are "
+            f"1×World, 1×EKF, 1×UKF, or 1×World+1×Filter (multiple sim worlds "
+            f"or multiple filters are not yet supported).")
 
     classified = [(t, *_classify(t)) for t in targets]
 
-    # Validate no cross-target connect/binding spans. Sim+EKF targets cover
-    # both their sim world and the EKF's internal est world.
+    # Validate no cross-target connect/binding spans. Sim+filter targets
+    # cover both their sim world and the filter's internal est world.
     target_for_world: dict[int, str] = {}
     for t, kind, drv in classified:
         if kind == "world":
             target_for_world[id(drv)] = t.name
-        elif kind == "ekf":
+        elif kind in ("ekf", "ukf"):
             target_for_world[id(drv.world)] = t.name
-        else:  # "sim+ekf"
-            sim_w, ekf = drv
+        else:  # "sim+ekf" / "sim+ukf"
+            sim_w, flt = drv
             target_for_world[id(sim_w)]    = t.name
-            target_for_world[id(ekf.world)] = t.name
+            target_for_world[id(flt.world)] = t.name
 
     def world_target_name(w):
         try:
@@ -153,11 +165,11 @@ def emit_config(cfg, base_out, workflow: str = "library") -> None:
     for t, kind, drv in classified:
         if kind == "world":
             worlds = [drv]
-        elif kind == "ekf":
+        elif kind in ("ekf", "ukf"):
             worlds = [drv.world]
         else:
-            sim_w, ekf = drv
-            worlds = [sim_w, ekf.world]
+            sim_w, flt = drv
+            worlds = [sim_w, flt.world]
         for w in worlds:
             for conn in w.connections:
                 src_t = craft_target_name(conn.source.craft_ref)
@@ -180,33 +192,37 @@ def emit_config(cfg, base_out, workflow: str = "library") -> None:
             world.dt = t.dt
             world.sim_rate_mult = t.sim_rate_mult
             emit(world, out_dir=target_dir, workflow=workflow)
-        elif kind == "ekf":
-            ekf = drv
-            world = ekf.world
+        elif kind in ("ekf", "ukf"):
+            flt = drv
+            world = flt.world
             world.dt = t.dt
             world.sim_rate_mult = t.sim_rate_mult
-            _emit_ekf_target(t, ekf, world, target_dir, workflow)
-        else:  # "sim+ekf"
-            sim_w, ekf = drv
+            _emit_filter_target(t, flt, world, target_dir, workflow,
+                                kind=kind)
+        else:  # sim+ekf / sim+ukf
+            sim_w, flt = drv
             sim_w.dt = t.dt
             sim_w.sim_rate_mult = t.sim_rate_mult
-            ekf.world.dt = t.dt
-            ekf.world.sim_rate_mult = t.sim_rate_mult
-            _emit_sim_plus_ekf_target(t, sim_w, ekf, target_dir, workflow)
+            flt.world.dt = t.dt
+            flt.world.sim_rate_mult = t.sim_rate_mult
+            _emit_sim_plus_filter_target(t, sim_w, flt, target_dir, workflow,
+                                         kind=kind.split("+")[1])
 
 
-def _emit_ekf_target(target, ekf, world, out_dir: Path,
-                     workflow: str) -> None:
-    """Emit per-craft + main for an EKF-driven Target. Reuses the standard
-    craft/telemetry/config/cmake emitters; substitutes the main with the
-    EKF-driven variant. workflow="library" omits the main entirely."""
+def _emit_filter_target(target, filter_obj, world, out_dir: Path,
+                        workflow: str, kind: str = "ekf") -> None:
+    """Emit per-craft + main for a filter-driven Target (EKF or UKF).
+    Reuses the standard craft/telemetry/config/cmake emitters; substitutes
+    the main with the filter-driven variant. workflow="library" omits the
+    main entirely."""
     from .ekf_main import emit_ekf_main_cpp
 
     if workflow not in ("library", "binary"):
         raise ValueError(
             f"workflow must be 'library' or 'binary', got {workflow!r}")
     if not world.crafts:
-        raise RuntimeError("emit_config (EKF target): wrapped world has no crafts")
+        raise RuntimeError(
+            f"emit_config ({kind} target): wrapped world has no crafts")
 
     seen: set[int] = set()
     unique_crafts: list[Craft] = []
@@ -230,24 +246,20 @@ def _emit_ekf_target(target, ekf, world, out_dir: Path,
     files[f"{world_name}.cmake"]    = emit_cmake_fragment(
         world, workflow=workflow, multi=multi)
     if workflow == "binary":
-        files[f"{world_name}_main.cpp"] = emit_ekf_main_cpp(target, ekf)
+        files[f"{world_name}_main.cpp"] = emit_ekf_main_cpp(
+            target, filter_obj, kind=kind)
 
     for filename, contents in files.items():
         (out_dir / filename).write_text(contents)
 
 
-def _emit_sim_plus_ekf_target(target, sim_world: World, ekf, out_dir: Path,
-                              workflow: str) -> None:
-    """Emit per-craft + main for a Target whose drives = [sim_world, ekf].
+def _emit_sim_plus_filter_target(target, sim_world: World, filter_obj,
+                                 out_dir: Path, workflow: str,
+                                 kind: str = "ekf") -> None:
+    """Emit per-craft + main for a Target whose drives = [sim_world, filter].
 
-    File layout:
-      * One per-craft fileset (.hpp/.cpp/_telemetry.hpp) per unique Craft
-        across BOTH worlds. The sim and est crafts have different names so
-        they end up in different .hpp files.
-      * One world-level config.h + cmake fragment, named after the target.
-      * The cmake fragment's `add_executable(...)` target is also named
-        after the target.
-      * One unified _main.cpp from emit_sim_plus_ekf_main_cpp().
+    `kind` selects EKF vs UKF. File layout is identical between the two —
+    only the unified _main.cpp differs (filter wrapper type + ctor args).
     """
     from .sim_ekf_main import emit_sim_plus_ekf_main_cpp
 
@@ -255,9 +267,10 @@ def _emit_sim_plus_ekf_target(target, sim_world: World, ekf, out_dir: Path,
         raise ValueError(
             f"workflow must be 'library' or 'binary', got {workflow!r}")
     if not sim_world.crafts:
-        raise RuntimeError("emit_config (sim+ekf): sim world has no crafts")
-    if not ekf.world.crafts:
-        raise RuntimeError("emit_config (sim+ekf): EKF wrapped world has no crafts")
+        raise RuntimeError(f"emit_config (sim+{kind}): sim world has no crafts")
+    if not filter_obj.world.crafts:
+        raise RuntimeError(
+            f"emit_config (sim+{kind}): filter wrapped world has no crafts")
 
     # Union the per-craft fileset across both worlds — no name collisions
     # are possible because sim and est crafts are required to have
@@ -266,13 +279,13 @@ def _emit_sim_plus_ekf_target(target, sim_world: World, ekf, out_dir: Path,
     seen: set[int] = set()
     unique_crafts: list[Craft] = []
     seen_names: set[str] = set()
-    for entry in list(sim_world.crafts) + list(ekf.world.crafts):
+    for entry in list(sim_world.crafts) + list(filter_obj.world.crafts):
         if id(entry.craft) in seen:
             continue
         seen.add(id(entry.craft))
         if entry.craft.name in seen_names:
             raise RuntimeError(
-                f"emit_config (sim+ekf): two distinct crafts share the name "
+                f"emit_config (sim+{kind}): two distinct crafts share the name "
                 f"{entry.craft.name!r}; rename one so generated files don't "
                 f"collide.")
         seen_names.add(entry.craft.name)
@@ -290,13 +303,13 @@ def _emit_sim_plus_ekf_target(target, sim_world: World, ekf, out_dir: Path,
     # cmake target / config.h are addressable from the user's CMakeLists.
     # The two worlds share the same feature-test macro set; we union their
     # registered fields by passing a synthetic world to emit_config_h.
-    union = _union_world_for_config(sim_world, ekf.world, target.name)
+    union = _union_world_for_config(sim_world, filter_obj.world, target.name)
     files[f"{target.name}_config.h"]   = emit_config_h(union)
     files[f"{target.name}.cmake"]      = emit_cmake_fragment(
         union, workflow=workflow, multi=len(unique_crafts) > 1)
     if workflow == "binary":
         files[f"{target.name}_main.cpp"] = emit_sim_plus_ekf_main_cpp(
-            target, sim_world, ekf)
+            target, sim_world, filter_obj, kind=kind)
 
     for filename, contents in files.items():
         (out_dir / filename).write_text(contents)

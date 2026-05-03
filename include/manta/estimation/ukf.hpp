@@ -90,31 +90,39 @@ public:
     // Update: propagate sigma points through h, build cross-covariance.
     template <class MeasureH>
     void update(const MeasureH& h, const MeasVec& z, const MeasCov& R) {
+        update_n<MeasDim>(h, z, R);
+    }
+
+    // Update step with a per-call measurement dimension N. Lets a single
+    // UKF instance absorb measurements of varying width — the standard
+    // sequential per-sensor update pattern. Mathematically equivalent to a
+    // fused update when per-sensor R blocks are independent.
+    template <int N, class MeasureH>
+    void update_n(const MeasureH& h,
+                  const Eigen::Matrix<double, N, 1>& z,
+                  const Eigen::Matrix<double, N, N>& R) {
         SigmaMatrix chi = sigma_points(x_, P_);
 
-        MeasSigma zeta;
+        Eigen::Matrix<double, N, NSigma> zeta;
         for (int i = 0; i < NSigma; ++i) {
             StateVec xi = chi.col(i);
             zeta.col(i) = h(xi);
         }
 
-        // Predicted measurement mean.
-        MeasVec z_pred = MeasVec::Zero();
+        Eigen::Matrix<double, N, 1> z_pred = Eigen::Matrix<double, N, 1>::Zero();
         for (int i = 0; i < NSigma; ++i) z_pred += wm_(i) * zeta.col(i);
 
-        // Innovation covariance + cross-covariance.
-        MeasCov  Pzz = R;
-        Eigen::Matrix<double, StateDim, MeasDim> Pxz =
-            Eigen::Matrix<double, StateDim, MeasDim>::Zero();
+        Eigen::Matrix<double, N, N>        Pzz = R;
+        Eigen::Matrix<double, StateDim, N> Pxz =
+            Eigen::Matrix<double, StateDim, N>::Zero();
         for (int i = 0; i < NSigma; ++i) {
-            MeasVec  dz = zeta.col(i) - z_pred;
-            StateVec dx = chi.col(i)  - x_;
+            Eigen::Matrix<double, N, 1> dz = zeta.col(i) - z_pred;
+            StateVec                    dx = chi.col(i)  - x_;
             Pzz += wc_(i) * (dz * dz.transpose());
             Pxz += wc_(i) * (dx * dz.transpose());
         }
 
-        // Kalman gain & update.
-        Eigen::Matrix<double, StateDim, MeasDim> K = Pxz * Pzz.inverse();
+        Eigen::Matrix<double, StateDim, N> K = Pxz * Pzz.inverse();
         x_ = x_ + K * (z - z_pred);
         StateCov P_new = P_ - K * Pzz * K.transpose();
         P_ = 0.5 * (P_new + P_new.transpose());   // symmetrize

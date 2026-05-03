@@ -28,6 +28,7 @@
 // evaluate() call. For small covariances and reasonable sigma spreads this
 // is fine; it's the same compromise EKF makes.
 
+#include <cmath>
 #include <type_traits>
 
 #include <Eigen/Core>
@@ -91,7 +92,59 @@ public:
         ukf_.update(h, z, R);
     }
 
+    // Per-sensor update: lets a single CraftUKF absorb measurements of
+    // varying width N. Codegen drives this from
+    //   if (ukf.craft().sensor().consume_fresh()) ukf.update_n<N>(h, z, R);
+    // Mathematically equivalent to a single fused update when per-sensor
+    // R blocks are independent.
+    template <int N, class MeasureH>
+    void update_n(const MeasureH& h,
+                  const Eigen::Matrix<double, N, 1>& z,
+                  const Eigen::Matrix<double, N, N>& R) {
+        ukf_.template update_n<N>(h, z, R);
+    }
+
+    // Codegen-friendly accessors for the rigid-state slices. Mirror
+    // CraftEKF so a UKF descriptor's BoundSignals route the same way.
+    Eigen::Matrix<double, 3, 1> position() const noexcept {
+        return ukf_.state().template segment<3>(0);
+    }
+    Eigen::Matrix<double, 4, 1> orientation() const noexcept {
+        return ukf_.state().template segment<4>(3);
+    }
+    Eigen::Matrix<double, 3, 1> vel_linear() const noexcept {
+        return ukf_.state().template segment<3>(7);
+    }
+    Eigen::Matrix<double, 3, 1> vel_angular() const noexcept {
+        return ukf_.state().template segment<3>(10);
+    }
+    const StateVec& full_state() const noexcept { return ukf_.state(); }
+
+    Eigen::Matrix<double, 3, 1> position_stddev() const noexcept {
+        return diag_stddev_segment<3>(0);
+    }
+    Eigen::Matrix<double, 4, 1> orientation_stddev() const noexcept {
+        return diag_stddev_segment<4>(3);
+    }
+    Eigen::Matrix<double, 3, 1> vel_linear_stddev() const noexcept {
+        return diag_stddev_segment<3>(7);
+    }
+    Eigen::Matrix<double, 3, 1> vel_angular_stddev() const noexcept {
+        return diag_stddev_segment<3>(10);
+    }
+
 private:
+    template <int N>
+    Eigen::Matrix<double, N, 1> diag_stddev_segment(int start) const noexcept {
+        Eigen::Matrix<double, N, 1> out;
+        const auto& P = ukf_.covariance();
+        for (int i = 0; i < N; ++i) {
+            const double v = P(start + i, start + i);
+            out(i) = std::sqrt(v > 0.0 ? v : 0.0);
+        }
+        return out;
+    }
+
     CraftR              craft_;
     UKF<StateDim, MeasDim> ukf_;
 };

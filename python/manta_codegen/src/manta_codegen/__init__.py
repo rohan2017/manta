@@ -14,7 +14,7 @@ from .core import (
 )
 from .manifest import MantaConfig, Target
 from .bindings import connect, publish, subscribe
-from .estimation import EKF
+from .estimation import EKF, UKF
 from .emit import emit
 
 __all__ = [
@@ -28,6 +28,7 @@ __all__ = [
     "MantaConfig",
     "Target",
     "EKF",
+    "UKF",
     "tf",
     "connect",
     "publish",

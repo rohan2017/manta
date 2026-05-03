@@ -32,7 +32,8 @@ from .._format import cpp_float as _f
 from ..signal import Binding, accessor_for, is_craft_signal
 from ._util import GENERATED_BANNER, class_name_for_craft
 from .ekf_main import (_MeasFunctor, _double_qualify_partframe,
-                        _first_mag_field_var, _is_ekf_signal)
+                        _filter_concrete_craft_type, _filter_construction,
+                        _first_mag_field_var, _is_filter_signal)
 from .main import _emit_binding_subscriber, _emit_field_sync, _quote
 
 
@@ -71,19 +72,23 @@ class _AccessorCtx:
         self.craft_id_is_templated[id(craft)] = False
 
     def add_ekf(self, ekf, ekf_var: str) -> None:
+        """Register an EKF/UKF wrapper. Bindings targeting the wrapped
+        craft route through `<filter_var>.craft().<part>()`. The
+        `Vec3<PartFrame> -> Vec3<PartFrame, double>` patch only applies
+        when the wrapped craft is scalar-templated (the EKF case, or a
+        UKF wrapping a templated craft); plain non-templated UKF crafts
+        already use Real-typed signals."""
         self.ekf_var = ekf_var
-        # EKF wraps a templated craft instantiated with double; bindings
-        # targeting that craft go through `ekf_var.craft().<part>()` and
-        # need Vec3<PartFrame> → Vec3<PartFrame, double> rewriting.
         wrapped = ekf.world.crafts[0].craft
         self.craft_id_to_var[id(wrapped)] = f"{ekf_var}.craft()"
-        self.craft_id_is_templated[id(wrapped)] = True
+        self.craft_id_is_templated[id(wrapped)] = bool(
+            getattr(wrapped, "scalar_templated", False))
 
     def accessor_for(self, sig) -> tuple[str, bool]:
         """Returns (accessor_expr, is_templated). `is_templated` is True
         when the underlying craft is the est (double-instantiated) one
         — signals targeting it need the Vec3<PartFrame, double> patch."""
-        if _is_ekf_signal(sig):
+        if _is_filter_signal(sig):
             return self.ekf_var, False
         var = self.craft_id_to_var[id(sig.craft_ref)]
         templated = self.craft_id_is_templated[id(sig.craft_ref)]
@@ -104,44 +109,53 @@ class _AccessorCtx:
         return stmt
 
 
-def emit_sim_plus_ekf_main_cpp(target, sim_world, ekf) -> str:
-    """Emit main.cpp for a Target whose drives are exactly [sim_world, ekf]."""
+def emit_sim_plus_ekf_main_cpp(target, sim_world, filter_obj,
+                                kind: str = "ekf") -> str:
+    """Emit main.cpp for a Target whose drives are [sim_world, filter].
+
+    `kind` selects EKF (CraftEKF, requires scalar_templated craft) vs UKF
+    (CraftUKFOf, takes any craft). Most of the body is filter-agnostic;
+    the wrapper-type/ctor differences come from
+    `_filter_construction` and `_filter_concrete_craft_type`.
+    """
 
     if len(sim_world.crafts) != 1:
         raise NotImplementedError(
-            "emit_sim_plus_ekf_main_cpp: only single-craft sim worlds are "
-            "supported in this build (multi-craft sim + EKF lands later).")
-    if len(ekf.world.crafts) != 1:
+            "emit_sim_plus_filter_main_cpp: only single-craft sim worlds are "
+            "supported in this build (multi-craft sim + filter lands later).")
+    if len(filter_obj.world.crafts) != 1:
         raise NotImplementedError(
-            "emit_sim_plus_ekf_main_cpp: only single-craft est worlds are "
+            "emit_sim_plus_filter_main_cpp: only single-craft est worlds are "
             "supported.")
 
     sim_craft = sim_world.crafts[0].craft
     sim_craft_var = f"sim_{sim_craft.name}"
-    est_craft_class_tmpl = class_name_for_craft(ekf.world.crafts[0].craft.name) + "T"
-    ekf_var = ekf.cpp_var_name()
+    est_craft_obj = filter_obj.world.crafts[0].craft
+    est_craft_type = _filter_concrete_craft_type(kind, est_craft_obj)
+    filter_var = filter_obj.cpp_var_name()
 
     ctx = _AccessorCtx()
     ctx.add_sim_craft(sim_craft, sim_craft_var)
-    ctx.add_ekf(ekf, ekf_var)
+    ctx.add_ekf(filter_obj, filter_var)
 
     # Field instances are constructed in main(); the same descriptor object
     # may appear in both worlds, in which case it shares one C++ var.
-    # Resolve the MagField var (if any) so a Magnetometer measurement can
-    # name the right instance for its locally-constant-B capture.
-    field_var_for_id = _plan_field_vars(sim_world, ekf.world)
+    field_var_for_id = _plan_field_vars(sim_world, filter_obj.world)
     mag_field_var = (_first_mag_field_var(sim_world, field_var_for_id)
-                     or _first_mag_field_var(ekf.world, field_var_for_id))
+                     or _first_mag_field_var(filter_obj.world, field_var_for_id))
 
-    # Per-sensor measurement functors (one per part in ekf.measurements).
+    # Per-sensor measurement functors (one per part in filter.measurements).
     meas_specs = []
-    for m in ekf.measurements:
-        part_var = f"{ekf_var}.craft().{m.name}()"
-        spec = _MeasFunctor.for_part(m, ekf_var, part_var,
+    for m in filter_obj.measurements:
+        part_var = f"{filter_var}.craft().{m.name}()"
+        spec = _MeasFunctor.for_part(m, filter_var, part_var,
                                      mag_field_var=mag_field_var)
         meas_specs.append((m, spec))
 
     meas_dim = sum(s.n_floats for _, s in meas_specs) if meas_specs else 1
+
+    filter_header, filter_ctor = _filter_construction(
+        kind, filter_obj, est_craft_type, filter_var, meas_dim)
 
     # Build the file.
     lines: list[str] = [
@@ -165,30 +179,26 @@ def emit_sim_plus_ekf_main_cpp(target, sim_world, ekf) -> str:
         "",
         "#include \"manta/core/scene.hpp\"",
         "#include \"manta/core/world.hpp\"",
-        "#include \"manta/estimation/craft_ekf.hpp\"",
+        filter_header,
     ]
-    # Sim-side craft + est-side craft includes. The two crafts are emitted
-    # as separate generated files (different names → different .hpp).
     lines.append(f'#include "{sim_craft.name}.hpp"')
-    est_craft_obj = ekf.world.crafts[0].craft
     if est_craft_obj.name != sim_craft.name:
         lines.append(f'#include "{est_craft_obj.name}.hpp"')
-    # Field/planet headers — union over both worlds.
     seen_headers: set[str] = set()
-    for f in list(sim_world.fields) + list(ekf.world.fields):
+    for f in list(sim_world.fields) + list(filter_obj.world.fields):
         if f.cpp_header not in seen_headers:
             seen_headers.add(f.cpp_header)
             lines.append(f'#include "{f.cpp_header}"')
     for p in sim_world.planets:
         lines.append(f'#include "{p.cpp_header}"')
-    if sim_world.tethers or ekf.world.tethers:
+    if sim_world.tethers or filter_obj.world.tethers:
         lines.append('#include "manta/coupling/tether.hpp"')
         lines.append('#include "manta/parts/coupling/tether_endpoint.hpp"')
-    if ekf.world.planets:
+    if filter_obj.world.planets:
         raise NotImplementedError(
-            "emit_sim_plus_ekf_main_cpp: planets in the EKF's wrapped world "
-            "aren't supported (CraftEKF doesn't own a Scene). Register the "
-            "needed fields directly via World.fields on the est-side world.")
+            "emit_sim_plus_filter_main_cpp: planets in the filter's wrapped "
+            "world aren't supported (CraftEKF/UKF don't own a Scene). "
+            "Register fields directly via World.fields on the est-side world.")
 
     lines += [
         "",
@@ -272,32 +282,34 @@ def emit_sim_plus_ekf_main_cpp(target, sim_world, ekf) -> str:
 
     lines += [
         "",
-        "    // ---- EKF ----",
-        f"    manta::estimation::CraftEKF<{est_craft_class_tmpl}, {meas_dim}> {ekf_var};",
-        f"    using EkfT = decltype({ekf_var});",
+        f"    // ---- {kind.upper()} ----",
+        f"    {filter_ctor}",
+        f"    using EkfT = decltype({filter_var});",
         "    EkfT::StateVec x0 = EkfT::StateVec::Zero();",
         "    x0(3) = 1.0;     // identity quaternion w",
-        f"    EkfT::StateCov P0 = EkfT::StateCov::Identity() * {_f(ekf.initial_covariance)};",
-        f"    EkfT::StateCov Q  = EkfT::StateCov::Identity() * {_f(ekf.process_noise)};",
-        f"    {ekf_var}.set_state(x0);",
-        f"    {ekf_var}.set_covariance(P0);",
+        f"    EkfT::StateCov P0 = EkfT::StateCov::Identity() * "
+        f"{_f(filter_obj.initial_covariance)};",
+        f"    EkfT::StateCov Q  = EkfT::StateCov::Identity() * "
+        f"{_f(filter_obj.process_noise)};",
+        f"    {filter_var}.set_state(x0);",
+        f"    {filter_var}.set_covariance(P0);",
         "",
     ]
 
     # Construct est-only fields (those NOT in sim) and register all est-
-    # needed fields on the EKF. Var names come from `field_var_for_id` so
-    # any MagField found by `_first_mag_field_var` resolves to the same
+    # needed fields on the filter. Var names come from `field_var_for_id`
+    # so any MagField found by `_first_mag_field_var` resolves to the same
     # instance the codegen emits.
     sim_field_ids = {id(f) for f in sim_world.fields}
-    for i, f in enumerate(ekf.world.fields):
+    for i, f in enumerate(filter_obj.world.fields):
         var = field_var_for_id[id(f)]
         if id(f) not in sim_field_ids:
             lines.append(f"    {f.emit_construction(var)}")
             for stmt in (f.emit_extra_setup(var) if hasattr(f, "emit_extra_setup") else []):
                 lines.append(f"    {stmt}")
-        lines.append(f"    {ekf_var}.register_field({var});")
+        lines.append(f"    {filter_var}.register_field({var});")
         for base in getattr(f, "register_as", []) or []:
-            lines.append(f"    {ekf_var}.template register_field<{base}>({var});")
+            lines.append(f"    {filter_var}.template register_field<{base}>({var});")
 
     # Per-sensor R blocks.
     for m, spec in meas_specs:
@@ -316,12 +328,10 @@ def emit_sim_plus_ekf_main_cpp(target, sim_world, ekf) -> str:
         "",
     ]
 
-    # Bindings: union of sim_world.bindings + ekf.world.bindings. Each gets
-    # a globally-unique bind_id. Subscribers declared up-front; publishers
-    # too. Direction-specific apply/publish in the tick loop.
+    # Bindings: union of sim_world.bindings + filter.world.bindings.
     bind_assignments: list[tuple[int, "Binding"]] = []
     bid = 0
-    for w in (sim_world, ekf.world):
+    for w in (sim_world, filter_obj.world):
         for b in w.bindings:
             bind_assignments.append((bid, b))
             bid += 1
@@ -344,9 +354,10 @@ def emit_sim_plus_ekf_main_cpp(target, sim_world, ekf) -> str:
         _emit_field_sync(lines, i, topic, sim_world.fields[i].cpp_class)
 
     total_bindings = len(bind_assignments)
+    kind_label = kind.upper()
     lines += [
         "",
-        f'    std::printf("{target.name}: ready (sim+EKF). 1 sim craft, '
+        f'    std::printf("{target.name}: ready (sim+{kind_label}). 1 sim craft, '
         f'1 est craft, {total_bindings} binding(s), {len(meas_specs)} '
         f'measurement sensor(s).\\n");',
         "",
@@ -370,15 +381,15 @@ def emit_sim_plus_ekf_main_cpp(target, sim_world, ekf) -> str:
     ]
 
     # Cross-world + within-world connect() steps. Run AFTER sim_w.update()
-    # so sensor outputs are fresh, BEFORE ekf.predict() so set_measurement
-    # updates land first.
-    all_connections = list(sim_world.connections) + list(ekf.world.connections)
+    # so sensor outputs are fresh, BEFORE filter.predict() so the
+    # set_measurement updates land first.
+    all_connections = list(sim_world.connections) + list(filter_obj.world.connections)
     for conn in all_connections:
         _emit_connection_step(lines, conn, ctx)
 
     lines += [
         "",
-        f"        {ekf_var}.predict(DT, Q);",
+        f"        {filter_var}.predict(DT, Q);",
         "",
     ]
 
@@ -387,8 +398,8 @@ def emit_sim_plus_ekf_main_cpp(target, sim_world, ekf) -> str:
     # default form).
     for m, spec in meas_specs:
         rname = f"R_{m.name}"
-        part_acc = f"{ekf_var}.craft().{m.name}()"
-        spec.emit_update_block(lines, ekf_var, part_acc, rname)
+        part_acc = f"{filter_var}.craft().{m.name}()"
+        spec.emit_update_block(lines, filter_var, part_acc, rname)
     if meas_specs:
         lines.append("")
 

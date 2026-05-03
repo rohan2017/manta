@@ -34,23 +34,32 @@ from .main import (
 )
 
 
-def _is_ekf_signal(b) -> bool:
-    """A BoundSignal whose craft_ref is the EKF descriptor itself (not a Craft).
-    Detected via the `$ekf/` part_name sentinel; reading craft_ref is also
-    sufficient but the prefix check avoids the import cycle."""
+def _is_filter_signal(b) -> bool:
+    """A BoundSignal whose craft_ref is an EKF or UKF descriptor (not a
+    Craft). Detected via the part_name sentinel prefix; works for both
+    filter kinds without import cycles."""
     from ..estimation.ekf import EKF_SENTINEL_PREFIX
-    return getattr(b, "part_name", "").startswith(EKF_SENTINEL_PREFIX)
+    from ..estimation.ukf import UKF_SENTINEL_PREFIX
+    pn = getattr(b, "part_name", "")
+    return pn.startswith(EKF_SENTINEL_PREFIX) or pn.startswith(UKF_SENTINEL_PREFIX)
+
+
+# Back-compat alias — historical callsites named this _is_ekf_signal.
+_is_ekf_signal = _is_filter_signal
 
 
 def _accessor_for_ekf_or_craft(sig, craft_var: str, ekf_var: str) -> str:
-    """Resolve {accessor} for a BoundSignal in an EKF target.
+    """Resolve {accessor} for a BoundSignal in a filter target.
 
     Three cases:
-      * EKF-rooted (sig.craft_ref is the EKF):   accessor = `ekf_var`.
-      * Craft-rooted, $craft sentinel:           accessor = `ekf_var.craft()`.
-      * Craft-rooted, named part:                accessor = `ekf_var.craft().<part>()`.
+      * Filter-rooted (sig.craft_ref is the EKF/UKF): accessor = `ekf_var`.
+      * Craft-rooted, $craft sentinel:                accessor = `ekf_var.craft()`.
+      * Craft-rooted, named part:                     accessor = `ekf_var.craft().<part>()`.
+
+    `ekf_var` is the C++ var name for the filter (`ekf_<id>` or `ukf_<id>`);
+    the parameter name is historical.
     """
-    if _is_ekf_signal(sig):
+    if _is_filter_signal(sig):
         return ekf_var
     base = accessor_for(sig)   # "craft" or "craft.<part>()"
     if base == "craft":
@@ -249,40 +258,93 @@ def _first_mag_field_var(world, var_for_id: dict[int, str] | None = None) -> str
     return None
 
 
-def emit_ekf_main_cpp(target, ekf) -> str:
-    """Emit the main.cpp for a Target whose driveable is an EKF.
+def _filter_construction(kind: str, filter_obj, primary_class_tmpl: str,
+                         filter_var: str, meas_dim: int) -> tuple[str, str]:
+    """Return (header_include_line, ctor_line) for the filter wrapper.
 
-    `target` is a `manifest.Target`. `ekf` is the EKF descriptor (the sole
-    drive in target.drives).
+    EKF instantiates `CraftEKF<EstCraftT, MeasDim>` (template-template
+    parameter — the templated craft class is passed verbatim). UKF
+    uses `CraftUKFOf<EstCraft<double>, MeasDim>` so non-templated
+    crafts work too — the codegen always picks the `<double>` form
+    for a templated craft.
     """
-    world = ekf.world
+    if kind == "ekf":
+        return (
+            "#include \"manta/estimation/craft_ekf.hpp\"",
+            f"manta::estimation::CraftEKF<{primary_class_tmpl}, {meas_dim}> "
+            f"{filter_var};",
+        )
+    if kind == "ukf":
+        # CraftUKFOf takes a concrete type. Use Tmpl<double> when the craft
+        # is scalar-templated; otherwise the class name is the concrete
+        # craft itself (no <Scalar>).
+        # We pass the templated form here because `class_name_for_craft + 'T'`
+        # refers to the templated alias. For non-templated crafts the
+        # caller passes the plain class name without the trailing 'T'.
+        a, b, k = filter_obj.alpha, filter_obj.beta, filter_obj.kappa
+        return (
+            "#include \"manta/estimation/craft_ukf.hpp\"",
+            f"manta::estimation::CraftUKFOf<{primary_class_tmpl}, {meas_dim}> "
+            f"{filter_var}({_f(a)}, {_f(b)}, {_f(k)});",
+        )
+    raise ValueError(f"unknown filter kind {kind!r}")
+
+
+def _filter_concrete_craft_type(kind: str, craft) -> str:
+    """C++ type for the wrapped craft as seen by the filter wrapper.
+
+    EKF wants the templated alias (`Ex5EstCraftT` — the Tpl<class>),
+    UKF wants the concrete instantiation (`Ex5EstCraftT<double>` for
+    templated crafts, plain `MyCraft` for non-templated).
+    """
+    base = class_name_for_craft(craft.name)
+    if kind == "ekf":
+        return base + "T"
+    # UKF: concrete class.
+    if getattr(craft, "scalar_templated", False):
+        return base + "T<double>"
+    return base
+
+
+def emit_ekf_main_cpp(target, filter_obj, kind: str = "ekf") -> str:
+    """Emit the main.cpp for a Target whose driveable is an EKF or UKF.
+
+    `target` is a `manifest.Target`. `filter_obj` is the EKF/UKF
+    descriptor (the sole drive in target.drives). `kind` selects the
+    C++ wrapper type — kept as a string to keep emit_config's dispatch
+    simple. Most of the body is filter-agnostic; the differences are
+    confined to `_filter_construction` and `_filter_concrete_craft_type`.
+    """
+    world = filter_obj.world
     if not world.crafts:
-        raise RuntimeError("emit_ekf_main_cpp: EKF's wrapped world has no crafts")
+        raise RuntimeError(
+            f"emit_{kind}_main_cpp: filter's wrapped world has no crafts")
     if len(world.crafts) > 1:
         raise NotImplementedError(
-            "emit_ekf_main_cpp: only single-craft worlds are supported in v1.")
+            f"emit_{kind}_main_cpp: only single-craft worlds are supported in v1.")
 
     unique_crafts = _world_unique_crafts(world)
     primary = unique_crafts[0]
-    primary_class_tmpl = class_name_for_craft(primary.name) + "T"
+    primary_class = _filter_concrete_craft_type(kind, primary)
 
-    ekf_var  = ekf.cpp_var_name()                # "ekf_<id>"
-    craft_var = f"{ekf_var}.craft()"             # accessor for the wrapped craft
+    filter_var = filter_obj.cpp_var_name()           # "ekf_<id>" or "ukf_<id>"
+    craft_var = f"{filter_var}.craft()"
 
-    # Field var lookup so a Magnetometer measurement can name the right
-    # MagField instance for its locally-constant-B capture.
     mag_field_var = _first_mag_field_var(world)
 
     meas_specs: list[tuple[object, _MeasFunctor]] = []
-    for m in ekf.measurements:
+    for m in filter_obj.measurements:
         part_var = f"{craft_var}.{m.name}()"
-        spec = _MeasFunctor.for_part(m, ekf_var, part_var,
+        spec = _MeasFunctor.for_part(m, filter_var, part_var,
                                      mag_field_var=mag_field_var)
         meas_specs.append((m, spec))
 
     meas_dim = sum(s.n_floats for _, s in meas_specs) if meas_specs else 1
     if meas_dim < 1:
         meas_dim = 1
+
+    filter_header, filter_ctor = _filter_construction(
+        kind, filter_obj, primary_class, filter_var, meas_dim)
 
     lines: list[str] = [
         GENERATED_BANNER,
@@ -303,7 +365,7 @@ def emit_ekf_main_cpp(target, ekf) -> str:
         "#include <Eigen/Geometry>",
         "#include <zenoh.hxx>",
         "",
-        "#include \"manta/estimation/craft_ekf.hpp\"",
+        filter_header,
     ]
     for c in unique_crafts:
         lines.append(f'#include "{c.name}.hpp"')
@@ -358,15 +420,17 @@ def emit_ekf_main_cpp(target, ekf) -> str:
         f"    constexpr float SIM_RATE_MULT  = {_f(target.sim_rate_mult)};",
         f"    const     float WALL_PERIOD    = DT / SIM_RATE_MULT;",
         "",
-        f"    manta::estimation::CraftEKF<{primary_class_tmpl}, {meas_dim}> {ekf_var};",
+        f"    {filter_ctor}",
         "",
-        f"    using EkfT = decltype({ekf_var});",
+        f"    using EkfT = decltype({filter_var});",
         "    EkfT::StateVec x0 = EkfT::StateVec::Zero();",
         "    x0(3) = 1.0;     // identity quaternion w",
-        f"    EkfT::StateCov P0 = EkfT::StateCov::Identity() * {_f(ekf.initial_covariance)};",
-        f"    EkfT::StateCov Q  = EkfT::StateCov::Identity() * {_f(ekf.process_noise)};",
-        f"    {ekf_var}.set_state(x0);",
-        f"    {ekf_var}.set_covariance(P0);",
+        f"    EkfT::StateCov P0 = EkfT::StateCov::Identity() * "
+        f"{_f(filter_obj.initial_covariance)};",
+        f"    EkfT::StateCov Q  = EkfT::StateCov::Identity() * "
+        f"{_f(filter_obj.process_noise)};",
+        f"    {filter_var}.set_state(x0);",
+        f"    {filter_var}.set_covariance(P0);",
         "",
     ]
 
@@ -387,9 +451,9 @@ def emit_ekf_main_cpp(target, ekf) -> str:
         lines.append(f"    {f.emit_construction(var)}")
         for stmt in (f.emit_extra_setup(var) if hasattr(f, "emit_extra_setup") else []):
             lines.append(f"    {stmt}")
-        lines.append(f"    {ekf_var}.register_field({var});")
+        lines.append(f"    {filter_var}.register_field({var});")
         for base in getattr(f, "register_as", []) or []:
-            lines.append(f"    {ekf_var}.template register_field<{base}>({var});")
+            lines.append(f"    {filter_var}.template register_field<{base}>({var});")
         if getattr(f, "synchronized", False):
             sync_field_idxs.append(i)
 
@@ -417,9 +481,10 @@ def emit_ekf_main_cpp(target, ekf) -> str:
         _emit_field_sync(lines, i, topic, world.fields[i].cpp_class)
 
     total_bindings = len(bind_assignments)
+    kind_label = kind.upper()
     lines += [
         "",
-        f'    std::printf("{target.name}: ready (EKF). 1 craft, '
+        f'    std::printf("{target.name}: ready ({kind_label}). 1 craft, '
         f'{total_bindings} binding(s), {len(meas_specs)} measurement sensor(s).\\n");',
         "",
         "    auto next = std::chrono::steady_clock::now();",
@@ -432,18 +497,18 @@ def emit_ekf_main_cpp(target, ekf) -> str:
 
     for bid, b in bind_assignments:
         if b.direction == "in":
-            _emit_input_binding_apply(lines, bid, b, craft_var, ekf_var)
+            _emit_input_binding_apply(lines, bid, b, craft_var, filter_var)
 
     lines += [
         "",
-        f"        {ekf_var}.predict(DT, Q);",
+        f"        {filter_var}.predict(DT, Q);",
         "",
     ]
 
     for m, spec in meas_specs:
         rname = f"R_{m.name}"
         part_acc = f"{craft_var}.{m.name}()"
-        spec.emit_update_block(lines, ekf_var, part_acc, rname)
+        spec.emit_update_block(lines, filter_var, part_acc, rname)
     if meas_specs:
         lines.append("")
 
@@ -454,7 +519,7 @@ def emit_ekf_main_cpp(target, ekf) -> str:
 
     for bid, b in bind_assignments:
         if b.direction == "out":
-            _emit_output_binding_publish(lines, bid, b, craft_var, ekf_var)
+            _emit_output_binding_publish(lines, bid, b, craft_var, filter_var)
 
     lines += [
         "        }",
@@ -469,6 +534,12 @@ def emit_ekf_main_cpp(target, ekf) -> str:
         "",
     ]
     return "\n".join(lines)
+
+
+def emit_ukf_main_cpp(target, ukf) -> str:
+    """Emit main.cpp for a Target whose driveable is a UKF descriptor.
+    Thin wrapper that forwards to the shared filter emitter."""
+    return emit_ekf_main_cpp(target, ukf, kind="ukf")
 
 
 # ---------------------------------------------------------------------------

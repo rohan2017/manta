@@ -133,7 +133,7 @@ class EKF:
         self.orientation     = self._make_signal("orientation",      "orientation",      4)
         self.vel_linear      = self._make_signal("vel_linear",       "vel_linear",       3)
         self.vel_angular     = self._make_signal("vel_angular",      "vel_angular",      3)
-        self.full_state      = self._make_signal("full_state",       "state",            sd)
+        self.full_state      = self._make_signal("full_state",       "full_state",       sd)
         # Stddev variants — codegen reads sqrt(P[i, i]) from corresponding
         # rows of the covariance matrix.
         self.position_stddev    = self._make_signal("position_stddev",    "position_stddev",    3)
