@@ -81,17 +81,12 @@ manta_ex3_apply(ex3_tvc_rocket)
 # ex4 — binary workflow: reaction wheel demo (Motor articulation).
 include(${CMAKE_CURRENT_SOURCE_DIR}/ex4_reaction_wheel/generated/ex4/ex4.cmake)
 
-# ex5 — library workflow: sim Craft + templated estimator Craft + CraftEKF.
-# Two codegen-emitted crafts: ex5 (sim) and ex5_est (templated estimator).
+# ex5 — Pattern A: sim Craft + templated estimator Craft + CraftEKF in one
+# binary. The codegen-emitted main wires sim sensor outputs into the EKF
+# craft's set_measurement hooks each tick via cross-world connect(), runs
+# both worlds in lockstep, and publishes truth + estimate to Zenoh.
 include(${CMAKE_CURRENT_SOURCE_DIR}/ex5_estimator_demo/generated/ex5/ex5.cmake)
-include(${CMAKE_CURRENT_SOURCE_DIR}/ex5_estimator_demo/generated/ex5_est/ex5_est.cmake)
-add_executable(ex5_estimator_demo
-    ex5_estimator_demo/ex5.cpp
-    ${manta_ex5_SOURCES}
-    ${manta_ex5_est_SOURCES})
-target_link_libraries(ex5_estimator_demo PRIVATE manta_examples_shared)
-manta_ex5_apply(ex5_estimator_demo)
-manta_ex5_est_apply(ex5_estimator_demo)
+target_link_libraries(ex5 PRIVATE manta_examples_shared)
 
 # ex6 — Pattern C: real-data-only estimator (no sim Craft). Codegen-driven
 # EKF target: include() defines the `ex6_est` binary directly; the

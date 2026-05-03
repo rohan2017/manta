@@ -1,14 +1,13 @@
-"""Programmatic smoke test for ex6 sim + EKF demo.
+"""Programmatic smoke test for ex5 sim + EKF demo.
 
 Verifies:
   1. Truth and estimate streams both publish under Zenoh.
   2. After 5 s of free fall + a thruster pulse, the EKF estimated
      velocity tracks the truth velocity within 0.1 m/s on each axis.
-  3. The covariance diagonal on velocity has shrunk below the initial
-     identity (filter is converging, not diverging).
+  3. The velocity stddev has shrunk below sqrt(initial covariance).
 
 Usage:
-    Terminal A: ./build/examples/ex5_estimator_demo
+    Terminal A: ./build/examples/ex5
     Terminal B: python examples/ex5_estimator_demo/smoke_test.py
 """
 
