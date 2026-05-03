@@ -34,6 +34,7 @@
 // last_*() values, which the user updates via set_measurement(...) on the
 // est-side craft from the data source.
 
+#include <cmath>
 #include <Eigen/Core>
 #include <ceres/jet.h>
 
@@ -113,7 +114,63 @@ public:
         ekf_.update(h, z, R);
     }
 
+    // Per-sensor update: lets a single CraftEKF absorb measurements of
+    // varying width N (e.g. DVL=3, IMU=6, Mag=3) without instantiating
+    // separate filters. Codegen drives this from
+    //   if (ekf.craft().sensor().consume_fresh()) ekf.update_n<N>(h, z, R);
+    // patterns. Mathematically equivalent to a single fused update when
+    // sensors' R blocks are independent.
+    template <int N, class MeasureH>
+    void update_n(const MeasureH& h,
+                  const Eigen::Matrix<double, N, 1>& z,
+                  const Eigen::Matrix<double, N, N>& R) {
+        ekf_.template update_n<N>(h, z, R);
+    }
+
+    // Codegen-friendly accessors for the rigid-state slices. Output
+    // BoundSignals on the Python EKF descriptor read these via
+    //     ekf_<id>.position()(i)  /  .orientation()(i)  /  .vel_linear()(i)
+    // / .vel_angular()(i) / .full_state()(i)
+    // and the corresponding `_stddev()` variants.
+    Eigen::Matrix<double, 3, 1> position() const noexcept {
+        return ekf_.state().template segment<3>(0);
+    }
+    Eigen::Matrix<double, 4, 1> orientation() const noexcept {
+        return ekf_.state().template segment<4>(3);
+    }
+    Eigen::Matrix<double, 3, 1> vel_linear() const noexcept {
+        return ekf_.state().template segment<3>(7);
+    }
+    Eigen::Matrix<double, 3, 1> vel_angular() const noexcept {
+        return ekf_.state().template segment<3>(10);
+    }
+    const StateVec& full_state() const noexcept { return ekf_.state(); }
+
+    Eigen::Matrix<double, 3, 1> position_stddev() const noexcept {
+        return diag_stddev_segment<3>(0);
+    }
+    Eigen::Matrix<double, 4, 1> orientation_stddev() const noexcept {
+        return diag_stddev_segment<4>(3);
+    }
+    Eigen::Matrix<double, 3, 1> vel_linear_stddev() const noexcept {
+        return diag_stddev_segment<3>(7);
+    }
+    Eigen::Matrix<double, 3, 1> vel_angular_stddev() const noexcept {
+        return diag_stddev_segment<3>(10);
+    }
+
 private:
+    template <int N>
+    Eigen::Matrix<double, N, 1> diag_stddev_segment(int start) const noexcept {
+        Eigen::Matrix<double, N, 1> out;
+        const auto& P = ekf_.covariance();
+        for (int i = 0; i < N; ++i) {
+            const double v = P(start + i, start + i);
+            out(i) = std::sqrt(v > 0.0 ? v : 0.0);
+        }
+        return out;
+    }
+
     CraftR              craft_real_;
     CraftJ              craft_jet_;
     EKF<StateDim, MeasDim> ekf_;

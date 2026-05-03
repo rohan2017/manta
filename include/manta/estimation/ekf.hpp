@@ -90,25 +90,36 @@ public:
     // x += K y, P = (I - K H) P. H = dh/dx via Ceres Jets.
     template <class MeasureH>
     void update(const MeasureH& h, const MeasVec& z, const MeasCov& R) {
+        update_n<MeasDim>(h, z, R);
+    }
+
+    // Update step with a per-call measurement dimension N. Lets a single
+    // EKF instance absorb measurements of varying width — the standard
+    // sequential per-sensor update pattern. Mathematically equivalent to a
+    // fused update when the per-sensor R blocks are independent.
+    template <int N, class MeasureH>
+    void update_n(const MeasureH& h,
+                  const Eigen::Matrix<double, N, 1>& z,
+                  const Eigen::Matrix<double, N, N>& R) {
         using Jet = ceres::Jet<double, StateDim>;
         Eigen::Matrix<Jet, StateDim, 1> x_jet;
         for (int i = 0; i < StateDim; ++i) {
             x_jet(i) = Jet(x_(i), i);
         }
-        Eigen::Matrix<Jet, MeasDim, 1> z_jet = h(x_jet);
+        Eigen::Matrix<Jet, N, 1> z_jet = h(x_jet);
 
-        MeasVec      z_pred;
-        MeasJacobian H;
-        for (int i = 0; i < MeasDim; ++i) {
+        Eigen::Matrix<double, N, 1>        z_pred;
+        Eigen::Matrix<double, N, StateDim> H;
+        for (int i = 0; i < N; ++i) {
             z_pred(i) = z_jet(i).a;
             for (int j = 0; j < StateDim; ++j) {
                 H(i, j) = z_jet(i).v[j];
             }
         }
 
-        MeasVec y = z - z_pred;
-        MeasCov S = H * P_ * H.transpose() + R;
-        Eigen::Matrix<double, StateDim, MeasDim> K = P_ * H.transpose() * S.inverse();
+        Eigen::Matrix<double, N, 1>        y = z - z_pred;
+        Eigen::Matrix<double, N, N>        S = H * P_ * H.transpose() + R;
+        Eigen::Matrix<double, StateDim, N> K = P_ * H.transpose() * S.inverse();
 
         x_ = x_ + K * y;
         P_ = (StateCov::Identity() - K * H) * P_;
