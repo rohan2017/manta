@@ -44,6 +44,10 @@ def emit_cmake_fragment(world: World, workflow: str, multi: bool = False) -> str
     for c in unique_crafts:
         lines.append(f"    ${{manta_{name}_DIR}}/{c}_craft.cpp")
     if workflow == "binary":
+        # World harness body (setup/tick + anonymous-namespace Zenoh
+        # state) + thin main. Library workflow leaves these out — users
+        # who want the harness should re-emit with --workflow binary.
+        lines.append(f"    ${{manta_{name}_DIR}}/{name}.cpp")
         lines.append(f"    ${{manta_{name}_DIR}}/{name}_main.cpp")
     lines += [
         ")",
@@ -52,57 +56,57 @@ def emit_cmake_fragment(world: World, workflow: str, multi: bool = False) -> str
     ]
     for c in unique_crafts:
         lines.append(f"    ${{manta_{name}_DIR}}/{c}_craft.hpp")
+    if workflow == "binary":
+        lines.append(f"    ${{manta_{name}_DIR}}/{name}.hpp")
     lines += [
         f"    ${{manta_{name}_DIR}}/{name}_config.h",
         ")",
         "",
         f'set(manta_{name}_CONFIG_INCLUDE "-include${{manta_{name}_DIR}}/{name}_config.h")',
         "",
+        "# Zenoh deps — the harness's <name>.cpp uses zenoh.hxx for bindings",
+        "# (subscribers + publishers + field-sync). Fetched once per build.",
+        "if(NOT TARGET zenohcxx::zenohc)",
+        "    include(FetchContent)",
+        '    set(_manta_zenoh_version "1.9.0")',
+        "    if(CMAKE_SYSTEM_PROCESSOR MATCHES \"x86_64|amd64|AMD64\")",
+        '        set(_manta_zenohc_arch "x86_64-unknown-linux-gnu")',
+        "    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES \"aarch64|arm64\")",
+        '        set(_manta_zenohc_arch "aarch64-unknown-linux-gnu")',
+        "    else()",
+        '        message(FATAL_ERROR "manta-codegen: no pre-built zenoh-c for ${CMAKE_SYSTEM_PROCESSOR}")',
+        "    endif()",
+        "    FetchContent_Declare(zenohc_binary",
+        '        URL "https://github.com/eclipse-zenoh/zenoh-c/releases/download/${_manta_zenoh_version}/zenoh-c-${_manta_zenoh_version}-${_manta_zenohc_arch}-standalone.zip")',
+        "    FetchContent_GetProperties(zenohc_binary)",
+        "    if(NOT zenohc_binary_POPULATED)",
+        "        FetchContent_Populate(zenohc_binary)",
+        "    endif()",
+        "    find_package(zenohc REQUIRED CONFIG",
+        '        PATHS "${zenohc_binary_SOURCE_DIR}/lib/cmake/zenohc" NO_DEFAULT_PATH)',
+        '    set(ZENOHCXX_ENABLE_TESTS    OFF CACHE BOOL "" FORCE)',
+        '    set(ZENOHCXX_ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)',
+        '    set(ZENOHCXX_ZENOHPICO       OFF CACHE BOOL "" FORCE)',
+        "    FetchContent_Declare(zenohcxx",
+        "        GIT_REPOSITORY https://github.com/eclipse-zenoh/zenoh-cpp.git",
+        "        GIT_TAG        ${_manta_zenoh_version} GIT_SHALLOW TRUE)",
+        "    FetchContent_MakeAvailable(zenohcxx)",
+        "endif()",
+        "",
         "# Helper: apply this world's config-header force-include + include path",
-        "# to a target. The user calls this on whichever target builds the",
-        "# generated source. Required because the feature-test macros must be",
-        "# uniform across every TU of the binary that contains parts using them.",
+        "# + manta + zenoh links to a target. The user calls this on whichever",
+        "# target builds the generated source.",
         f"function(manta_{name}_apply target)",
         f"    target_include_directories(${{target}} PRIVATE ${{manta_{name}_DIR}})",
         f"    target_compile_options(${{target}} PRIVATE \"SHELL:-include ${{manta_{name}_DIR}}/{name}_config.h\")",
+        f"    target_link_libraries(${{target}} PRIVATE manta::manta zenohcxx::zenohc)",
         "endfunction()",
         "",
     ]
 
     if workflow == "binary":
-        # Binary + real_data workflows use Zenoh. Set it up if the
-        # enclosing project hasn't already (idempotent: skips when the target
-        # already exists, e.g. when building inside the manta repo's examples).
         lines += [
-            "if(NOT TARGET zenohcxx::zenohc)",
-            "    include(FetchContent)",
-            '    set(_manta_zenoh_version "1.9.0")',
-            "    if(CMAKE_SYSTEM_PROCESSOR MATCHES \"x86_64|amd64|AMD64\")",
-            '        set(_manta_zenohc_arch "x86_64-unknown-linux-gnu")',
-            "    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES \"aarch64|arm64\")",
-            '        set(_manta_zenohc_arch "aarch64-unknown-linux-gnu")',
-            "    else()",
-            '        message(FATAL_ERROR "manta-codegen: no pre-built zenoh-c for ${CMAKE_SYSTEM_PROCESSOR}")',
-            "    endif()",
-            "    FetchContent_Declare(zenohc_binary",
-            '        URL "https://github.com/eclipse-zenoh/zenoh-c/releases/download/${_manta_zenoh_version}/zenoh-c-${_manta_zenoh_version}-${_manta_zenohc_arch}-standalone.zip")',
-            "    FetchContent_GetProperties(zenohc_binary)",
-            "    if(NOT zenohc_binary_POPULATED)",
-            "        FetchContent_Populate(zenohc_binary)",
-            "    endif()",
-            "    find_package(zenohc REQUIRED CONFIG",
-            '        PATHS "${zenohc_binary_SOURCE_DIR}/lib/cmake/zenohc" NO_DEFAULT_PATH)',
-            '    set(ZENOHCXX_ENABLE_TESTS    OFF CACHE BOOL "" FORCE)',
-            '    set(ZENOHCXX_ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)',
-            '    set(ZENOHCXX_ZENOHPICO       OFF CACHE BOOL "" FORCE)',
-            "    FetchContent_Declare(zenohcxx",
-            "        GIT_REPOSITORY https://github.com/eclipse-zenoh/zenoh-cpp.git",
-            "        GIT_TAG        ${_manta_zenoh_version} GIT_SHALLOW TRUE)",
-            "    FetchContent_MakeAvailable(zenohcxx)",
-            "endif()",
-            "",
             f"add_executable({name} ${{manta_{name}_SOURCES}})",
-            f"target_link_libraries({name} PRIVATE manta::manta zenohcxx::zenohc)",
             f"manta_{name}_apply({name})",
             "",
         ]

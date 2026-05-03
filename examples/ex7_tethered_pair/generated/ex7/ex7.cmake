@@ -5,26 +5,21 @@ set(manta_ex7_DIR ${CMAKE_CURRENT_LIST_DIR})
 set(manta_ex7_SOURCES
     ${manta_ex7_DIR}/leader_craft.cpp
     ${manta_ex7_DIR}/follower_craft.cpp
+    ${manta_ex7_DIR}/ex7.cpp
     ${manta_ex7_DIR}/ex7_main.cpp
 )
 
 set(manta_ex7_HEADERS
     ${manta_ex7_DIR}/leader_craft.hpp
     ${manta_ex7_DIR}/follower_craft.hpp
+    ${manta_ex7_DIR}/ex7.hpp
     ${manta_ex7_DIR}/ex7_config.h
 )
 
 set(manta_ex7_CONFIG_INCLUDE "-include${manta_ex7_DIR}/ex7_config.h")
 
-# Helper: apply this world's config-header force-include + include path
-# to a target. The user calls this on whichever target builds the
-# generated source. Required because the feature-test macros must be
-# uniform across every TU of the binary that contains parts using them.
-function(manta_ex7_apply target)
-    target_include_directories(${target} PRIVATE ${manta_ex7_DIR})
-    target_compile_options(${target} PRIVATE "SHELL:-include ${manta_ex7_DIR}/ex7_config.h")
-endfunction()
-
+# Zenoh deps — the harness's <name>.cpp uses zenoh.hxx for bindings
+# (subscribers + publishers + field-sync). Fetched once per build.
 if(NOT TARGET zenohcxx::zenohc)
     include(FetchContent)
     set(_manta_zenoh_version "1.9.0")
@@ -52,6 +47,14 @@ if(NOT TARGET zenohcxx::zenohc)
     FetchContent_MakeAvailable(zenohcxx)
 endif()
 
+# Helper: apply this world's config-header force-include + include path
+# + manta + zenoh links to a target. The user calls this on whichever
+# target builds the generated source.
+function(manta_ex7_apply target)
+    target_include_directories(${target} PRIVATE ${manta_ex7_DIR})
+    target_compile_options(${target} PRIVATE "SHELL:-include ${manta_ex7_DIR}/ex7_config.h")
+    target_link_libraries(${target} PRIVATE manta::manta zenohcxx::zenohc)
+endfunction()
+
 add_executable(ex7 ${manta_ex7_SOURCES})
-target_link_libraries(ex7 PRIVATE manta::manta zenohcxx::zenohc)
 manta_ex7_apply(ex7)

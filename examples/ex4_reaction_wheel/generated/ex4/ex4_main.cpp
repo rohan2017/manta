@@ -7,137 +7,33 @@
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <mutex>
-#include <string>
 #include <thread>
-#include <vector>
 
-#include <zenoh.hxx>
-
-#include "manta/core/scene.hpp"
-#include "manta/core/world.hpp"
-#include "ex4_craft.hpp"
+#include "ex4.hpp"
 
 namespace {
 std::atomic<bool> g_run{true};
 void on_signal(int) { g_run.store(false); }
-
-// Tiny float-array parser for command payloads.
-bool parse_float_array(std::string_view s, std::vector<float>& out) {
-    out.clear();
-    auto lb = s.find('['); auto rb = s.rfind(']');
-    if (lb == std::string_view::npos || rb == std::string_view::npos || rb <= lb) return false;
-    std::string body(s.substr(lb + 1, rb - lb - 1));
-    char* p = body.data(); char* end = body.data() + body.size();
-    while (p < end) {
-        while (p < end && (*p == ' ' || *p == ',' || *p == '\t' || *p == '\n')) ++p;
-        if (p >= end) break;
-        char* next = nullptr;
-        float v = std::strtof(p, &next);
-        if (next == p) return false;
-        out.push_back(v);
-        p = next;
-    }
-    return true;
-}
 }
 
 int main() {
     std::signal(SIGINT,  on_signal);
     std::signal(SIGTERM, on_signal);
 
-    constexpr float DT             = 0.001f;
-    constexpr float SIM_RATE_MULT  = 1.0f;
-    const     float WALL_PERIOD    = DT / SIM_RATE_MULT;
-
-    manta::World w;
-    w.clock().set_dt(DT);
-    auto& scene = w.create_scene();
-    Ex4Craft craft;
-    scene.add_craft(craft, manta::InitialState{});
-    zenoh::Config cfg = zenoh::Config::create_default();
-    auto session = zenoh::Session::open(std::move(cfg));
-
-    std::mutex bind_1_mtx;
-    std::vector<float> bind_1_payload;
-    auto bind_1_sub = session.declare_subscriber(
-        zenoh::KeyExpr("manta/ex4/wheel/cmd"),
-        [&](const zenoh::Sample& s) {
-            std::vector<float> v;
-            std::string payload(s.get_payload().as_string());
-            if (parse_float_array(payload, v) && v.size() >= 1) {
-                std::lock_guard<std::mutex> lk(bind_1_mtx);
-                bind_1_payload = std::move(v);
-            }
-        }, zenoh::closures::none);
-    auto pub_0 = session.declare_publisher(zenoh::KeyExpr("manta/ex4/state"));
-
+    manta_gen::ex4::setup();
     std::printf("ex4: ready. 1 craft(s), 2 binding(s).\n");
 
+    constexpr float WALL_PERIOD = manta_gen::ex4::DT / manta_gen::ex4::SIM_RATE_MULT;
     auto next = std::chrono::steady_clock::now();
     const auto period = std::chrono::microseconds(int64_t(WALL_PERIOD * 1e6));
-    int pub_decim = 0;
-    const int pub_every = 20;  // ~50 Hz publish
 
     while (g_run.load()) {
-        { std::lock_guard<std::mutex> lk(bind_1_mtx);
-          if (bind_1_payload.size() >= 1) {
-              craft.wheel().set_torque(bind_1_payload[0]);    // member: set_torque
-              bind_1_payload.clear();
-          } }
-
-        w.update();
-
-        if (++pub_decim >= pub_every) {
-            pub_decim = 0;
-            { std::string _json = "{";
-              _json += "\"t\":";
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%g", double(craft.world().clock().time())); _json += _b; }
-              _json += ",";
-              _json += "\"p\":[";
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.scene_to_craft().position().raw()(0))); _json += _b; }
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().position().raw()(1))); _json += _b; }
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().position().raw()(2))); _json += _b; }
-              _json += "]";
-              _json += ",";
-              _json += "\"q\":[";
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.scene_to_craft().orientation().raw().w())); _json += _b; }
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().orientation().raw().x())); _json += _b; }
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().orientation().raw().y())); _json += _b; }
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().orientation().raw().z())); _json += _b; }
-              _json += "]";
-              _json += ",";
-              _json += "\"v\":[";
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.scene_to_craft().vel_linear().raw()(0))); _json += _b; }
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().vel_linear().raw()(1))); _json += _b; }
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().vel_linear().raw()(2))); _json += _b; }
-              _json += "]";
-              _json += ",";
-              _json += "\"w\":[";
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.scene_to_craft().vel_angular().raw()(0))); _json += _b; }
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().vel_angular().raw()(1))); _json += _b; }
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().vel_angular().raw()(2))); _json += _b; }
-              _json += "]";
-              _json += ",";
-              _json += "\"wheel_angle\":";
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%g", double(craft.wheel().angle())); _json += _b; }
-              _json += ",";
-              _json += "\"wheel_rate\":";
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%g", double(craft.wheel().rate())); _json += _b; }
-              _json += ",";
-              _json += "\"wheel_accel\":";
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%g", double(craft.wheel().accel())); _json += _b; }
-              _json += "}";
-              pub_0.put(zenoh::Bytes(_json));
-            }
-        }
-
+        manta_gen::ex4::tick();
         next += period;
         std::this_thread::sleep_until(next);
     }
 
     std::printf("ex4: shutting down.\n");
+    manta_gen::ex4::shutdown();
     return 0;
 }

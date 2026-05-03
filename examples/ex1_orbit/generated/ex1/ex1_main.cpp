@@ -7,261 +7,33 @@
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <mutex>
-#include <string>
 #include <thread>
-#include <vector>
 
-#include <zenoh.hxx>
-
-#include "manta/core/scene.hpp"
-#include "manta/core/world.hpp"
-#include "ex1_craft.hpp"
-#include "manta/fields/gravity_field.hpp"
+#include "ex1.hpp"
 
 namespace {
 std::atomic<bool> g_run{true};
 void on_signal(int) { g_run.store(false); }
-
-// Tiny float-array parser for command payloads.
-bool parse_float_array(std::string_view s, std::vector<float>& out) {
-    out.clear();
-    auto lb = s.find('['); auto rb = s.rfind(']');
-    if (lb == std::string_view::npos || rb == std::string_view::npos || rb <= lb) return false;
-    std::string body(s.substr(lb + 1, rb - lb - 1));
-    char* p = body.data(); char* end = body.data() + body.size();
-    while (p < end) {
-        while (p < end && (*p == ' ' || *p == ',' || *p == '\t' || *p == '\n')) ++p;
-        if (p >= end) break;
-        char* next = nullptr;
-        float v = std::strtof(p, &next);
-        if (next == p) return false;
-        out.push_back(v);
-        p = next;
-    }
-    return true;
-}
 }
 
 int main() {
     std::signal(SIGINT,  on_signal);
     std::signal(SIGTERM, on_signal);
 
-    constexpr float DT             = 0.005f;
-    constexpr float SIM_RATE_MULT  = 200.0f;
-    const     float WALL_PERIOD    = DT / SIM_RATE_MULT;
-
-    manta::World w;
-    w.clock().set_dt(DT);
-    auto& scene = w.create_scene();
-    manta::fields::GravityField field_0{};
-    field_0.add(manta::fields::GravityField::Disturbance::point_mass(manta::geom::Vec3<manta::SceneFrame>{0.0f, 0.0f, 0.0f}, manta::Real(3.986004e+14f)), manta::fields::PERSISTENT);
-    w.register_field(field_0);
-    Ex1Craft craft;
-    scene.add_craft(craft, manta::InitialState{manta::geom::Vec3<manta::SceneFrame>{6372000.0f, 0.0f, 0.0f}, manta::geom::Ori<manta::SceneFrame>{Eigen::Quaternionf{1.0f, 0.0f, 0.0f, 0.0f}}, manta::geom::Vec3<manta::SceneFrame>{0.0f, 7909.172f, 0.0f}, manta::geom::Vec3<manta::CraftFrame>{0.0f, 0.0f, 0.0f}});
-    zenoh::Config cfg = zenoh::Config::create_default();
-    auto session = zenoh::Session::open(std::move(cfg));
-
-    std::mutex bind_1_mtx;
-    std::vector<float> bind_1_payload;
-    auto bind_1_sub = session.declare_subscriber(
-        zenoh::KeyExpr("manta/ex1/tx_p/cmd"),
-        [&](const zenoh::Sample& s) {
-            std::vector<float> v;
-            std::string payload(s.get_payload().as_string());
-            if (parse_float_array(payload, v) && v.size() >= 1) {
-                std::lock_guard<std::mutex> lk(bind_1_mtx);
-                bind_1_payload = std::move(v);
-            }
-        }, zenoh::closures::none);
-    std::mutex bind_2_mtx;
-    std::vector<float> bind_2_payload;
-    auto bind_2_sub = session.declare_subscriber(
-        zenoh::KeyExpr("manta/ex1/tx_n/cmd"),
-        [&](const zenoh::Sample& s) {
-            std::vector<float> v;
-            std::string payload(s.get_payload().as_string());
-            if (parse_float_array(payload, v) && v.size() >= 1) {
-                std::lock_guard<std::mutex> lk(bind_2_mtx);
-                bind_2_payload = std::move(v);
-            }
-        }, zenoh::closures::none);
-    std::mutex bind_3_mtx;
-    std::vector<float> bind_3_payload;
-    auto bind_3_sub = session.declare_subscriber(
-        zenoh::KeyExpr("manta/ex1/ty_p/cmd"),
-        [&](const zenoh::Sample& s) {
-            std::vector<float> v;
-            std::string payload(s.get_payload().as_string());
-            if (parse_float_array(payload, v) && v.size() >= 1) {
-                std::lock_guard<std::mutex> lk(bind_3_mtx);
-                bind_3_payload = std::move(v);
-            }
-        }, zenoh::closures::none);
-    std::mutex bind_4_mtx;
-    std::vector<float> bind_4_payload;
-    auto bind_4_sub = session.declare_subscriber(
-        zenoh::KeyExpr("manta/ex1/ty_n/cmd"),
-        [&](const zenoh::Sample& s) {
-            std::vector<float> v;
-            std::string payload(s.get_payload().as_string());
-            if (parse_float_array(payload, v) && v.size() >= 1) {
-                std::lock_guard<std::mutex> lk(bind_4_mtx);
-                bind_4_payload = std::move(v);
-            }
-        }, zenoh::closures::none);
-    std::mutex bind_5_mtx;
-    std::vector<float> bind_5_payload;
-    auto bind_5_sub = session.declare_subscriber(
-        zenoh::KeyExpr("manta/ex1/tz_p/cmd"),
-        [&](const zenoh::Sample& s) {
-            std::vector<float> v;
-            std::string payload(s.get_payload().as_string());
-            if (parse_float_array(payload, v) && v.size() >= 1) {
-                std::lock_guard<std::mutex> lk(bind_5_mtx);
-                bind_5_payload = std::move(v);
-            }
-        }, zenoh::closures::none);
-    std::mutex bind_6_mtx;
-    std::vector<float> bind_6_payload;
-    auto bind_6_sub = session.declare_subscriber(
-        zenoh::KeyExpr("manta/ex1/tz_n/cmd"),
-        [&](const zenoh::Sample& s) {
-            std::vector<float> v;
-            std::string payload(s.get_payload().as_string());
-            if (parse_float_array(payload, v) && v.size() >= 1) {
-                std::lock_guard<std::mutex> lk(bind_6_mtx);
-                bind_6_payload = std::move(v);
-            }
-        }, zenoh::closures::none);
-    auto pub_0 = session.declare_publisher(zenoh::KeyExpr("manta/ex1/state"));
-    auto pub_field_0 = session.declare_publisher(zenoh::KeyExpr("manta/ex1/field_0/disturbance"));
-    field_0.set_tx_hook([&pub_field_0](std::uint16_t tag, const manta::fields::GravityField::Params& params, int lifetime) {
-        std::vector<std::uint8_t> buf;
-        buf.resize(2 + 2 + 4 + params.size());
-        std::uint16_t ver = 1;
-        std::memcpy(buf.data() + 0, &ver,      2);
-        std::memcpy(buf.data() + 2, &tag,      2);
-        std::memcpy(buf.data() + 4, &lifetime, 4);
-        std::memcpy(buf.data() + 8, params.data(), params.size());
-        pub_field_0.put(zenoh::Bytes(std::move(buf)));
-    });
-    auto sub_field_0 = session.declare_subscriber(
-        zenoh::KeyExpr("manta/ex1/field_0/disturbance"),
-        [&](const zenoh::Sample& s) {
-            auto payload = s.get_payload().as_vector();
-            if (payload.size() < 8 + manta::fields::GravityField::kParamsBytes) return;
-            std::uint16_t ver = 0, tag = 0;
-            std::int32_t  lifetime = 0;
-            std::memcpy(&ver,      payload.data() + 0, 2);
-            std::memcpy(&tag,      payload.data() + 2, 2);
-            std::memcpy(&lifetime, payload.data() + 4, 4);
-            if (ver != 1) return;
-            manta::fields::GravityField::Params p{};
-            std::memcpy(p.data(), payload.data() + 8, p.size());
-            field_0.receive(tag, p, lifetime);
-        }, zenoh::closures::none);
-
+    manta_gen::ex1::setup();
     std::printf("ex1: ready. 1 craft(s), 7 binding(s).\n");
 
+    constexpr float WALL_PERIOD = manta_gen::ex1::DT / manta_gen::ex1::SIM_RATE_MULT;
     auto next = std::chrono::steady_clock::now();
     const auto period = std::chrono::microseconds(int64_t(WALL_PERIOD * 1e6));
-    int pub_decim = 0;
-    const int pub_every = 20;  // ~50 Hz publish
 
     while (g_run.load()) {
-        { std::lock_guard<std::mutex> lk(bind_1_mtx);
-          if (bind_1_payload.size() >= 1) {
-              craft.tx_p().set_throttle(bind_1_payload[0]);    // member: set_throttle
-              bind_1_payload.clear();
-          } }
-        { std::lock_guard<std::mutex> lk(bind_2_mtx);
-          if (bind_2_payload.size() >= 1) {
-              craft.tx_n().set_throttle(bind_2_payload[0]);    // member: set_throttle
-              bind_2_payload.clear();
-          } }
-        { std::lock_guard<std::mutex> lk(bind_3_mtx);
-          if (bind_3_payload.size() >= 1) {
-              craft.ty_p().set_throttle(bind_3_payload[0]);    // member: set_throttle
-              bind_3_payload.clear();
-          } }
-        { std::lock_guard<std::mutex> lk(bind_4_mtx);
-          if (bind_4_payload.size() >= 1) {
-              craft.ty_n().set_throttle(bind_4_payload[0]);    // member: set_throttle
-              bind_4_payload.clear();
-          } }
-        { std::lock_guard<std::mutex> lk(bind_5_mtx);
-          if (bind_5_payload.size() >= 1) {
-              craft.tz_p().set_throttle(bind_5_payload[0]);    // member: set_throttle
-              bind_5_payload.clear();
-          } }
-        { std::lock_guard<std::mutex> lk(bind_6_mtx);
-          if (bind_6_payload.size() >= 1) {
-              craft.tz_n().set_throttle(bind_6_payload[0]);    // member: set_throttle
-              bind_6_payload.clear();
-          } }
-
-        w.update();
-
-        if (++pub_decim >= pub_every) {
-            pub_decim = 0;
-            { std::string _json = "{";
-              _json += "\"t\":";
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%g", double(craft.world().clock().time())); _json += _b; }
-              _json += ",";
-              _json += "\"p\":[";
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.scene_to_craft().position().raw()(0))); _json += _b; }
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().position().raw()(1))); _json += _b; }
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().position().raw()(2))); _json += _b; }
-              _json += "]";
-              _json += ",";
-              _json += "\"q\":[";
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.scene_to_craft().orientation().raw().w())); _json += _b; }
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().orientation().raw().x())); _json += _b; }
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().orientation().raw().y())); _json += _b; }
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().orientation().raw().z())); _json += _b; }
-              _json += "]";
-              _json += ",";
-              _json += "\"v\":[";
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.scene_to_craft().vel_linear().raw()(0))); _json += _b; }
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().vel_linear().raw()(1))); _json += _b; }
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().vel_linear().raw()(2))); _json += _b; }
-              _json += "]";
-              _json += ",";
-              _json += "\"w\":[";
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.scene_to_craft().vel_angular().raw()(0))); _json += _b; }
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().vel_angular().raw()(1))); _json += _b; }
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().vel_angular().raw()(2))); _json += _b; }
-              _json += "]";
-              _json += ",";
-              _json += "\"tx_p\":";
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%g", double(craft.tx_p().throttle())); _json += _b; }
-              _json += ",";
-              _json += "\"tx_n\":";
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%g", double(craft.tx_n().throttle())); _json += _b; }
-              _json += ",";
-              _json += "\"ty_p\":";
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%g", double(craft.ty_p().throttle())); _json += _b; }
-              _json += ",";
-              _json += "\"ty_n\":";
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%g", double(craft.ty_n().throttle())); _json += _b; }
-              _json += ",";
-              _json += "\"tz_p\":";
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%g", double(craft.tz_p().throttle())); _json += _b; }
-              _json += ",";
-              _json += "\"tz_n\":";
-              { char _b[32]; std::snprintf(_b, sizeof(_b), "%g", double(craft.tz_n().throttle())); _json += _b; }
-              _json += "}";
-              pub_0.put(zenoh::Bytes(_json));
-            }
-        }
-
+        manta_gen::ex1::tick();
         next += period;
         std::this_thread::sleep_until(next);
     }
 
     std::printf("ex1: shutting down.\n");
+    manta_gen::ex1::shutdown();
     return 0;
 }

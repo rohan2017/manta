@@ -20,7 +20,7 @@ from ..core import Craft, World
 from .craft import emit_craft_hpp, emit_craft_cpp
 from .config import emit_config_h
 from .telemetry import emit_telemetry_hpp
-from .main import emit_main_cpp
+from .main import emit_world_hpp, emit_world_cpp, emit_world_main_cpp
 from .cmake import emit_cmake_fragment
 
 
@@ -68,14 +68,21 @@ def emit(world: World,
         if workflow in ("library", "binary"):
             files[f"{n}_telemetry.hpp"] = emit_telemetry_hpp(craft)
 
-    # World-level files (single-craft worlds preserve the legacy naming
-    # where the cmake fragment / config.h are named after the craft).
+    # World-harness files (workflow="binary" only):
+    #   <world>.hpp / <world>.cpp expose the namespaced
+    #   `manta_gen::<world>::{w, scene, craft, field_<i>, planet_<i>,
+    #   tether_<i>, setup, tick}` surface for direct user inclusion.
+    #   <world>_main.cpp is a thin pacing loop on top of setup/tick.
+    # Library workflow stays craft-only — the user provides their own
+    # world setup, main, and Zenoh wiring.
     world_name = world.name
     files[f"{world_name}_config.h"] = emit_config_h(world)
     files[f"{world_name}.cmake"]    = emit_cmake_fragment(
         world, workflow=workflow, multi=multi)
     if workflow == "binary":
-        files[f"{world_name}_main.cpp"] = emit_main_cpp(world)
+        files[f"{world_name}.hpp"]      = emit_world_hpp(world)
+        files[f"{world_name}.cpp"]      = emit_world_cpp(world)
+        files[f"{world_name}_main.cpp"] = emit_world_main_cpp(world)
 
     for filename, contents in files.items():
         (out / filename).write_text(contents)
