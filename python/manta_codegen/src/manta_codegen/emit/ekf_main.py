@@ -326,6 +326,7 @@ def emit_ekf_main_cpp(target, filter_obj, kind: str = "ekf") -> str:
     unique_crafts = _world_unique_crafts(world)
     primary = unique_crafts[0]
     primary_class = _filter_concrete_craft_type(kind, primary)
+    templated_craft = bool(getattr(primary, "scalar_templated", False))
 
     filter_var = filter_obj.cpp_var_name()           # "ekf_<id>" or "ukf_<id>"
     craft_var = f"{filter_var}.craft()"
@@ -497,7 +498,8 @@ def emit_ekf_main_cpp(target, filter_obj, kind: str = "ekf") -> str:
 
     for bid, b in bind_assignments:
         if b.direction == "in":
-            _emit_input_binding_apply(lines, bid, b, craft_var, filter_var)
+            _emit_input_binding_apply(lines, bid, b, craft_var, filter_var,
+                                      templated_craft=templated_craft)
 
     lines += [
         "",
@@ -548,7 +550,16 @@ def emit_ukf_main_cpp(target, ukf) -> str:
 # output signals).
 
 def _emit_input_binding_apply(lines: list[str], i: int, b: Binding,
-                              craft_var: str, ekf_var: str) -> None:
+                              craft_var: str, ekf_var: str,
+                              templated_craft: bool = True) -> None:
+    """Apply an in-binding's payload through each member's cpp_write_stmt.
+
+    `templated_craft` controls whether `Vec3<PartFrame> ->
+    Vec3<PartFrame, double>` rewriting is applied. EKF always wraps a
+    scalar-templated craft (instantiated with double), so the patch
+    runs. UKF can wrap either a templated craft (also instantiated with
+    double — patch runs) or a plain non-templated craft (Scalar=Real,
+    no patch needed)."""
     lines += [
         f"        {{ std::lock_guard<std::mutex> lk(bind_{i}_mtx);",
         f"          if (bind_{i}_payload.size() >= {b.total_floats}) {{",
@@ -560,11 +571,8 @@ def _emit_input_binding_apply(lines: list[str], i: int, b: Binding,
         v_subs = {f"v{k}": f"bind_{i}_payload[{cursor + k}]" for k in range(n)}
         v_subs["accessor"] = accessor
         stmt = sig.signal.cpp_write_stmt.format(**v_subs)
-        # The EKF wraps a scalar-templated craft instantiated with double.
-        # Sensor signal cpp_write_stmts hardcode `Vec3<PartFrame>` (which
-        # defaults to Real=float) — patch in the explicit double scalar so
-        # the call resolves against the double-instantiated overload.
-        stmt = _double_qualify_partframe(stmt)
+        if templated_craft:
+            stmt = _double_qualify_partframe(stmt)
         lines.append(f"              {stmt}    // member: {member_name}")
         cursor += n
     lines += [

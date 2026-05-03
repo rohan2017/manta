@@ -103,6 +103,12 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/ex7_tethered_pair/generated/ex7/ex7.cmake)
 # two thrusters; follower mirrors leader via w.connect() (no Zenoh).
 include(${CMAKE_CURRENT_SOURCE_DIR}/connect_demo/generated/connect_demo/connect_demo.cmake)
 
+# ukf_smoke — minimal UKF codegen smoke target. Mass + IMU + DVL on a
+# plain (non-templated) craft, wrapped in CraftUKFOf<...>. Catches
+# regressions in the UKF emit path.
+include(${CMAKE_CURRENT_SOURCE_DIR}/ukf_smoke/generated/ukf_smoke/ukf_smoke.cmake)
+target_link_libraries(ukf_smoke PRIVATE manta_examples_shared)
+
 # sync_smoke — Zenoh field-sync round-trip test. Spins up two Sessions in
 # one process, replicates a GravityField disturbance through the codegen's
 # wire format, verifies the receiver rebuilds the same Disturbance.

@@ -210,15 +210,16 @@ Three Target shapes are supported today:
 
 - **`drives=[World]`** — standard sim. Codegen emits the typed crafts +
   a Zenoh main that drives `w.update()` per tick.
-- **`drives=[EKF]`** — pure estimator. The EKF wraps its own internal
-  World; codegen emits a `manta::estimation::CraftEKF<...>` main with
-  per-sensor `consume_fresh + update_n<N>` (Pattern C — real-data EKF
-  fed from external Zenoh topics, see ex6).
-- **`drives=[World, EKF]`** — sim + EKF in one binary, the two worlds
-  ticked from one wall clock. Cross-world `connect()` pipes sim sensor
-  outputs into the EKF craft's `set_measurement` hooks; the sim's
-  commanded throttle mirrors onto the est-side thruster so predict's
-  force model matches (Pattern A — see ex5).
+- **`drives=[EKF]`** or **`drives=[UKF]`** — pure estimator. The
+  filter wraps its own internal World; codegen emits a
+  `manta::estimation::CraftEKF<...>` (or `CraftUKFOf<...>`) main with
+  per-sensor `consume_fresh + update_n<N>` (Pattern C — real-data
+  filter fed from external Zenoh topics, see ex6).
+- **`drives=[World, EKF/UKF]`** — sim + filter in one binary, the two
+  worlds ticked from one wall clock. Cross-world `connect()` pipes
+  sim sensor outputs into the filter craft's `set_measurement` hooks;
+  the sim's commanded throttle mirrors onto the est-side thruster so
+  predict's force model matches (Pattern A — see ex5).
 
 `Earth` automatically registers persistent ocean + atmosphere disturbances
 on its FluidField; optional `gravity_mu`, `include_j2`, and
@@ -266,16 +267,23 @@ per-sensor updates with varying measurement width. See
 hand-wired API; ex5 / ex6 show the codegen path described next.
 
 ### Estimator codegen
-An EKF descriptor wraps a World + a list of measurement parts:
+An EKF or UKF descriptor wraps a World + a list of measurement parts:
 
 ```python
 ekf = EKF(est_world, measurements=[imu, dvl, mag])
+ukf = UKF(est_world, measurements=[imu, dvl], alpha=1e-3, beta=2.0, kappa=0.0)
 ```
 
-Codegen emits the `manta::estimation::CraftEKF<EstCraftT, MeasDim>`
-instance, the `predict(dt, Q)` per tick, and one
-`if (sensor.consume_fresh()) update_n<N>(...)` block per measurement
-part. Per-sensor measurement-functor templates are built in for:
+Both shapes share the same emit pipeline. Codegen emits the
+`manta::estimation::CraftEKF<EstCraftT, MeasDim>` (or
+`CraftUKFOf<EstCraft<double>, MeasDim>`) instance, the `predict(dt, Q)`
+per tick, and one `if (sensor.consume_fresh()) update_n<N>(...)` block
+per measurement part.
+
+EKF requires the wrapped craft to be `scalar_templated=True` (autodiff
+needs Jet evaluation). UKF works on plain non-templated crafts too —
+the unscented transform only ever calls `evaluate(x, dt)` with double
+scalars. Per-sensor measurement-functor templates are built in for:
 
 - **DVL** — `h(x) = R(q)^T · v_scene` (body-frame velocity).
 - **IMU** — `h(x) = [0; ω_body]` under the no-net-force assumption
@@ -334,6 +342,7 @@ The codegen has two output modes:
 | ex6 | binary  | Real-data-only EKF, fed from external Zenoh topics (Pattern C) |
 | ex7 | binary  | Codegen-driven Tether between two crafts |
 | connect_demo | binary | Two-thruster `connect()` mirror — minimal in-process binding demo |
+| ukf_smoke | binary | Minimal UKF codegen smoke — Mass + IMU + DVL on a non-templated craft |
 | sync_smoke | — | Round-trips a GravityField disturbance through real Zenoh |
 | wire_debug | — | Pretty-prints field-sync disturbance bytes off the wire |
 
@@ -354,9 +363,6 @@ Early/active development. The public API is stable enough for ex0..ex7
 to drive it without back-compat shims, but any of it can still move.
 Notable items not yet built:
 
-- UKF codegen — same shape as EKF codegen (descriptor + measurements
-  + per-sensor `update_n`), but for the sigma-point filter. Useful when
-  the craft can't be cleanly scalar-templated.
 - A submarine demo (Ex8) — full thruster suite + IMU + DVL in the ocean,
   bound to Zenoh for viewer + control.
 - Per-disturbance exact `state_at_jet` opt-in. Today the templated
