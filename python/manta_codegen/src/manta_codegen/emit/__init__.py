@@ -88,11 +88,15 @@ def emit_config(cfg, base_out, workflow: str = "library", flat_target=None) -> N
     configs: when set, codegen writes directly into `base_out / flat_target.name`
     using the existing single-world emit path.
 
-    Phase A: only Targets with exactly one World are supported. Multi-world
-    Targets and EKF-bearing Targets land in subsequent commits.
+    Supported Target shapes:
+      * exactly one World in `drives` — emits the standard sim main.
+      * exactly one EKF in `drives`   — emits an EKF-driven main wrapping
+                                        the EKF's internal world.
     """
     from ..core import World
     from ..manifest import MantaConfig
+    from ..estimation.ekf import EKF
+    from .ekf_main import emit_ekf_main_cpp
 
     if not isinstance(cfg, MantaConfig):
         raise TypeError(f"emit_config: expected MantaConfig, got {type(cfg).__name__}")
@@ -100,24 +104,36 @@ def emit_config(cfg, base_out, workflow: str = "library", flat_target=None) -> N
     base = Path(base_out)
     targets = cfg.targets
 
-    # Phase-A guard: every Target must have exactly one World in `drives`,
-    # and no other Driveables (EKF, etc.) yet.
-    for t in targets:
+    def _classify(t):
+        """Return ('world', World) or ('ekf', EKF) for a single-Driveable target."""
         worlds = [d for d in t.drives if isinstance(d, World)]
-        non_worlds = [d for d in t.drives if not isinstance(d, World)]
-        if len(worlds) != 1 or non_worlds:
+        ekfs   = [d for d in t.drives if isinstance(d, EKF)]
+        other  = [d for d in t.drives
+                  if not isinstance(d, World) and not isinstance(d, EKF)]
+        if other:
             raise NotImplementedError(
-                f"emit_config: Target {t.name!r} has "
-                f"{len(worlds)} worlds and {len(non_worlds)} other drives; "
-                f"only single-World Targets are supported in this build "
-                f"(multi-world + EKF support is in flight).")
+                f"emit_config: Target {t.name!r} contains {len(other)} unsupported "
+                f"drive type(s) ({[type(d).__name__ for d in other]}). "
+                f"Supported: World, EKF.")
+        if len(worlds) == 1 and not ekfs:
+            return "world", worlds[0]
+        if len(ekfs) == 1 and not worlds:
+            return "ekf", ekfs[0]
+        raise NotImplementedError(
+            f"emit_config: Target {t.name!r} has {len(worlds)} worlds and "
+            f"{len(ekfs)} EKFs; only single-Driveable Targets are supported "
+            f"in this build (multi-world support is in flight).")
 
-    # Validate no cross-target connect/binding spans.
+    classified = [(t, *_classify(t)) for t in targets]
+
+    # Validate no cross-target connect/binding spans. EKF targets carry their
+    # own internal world, which we treat as a target-local entity.
     target_for_world: dict[int, str] = {}
-    for t in targets:
-        for d in t.drives:
-            if isinstance(d, World):
-                target_for_world[id(d)] = t.name
+    for t, kind, drv in classified:
+        if kind == "world":
+            target_for_world[id(drv)] = t.name
+        else:  # "ekf"
+            target_for_world[id(drv.world)] = t.name
 
     def world_target_name(w):
         try:
@@ -129,34 +145,76 @@ def emit_config(cfg, base_out, workflow: str = "library", flat_target=None) -> N
         w = getattr(c, "_world", None)
         return world_target_name(w) if w is not None else None
 
-    for t in targets:
-        for d in t.drives:
-            if isinstance(d, World):
-                for binding in d.bindings + []:
-                    pass   # bindings are already world-local; OK.
-                for conn in d.connections:
-                    src_t = craft_target_name(conn.source.craft_ref)
-                    snk_t = craft_target_name(conn.sink.craft_ref)
-                    if src_t is None or snk_t is None:
-                        raise RuntimeError(
-                            f"emit_config: connect() endpoint not in any Target "
-                            f"({conn.source.name} → {conn.sink.name})")
-                    if src_t != snk_t:
-                        raise RuntimeError(
-                            f"emit_config: connect({conn.source.name} → {conn.sink.name}) "
-                            f"crosses targets ({src_t!r} → {snk_t!r}); "
-                            f"use publish/subscribe across binaries instead.")
+    for t, kind, drv in classified:
+        world_for_validation = drv if kind == "world" else drv.world
+        for conn in world_for_validation.connections:
+            src_t = craft_target_name(conn.source.craft_ref)
+            snk_t = craft_target_name(conn.sink.craft_ref)
+            if src_t is None or snk_t is None:
+                raise RuntimeError(
+                    f"emit_config: connect() endpoint not in any Target "
+                    f"({conn.source.name} → {conn.sink.name})")
+            if src_t != snk_t:
+                raise RuntimeError(
+                    f"emit_config: connect({conn.source.name} → {conn.sink.name}) "
+                    f"crosses targets ({src_t!r} → {snk_t!r}); "
+                    f"use publish/subscribe across binaries instead.")
 
-    # Phase-A delegates each Target to the existing single-World emit.
-    for t in targets:
-        world = next(d for d in t.drives if isinstance(d, World))
-        # Cadence is now Target-level; copy onto the world for the legacy
-        # emitters that still read world.dt / world.sim_rate_mult.
-        world.dt = t.dt
-        world.sim_rate_mult = t.sim_rate_mult
+    for t, kind, drv in classified:
         target_dir = base / t.name
         target_dir.mkdir(parents=True, exist_ok=True)
-        emit(world, out_dir=target_dir, workflow=workflow)
+        if kind == "world":
+            world = drv
+            world.dt = t.dt
+            world.sim_rate_mult = t.sim_rate_mult
+            emit(world, out_dir=target_dir, workflow=workflow)
+        else:  # "ekf"
+            ekf = drv
+            world = ekf.world
+            world.dt = t.dt
+            world.sim_rate_mult = t.sim_rate_mult
+            _emit_ekf_target(t, ekf, world, target_dir, workflow)
+
+
+def _emit_ekf_target(target, ekf, world, out_dir: Path,
+                     workflow: str) -> None:
+    """Emit per-craft + main for an EKF-driven Target. Reuses the standard
+    craft/telemetry/config/cmake emitters; substitutes the main with the
+    EKF-driven variant. workflow="library" omits the main entirely."""
+    from .ekf_main import emit_ekf_main_cpp
+
+    if workflow not in ("library", "binary"):
+        raise ValueError(
+            f"workflow must be 'library' or 'binary', got {workflow!r}")
+    if not world.crafts:
+        raise RuntimeError("emit_config (EKF target): wrapped world has no crafts")
+
+    seen: set[int] = set()
+    unique_crafts: list[Craft] = []
+    for entry in world.crafts:
+        if id(entry.craft) not in seen:
+            seen.add(id(entry.craft))
+            unique_crafts.append(entry.craft)
+
+    multi = len(unique_crafts) > 1
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    files: dict[str, str] = {}
+    for craft in unique_crafts:
+        n = craft.name
+        files[f"{n}.hpp"] = emit_craft_hpp(craft)
+        files[f"{n}.cpp"] = emit_craft_cpp(craft)
+        files[f"{n}_telemetry.hpp"] = emit_telemetry_hpp(craft)
+
+    world_name = world.name
+    files[f"{world_name}_config.h"] = emit_config_h(world)
+    files[f"{world_name}.cmake"]    = emit_cmake_fragment(
+        world, workflow=workflow, multi=multi)
+    if workflow == "binary":
+        files[f"{world_name}_main.cpp"] = emit_ekf_main_cpp(target, ekf)
+
+    for filename, contents in files.items():
+        (out_dir / filename).write_text(contents)
 
 
 __all__ = ["emit", "emit_config"]

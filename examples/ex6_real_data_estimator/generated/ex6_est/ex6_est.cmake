@@ -4,6 +4,7 @@ set(manta_ex6_est_DIR ${CMAKE_CURRENT_LIST_DIR})
 
 set(manta_ex6_est_SOURCES
     ${manta_ex6_est_DIR}/ex6_est.cpp
+    ${manta_ex6_est_DIR}/ex6_est_main.cpp
 )
 
 set(manta_ex6_est_HEADERS
@@ -21,3 +22,34 @@ function(manta_ex6_est_apply target)
     target_include_directories(${target} PRIVATE ${manta_ex6_est_DIR})
     target_compile_options(${target} PRIVATE "SHELL:-include ${manta_ex6_est_DIR}/ex6_est_config.h")
 endfunction()
+
+if(NOT TARGET zenohcxx::zenohc)
+    include(FetchContent)
+    set(_manta_zenoh_version "1.9.0")
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
+        set(_manta_zenohc_arch "x86_64-unknown-linux-gnu")
+    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+        set(_manta_zenohc_arch "aarch64-unknown-linux-gnu")
+    else()
+        message(FATAL_ERROR "manta-codegen: no pre-built zenoh-c for ${CMAKE_SYSTEM_PROCESSOR}")
+    endif()
+    FetchContent_Declare(zenohc_binary
+        URL "https://github.com/eclipse-zenoh/zenoh-c/releases/download/${_manta_zenoh_version}/zenoh-c-${_manta_zenoh_version}-${_manta_zenohc_arch}-standalone.zip")
+    FetchContent_GetProperties(zenohc_binary)
+    if(NOT zenohc_binary_POPULATED)
+        FetchContent_Populate(zenohc_binary)
+    endif()
+    find_package(zenohc REQUIRED CONFIG
+        PATHS "${zenohc_binary_SOURCE_DIR}/lib/cmake/zenohc" NO_DEFAULT_PATH)
+    set(ZENOHCXX_ENABLE_TESTS    OFF CACHE BOOL "" FORCE)
+    set(ZENOHCXX_ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(ZENOHCXX_ZENOHPICO       OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(zenohcxx
+        GIT_REPOSITORY https://github.com/eclipse-zenoh/zenoh-cpp.git
+        GIT_TAG        ${_manta_zenoh_version} GIT_SHALLOW TRUE)
+    FetchContent_MakeAvailable(zenohcxx)
+endif()
+
+add_executable(ex6_est ${manta_ex6_est_SOURCES})
+target_link_libraries(ex6_est PRIVATE manta::manta zenohcxx::zenohc)
+manta_ex6_est_apply(ex6_est)

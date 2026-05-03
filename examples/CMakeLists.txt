@@ -93,14 +93,12 @@ target_link_libraries(ex5_estimator_demo PRIVATE manta_examples_shared)
 manta_ex5_apply(ex5_estimator_demo)
 manta_ex5_est_apply(ex5_estimator_demo)
 
-# ex6 — Pattern C: real-data-only estimator (no sim Craft). Subscribes to
-# external Zenoh topics, runs CraftEKF, publishes estimate.
+# ex6 — Pattern C: real-data-only estimator (no sim Craft). Codegen-driven
+# EKF target: include() defines the `ex6_est` binary directly; the
+# generated _main.cpp wraps `manta::estimation::CraftEKF<Ex6EstCraftT, 3>`,
+# subscribes to external Zenoh sensor topics, publishes the estimate.
 include(${CMAKE_CURRENT_SOURCE_DIR}/ex6_real_data_estimator/generated/ex6_est/ex6_est.cmake)
-add_executable(ex6_real_data_estimator
-    ex6_real_data_estimator/ex6.cpp
-    ${manta_ex6_est_SOURCES})
-target_link_libraries(ex6_real_data_estimator PRIVATE manta_examples_shared)
-manta_ex6_est_apply(ex6_real_data_estimator)
+target_link_libraries(ex6_est PRIVATE manta_examples_shared)
 
 # ex7 — codegen-driven tether between two crafts. Python Tether(...) +
 # World.add_tether(...) generates the C++ Tether instance + endpoint adds.

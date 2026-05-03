@@ -90,6 +90,12 @@ class EKF:
             _ekf_id_counter = 0
         self._ekf_id = _ekf_id_counter
 
+        # `_world` back-pointer mirrors Craft._world — the module-level
+        # publish/connect/subscribe helpers walk craft_ref._world to find
+        # the owning World. EKF output signals have craft_ref = self, so
+        # they need their own back-pointer.
+        self._world = self.world
+
         # Validate the wrapped world has at least one craft.
         if not self.world.crafts:
             raise ValueError(

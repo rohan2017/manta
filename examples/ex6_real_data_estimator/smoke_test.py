@@ -1,11 +1,11 @@
-"""Programmatic smoke test for ex7 (real-data-only estimator).
+"""Programmatic smoke test for ex6 (real-data-only estimator).
 
-Runs `fake_sensors.py` for ~5 s alongside the ex7 binary, subscribes to
+Runs `fake_sensors.py` for ~5 s alongside the ex6 binary, subscribes to
 `manta/ex6/estimate`, and verifies the EKF velocity estimate converged on
 the known truth (`vx = 1.5 m/s`, others zero).
 
 Usage:
-    Terminal A: ./build/examples/ex6_real_data_estimator
+    Terminal A: ./build/examples/ex6_est
     Terminal B: python examples/ex6_real_data_estimator/fake_sensors.py
     Terminal C: python examples/ex6_real_data_estimator/smoke_test.py
 """
@@ -64,7 +64,7 @@ def main() -> int:
 
     final = LATEST[-1]
     print(f"final estimate p={final['p']} v={final['v']} "
-          f"P_diag={final['P']}")
+          f"p_stddev={final['p_stddev']} v_stddev={final['v_stddev']}")
 
     failures = 0
     expected_vx = 1.5
@@ -78,11 +78,13 @@ def main() -> int:
                   file=sys.stderr)
             failures += 1
 
-    # Velocity covariance should have shrunk (EKF converged).
-    for i in (3, 4, 5):
-        if final["P"][i] > 0.1:
-            print(f"FAIL: P[{i}] = {final['P'][i]:.4f} did not shrink",
-                  file=sys.stderr)
+    # Velocity stddev should have shrunk (EKF converged).
+    # The codegen-emitted publish carries stddev directly (sqrt of the P
+    # diagonal) — matching threshold ≈ sqrt(0.1) ≈ 0.32 for "shrunk".
+    for axis in (0, 1, 2):
+        if final["v_stddev"][axis] > 0.32:
+            print(f"FAIL: v_stddev[{axis}] = {final['v_stddev'][axis]:.4f} "
+                  "did not shrink", file=sys.stderr)
             failures += 1
 
     sub.undeclare()
