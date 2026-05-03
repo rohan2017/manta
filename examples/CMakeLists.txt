@@ -106,6 +106,10 @@ manta_ex6_est_apply(ex6_real_data_estimator)
 # World.add_tether(...) generates the C++ Tether instance + endpoint adds.
 include(${CMAKE_CURRENT_SOURCE_DIR}/ex7_tethered_pair/generated/ex7/ex7.cmake)
 
+# connect_demo — in-process signal-to-signal binding demo. One craft with
+# two thrusters; follower mirrors leader via w.connect() (no Zenoh).
+include(${CMAKE_CURRENT_SOURCE_DIR}/connect_demo/generated/connect_demo/connect_demo.cmake)
+
 # sync_smoke — Zenoh field-sync round-trip test. Spins up two Sessions in
 # one process, replicates a GravityField disturbance through the codegen's
 # wire format, verifies the receiver rebuilds the same Disturbance.

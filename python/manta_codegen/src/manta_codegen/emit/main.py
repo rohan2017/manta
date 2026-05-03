@@ -203,8 +203,17 @@ def emit_main_cpp(world: World) -> str:
         var = craft_var(idx)
         lines.append(f"    scene.add_craft({var}, {_initial_state_literal(entry)});")
 
+    # User-declared world-level signal slots, backed by std::atomic<float>.
+    # Bindings whose member is one of these slots read/write directly via
+    # the slot variable; no craft accessor involved.
+    if world.user_signals:
+        lines.append("    // user-declared signal slots")
+        for us in world.user_signals:
+            slot = us.part_name.split("/", 1)[1]
+            lines.append(f"    std::atomic<float> user_signal_{slot}{{0.0f}};")
+        lines.append("")
+
     lines += [
-        "",
         "    zenoh::Config cfg = zenoh::Config::create_default();",
         "    auto session = zenoh::Session::open(std::move(cfg));",
         "",
@@ -224,7 +233,19 @@ def emit_main_cpp(world: World) -> str:
     craft_index_by_id: dict[int, int] = {
         id(entry.craft): cidx for cidx, entry in enumerate(world.crafts)
     }
+    from ..signal import is_user_signal
+    USER_BINDING = -1   # placeholder craft index for pure-user-signal bindings
     for b in world.bindings:
+        all_user = all(is_user_signal(m) for m in b.members.values())
+        any_user = any(is_user_signal(m) for m in b.members.values())
+        if all_user:
+            bind_assignments.append((bind_idx, USER_BINDING, b))
+            bind_idx += 1
+            continue
+        if any_user:
+            raise RuntimeError(
+                f"emit_main_cpp: binding on topic {b.topic!r} mixes user-"
+                f"declared signals with craft signals; split them.")
         member_crafts = {id(m.craft_ref) for m in b.members.values()}
         if len(member_crafts) != 1:
             raise RuntimeError(
@@ -279,6 +300,15 @@ def emit_main_cpp(world: World) -> str:
         "",
         "        w.update();",
         "",
+    ]
+
+    # In-process connect() steps run right after w.update() so the values
+    # they propagate are the just-computed ones. Bindings (Zenoh pub) read
+    # the same values on the publish-decimation tick below.
+    for conn in world.connections:
+        _emit_connection_step(lines, conn, craft_index_by_id, multi)
+
+    lines += [
         "        if (++pub_decim >= pub_every) {",
         "            pub_decim = 0;",
     ]
@@ -304,6 +334,33 @@ def emit_main_cpp(world: World) -> str:
 
 # ---------------------------------------------------------------------------
 # Binding emit helpers (phase 2)
+
+def _emit_connection_step(lines: list[str],
+                          conn,
+                          craft_index_by_id: dict[int, int],
+                          multi: bool) -> None:
+    """Emit one tick's worth of in-process signal-to-signal copy. Reads the
+    source's per-component cpp_read_exprs into temporaries, then runs the
+    sink's cpp_write_stmt with v0..v{n-1} bound to those temps."""
+    src = conn.source
+    snk = conn.sink
+    src_var = "craft" if not multi else f"craft_{craft_index_by_id[id(src.craft_ref)]}"
+    snk_var = "craft" if not multi else f"craft_{craft_index_by_id[id(snk.craft_ref)]}"
+    src_acc = _accessor_for_with_var(src, src_var)
+    snk_acc = _accessor_for_with_var(snk, snk_var)
+    n = src.signal.n_floats
+    lines.append(f"        // connect: {src.part_name}.{src.name} → "
+                 f"{snk.part_name}.{snk.name}")
+    lines.append("        {")
+    for i in range(n):
+        expr = src.signal.cpp_read_exprs[i].format(accessor=src_acc)
+        lines.append(f"            const float v{i} = {expr};")
+    fmt = {"accessor": snk_acc}
+    for i in range(n):
+        fmt[f"v{i}"] = f"v{i}"
+    lines.append(f"            {snk.signal.cpp_write_stmt.format(**fmt)}")
+    lines.append("        }")
+
 
 def _emit_field_sync(lines: list[str], i: int, topic: str, cpp_class: str) -> None:
     """Emit Zenoh tx/rx wiring for a synchronized Field instance.
@@ -370,11 +427,15 @@ def _emit_binding_subscriber(lines: list[str], i: int, b: Binding) -> None:
 def _accessor_for_with_var(sig, craft_var: str) -> str:
     """Like accessor_for() but with a configurable C++ craft variable name.
     Replaces the hard-coded `craft` with `craft_var` so multi-craft mains
-    can use craft_0, craft_1, ... for distinct instances."""
-    base = accessor_for(sig)   # "craft" or "craft.<part>()"
+    can use craft_0, craft_1, ... for distinct instances. User-declared
+    world-level signals don't go through any craft accessor — they're
+    direct slot reads/writes — so we return an empty string that gets
+    silently ignored when their cpp_read/write_stmt formats."""
+    base = accessor_for(sig)   # "" / "craft" / "craft.<part>()"
+    if base == "":
+        return ""
     if base == "craft":
         return craft_var
-    # Otherwise base is "craft.<part>()" — replace the leading craft with var.
     assert base.startswith("craft.")
     return craft_var + base[len("craft"):]
 

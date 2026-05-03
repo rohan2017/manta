@@ -149,14 +149,36 @@ def scalar_in_signal(name: str, setter_method: str) -> Signal:
 
 CRAFT_SENTINEL = "$craft"
 
+# User-declared world-level signal slot. The part_name has the form
+# `$user/<slot_name>` and the accessor expression in the Signal's
+# cpp_read_exprs / cpp_write_stmt writes directly to the slot's storage
+# in main() — no craft is involved. Today only scalar (n=1) slots are
+# supported, backed by `std::atomic<float>`; larger slots can be added
+# later with a mutexed std::array.
+USER_SENTINEL_PREFIX = "$user/"
+
 
 def is_craft_signal(b: BoundSignal) -> bool:
     return b.part_name == CRAFT_SENTINEL
 
 
+def is_user_signal(b: BoundSignal) -> bool:
+    return b.part_name.startswith(USER_SENTINEL_PREFIX)
+
+
+def user_signal_slot_name(b: BoundSignal) -> str:
+    """Strip the `$user/` prefix; result is the slot's C++ identifier."""
+    assert is_user_signal(b)
+    return b.part_name[len(USER_SENTINEL_PREFIX):]
+
+
 def accessor_for(b: BoundSignal) -> str:
     """Return the C++ accessor expression to substitute for `{accessor}` in
-    the signal's cpp_read_exprs / cpp_write_stmt."""
+    the signal's cpp_read_exprs / cpp_write_stmt. User-signal slots resolve
+    to the slot variable directly (no `.method()` call), so the read/write
+    expressions are crafted to ignore `{accessor}`."""
+    if is_user_signal(b):
+        return ""   # signal's own expressions don't use {accessor}
     return "craft" if is_craft_signal(b) else f"craft.{b.part_name}()"
 
 
@@ -204,3 +226,44 @@ class Binding:
     def total_floats(self) -> int:
         return sum(sig.signal.n_floats for sig in self.members.values())
 
+
+
+# ---------------------------------------------------------------------------
+# Connection — in-process signal-to-signal binding (no Zenoh, no JSON).
+
+@dataclass
+class Connection:
+    """Connect an `out` BoundSignal to an `in` BoundSignal in the same
+    binary. Codegen emits a per-tick copy step that reads the source's
+    `cpp_read_exprs` and pushes the floats through the sink's
+    `cpp_write_stmt`. No serialization, no mutex — just function calls.
+
+    Use cases:
+      * Multiple parts that should follow the same command (e.g. two
+        thrusters mirroring one throttle).
+      * Sim-side sensor reading driving an estimator-side measurement
+        input in the same process (no Zenoh round-trip needed).
+    """
+    source: BoundSignal
+    sink:   BoundSignal
+
+    def __post_init__(self) -> None:
+        if self.source.direction != "out":
+            raise ValueError(
+                f"Connection: source signal {self.source.name!r} must have "
+                f"direction='out', got {self.source.direction!r}")
+        if self.sink.direction != "in":
+            raise ValueError(
+                f"Connection: sink signal {self.sink.name!r} must have "
+                f"direction='in', got {self.sink.direction!r}")
+        if self.source.signal.n_floats != self.sink.signal.n_floats:
+            raise ValueError(
+                f"Connection: source has n_floats={self.source.signal.n_floats}, "
+                f"sink has n_floats={self.sink.signal.n_floats} — must match")
+        # User-declared world-level signals don't have a craft_ref;
+        # everything else must be attached to one.
+        if (self.source.craft_ref is None and not is_user_signal(self.source)) or \
+           (self.sink.craft_ref   is None and not is_user_signal(self.sink)):
+            raise ValueError(
+                "Connection: signals must be attached to a craft "
+                "(call c.add(part) first), or come from world.declare_signal(...).")
