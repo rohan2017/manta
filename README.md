@@ -15,7 +15,7 @@ templated C++ that compiles into a regular binary.
 include/manta/        C++ runtime: parts, fields, planets, scenes, EKF/UKF
 python/manta_codegen/ Python descriptors + emitter
 examples/             ex0..ex7 + connect_demo + sync_smoke + wire_debug
-tests/                doctest unit + integration tests (232 cases)
+tests/                doctest unit + integration tests (231 cases)
 ```
 
 ## Quick example
@@ -234,12 +234,31 @@ Convert on the user side:
 world.add_craft(drone, on=earth, pos=from_wgs84_lla(37.4, -122.1, 100))
 ```
 
-### Scalar templating
-Most parts are templated on `Scalar` so they work under both `double` (sim)
-and `ceres::Jet<double, N>` (autodiff Jacobians for the EKF). Set
-`craft.scalar_templated = True` to opt in; the codegen emits the craft as a
-class template with a `using FooCraft = FooCraftT<Real>` alias. Required to
-plug into `manta::estimation::WorldEKF<MyCraftT, MeasDim>`.
+### Templated World, Scene, Craft
+The whole sim core is templated on `Scalar`:
+
+```cpp
+template <class Scalar> class WorldT;        // World    = WorldT<Real>
+template <class Scalar> class SceneT;        // Scene    = SceneT<Real>
+template <class Scalar = Real> class CraftT; // Craft    = CraftT<Real>
+template <class Scalar = Real> class PartT;
+```
+
+The `Real` instantiation (default `Real = float`) drives the sim. The
+Jet instantiation (`ceres::Jet<double, N>`) is what `WorldEKF` runs for
+the Jacobian step — the **same physics** is evaluated on Jet scalars,
+so the state-transition Jacobian falls out of autodiff for free. No
+hand-written process model.
+
+This generalizes to inter-craft physics. Tethers, contacts, fluid
+coupling — anything correct in the Real World is automatically correct
+in the Jet World. Cross-craft Jacobian entries propagate naturally.
+
+Set `craft.scalar_templated = True` in the descriptor; the codegen
+emits the craft as `FooCraftT<Scalar>` with a `using FooCraft =
+FooCraftT<Real>` alias. Required for filter-target crafts (the codegen
+needs to instantiate them as `<double>` for the Real filter world and
+`<Jet>` for the Jet shadow).
 
 For Jet-templated parts that query a Field, use
 `fields::state_at_templated<Scalar>(field, pos)` (already wired into
@@ -248,56 +267,96 @@ fast path; Jet-Scalar finite-diffs through the field's spatial gradient
 so EKF / system-ID Jacobians capture `∂g/∂pos` for orbital regimes.
 
 ### Estimators
+
 Two flavors share an API:
 
-- **`WorldEKF<MyCraftT, MeasDim>`** — Jet-based autodiff EKF. No
-  hand-written process model; the same templated craft runs both for the
-  value step (`double`) and the Jacobian step (`Jet`). Best when the
-  craft's evaluate() is autodiffable and reasonably linear locally.
+- **`WorldEKF<NumCrafts, MeasDim>`** — autodiff EKF. Wraps a
+  `WorldT<double>` (the Real world the user feeds sensor measurements
+  into) plus a `WorldT<Jet>` shadow (built identically; runs the Jet
+  Jacobian step). State dim is `13 * NumCrafts` — the concat of every
+  craft's 13-DOF rigid-body state.
 
-- **`WorldUKF<MyCraftT, MeasDim>` / `WorldUKFOf<PlainCraft, MeasDim>`** —
-  sigma-point UKF. No autodiff, so the craft doesn't need to be
-  scalar-templated — works on plain `manta::Craft` too. Captures
-  second-order nonlinearity. 2N+1 evaluates per predict step vs. EKF's
-  one-evaluate-plus-Jet-pass.
+- **`WorldUKF<NumCrafts, MeasDim>`** — sigma-point UKF. No Jet
+  shadow — propagates each sigma point through the same Real
+  `WorldT<double>::update()`. Captures second-order nonlinearity;
+  `2*StateDim+1` World evaluations per predict.
 
-Same predict/update API on both, plus `update_n<N>(h, z, R)` for
-per-sensor updates with varying measurement width. See
-`tests/test_ekf_against_sim.cpp` and `tests/test_ukf.cpp` for the
-hand-wired API; ex5 / ex6 show the codegen path described next.
+Both expose `predict(dt, Q)`, `update_n<N>(h, z, R)`, and per-craft
+slice accessors (`position(idx)`, `vel_linear(idx)`, etc.). Single-
+craft callers can omit the index — defaults to craft 0.
+
+```cpp
+manta::WorldT<double> w_real;     // Real world the user populates
+manta::WorldT<EkfT::Jet> w_jet;   // Jet shadow, built identically
+
+EkfT ekf;
+ekf.bind(w_jet, {&craft_real}, {&craft_jet});
+ekf.set_state(...);
+ekf.predict(dt, Q);
+ekf.update_n<3>(some_h, z, R);
+```
 
 ### Estimator codegen
-An EKF or UKF descriptor wraps a World + a list of measurement parts:
+
+An EKF or UKF descriptor wraps a World and a list of measurement parts:
 
 ```python
 ekf = EKF(est_world, measurements=[imu, dvl, mag])
 ukf = UKF(est_world, measurements=[imu, dvl], alpha=1e-3, beta=2.0, kappa=0.0)
 ```
 
-Both shapes share the same emit pipeline. Codegen emits the
-`manta::estimation::WorldEKF<EstCraftT, MeasDim>` (or
-`WorldUKFOf<EstCraft<double>, MeasDim>`) instance, the `predict(dt, Q)`
-per tick, and one `if (sensor.consume_fresh()) update_n<N>(...)` block
-per measurement part.
+Both shapes share the same emit pipeline. The codegen-emitted harness:
 
-EKF requires the wrapped craft to be `scalar_templated=True` (autodiff
-needs Jet evaluation). UKF works on plain non-templated crafts too —
-the unscented transform only ever calls `evaluate(x, dt)` with double
-scalars. Per-sensor measurement-functor templates are built in for:
+- Builds the Real `WorldT<double>` + crafts + fields exactly like a sim
+  World harness.
+- For EKF, builds a Jet shadow `WorldT<Jet>` (identical setup; same
+  field instances shared by-pointer between Real and Jet).
+- Instantiates `WorldEKF<NumCrafts, MeasDim>` (or `WorldUKF<...>`) and
+  binds it to both worlds + per-craft pointer arrays.
+- Runs `predict(DT, Q)` + per-sensor `consume_fresh + update_n<N>` in
+  `tick()`.
+
+Multi-craft worlds work natively. Each measurement part lives on a
+specific craft; the codegen routes the per-sensor measurement update
+through that craft's state slice (`13 * craft_idx + offset`). See
+ex9 for a two-craft EKF.
+
+Per-sensor measurement-functor templates are built in for:
 
 - **DVL** — `h(x) = R(q)^T · v_scene` (body-frame velocity).
-- **IMU** — `h(x) = [0; ω_body]` under the no-net-force assumption
-  (predicted accel zero, gyro from state). User overrides for crafts
-  with active forces.
+- **IMU** — `h(x) = [0; ω_body]` under the no-net-force assumption.
+  User overrides for crafts with active forces.
 - **Magnetometer** — `h(x) = R(q)^T · B(p_now)` with B captured at
-  update-time from the registered MagField (locally-constant-B: ∂h/∂q
-  exact, ∂h/∂p dropped).
+  update-time from the registered MagField (locally-constant-B:
+  ∂h/∂q exact, ∂h/∂p dropped).
 
 R blocks are populated automatically from each part's noise sigmas.
 EKF state slices (`position`, `orientation`, `vel_linear`,
 `vel_angular`, plus per-component `*_stddev`) are exposed as
 BoundSignals — route them through the same `publish/connect` paths
 used for craft signals.
+
+### Harness
+`manta::Harness` is the polymorphic base class for everything that
+drives a `WorldT`. The codegen emits a per-Target subclass:
+
+```cpp
+namespace manta_gen::ex1 {
+    void setup(); void tick(); void shutdown();   // free functions
+    struct Harness : public manta::Harness { /* delegates to free fns */ };
+    extern Harness harness;
+}
+
+// User code:
+manta::Harness& h = manta_gen::ex1::harness;
+h.setup();
+while (running) h.tick();
+h.shutdown();
+```
+
+The free functions remain the hot-path entry points (inlinable, no
+virtual dispatch); `Harness` is for plugin layers, runtime harness
+swapping, or generic multi-Target binaries.
 
 ### Frame hierarchy
 `World → Planet → Scene → Craft → Part`. Frames are static type tags
@@ -342,8 +401,9 @@ The codegen has two output modes:
 | ex6 | binary  | Real-data-only EKF, fed from external Zenoh topics (Pattern C) |
 | ex7 | binary  | Codegen-driven Tether between two crafts |
 | ex8 | binary  | Submarine — Mass + PointBuoy + Surface drag + 2× thruster + IMU/DVL/Mag, sim+EKF |
+| ex9 | binary  | Dual-craft EKF — two drones jointly estimated by `WorldEKF<2, 18>` (Pattern C) |
 | connect_demo | binary | Two-thruster `connect()` mirror — minimal in-process binding demo |
-| ukf_smoke | binary | Minimal UKF codegen smoke — Mass + IMU + DVL on a non-templated craft |
+| ukf_smoke | binary | Minimal UKF codegen smoke — Mass + IMU + DVL |
 | sync_smoke | — | Round-trips a GravityField disturbance through real Zenoh |
 | wire_debug | — | Pretty-prints field-sync disturbance bytes off the wire |
 
@@ -351,7 +411,7 @@ The codegen has two output modes:
 
 ```bash
 cmake -S . -B build && cmake --build build -j
-ctest --test-dir build       # 233 cases (232 doctest + sync_smoke)
+ctest --test-dir build       # 232 cases (231 doctest + sync_smoke)
 ```
 
 Each example has a CMake target named after its directory (e.g. `ex5`).
@@ -360,14 +420,20 @@ binary over Zenoh.
 
 ## Status
 
-Early/active development. The public API is stable enough for ex0..ex7
+Early/active development. The public API is stable enough for ex0..ex9
 to drive it without back-compat shims, but any of it can still move.
 Notable items not yet built:
 
-- Per-disturbance exact `state_at_jet` opt-in. Today the templated
+- **Block-decomposed predict** for `NumCrafts` larger than ~10. Today
+  the EKF predict step is dense in `13·NumCrafts` Jet partials — fine
+  through 10 crafts, expensive past that. The static coupling topology
+  (which crafts touch which via tethers, contacts) is knowable at
+  codegen time, so a block-decomposed predict that codegens per-craft
+  Jet seeds is tractable. Deferred until a real swarm example asks.
+- **Per-disturbance exact `state_at_jet` opt-in.** Today the templated
   field query falls back to finite-diff for Jet scalars; an analytic
-  override slot on Disturbance can be added when a consumer wants it.
-- Templated `MagField` for an exact `∂h/∂p` Jacobian in the
+  override slot on `Disturbance` can be added when a consumer wants it.
+- **Templated `MagField`** for an exact `∂h/∂p` Jacobian in the
   Magnetometer EKF update. Today the codegen captures B at update-time
   and treats it locally constant — fine for typical magnetometer use
   cases, lossy near steep field gradients (close-in dipoles).
