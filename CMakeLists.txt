@@ -23,8 +23,6 @@ add_library(manta STATIC
     src/core/composite_part.cpp
     src/core/articulated_part.cpp
     src/core/craft.cpp
-    src/core/scene.cpp
-    src/core/world.cpp
     src/parts/articulation/motor.cpp)
 add_library(manta::manta ALIAS manta)
 

@@ -14,17 +14,17 @@
 
 namespace manta {
 
-class World;
+template <class Scalar> class WorldT;
 
 // A craft is a self-contained vehicle: a root part tree plus its own rigid-
-// body state. Templated on Scalar so the same authoring artifact can serve
-// the sim path (Scalar = Real, driven by a Scene) and the estimator path
-// (Scalar = ceres::Jet<...>, driven by an EKF via evaluate()).
+// body state. Templated on Scalar so the same authoring artifact serves
+// the sim path (Scalar = Real, driven by a Scene/World) and the estimator
+// path (Scalar = ceres::Jet<...>, driven by a Jet-instantiated SceneT/WorldT
+// from inside WorldEKF::predict()).
 //
-// `using Craft = CraftT<Real>` below is what existing code uses; the Real
-// instantiation is the one Scenes hold and update. Estimator-side use
-// activates by instantiating CraftT<Jet> and calling its evaluate() hook
-// directly — no Scene needed.
+// `using Craft = CraftT<Real>` below is what existing code uses. A Jet-
+// instantiated WorldT<Jet> holds Jet-typed crafts via the same Scene API
+// — there is no separate path for the estimator.
 template <class Scalar = Real>
 class CraftT {
 public:
@@ -91,14 +91,15 @@ public:
 
     fields::Field* field_ptr(const std::type_info& ti) const;
 
-    // Scene/World accessors are only meaningful when Scalar == Real; for the
-    // estimator path (Jet), the craft isn't attached to a Scene/World.
-    Scene&       scene();
-    const Scene& scene() const;
+    // Scene/World accessors. With templated Scene/World, a Jet-instantiated
+    // craft IS attached to its Jet-instantiated parents — these accessors
+    // work in both paths.
+    SceneT<Scalar>&       scene();
+    const SceneT<Scalar>& scene() const;
     bool has_scene() const noexcept { return scene_ != nullptr; }
 
-    World&       world();
-    const World& world() const;
+    WorldT<Scalar>&       world();
+    const WorldT<Scalar>& world() const;
     bool has_world() const noexcept { return world_ != nullptr; }
 
     // Three-phase update. Sim path (Scene-driven) calls these in barrier-
@@ -317,14 +318,14 @@ private:
         }
     }
 
-    friend class Scene;
+    friend class SceneT<Scalar>;
 
     std::string name_;
     RootPartT_  root_{"root"};
     SceneToCraft scene_to_craft_;
     std::unordered_map<std::type_index, fields::Field*> fields_;
-    Scene*  scene_ = nullptr;
-    World*  world_ = nullptr;
+    SceneT<Scalar>*  scene_ = nullptr;
+    WorldT<Scalar>*  world_ = nullptr;
 };
 
 // Backwards-compat alias. The existing RootPart is used by Scalar=Real instances.
@@ -367,23 +368,23 @@ inline fields::Field* CraftT<Scalar>::field_ptr(const std::type_info& ti) const 
 }
 
 template <class Scalar>
-inline Scene& CraftT<Scalar>::scene() {
+inline SceneT<Scalar>& CraftT<Scalar>::scene() {
     assert(scene_ && "Craft is not attached to a Scene");
     return *scene_;
 }
 template <class Scalar>
-inline const Scene& CraftT<Scalar>::scene() const {
+inline const SceneT<Scalar>& CraftT<Scalar>::scene() const {
     assert(scene_ && "Craft is not attached to a Scene");
     return *scene_;
 }
 
 template <class Scalar>
-inline World& CraftT<Scalar>::world() {
+inline WorldT<Scalar>& CraftT<Scalar>::world() {
     assert(world_ && "Craft is not attached to a World");
     return *world_;
 }
 template <class Scalar>
-inline const World& CraftT<Scalar>::world() const {
+inline const WorldT<Scalar>& CraftT<Scalar>::world() const {
     assert(world_ && "Craft is not attached to a World");
     return *world_;
 }

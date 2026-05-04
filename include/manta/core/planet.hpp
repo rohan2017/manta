@@ -7,7 +7,7 @@
 
 namespace manta {
 
-class World;
+template <class Scalar> class WorldT;
 
 // Planet — a body that defines a (possibly rotating, possibly translating)
 // frame inside the World, and contributes disturbances to the World's global
@@ -44,7 +44,7 @@ public:
     // Called once at registration time by `World::add_planet`. Subclasses
     // attach disturbances to the world's fields here. Default: no-op (a
     // featureless planet doesn't affect any field).
-    virtual void register_disturbances(World& /*world*/) {}
+    virtual void register_disturbances(WorldT<Real>& /*world*/) {}
 
     // Called each tick before any craft updates. Subclasses advance their
     // frame transform (rotation, ephemeris) and any time-varying disturbance
