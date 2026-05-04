@@ -115,6 +115,12 @@ void setup() {
     EkfT::StateVec x0 = EkfT::StateVec::Zero();
     x0(3) = 1.0;     // craft 0: identity quaternion w
     EkfT::StateCov P0 = EkfT::StateCov::Identity() * 1.0f;
+    // initial_attitude_var: lock the four quaternion entries of P_0 so the EKF doesn't
+    // try to relearn absolute attitude from body-frame sensors that don't observe it.
+    P0(3, 3) = 1e-09f;
+    P0(4, 4) = 1e-09f;
+    P0(5, 5) = 1e-09f;
+    P0(6, 6) = 1e-09f;
     ekf_0.set_state(x0);
     ekf_0.set_covariance(P0);
     ekf_0.bind(w_jet, {&craft}, {&craft_jet});

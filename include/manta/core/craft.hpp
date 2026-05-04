@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <string>
+#include <type_traits>
 #include <typeindex>
 #include <typeinfo>
 #include <unordered_map>
@@ -284,6 +285,20 @@ public:
     void set_rigid_state(const RigidState& x) noexcept {
         scene_to_craft_.set_position(geom::Vec3<SceneFrame, Scalar>::from_raw(x.template segment<3>(0)));
         Eigen::Quaternion<Scalar> q(x(3), x(4), x(5), x(6));
+        // Always normalize, including for autodiff scalars. Skipping
+        // normalize was tempting (it preserves the qw column of the
+        // raw Jacobian) but it breaks a deeper invariant: Eigen's
+        // quaternion-vector product on a non-unit q evaluates to
+        // |q|² · R_unit · v rather than R · v, so R^T · R · F equals
+        // |q|⁴ · F instead of F — the autodiff then attributes a fake
+        // |q|⁴ sensitivity to qw, the EKF treats that as real
+        // observability, and the orientation diverges. Normalize keeps
+        // R orthonormal so the cancellation in R^T · R is exact.
+        // The collapsed qw Jacobian column at unit q is the correct
+        // mathematical derivative (rotation is 3-DOF; the radial
+        // direction is genuinely unobservable). The EKF wrapper
+        // projects P's quaternion block onto the tangent space after
+        // each end_step to keep the redundant direction zero.
         q.normalize();
         scene_to_craft_.set_orientation(geom::Ori<SceneFrame, Scalar>{q});
         scene_to_craft_.set_vel_linear(geom::Vec3<SceneFrame, Scalar>::from_raw(x.template segment<3>(7)));

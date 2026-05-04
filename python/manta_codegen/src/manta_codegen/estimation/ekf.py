@@ -92,7 +92,21 @@ class EKF:
                Each part contributes its own `consume_fresh()` gate +
                R block read from the part's sigma fields.
         process_noise: scalar — Q is `process_noise * I`.
-        initial_covariance: scalar — P_0 is `initial_covariance * I`.
+        initial_covariance: scalar — P_0 is `initial_covariance * I`,
+               then overrides below adjust specific blocks.
+        initial_attitude_var: per-component variance applied to the four
+               quaternion entries of P_0 (one per craft, so 4×NumCrafts
+               entries on the diagonal). When the sensor suite has no
+               absolute-orientation reference (no magnetometer, GPS,
+               star tracker, …), absolute attitude is unobservable from
+               IMU + DVL + gyro alone — the EKF can pick any q and
+               counter-rotate v_scene to match every body-frame
+               measurement. Setting this to a small value (e.g. 1e-9)
+               communicates "I trust the initial attitude, don't try
+               to relearn it from body-frame data" — the EKF then
+               keeps q ≈ initial through the run and v_scene tracks
+               truth. Default `None` reuses `initial_covariance` (the
+               original isotropic P_0).
         scalar_templated: forced True; included for API consistency with
                Craft. Estimator crafts must be templated for autodiff.
     """
@@ -100,6 +114,7 @@ class EKF:
     measurements: list = field(default_factory=list)
     process_noise: float = 1e-6
     initial_covariance: float = 1.0
+    initial_attitude_var: float | None = None
 
     # Static dimension of the rigid-body state — matches CraftT::kRigidStateDim.
     STATE_DIM: int = 13

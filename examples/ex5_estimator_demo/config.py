@@ -30,7 +30,7 @@ def make_config() -> MantaConfig:
     sim_c.add(Mass("body", mass=1.0, moi=(0.05, 0.05, 0.05)))
     sim_imu = IMU("imu", accel_sigma=0.05, gyro_sigma=0.005)
     sim_dvl = DVL("dvl", velocity_sigma=0.02)
-    sim_thrust = Thruster("thrust", max_thrust=15.0, direction=(1.0, 1.0, 0.5))
+    sim_thrust = Thruster("thrust", max_thrust=15.0, direction=(1.0, 0.0, 0.0))
     sim_c.add(sim_imu)
     sim_c.add(sim_dvl)
     sim_c.add(sim_thrust)
@@ -43,15 +43,23 @@ def make_config() -> MantaConfig:
     est_c.add(Mass("body", mass=1.0, moi=(0.05, 0.05, 0.05)))
     est_imu = IMU("imu", accel_sigma=0.05, gyro_sigma=0.005)
     est_dvl = DVL("dvl", velocity_sigma=0.02)
-    est_thrust = Thruster("thrust", max_thrust=15.0, direction=(1.0, 1.0, 0.5))
+    est_thrust = Thruster("thrust", max_thrust=15.0, direction=(1.0, 0.0, 0.0))
     est_c.add(est_imu)
     est_c.add(est_dvl)
     est_c.add(est_thrust)
 
     est_w = World("ex5_est").add_field(grav).add_craft(est_c)
 
+    # ex5's sensor suite (IMU + DVL + gyro) is all body-frame: absolute
+    # orientation is unobservable, so the EKF would otherwise drift q
+    # and counter-rotate v_scene to match every body-frame reading. Lock
+    # initial attitude with high confidence (variance 1e-9) so the EKF
+    # keeps the assumed initial q and v_scene tracks truth directly.
+    # Production setups should add a magnetometer or position sensor
+    # instead of locking attitude.
     ekf = EKF(est_w, measurements=[est_imu, est_dvl],
-              process_noise=1e-6, initial_covariance=1.0)
+              process_noise=1e-6, initial_covariance=1.0,
+              initial_attitude_var=1e-9)
 
     # ---- In-process plumbing ----
     # Cross-world: sim sensor outputs feed est sensor measurement inputs

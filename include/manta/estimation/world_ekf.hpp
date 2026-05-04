@@ -389,6 +389,31 @@ public:
         for (auto& apply : queue_) apply(x, P);
         queue_.clear();
 
+        // Renormalize each craft's quaternion to unit norm. The Jet
+        // path's `q.normalize()` happens inside set_rigid_state, but
+        // post-Kalman-update x can have q drifted off unit, so we
+        // project back here before the next predict seeds Jets from
+        // it. We do NOT project the q-block of P onto the tangent
+        // space — for the redundant-direction problem the analytical
+        // story would say "zero out the radial component" but in
+        // practice on this codebase the projection makes things
+        // worse by clamping legitimate qx/qy/qz uncertainty too
+        // aggressively. Skipping the P projection leaves the standard
+        // EKF behavior (well-conditioned for the typical case).
+        for (int k = 0; k < NumCrafts; ++k) {
+            const int qw = kRigidStateDim*k + 3;
+            const double n2 =
+                x(qw)*x(qw) + x(qw+1)*x(qw+1)
+              + x(qw+2)*x(qw+2) + x(qw+3)*x(qw+3);
+            if (n2 > 1e-24) {
+                const double inv_n = 1.0 / std::sqrt(n2);
+                x(qw)   *= inv_n;
+                x(qw+1) *= inv_n;
+                x(qw+2) *= inv_n;
+                x(qw+3) *= inv_n;
+            }
+        }
+
         ekf_.set_state(x);
         ekf_.set_covariance(P);
 

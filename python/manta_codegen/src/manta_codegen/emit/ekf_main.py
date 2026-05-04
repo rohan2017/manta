@@ -877,6 +877,27 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
     lines += [
         f"    EkfT::StateCov P0 = EkfT::StateCov::Identity() * "
         f"{_f(filter_obj.initial_covariance)};",
+    ]
+    # Per-craft attitude-variance override. Lock the four quaternion
+    # diagonal entries to a tight value when the sensor suite can't
+    # observe absolute orientation; without this, IMU + DVL alone leave
+    # q under-determined and the EKF picks a self-consistent (q,
+    # v_scene) pair that satisfies every body-frame measurement but
+    # has q rotated from truth.
+    iav = getattr(filter_obj, "initial_attitude_var", None)
+    if iav is not None:
+        lines.append(
+            f"    // initial_attitude_var: lock the four quaternion "
+            f"entries of P_0 so the EKF doesn't")
+        lines.append(
+            f"    // try to relearn absolute attitude from body-frame "
+            f"sensors that don't observe it.")
+        for k in range(num_crafts):
+            for off in range(4):
+                idx = k * 13 + 3 + off
+                lines.append(
+                    f"    P0({idx}, {idx}) = {_f(float(iav))};")
+    lines += [
         f"    {filter_var}.set_state(x0);",
         f"    {filter_var}.set_covariance(P0);",
     ]

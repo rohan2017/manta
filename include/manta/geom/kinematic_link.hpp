@@ -1,5 +1,7 @@
 #pragma once
 
+#include <type_traits>
+
 #include "../core/frame.hpp"
 #include "../core/types.hpp"
 #include "ori.hpp"
@@ -242,6 +244,15 @@ inline void KinematicLink<From, To, Scalar>::update(Scalar dt) noexcept {
     } else {
         dq.setIdentity();
     }
+    // Always renormalize (including for Jet types). Eigen's
+    // quaternion-vector product on a non-unit q evaluates to
+    // |q|² · R_unit · v, so dropping the normalize would propagate a
+    // |q|² scaling through autodiff and corrupt every Jacobian column
+    // the rotation feeds. The collapsed-qw derivative at unit q is
+    // the correct mathematical answer (rotation is 3-DOF); the EKF
+    // wrapper projects P's quaternion block onto the tangent space
+    // each tick to keep the redundant direction free of leaked
+    // measurement noise.
     auto q_new = (orientation_.raw() * dq).normalized();
     auto w_new = w0 + al * dt;
 
