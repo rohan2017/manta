@@ -93,20 +93,67 @@ class EKF:
                R block read from the part's sigma fields.
         process_noise: scalar — Q is `process_noise * I`.
         initial_covariance: scalar — P_0 is `initial_covariance * I`,
-               then overrides below adjust specific blocks.
-        initial_attitude_var: per-component variance applied to the four
-               quaternion entries of P_0 (one per craft, so 4×NumCrafts
-               entries on the diagonal). When the sensor suite has no
-               absolute-orientation reference (no magnetometer, GPS,
-               star tracker, …), absolute attitude is unobservable from
-               IMU + DVL + gyro alone — the EKF can pick any q and
-               counter-rotate v_scene to match every body-frame
-               measurement. Setting this to a small value (e.g. 1e-9)
-               communicates "I trust the initial attitude, don't try
-               to relearn it from body-frame data" — the EKF then
-               keeps q ≈ initial through the run and v_scene tracks
-               truth. Default `None` reuses `initial_covariance` (the
-               original isotropic P_0).
+               then any of the per-block overrides below replace
+               specific diagonal entries.
+
+        Per-craft init knobs accept any of these shapes — same contract
+        for state vectors AND variances. The codegen resolves them to a
+        per-craft list at emit time:
+
+          * None (default)
+              - State fields: read from `world.add_craft(c, pos=...,
+                ori=..., vel=..., vel_angular=...)` — the world's
+                per-craft init is the source of truth.
+              - Variance fields: fall back to `initial_covariance` for
+                that block on every craft.
+
+          * A single value (tuple for state, scalar for variance) —
+            broadcast to every craft.
+
+          * A list of values, length = number of crafts — one entry
+            per craft in `world.crafts` order.
+
+          * A dict keyed by craft name — only the named crafts are
+            overridden; the rest fall back to the broadcast / world-
+            default behavior. Useful when only some crafts in a swarm
+            need specific init.
+
+        Per-craft INITIAL STATE overrides:
+            initial_position           — 3-tuple (px, py, pz)
+            initial_orientation        — 4-tuple (qw, qx, qy, qz)
+            initial_velocity           — 3-tuple (vx, vy, vz) in scene
+            initial_angular_velocity   — 3-tuple (wx, wy, wz) in body
+
+        Per-block INITIAL VARIANCE overrides (scalar applied to each
+        diagonal entry of the named block):
+            initial_position_var
+            initial_attitude_var
+            initial_velocity_var
+            initial_angular_velocity_var
+
+        Tuning the *_var knobs is how you tell the EKF "I trust this
+        block of the initial state — don't burn measurement information
+        relearning it." For sensor suites that don't observe absolute
+        attitude (IMU + DVL + gyro, all body-frame), giving the
+        attitude block a moderate variance (e.g. 1e-4) keeps q close
+        to the seeded initial during the run; the EKF still updates
+        within that block but doesn't drift to a self-consistent
+        rotated solution.
+
+        Examples (multi-craft swarm):
+
+            # Same init for both, default world placement:
+            EKF(w, ..., initial_attitude_var=1e-4)
+
+            # craft_0 starts at origin, craft_1 at (10, 0, 0); variances
+            # broadcast across both:
+            EKF(w, ..., initial_position=[(0,0,0), (10,0,0)],
+                       initial_position_var=1e-4)
+
+            # Only craft "leader" gets a tight attitude lock, "follower"
+            # uses the default isotropic P_0:
+            EKF(w, ..., initial_attitude_var={"leader": 1e-9})
+
         scalar_templated: forced True; included for API consistency with
                Craft. Estimator crafts must be templated for autodiff.
     """
@@ -114,7 +161,16 @@ class EKF:
     measurements: list = field(default_factory=list)
     process_noise: float = 1e-6
     initial_covariance: float = 1.0
-    initial_attitude_var: float | None = None
+
+    initial_position:         "tuple | list | None" = None
+    initial_orientation:      "tuple | list | None" = None
+    initial_velocity:         "tuple | list | None" = None
+    initial_angular_velocity: "tuple | list | None" = None
+
+    initial_position_var:         float | None = None
+    initial_attitude_var:         float | None = None
+    initial_velocity_var:         float | None = None
+    initial_angular_velocity_var: float | None = None
 
     # Static dimension of the rigid-body state — matches CraftT::kRigidStateDim.
     STATE_DIM: int = 13

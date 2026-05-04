@@ -868,35 +868,109 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
         lines.append("")
 
     # Filter init + bind.
+    #
+    # Per-craft initial-state and per-block initial-variance knobs each
+    # accept four shapes — None / scalar-or-tuple (broadcast) / list
+    # (per-craft positional) / dict (per-craft by name). Both helpers
+    # resolve to a per-craft list of length num_crafts at emit time.
+    craft_names = [world.crafts[k].craft.name for k in range(num_crafts)]
+
+    def _resolve_state(attr: str, default_extractor, n_components: int):
+        """Per-craft state vector (tuple of n_components floats per
+        craft). None → world.add_craft default; scalar tuple → broadcast;
+        list of tuples → positional per-craft; dict → by craft name."""
+        override = getattr(filter_obj, attr, None)
+        def _from_world(k):
+            return tuple(float(v) for v in default_extractor(world.crafts[k]))
+        if override is None:
+            return [_from_world(k) for k in range(num_crafts)]
+        if isinstance(override, dict):
+            out = []
+            for k in range(num_crafts):
+                v = override.get(craft_names[k])
+                out.append(tuple(float(x) for x in v) if v is not None else _from_world(k))
+            return out
+        # Single tuple (broadcast) — heuristic: length matches and
+        # contents are scalars (not nested tuples/lists).
+        if (len(override) == n_components
+                and not isinstance(override[0], (list, tuple))):
+            return [tuple(float(v) for v in override) for _ in range(num_crafts)]
+        # List of tuples (one per craft).
+        if len(override) != num_crafts:
+            raise ValueError(
+                f"EKF.{attr}: expected {num_crafts} per-craft tuples (or a "
+                f"single broadcast tuple, or a dict by craft name); "
+                f"got list of length {len(override)}.")
+        return [tuple(float(v) for v in override[k]) for k in range(num_crafts)]
+
+    def _resolve_var(attr: str):
+        """Per-craft scalar (or None) for a variance block. None →
+        leave at initial_covariance; scalar → broadcast; list → per-
+        craft positional; dict → by craft name (others stay default)."""
+        override = getattr(filter_obj, attr, None)
+        if override is None:
+            return [None] * num_crafts
+        if isinstance(override, dict):
+            return [
+                float(override[craft_names[k]]) if craft_names[k] in override else None
+                for k in range(num_crafts)
+            ]
+        if isinstance(override, (list, tuple)):
+            if len(override) != num_crafts:
+                raise ValueError(
+                    f"EKF.{attr}: expected {num_crafts} per-craft scalars "
+                    f"(or a single broadcast scalar, or a dict by craft "
+                    f"name); got list of length {len(override)}.")
+            return [float(v) for v in override]
+        # Plain scalar → broadcast.
+        return [float(override)] * num_crafts
+
+    pos_per_craft = _resolve_state("initial_position",         lambda e: e.position,    3)
+    ori_per_craft = _resolve_state("initial_orientation",      lambda e: e.orientation, 4)
+    vel_per_craft = _resolve_state("initial_velocity",         lambda e: e.vel_linear,  3)
+    ang_per_craft = _resolve_state("initial_angular_velocity", lambda e: e.vel_angular, 3)
+
     lines += [
         "    // ---- Filter init ----",
         f"    EkfT::StateVec x0 = EkfT::StateVec::Zero();",
     ]
     for k in range(num_crafts):
-        lines.append(f"    x0({k * 13 + 3}) = 1.0;     // craft {k}: identity quaternion w")
-    lines += [
+        s0 = k * 13
+        p, q, v, w = pos_per_craft[k], ori_per_craft[k], vel_per_craft[k], ang_per_craft[k]
+        lines.append(f"    // craft {k} initial state")
+        lines.append(f"    x0({s0+0}) = {_f(p[0])}; x0({s0+1}) = {_f(p[1])}; x0({s0+2}) = {_f(p[2])};")
+        lines.append(f"    x0({s0+3}) = {_f(q[0])}; x0({s0+4}) = {_f(q[1])}; "
+                     f"x0({s0+5}) = {_f(q[2])}; x0({s0+6}) = {_f(q[3])};")
+        lines.append(f"    x0({s0+7}) = {_f(v[0])}; x0({s0+8}) = {_f(v[1])}; x0({s0+9}) = {_f(v[2])};")
+        lines.append(f"    x0({s0+10}) = {_f(w[0])}; x0({s0+11}) = {_f(w[1])}; x0({s0+12}) = {_f(w[2])};")
+
+    lines.append(
         f"    EkfT::StateCov P0 = EkfT::StateCov::Identity() * "
-        f"{_f(filter_obj.initial_covariance)};",
+        f"{_f(filter_obj.initial_covariance)};")
+
+    # Per-block + per-craft variance overrides. Each block (position,
+    # attitude, velocity, angular velocity) has its own *_var field on
+    # the EKF descriptor; each accepts None (use initial_covariance),
+    # scalar (broadcast), list (per-craft positional), or dict (per-
+    # craft by name). _resolve_var returns a length-num_crafts list of
+    # (float | None); we emit a P0 override line only for crafts where
+    # it's set.
+    var_blocks = [
+        ("initial_position_var",         0, 3),
+        ("initial_attitude_var",         3, 4),
+        ("initial_velocity_var",         7, 3),
+        ("initial_angular_velocity_var", 10, 3),
     ]
-    # Per-craft attitude-variance override. Lock the four quaternion
-    # diagonal entries to a tight value when the sensor suite can't
-    # observe absolute orientation; without this, IMU + DVL alone leave
-    # q under-determined and the EKF picks a self-consistent (q,
-    # v_scene) pair that satisfies every body-frame measurement but
-    # has q rotated from truth.
-    iav = getattr(filter_obj, "initial_attitude_var", None)
-    if iav is not None:
-        lines.append(
-            f"    // initial_attitude_var: lock the four quaternion "
-            f"entries of P_0 so the EKF doesn't")
-        lines.append(
-            f"    // try to relearn absolute attitude from body-frame "
-            f"sensors that don't observe it.")
+    for attr, off, n in var_blocks:
+        per_craft = _resolve_var(attr)
         for k in range(num_crafts):
-            for off in range(4):
-                idx = k * 13 + 3 + off
-                lines.append(
-                    f"    P0({idx}, {idx}) = {_f(float(iav))};")
+            v = per_craft[k]
+            if v is None:
+                continue
+            base = k * 13 + off
+            for j in range(n):
+                lines.append(f"    P0({base+j}, {base+j}) = {_f(v)};")
+
     lines += [
         f"    {filter_var}.set_state(x0);",
         f"    {filter_var}.set_covariance(P0);",

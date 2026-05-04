@@ -50,16 +50,21 @@ def make_config() -> MantaConfig:
 
     est_w = World("ex5_est").add_field(grav).add_craft(est_c)
 
-    # ex5's sensor suite (IMU + DVL + gyro) is all body-frame: absolute
-    # orientation is unobservable, so the EKF would otherwise drift q
-    # and counter-rotate v_scene to match every body-frame reading. Lock
-    # initial attitude with high confidence (variance 1e-9) so the EKF
-    # keeps the assumed initial q and v_scene tracks truth directly.
-    # Production setups should add a magnetometer or position sensor
-    # instead of locking attitude.
+    # ex5's sensor suite (IMU + DVL + gyro) is body-frame only: there's
+    # no absolute-attitude reference. Both the sim and the EKF start at
+    # q = identity (the default in World.add_craft, which the EKF picks
+    # up automatically). The default per-block variances tell the EKF
+    # we're moderately confident in that initial — small enough that
+    # body-frame measurement noise can't pull q far from identity, but
+    # not a hard lock. That's sufficient because nothing in the
+    # dynamics generates torque, so q should stay near identity for
+    # the whole run.
     ekf = EKF(est_w, measurements=[est_imu, est_dvl],
               process_noise=1e-6, initial_covariance=1.0,
-              initial_attitude_var=1e-9)
+              initial_position_var=1e-4,
+              initial_attitude_var=1e-4,
+              initial_velocity_var=1e-2,
+              initial_angular_velocity_var=1e-4)
 
     # ---- In-process plumbing ----
     # Cross-world: sim sensor outputs feed est sensor measurement inputs

@@ -128,7 +128,11 @@ void setup() {
 
     // ---- Filter init ----
     EkfT::StateVec x0 = EkfT::StateVec::Zero();
-    x0(3) = 1.0;     // craft 0: identity quaternion w
+    // craft 0 initial state
+    x0(0) = 0.0f; x0(1) = 0.0f; x0(2) = 0.0f;
+    x0(3) = 1.0f; x0(4) = 0.0f; x0(5) = 0.0f; x0(6) = 0.0f;
+    x0(7) = 0.0f; x0(8) = 0.0f; x0(9) = 0.0f;
+    x0(10) = 0.0f; x0(11) = 0.0f; x0(12) = 0.0f;
     EkfT::StateCov P0 = EkfT::StateCov::Identity() * 1.0f;
     ekf_0.set_state(x0);
     ekf_0.set_covariance(P0);

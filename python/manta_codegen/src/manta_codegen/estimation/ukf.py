@@ -83,6 +83,19 @@ class UKF:
     measurements: list = field(default_factory=list)
     process_noise: float = 1e-6
     initial_covariance: float = 1.0
+
+    # Per-craft initial-state overrides — see EKF for the contract.
+    # None ⇒ inherit from `world.add_craft(...)` defaults.
+    initial_position:         "tuple | list | None" = None
+    initial_orientation:      "tuple | list | None" = None
+    initial_velocity:         "tuple | list | None" = None
+    initial_angular_velocity: "tuple | list | None" = None
+
+    # Per-block initial-variance overrides (None ⇒ initial_covariance).
+    initial_position_var:         float | None = None
+    initial_attitude_var:         float | None = None
+    initial_velocity_var:         float | None = None
+    initial_angular_velocity_var: float | None = None
     alpha: float = 1e-3
     beta:  float = 2.0
     kappa: float = 0.0

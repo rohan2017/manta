@@ -55,13 +55,26 @@ def make_config() -> MantaConfig:
     drone_1, imu_1, dvl_1 = _make_drone("drone_1")
 
     # Both crafts in ONE world. The EKF estimates state[0..12]=drone_0,
-    # state[13..25]=drone_1.
+    # state[13..25]=drone_1. The two drones start at distinct positions
+    # so the per-craft init API has something concrete to demonstrate.
     w = (World("ex9")
-         .add_craft(drone_0)
-         .add_craft(drone_1))
+         .add_craft(drone_0, pos=(0.0, 0.0, 0.0))
+         .add_craft(drone_1, pos=(5.0, 0.0, 0.0)))
 
+    # Per-craft init knobs. Each *_var field accepts a scalar (broadcast
+    # to all crafts), a list-of-scalars (positional, one per craft), or
+    # a dict keyed by craft name (others stay at initial_covariance).
+    # State fields are inherited from add_craft() above unless
+    # overridden here. Below uses each shape once for documentation:
+    #   * initial_position_var: scalar — same trust for both crafts.
+    #   * initial_attitude_var: dict by name — only drone_0 gets a tight
+    #     attitude prior; drone_1 stays at the isotropic default.
+    #   * initial_velocity_var: list — different per craft positionally.
     ekf = EKF(w, measurements=[imu_0, dvl_0, imu_1, dvl_1],
-              process_noise=1e-6, initial_covariance=1.0)
+              process_noise=1e-6, initial_covariance=1.0,
+              initial_position_var=1e-4,
+              initial_attitude_var={"drone_0": 1e-4},
+              initial_velocity_var=[1e-2, 1e-3])
 
     # Each drone's sensor data arrives on its own Zenoh topic.
     subscribe(imu_0.set_measurement, "manta/ex9/imu/0")
