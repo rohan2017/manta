@@ -40,17 +40,42 @@ if TYPE_CHECKING:
 EKF_SENTINEL_PREFIX = "$ekf/"
 
 
-def _state_slice_signal(name: str, accessor_method: str, n: int) -> Signal:
-    """Out-direction signal that reads `n` floats from an EKF accessor —
-    e.g. `ekf.position()` returns a length-3 slice of the state vector."""
+def _state_slice_signal(name: str, accessor_method: str, n: int,
+                         craft_idx: int = 0) -> Signal:
+    """Out-direction signal that reads `n` floats from an EKF accessor.
+    The accessor methods (`position`, `vel_linear`, etc.) all take an
+    optional craft_idx (default 0) — for multi-craft worlds we bake the
+    index in at codegen time so `ekf.crafts['my_drone'].position` reads
+    that craft's slice of the joint state."""
     return Signal(
         name=name,
         direction="out",
         n_floats=n,
         cpp_read_exprs=tuple(
-            f"{{accessor}}.{accessor_method}()({i})" for i in range(n)
+            f"{{accessor}}.{accessor_method}({craft_idx})({i})" for i in range(n)
         ),
     )
+
+
+class _CraftEkfSignals:
+    """Per-craft BoundSignal bundle. `ekf.crafts['drone_0'].position`
+    reads `ekf_0.position(0)`; `ekf.crafts['drone_1'].position` reads
+    `ekf_0.position(1)` from the joint state vector.
+
+    Mirrors the surface of the EKF descriptor for a single craft slice.
+    """
+    def __init__(self, name: str):
+        self.name = name
+        # Signals are populated by the EKF descriptor's __post_init__
+        # since they need the EKF reference for the craft_ref sentinel.
+        self.position:           "BoundSignal | None" = None
+        self.orientation:        "BoundSignal | None" = None
+        self.vel_linear:         "BoundSignal | None" = None
+        self.vel_angular:        "BoundSignal | None" = None
+        self.position_stddev:    "BoundSignal | None" = None
+        self.orientation_stddev: "BoundSignal | None" = None
+        self.vel_linear_stddev:  "BoundSignal | None" = None
+        self.vel_angular_stddev: "BoundSignal | None" = None
 
 
 @dataclass
@@ -129,31 +154,67 @@ class EKF:
                     f"EKF: measurement part {m.name!r} is not attached to "
                     f"any craft in the EKF's wrapped world (crafts: {names}).")
 
-        # Build the output BoundSignals once. They share a synthetic
-        # `craft_ref` (this EKF) so the module-level publish/connect
-        # helpers find the owning context — codegen recognizes the
-        # sentinel and routes accordingly.
-        sd = self.STATE_DIM
-        self.position        = self._make_signal("position",         "position",         3)
-        self.orientation     = self._make_signal("orientation",      "orientation",      4)
-        self.vel_linear      = self._make_signal("vel_linear",       "vel_linear",       3)
-        self.vel_angular     = self._make_signal("vel_angular",      "vel_angular",      3)
-        self.full_state      = self._make_signal("full_state",       "full_state",       sd)
-        # Stddev variants — codegen reads sqrt(P[i, i]) from corresponding
-        # rows of the covariance matrix.
-        self.position_stddev    = self._make_signal("position_stddev",    "position_stddev",    3)
-        self.orientation_stddev = self._make_signal("orientation_stddev", "orientation_stddev", 4)
-        self.vel_linear_stddev  = self._make_signal("vel_linear_stddev",  "vel_linear_stddev",  3)
-        self.vel_angular_stddev = self._make_signal("vel_angular_stddev", "vel_angular_stddev", 3)
+        # Build the per-craft signal tree. For each craft in the wrapped
+        # world, expose a `_CraftEkfSignals` instance with position/
+        # orientation/vel_linear/vel_angular + stddev variants that read
+        # that craft's slice of the joint state (state[13*idx + ...]).
+        # Indexed by craft name: `ekf.crafts["drone_0"].position`.
+        self.crafts: dict[str, _CraftEkfSignals] = {}
+        for idx, c in enumerate(world_crafts):
+            cs = _CraftEkfSignals(c.name)
+            cs.position           = self._make_craft_signal(idx, "position",         "position",         3)
+            cs.orientation        = self._make_craft_signal(idx, "orientation",      "orientation",      4)
+            cs.vel_linear         = self._make_craft_signal(idx, "vel_linear",       "vel_linear",       3)
+            cs.vel_angular        = self._make_craft_signal(idx, "vel_angular",      "vel_angular",      3)
+            cs.position_stddev    = self._make_craft_signal(idx, "position_stddev",    "position_stddev",    3)
+            cs.orientation_stddev = self._make_craft_signal(idx, "orientation_stddev", "orientation_stddev", 4)
+            cs.vel_linear_stddev  = self._make_craft_signal(idx, "vel_linear_stddev",  "vel_linear_stddev",  3)
+            cs.vel_angular_stddev = self._make_craft_signal(idx, "vel_angular_stddev", "vel_angular_stddev", 3)
+            self.crafts[c.name] = cs
 
-    def _make_signal(self, name: str, accessor_method: str, n: int) -> BoundSignal:
-        sig = _state_slice_signal(name, accessor_method, n)
-        bs = BoundSignal(
+        # Single-craft shortcuts at the top level — `ekf.position` is
+        # equivalent to `ekf.crafts[<sole_craft>].position`. Multi-craft
+        # callers should use the explicit dict path.
+        sd = self.STATE_DIM
+        first = world_crafts[0]
+        first_cs = self.crafts[first.name]
+        self.position        = first_cs.position
+        self.orientation     = first_cs.orientation
+        self.vel_linear      = first_cs.vel_linear
+        self.vel_angular     = first_cs.vel_angular
+        self.position_stddev    = first_cs.position_stddev
+        self.orientation_stddev = first_cs.orientation_stddev
+        self.vel_linear_stddev  = first_cs.vel_linear_stddev
+        self.vel_angular_stddev = first_cs.vel_angular_stddev
+        # Full state spans the whole joint vector; not per-craft.
+        self.full_state = self._make_full_state_signal(sd)
+
+    def _make_craft_signal(self, craft_idx: int, name: str,
+                           accessor_method: str, n: int) -> BoundSignal:
+        """BoundSignal that reads craft_idx's slice via accessor(idx)."""
+        sig = _state_slice_signal(name, accessor_method, n,
+                                  craft_idx=craft_idx)
+        return BoundSignal(
             part_name=f"{EKF_SENTINEL_PREFIX}{self._ekf_id}",
             signal=sig,
-            craft_ref=self,   # sentinel; emit-side detects EKF-typed craft_ref
+            craft_ref=self,
         )
-        return bs
+
+    def _make_full_state_signal(self, n: int) -> BoundSignal:
+        # `full_state()` returns the whole concat'd state, no craft_idx.
+        sig = Signal(
+            name="full_state",
+            direction="out",
+            n_floats=n,
+            cpp_read_exprs=tuple(
+                f"{{accessor}}.full_state()({i})" for i in range(n)
+            ),
+        )
+        return BoundSignal(
+            part_name=f"{EKF_SENTINEL_PREFIX}{self._ekf_id}",
+            signal=sig,
+            craft_ref=self,
+        )
 
     # ---- helpers for codegen (used by emit/main.py in the follow-up) ----
 

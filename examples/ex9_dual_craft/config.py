@@ -69,16 +69,21 @@ def make_config() -> MantaConfig:
     subscribe(imu_1.set_measurement, "manta/ex9/imu/1")
     subscribe(dvl_1.set_measurement, "manta/ex9/dvl/1")
 
-    # Joint estimate publish. The codegen-emitted EKF wrapper exposes per-
-    # craft slices via the `position(idx)`/`vel_linear(idx)` accessors;
-    # for the default-bound BoundSignals (which read craft 0 only), we
-    # expose a representative subset here. Multi-craft output bindings are
-    # a future codegen extension.
+    # Per-craft signal tree: `ekf.crafts["<name>"]` exposes
+    # position/orientation/velocity/stddev BoundSignals scoped to that
+    # craft's slice of the joint state. Each one reads
+    # `ekf_0.<accessor>(craft_idx)(...)` at codegen time.
+    d0 = ekf.crafts["drone_0"]
+    d1 = ekf.crafts["drone_1"]
     publish({
-        "p0":       ekf.position,
-        "v0":       ekf.vel_linear,
-        "p_stddev": ekf.position_stddev,
-        "v_stddev": ekf.vel_linear_stddev,
+        "p0":          d0.position,
+        "v0":          d0.vel_linear,
+        "p0_stddev":   d0.position_stddev,
+        "v0_stddev":   d0.vel_linear_stddev,
+        "p1":          d1.position,
+        "v1":          d1.vel_linear,
+        "p1_stddev":   d1.position_stddev,
+        "v1_stddev":   d1.vel_linear_stddev,
     }, "manta/ex9/estimate")
 
     return MantaConfig(targets=[
