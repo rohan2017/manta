@@ -1,13 +1,19 @@
 // Example 3 — TVC rocket "hopper" (post-2026-05 redesign).
 //
-// Library workflow: Ex3Craft is codegen-emitted from craft.py. The deleted
-// `GimbaledThruster` is now a stack of two `Motor`s (yaw outer, pitch inner)
-// hosting a `Thruster1` engine — same physics, expressed via composition.
+// Library-workflow example under the harness architecture: the codegen
+// emits `manta_gen::ex3::{w, scene, craft, setup, tick, shutdown}` (in
+// generated/ex3/ex3.hpp). This file is a thin user-written main: it calls
+// the harness's setup, runs the outer rate-PID + gimbal PD loops on top
+// of the craft, ticks the harness, and adds its own Zenoh cmd subscriber
+// + state publisher.
 //
-// The old `engine.set_gimbal(pitch, yaw)` call set the gimbal angle
-// instantaneously. Motors are torque-controlled, so we run a stiff position
-// PD on each axis to track the desired gimbal angle. Stall torque on each
-// motor (100 N·m vs ~50 N peak from the engine) is plenty of headroom.
+// The deleted `GimbaledThruster` is now a stack of two `Motor`s (yaw outer,
+// pitch inner) hosting a `Thruster1` engine — same physics, expressed via
+// composition. The old `engine.set_gimbal(pitch, yaw)` call set the gimbal
+// angle instantaneously; Motors are torque-controlled, so we run a stiff
+// position PD on each axis to track the desired gimbal angle. Stall torque
+// on each motor (100 N·m vs ~50 N peak from the engine) is plenty of
+// headroom.
 //
 // Zenoh:
 //   subscribe 'manta/ex3/cmd'   = [thr, pitch_rate, yaw_rate]
@@ -23,11 +29,8 @@
 #include <zenoh.hxx>
 
 #include "manta/control/pid.hpp"
-#include "manta/core/scene.hpp"
-#include "manta/core/world.hpp"
-#include "manta/fields/gravity_field.hpp"
 
-#include "ex3_craft.hpp"
+#include "ex3.hpp"             // manta_gen::ex3 harness
 #include "ex3_telemetry.hpp"
 
 #include "sim_loop.hpp"
@@ -61,17 +64,12 @@ int main() {
     std::signal(SIGINT,  on_signal);
     std::signal(SIGTERM, on_signal);
 
-    constexpr float DT = 0.001f;
+    manta_gen::ex3::setup();
+    auto& craft = manta_gen::ex3::craft;
+    auto& world = manta_gen::ex3::w;
+
+    constexpr float DT = manta_gen::ex3::DT;
     constexpr float HOVER_FRACTION = (5.0f * 9.81f) / (1.5f * 5.0f * 9.81f);
-
-    fields::GravityField gf{Vec3<SceneFrame>{0, 0, -9.81f}};
-    World w;
-    w.register_field(gf);
-    w.clock().set_dt(DT);
-    auto& scene = w.create_scene();
-
-    Ex3Craft craft;
-    scene.add_craft(craft);
 
     // Outer-loop rate PIDs (rate-error → desired gimbal angle).
     PID<float> pitch_pid(0.20f, 0.10f, 0.02f, /*ilim=*/0.5f);
@@ -129,12 +127,12 @@ int main() {
         craft.yaw_motor()  .set_torque(gimbal_pd(craft.yaw_motor(),   +yaw_angle_sp));
         craft.engine().set_throttle(thr);
 
-        w.update();
+        manta_gen::ex3::tick();
 
         if (++pub_decim >= pub_every) {
             pub_decim = 0;
             Ex3CraftTelemetry telem;
-            capture_ex3_telemetry(craft, w.clock().time(), telem);
+            capture_ex3_telemetry(craft, world.clock().time(), telem);
             state_pub.put(zenoh::Bytes(telem.to_json()));
         }
 
@@ -142,5 +140,6 @@ int main() {
     }
 
     std::printf("ex3: shutting down.\n");
+    manta_gen::ex3::shutdown();
     return 0;
 }

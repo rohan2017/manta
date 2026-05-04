@@ -1,13 +1,21 @@
 // Example 2 — Quadcopter with rate-control PIDs.
 //
-// Library workflow: the Craft type (Ex2Craft) is codegen-emitted from
-// `craft.py`. This file is the user-written main: it does the
-// world/scene/Zenoh wiring, runs the rate PIDs, and applies X-config mixing
-// to the four PropThrusters that the codegen instantiated.
+// Library-workflow example under the harness architecture: the codegen
+// emits `manta_gen::ex2::{w, scene, craft, setup, tick, shutdown}` (in
+// generated/ex2/ex2.hpp). This file is a thin user-written main: it calls
+// the harness's setup, runs rate PIDs + X-config mixing on top of the
+// craft, ticks the harness, and adds its own Zenoh cmd subscriber +
+// state publisher (the cmd payload is a 4-float controller struct, not a
+// part-defined signal — out of scope for the binding system).
 //
 // Zenoh:
 //   subscribe 'manta/ex2/cmd'   = [thr, roll_rate, pitch_rate, yaw_rate]
 //   publish   'manta/ex2/state' = standard nested telemetry JSON
+//
+// To regenerate the harness:
+//   PYTHONPATH=python/manta_codegen/src \
+//       python -m manta_codegen.cli examples/ex2_quadcopter/craft.py \
+//           --workflow library
 
 #include <atomic>
 #include <csignal>
@@ -19,11 +27,8 @@
 #include <zenoh.hxx>
 
 #include "manta/control/pid.hpp"
-#include "manta/core/scene.hpp"
-#include "manta/core/world.hpp"
-#include "manta/fields/gravity_field.hpp"
 
-#include "ex2_craft.hpp"
+#include "ex2.hpp"             // manta_gen::ex2 harness
 #include "ex2_telemetry.hpp"
 
 #include "sim_loop.hpp"
@@ -43,17 +48,12 @@ int main() {
     std::signal(SIGINT,  on_signal);
     std::signal(SIGTERM, on_signal);
 
-    constexpr float DT = 0.001f;  // 1 kHz sim
+    // Build world + scene + Ex2Craft via the harness.
+    manta_gen::ex2::setup();
+    auto& craft = manta_gen::ex2::craft;
+    auto& world = manta_gen::ex2::w;
 
-    // World, scene, gravity. The Craft type comes from the codegen.
-    fields::GravityField gf;
-    World w;
-    w.register_field(gf);
-    w.clock().set_dt(DT);
-    auto& scene = w.create_scene();
-
-    Ex2Craft craft;
-    scene.add_craft(craft);
+    constexpr float DT = manta_gen::ex2::DT;
 
     // Rate controllers — gains live in user code (not in the descriptor).
     PID<float> roll_pid (0.10f, 0.05f, 0.005f, /*ilim=*/1.0f);
@@ -61,6 +61,9 @@ int main() {
     PID<float> yaw_pid  (0.20f, 0.10f, 0.000f, 1.0f);
 
     // ---- zenoh ----
+    // Separate session from the harness's internal one — the cmd payload
+    // is a user-defined 4-float struct, so the binding system can't
+    // express it. Two sessions in one process work fine.
     zenoh::Config cfg = zenoh::Config::create_default();
     auto session = zenoh::Session::open(std::move(cfg));
 
@@ -107,19 +110,19 @@ int main() {
         float u_yaw   = yaw_pid  .update(yaw_err  , DT);
 
         // X-config mixing.
-        // CCW props: fr, bl. CW props: fl, br. PropThruster CCW yields -z body torque.
+        // CCW props: fr, bl. CW props: fl, br. Thruster1's CCW yields -z body torque.
         // For +yaw command we want +z body torque → boost CW (fl, br), dim CCW (fr, bl).
         craft.fr().set_throttle(thr - u_roll + u_pitch - u_yaw);
         craft.fl().set_throttle(thr + u_roll + u_pitch + u_yaw);
         craft.bl().set_throttle(thr + u_roll - u_pitch - u_yaw);
         craft.br().set_throttle(thr - u_roll - u_pitch + u_yaw);
 
-        w.update();
+        manta_gen::ex2::tick();
 
         if (++pub_decim >= pub_every) {
             pub_decim = 0;
             Ex2CraftTelemetry telem;
-            capture_ex2_telemetry(craft, w.clock().time(), telem);
+            capture_ex2_telemetry(craft, world.clock().time(), telem);
             state_pub.put(zenoh::Bytes(telem.to_json()));
         }
 
@@ -127,5 +130,6 @@ int main() {
     }
 
     std::printf("ex2: shutting down.\n");
+    manta_gen::ex2::shutdown();
     return 0;
 }

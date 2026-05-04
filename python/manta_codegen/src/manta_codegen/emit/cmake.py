@@ -54,17 +54,20 @@ def emit_cmake_fragment(world: World, workflow: str, multi: bool = False,
     ]
     for c in unique_crafts:
         lines.append(f"    ${{manta_{name}_DIR}}/{c}_craft.cpp")
+    if composed_extra_cpps:
+        # Composed sim+filter Target: sub-harness .cpps + composed .cpp
+        # are passed in explicitly. Always part of SOURCES.
+        for f in composed_extra_cpps:
+            lines.append(f"    ${{manta_{name}_DIR}}/{f}")
+    else:
+        # Plain (single-world) harness body — always part of SOURCES so
+        # both library- and binary-workflow consumers link it. Library
+        # users include `<name>.hpp` and call `manta_gen::<name>::setup`/
+        # `tick`/`shutdown` from their own main.
+        lines.append(f"    ${{manta_{name}_DIR}}/{name}.cpp")
     if workflow == "binary":
-        if composed_extra_cpps:
-            # Composed sim+filter Target: sub-harness .cpps + composed .cpp
-            # + composed _main.cpp are passed in explicitly.
-            for f in composed_extra_cpps:
-                lines.append(f"    ${{manta_{name}_DIR}}/{f}")
-            lines.append(f"    ${{manta_{name}_DIR}}/{name}_main.cpp")
-        else:
-            # Plain (single-world) harness: <name>.cpp + <name>_main.cpp.
-            lines.append(f"    ${{manta_{name}_DIR}}/{name}.cpp")
-            lines.append(f"    ${{manta_{name}_DIR}}/{name}_main.cpp")
+        # Thin main only emitted for binary workflow.
+        lines.append(f"    ${{manta_{name}_DIR}}/{name}_main.cpp")
     lines += [
         ")",
         "",
@@ -72,12 +75,11 @@ def emit_cmake_fragment(world: World, workflow: str, multi: bool = False,
     ]
     for c in unique_crafts:
         lines.append(f"    ${{manta_{name}_DIR}}/{c}_craft.hpp")
-    if workflow == "binary":
-        if composed_extra_hpps:
-            for f in composed_extra_hpps:
-                lines.append(f"    ${{manta_{name}_DIR}}/{f}")
-        else:
-            lines.append(f"    ${{manta_{name}_DIR}}/{name}.hpp")
+    if composed_extra_hpps:
+        for f in composed_extra_hpps:
+            lines.append(f"    ${{manta_{name}_DIR}}/{f}")
+    else:
+        lines.append(f"    ${{manta_{name}_DIR}}/{name}.hpp")
     lines += [
         f"    ${{manta_{name}_DIR}}/{name}_config.h",
         ")",

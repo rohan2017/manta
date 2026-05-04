@@ -68,20 +68,20 @@ def emit(world: World,
         if workflow in ("library", "binary"):
             files[f"{n}_telemetry.hpp"] = emit_telemetry_hpp(craft)
 
-    # World-harness files (workflow="binary" only):
-    #   <world>.hpp / <world>.cpp expose the namespaced
-    #   `manta_gen::<world>::{w, scene, craft, field_<i>, planet_<i>,
-    #   tether_<i>, setup, tick}` surface for direct user inclusion.
-    #   <world>_main.cpp is a thin pacing loop on top of setup/tick.
-    # Library workflow stays craft-only — the user provides their own
-    # world setup, main, and Zenoh wiring.
+    # World-harness files: <world>.hpp / <world>.cpp expose the
+    # namespaced `manta_gen::<world>::{w, scene, craft, field_<i>,
+    # planet_<i>, tether_<i>, setup, tick, shutdown}` surface for direct
+    # user inclusion. Emitted in BOTH workflows so the user can either
+    # rely on the auto-emitted main (binary) or write their own
+    # controller around setup/tick (library — see ex2/ex3).
+    # <world>_main.cpp is the thin pacer; binary-only.
     world_name = world.name
     files[f"{world_name}_config.h"] = emit_config_h(world)
     files[f"{world_name}.cmake"]    = emit_cmake_fragment(
         world, workflow=workflow, multi=multi)
+    files[f"{world_name}.hpp"]      = emit_world_hpp(world)
+    files[f"{world_name}.cpp"]      = emit_world_cpp(world)
     if workflow == "binary":
-        files[f"{world_name}.hpp"]      = emit_world_hpp(world)
-        files[f"{world_name}.cpp"]      = emit_world_cpp(world)
         files[f"{world_name}_main.cpp"] = emit_world_main_cpp(world)
 
     for filename, contents in files.items():
