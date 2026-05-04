@@ -258,290 +258,50 @@ def _first_mag_field_var(world, var_for_id: dict[int, str] | None = None) -> str
     return None
 
 
-def _filter_construction(kind: str, filter_obj, primary_class_tmpl: str,
+def _filter_construction(kind: str, filter_obj, num_crafts: int,
                          filter_var: str, meas_dim: int) -> tuple[str, str]:
     """Return (header_include_line, ctor_line) for the filter wrapper.
 
-    EKF instantiates `WorldEKF<EstCraftT, MeasDim>` (template-template
-    parameter — the templated craft class is passed verbatim). UKF
-    uses `WorldUKFOf<EstCraft<double>, MeasDim>` so non-templated
-    crafts work too — the codegen always picks the `<double>` form
-    for a templated craft.
+    Both EKF and UKF now take `<NumCrafts, MeasDim>` template args. The
+    crafts are bound at runtime via `ekf.bind(...)`, so the wrapper type
+    no longer mentions a specific craft class.
     """
     if kind == "ekf":
         return (
             "#include \"manta/estimation/world_ekf.hpp\"",
-            f"manta::estimation::WorldEKF<{primary_class_tmpl}, {meas_dim}> "
+            f"manta::estimation::WorldEKF<{num_crafts}, {meas_dim}> "
             f"{filter_var};",
         )
     if kind == "ukf":
-        # WorldUKFOf takes a concrete type. Use Tmpl<double> when the craft
-        # is scalar-templated; otherwise the class name is the concrete
-        # craft itself (no <Scalar>).
-        # We pass the templated form here because `class_name_for_craft + 'T'`
-        # refers to the templated alias. For non-templated crafts the
-        # caller passes the plain class name without the trailing 'T'.
         a, b, k = filter_obj.alpha, filter_obj.beta, filter_obj.kappa
         return (
             "#include \"manta/estimation/world_ukf.hpp\"",
-            f"manta::estimation::WorldUKFOf<{primary_class_tmpl}, {meas_dim}> "
+            f"manta::estimation::WorldUKF<{num_crafts}, {meas_dim}> "
             f"{filter_var}({_f(a)}, {_f(b)}, {_f(k)});",
         )
     raise ValueError(f"unknown filter kind {kind!r}")
 
 
-def _filter_concrete_craft_type(kind: str, craft) -> str:
-    """C++ type for the wrapped craft as seen by the filter wrapper.
-
-    EKF wants the templated alias (`Ex5EstCraftT` — the Tpl<class>),
-    UKF wants the concrete instantiation (`Ex5EstCraftT<double>` for
-    templated crafts, plain `MyCraft` for non-templated).
-    """
-    base = class_name_for_craft(craft.name)
-    if kind == "ekf":
-        return base + "T"
-    # UKF: concrete class.
-    if getattr(craft, "scalar_templated", False):
-        return base + "T<double>"
-    return base
+def _filter_real_craft_type(craft) -> str:
+    """C++ type for the Real-side craft instance owned by the filter
+    harness. Filter targets always require scalar_templated crafts; the
+    Real instance is `<name>T<double>` (not the Real=float alias)."""
+    if not getattr(craft, "scalar_templated", False):
+        raise ValueError(
+            f"Filter targets require scalar_templated=True on craft "
+            f"{craft.name!r}. Set `c.scalar_templated = True` in the "
+            f"craft descriptor.")
+    return class_name_for_craft(craft.name) + "T<double>"
 
 
-def emit_ekf_main_cpp(target, filter_obj, kind: str = "ekf") -> str:
-    """Emit the main.cpp for a Target whose driveable is an EKF or UKF.
-
-    `target` is a `manifest.Target`. `filter_obj` is the EKF/UKF
-    descriptor (the sole drive in target.drives). `kind` selects the
-    C++ wrapper type — kept as a string to keep emit_config's dispatch
-    simple. Most of the body is filter-agnostic; the differences are
-    confined to `_filter_construction` and `_filter_concrete_craft_type`.
-    """
-    world = filter_obj.world
-    if not world.crafts:
-        raise RuntimeError(
-            f"emit_{kind}_main_cpp: filter's wrapped world has no crafts")
-    if len(world.crafts) > 1:
-        raise NotImplementedError(
-            f"emit_{kind}_main_cpp: only single-craft worlds are supported in v1.")
-
-    unique_crafts = _world_unique_crafts(world)
-    primary = unique_crafts[0]
-    primary_class = _filter_concrete_craft_type(kind, primary)
-    templated_craft = bool(getattr(primary, "scalar_templated", False))
-
-    filter_var = filter_obj.cpp_var_name()           # "ekf_<id>" or "ukf_<id>"
-    craft_var = f"{filter_var}.craft()"
-
-    mag_field_var = _first_mag_field_var(world)
-
-    meas_specs: list[tuple[object, _MeasFunctor]] = []
-    for m in filter_obj.measurements:
-        part_var = f"{craft_var}.{m.name}()"
-        spec = _MeasFunctor.for_part(m, filter_var, part_var,
-                                     mag_field_var=mag_field_var)
-        meas_specs.append((m, spec))
-
-    meas_dim = sum(s.n_floats for _, s in meas_specs) if meas_specs else 1
-    if meas_dim < 1:
-        meas_dim = 1
-
-    filter_header, filter_ctor = _filter_construction(
-        kind, filter_obj, primary_class, filter_var, meas_dim)
-
-    lines: list[str] = [
-        GENERATED_BANNER,
-        "",
-        "#include <atomic>",
-        "#include <chrono>",
-        "#include <csignal>",
-        "#include <cstdint>",
-        "#include <cstdio>",
-        "#include <cstdlib>",
-        "#include <cstring>",
-        "#include <mutex>",
-        "#include <string>",
-        "#include <thread>",
-        "#include <vector>",
-        "",
-        "#include <Eigen/Core>",
-        "#include <Eigen/Geometry>",
-        "#include <zenoh.hxx>",
-        "",
-        filter_header,
-    ]
-    for c in unique_crafts:
-        lines.append(f'#include "{c.name}_craft.hpp"')
-    for f in world.fields:
-        lines.append(f'#include "{f.cpp_header}"')
-    if world.planets:
-        raise NotImplementedError(
-            "emit_ekf_main_cpp: planets in an EKF-wrapped world aren't "
-            "supported yet (WorldEKF doesn't own a Scene). Register the "
-            "needed fields directly via World.fields for now.")
-
-    lines += [
-        "",
-        "namespace {",
-        "std::atomic<bool> g_run{true};",
-        "void on_signal(int) { g_run.store(false); }",
-        "",
-        "// Tiny float-array parser for command payloads.",
-        "bool parse_float_array(std::string_view s, std::vector<float>& out) {",
-        "    out.clear();",
-        "    auto lb = s.find('['); auto rb = s.rfind(']');",
-        "    if (lb == std::string_view::npos || rb == std::string_view::npos || rb <= lb) return false;",
-        "    std::string body(s.substr(lb + 1, rb - lb - 1));",
-        "    char* p = body.data(); char* end = body.data() + body.size();",
-        "    while (p < end) {",
-        "        while (p < end && (*p == ' ' || *p == ',' || *p == '\\t' || *p == '\\n')) ++p;",
-        "        if (p >= end) break;",
-        "        char* next = nullptr;",
-        "        float v = std::strtof(p, &next);",
-        "        if (next == p) return false;",
-        "        out.push_back(v);",
-        "        p = next;",
-        "    }",
-        "    return true;",
-        "}",
-        "}",
-        "",
-    ]
-
-    # Per-sensor measurement functors emitted at file scope.
-    for m, spec in meas_specs:
-        for ln in spec.body.rstrip("\n").split("\n"):
-            lines.append(ln)
-        lines.append("")
-
-    lines += [
-        "int main() {",
-        "    std::signal(SIGINT,  on_signal);",
-        "    std::signal(SIGTERM, on_signal);",
-        "",
-        f"    constexpr float DT             = {_f(target.dt)};",
-        f"    constexpr float SIM_RATE_MULT  = {_f(target.sim_rate_mult)};",
-        f"    const     float WALL_PERIOD    = DT / SIM_RATE_MULT;",
-        "",
-        f"    {filter_ctor}",
-        "",
-        f"    using EkfT = decltype({filter_var});",
-        "    EkfT::StateVec x0 = EkfT::StateVec::Zero();",
-        "    x0(3) = 1.0;     // identity quaternion w",
-        f"    EkfT::StateCov P0 = EkfT::StateCov::Identity() * "
-        f"{_f(filter_obj.initial_covariance)};",
-        f"    EkfT::StateCov Q  = EkfT::StateCov::Identity() * "
-        f"{_f(filter_obj.process_noise)};",
-        f"    {filter_var}.set_state(x0);",
-        f"    {filter_var}.set_covariance(P0);",
-        "",
-    ]
-
-    # Per-sensor R matrices.
-    for m, spec in meas_specs:
-        diag = spec.sigma_squared_diag(m)
-        n = spec.n_floats
-        rname = f"R_{m.name}"
-        lines.append(f"    Eigen::Matrix<double, {n}, {n}> {rname} = "
-                     f"Eigen::Matrix<double, {n}, {n}>::Zero();")
-        for i, v in enumerate(diag):
-            lines.append(f"    {rname}({i}, {i}) = {_f(v)};")
-        lines.append("")
-
-    sync_field_idxs: list[int] = []
-    for i, f in enumerate(world.fields):
-        var = f"field_{i}"
-        lines.append(f"    {f.emit_construction(var)}")
-        for stmt in (f.emit_extra_setup(var) if hasattr(f, "emit_extra_setup") else []):
-            lines.append(f"    {stmt}")
-        lines.append(f"    {filter_var}.register_field({var});")
-        for base in getattr(f, "register_as", []) or []:
-            lines.append(f"    {filter_var}.template register_field<{base}>({var});")
-        if getattr(f, "synchronized", False):
-            sync_field_idxs.append(i)
-
-    lines += [
-        "    zenoh::Config cfg = zenoh::Config::create_default();",
-        "    auto session = zenoh::Session::open(std::move(cfg));",
-        "",
-    ]
-
-    bind_assignments: list[tuple[int, "Binding"]] = []
-    for i, b in enumerate(world.bindings):
-        bind_assignments.append((i, b))
-
-    for bid, b in bind_assignments:
-        if b.direction == "in":
-            _emit_binding_subscriber(lines, bid, b)
-    for bid, b in bind_assignments:
-        if b.direction == "out":
-            lines.append(
-                f"    auto pub_{bid} = session.declare_publisher("
-                f"zenoh::KeyExpr({_quote(b.topic)}));")
-
-    for i in sync_field_idxs:
-        topic = world.fields[i].sync_topic or f"manta/{world.name}/field_{i}/disturbance"
-        _emit_field_sync(lines, i, topic, world.fields[i].cpp_class)
-
-    total_bindings = len(bind_assignments)
-    kind_label = kind.upper()
-    lines += [
-        "",
-        f'    std::printf("{target.name}: ready ({kind_label}). 1 craft, '
-        f'{total_bindings} binding(s), {len(meas_specs)} measurement sensor(s).\\n");',
-        "",
-        "    auto next = std::chrono::steady_clock::now();",
-        "    const auto period = std::chrono::microseconds(int64_t(WALL_PERIOD * 1e6));",
-        "    int pub_decim = 0;",
-        "    const int pub_every = 20;  // ~50 Hz publish",
-        "",
-        "    while (g_run.load()) {",
-    ]
-
-    for bid, b in bind_assignments:
-        if b.direction == "in":
-            _emit_input_binding_apply(lines, bid, b, craft_var, filter_var,
-                                      templated_craft=templated_craft)
-
-    lines += [
-        "",
-        f"        {filter_var}.predict(DT, Q);",
-        "",
-    ]
-
-    for m, spec in meas_specs:
-        rname = f"R_{m.name}"
-        part_acc = f"{craft_var}.{m.name}()"
-        spec.emit_update_block(lines, filter_var, part_acc, rname)
-    if meas_specs:
-        lines.append("")
-
-    lines += [
-        "        if (++pub_decim >= pub_every) {",
-        "            pub_decim = 0;",
-    ]
-
-    for bid, b in bind_assignments:
-        if b.direction == "out":
-            _emit_output_binding_publish(lines, bid, b, craft_var, filter_var)
-
-    lines += [
-        "        }",
-        "",
-        "        next += period;",
-        "        std::this_thread::sleep_until(next);",
-        "    }",
-        "",
-        f"    std::printf(\"{target.name}: shutting down.\\n\");",
-        "    return 0;",
-        "}",
-        "",
-    ]
-    return "\n".join(lines)
+def _filter_jet_craft_type(craft) -> str:
+    """C++ type for the Jet-shadow craft. Same templated class, instantiated
+    on the EKF's Jet scalar (the user's harness <world>.cpp drops the
+    `Ex<...>CraftT<JetType>` symbol; we just emit the class template name
+    here and the caller appends `<JetType>`)."""
+    return class_name_for_craft(craft.name) + "T"
 
 
-def emit_ukf_main_cpp(target, ukf) -> str:
-    """Emit main.cpp for a Target whose driveable is a UKF descriptor.
-    Thin wrapper that forwards to the shared filter emitter."""
-    return emit_ekf_main_cpp(target, ukf, kind="ukf")
 
 
 # ---------------------------------------------------------------------------
@@ -582,11 +342,15 @@ def _filter_collect(target, filter_obj, kind):
 
     unique_crafts = _world_unique_crafts(world)
     primary = unique_crafts[0]
-    primary_class = _filter_concrete_craft_type(kind, primary)
-    templated_craft = bool(getattr(primary, "scalar_templated", False))
+    real_craft_type = _filter_real_craft_type(primary)
+    jet_class_tmpl  = _filter_jet_craft_type(primary)
+    num_crafts      = len(world.crafts)
 
     filter_var = filter_obj.cpp_var_name()
-    craft_var = f"{filter_var}.craft()"
+    # The Real craft is a namespace-scope variable named `craft` (or
+    # `craft_<i>` for multi-craft worlds — single-craft is the only
+    # case currently supported).
+    craft_var = "craft"
     mag_field_var = _first_mag_field_var(world)
 
     meas_specs: list[tuple[object, _MeasFunctor]] = []
@@ -600,7 +364,7 @@ def _filter_collect(target, filter_obj, kind):
     meas_dim = max(meas_dim, 1)
 
     filter_header_inc, filter_ctor = _filter_construction(
-        kind, filter_obj, primary_class, filter_var, meas_dim)
+        kind, filter_obj, num_crafts, filter_var, meas_dim)
 
     bind_assignments = list(enumerate(world.bindings))
     sync_field_idxs = [i for i, f in enumerate(world.fields)
@@ -611,8 +375,9 @@ def _filter_collect(target, filter_obj, kind):
         "name":              world.name,
         "kind":              kind,
         "unique_crafts":     unique_crafts,
-        "primary_class":     primary_class,
-        "templated_craft":   templated_craft,
+        "real_craft_type":   real_craft_type,
+        "jet_class_tmpl":    jet_class_tmpl,
+        "num_crafts":        num_crafts,
         "filter_var":        filter_var,
         "craft_var":         craft_var,
         "filter_header_inc": filter_header_inc,
@@ -626,22 +391,23 @@ def _filter_collect(target, filter_obj, kind):
 
 def emit_filter_hpp(target, filter_obj, kind: str = "ekf") -> str:
     ctx = _filter_collect(target, filter_obj, kind)
-    name           = ctx["name"]
-    unique_crafts  = ctx["unique_crafts"]
-    filter_var     = ctx["filter_var"]
-    filter_inc     = ctx["filter_header_inc"]
-    filter_ctor    = ctx["filter_ctor"]
-    primary_class  = ctx["primary_class"]
-    meas_dim       = ctx["meas_dim"]
-    world          = ctx["world"]
+    name             = ctx["name"]
+    unique_crafts    = ctx["unique_crafts"]
+    filter_var       = ctx["filter_var"]
+    filter_inc       = ctx["filter_header_inc"]
+    filter_ctor      = ctx["filter_ctor"]
+    real_craft_type  = ctx["real_craft_type"]
+    meas_dim         = ctx["meas_dim"]
+    world            = ctx["world"]
 
-    # The filter wrapper's full type, taken from the ctor line. The ctor
-    # line is "manta::estimation::CraftXxx<...> filter_var(...);" — strip
-    # the var/initializer to recover the type for the extern decl.
+    # Strip ctor args off the line to recover the bare wrapper type for
+    # the extern decl in the header.
     filter_type = filter_ctor.split(" " + filter_var, 1)[0].strip()
 
     lines: list[str] = [
         GENERATED_BANNER, CPP_INCLUDE_GUARD, "",
+        '#include "manta/core/scene.hpp"',
+        '#include "manta/core/world.hpp"',
         filter_inc,
     ]
     for c in unique_crafts:
@@ -659,20 +425,27 @@ def emit_filter_hpp(target, filter_obj, kind: str = "ekf") -> str:
         f"inline constexpr float DT             = {_f(target.dt)};",
         f"inline constexpr float SIM_RATE_MULT  = {_f(target.sim_rate_mult)};",
         "",
-        f"// {kind.upper()} wrapper. Owns the est-side craft pair (WorldEKF) or",
-        f"// single craft (WorldUKFOf) plus the {meas_dim}-dim measurement",
-        f"// state. Default-constructed; setup() initializes state + cov.",
-        f"extern {filter_type} {filter_var};",
-        "",
+        f"// Real-side simulation infrastructure. The filter holds its own",
+        f"// `manta::WorldT<double>` (estimator state lives in double, not the",
+        f"// sim's `Real`=float, for filter conditioning). The Jet shadow",
+        f"// `WorldT<Jet>` used for the Jacobian step lives file-private in",
+        f"// the .cpp.",
+        f"extern manta::WorldT<double>          w;",
+        f"extern manta::SceneT<double>*         scene;          // valid after setup()",
     ]
     if world.fields:
-        lines.append("// Registered fields. setup() populates disturbances + registers.")
         for i, f in enumerate(world.fields):
             lines.append(f"extern {f.cpp_class} field_{i};")
-        lines.append("")
+    lines.append(f"extern {real_craft_type}    craft;")
     lines += [
-        "// One-time initialization. Sets the filter's initial state +",
-        "// covariance, registers fields, opens Zenoh + declares pubs/subs.",
+        "",
+        f"// {kind.upper()} wrapper. Bound to `w` (Real) + the Jet shadow + the",
+        f"// craft pointer(s) inside setup(). State dim = 13 * num_crafts.",
+        f"extern {filter_type} {filter_var};",
+        "",
+        "// One-time initialization. Builds both worlds (Real + Jet shadow),",
+        "// registers fields, instantiates the filter wrapper + binds it to",
+        "// the worlds, opens Zenoh + declares pubs/subs.",
         "void setup();",
         "",
         f"// One step: applies in-bindings, runs predict(), then for each",
@@ -680,9 +453,7 @@ def emit_filter_hpp(target, filter_obj, kind: str = "ekf") -> str:
         f"// On every kPubEvery=20 ticks, publishes out-bindings.",
         "void tick();",
         "",
-        "// Tear down Zenoh state before main() returns. Required because",
-        "// destroying the Zenoh session at static-destruction time blows up",
-        "// inside Tokio's TLS.",
+        "// Tear down Zenoh state before main() returns.",
         "void shutdown();",
         "",
         f"}}  // namespace manta_gen::{name}",
@@ -692,19 +463,52 @@ def emit_filter_hpp(target, filter_obj, kind: str = "ekf") -> str:
 
 
 def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
+    """Emit the harness body for an EKF/UKF Target.
+
+    Layout:
+      file scope:
+        - per-sensor measurement functor structs (templated on Scalar)
+
+      namespace manta_gen::<name>:
+        - manta::WorldT<double>  w;
+        - manta::SceneT<double>* scene = nullptr;
+        - <Field> field_<i> instances
+        - <Craft>T<double>       craft;
+        - filter wrapper instance (WorldEKF<NumCrafts, MeasDim> or
+          WorldUKF<NumCrafts, MeasDim>)
+
+      anonymous namespace:
+        - parse_float_array
+        - For EKF: manta::WorldT<JetType> w_jet; SceneT<JetType>* scene_jet
+                   + Jet-instantiated craft instance
+        - g_Q, R_<sensor> blocks
+        - per-binding mutex + payload + Subscriber/Publisher
+        - field-sync handles
+        - g_session, g_pub_decim/kPubEvery
+
+      namespace manta_gen::<name>:
+        - setup()  builds both worlds (Real always, Jet only for EKF),
+                   registers fields on each, adds crafts to scenes,
+                   binds the filter wrapper, declares Zenoh subs/pubs
+        - tick()   applies in-bindings, runs predict() + per-sensor
+                   update_n<N>(), decimated publish
+        - shutdown() resets Zenoh handles in reverse-init order
+    """
     ctx = _filter_collect(target, filter_obj, kind)
     name             = ctx["name"]
     filter_var       = ctx["filter_var"]
     craft_var        = ctx["craft_var"]
     filter_ctor      = ctx["filter_ctor"]
+    real_craft_type  = ctx["real_craft_type"]
+    jet_class_tmpl   = ctx["jet_class_tmpl"]
+    num_crafts       = ctx["num_crafts"]
     meas_specs       = ctx["meas_specs"]
     bind_assignments = ctx["bind_assignments"]
     sync_field_idxs  = ctx["sync_field_idxs"]
-    templated_craft  = ctx["templated_craft"]
     world            = ctx["world"]
 
-    # Strip the `var(args);` suffix off the ctor line to get the bare type;
-    # we'll emit the full ctor line as the storage definition below.
+    needs_jet = (kind == "ekf")
+
     lines: list[str] = [
         GENERATED_BANNER, "",
         f'#include "{name}.hpp"',
@@ -731,17 +535,17 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
             lines.append(ln)
         lines.append("")
 
-    # Definitions inside the namespace.
+    # Public namespace: Real-side storage + filter wrapper.
     lines += [
         f"namespace manta_gen::{name} {{",
         "",
-        # The ctor line produced by _filter_construction is the full
-        # definition (`manta::...::CraftXxx<...> filter_var(args);`).
-        filter_ctor,
+        "manta::WorldT<double>  w{};",
+        "manta::SceneT<double>* scene = nullptr;",
     ]
     for i, f in enumerate(world.fields):
-        construction = f.emit_construction(f"field_{i}")
-        lines.append(construction)
+        lines.append(f.emit_construction(f"field_{i}"))
+    lines.append(f"{real_craft_type} {craft_var}{{}};")
+    lines.append(filter_ctor)
     lines += [
         "",
         f"}}  // namespace manta_gen::{name}",
@@ -772,23 +576,35 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
         "",
         "std::optional<zenoh::Session> g_session;",
         "",
-    ]
-
-    # State / process-noise / R blocks.
-    lines += [
         f"using EkfT = decltype(manta_gen::{name}::{filter_var});",
-        "EkfT::StateCov g_Q = EkfT::StateCov::Identity() * "
+        f"EkfT::StateCov g_Q = EkfT::StateCov::Identity() * "
         f"{_f(filter_obj.process_noise)};",
         "",
     ]
+
+    if needs_jet:
+        # Jet shadow World — required by WorldEKF for the Jacobian step.
+        lines += [
+            f"// Jet shadow world. Built identically to the Real side in",
+            f"// setup(); WorldEKF::predict drives this through autodiff to",
+            f"// extract the state-transition Jacobian.",
+            f"using JetType = EkfT::Jet;",
+            f"manta::WorldT<JetType>   w_jet{{}};",
+            f"manta::SceneT<JetType>*  scene_jet = nullptr;",
+        ]
+        for i, f in enumerate(world.fields):
+            # The same field instance is shared between Real and Jet worlds
+            # (registration is by-pointer; field state is non-templated).
+            # No separate Jet field decl needed.
+            pass
+        lines.append(f"{jet_class_tmpl}<JetType> {craft_var}_jet{{}};")
+        lines.append("")
+
     for m, spec in meas_specs:
-        diag = spec.sigma_squared_diag(m)
         n = spec.n_floats
         rname = f"R_{m.name}"
         lines.append(f"Eigen::Matrix<double, {n}, {n}> {rname} = "
                      f"Eigen::Matrix<double, {n}, {n}>::Zero();")
-        # Initializer is in setup() since the diagonal sigmas are constants.
-
     if meas_specs:
         lines.append("")
 
@@ -825,17 +641,58 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
         f"namespace manta_gen::{name} {{",
         "",
         "void setup() {",
-        f"    using EkfT = decltype({filter_var});",
-        "    EkfT::StateVec x0 = EkfT::StateVec::Zero();",
-        "    x0(3) = 1.0;     // identity quaternion w",
+        "    // ---- Real world ----",
+        "    w.clock().set_dt(DT);",
+        "    scene = &w.create_scene();",
+    ]
+    for i, f in enumerate(world.fields):
+        var = f"field_{i}"
+        for stmt in (f.emit_extra_setup(var) if hasattr(f, "emit_extra_setup") else []):
+            lines.append(f"    {stmt}")
+        lines.append(f"    w.register_field({var});")
+        for base in getattr(f, "register_as", []) or []:
+            lines.append(f"    w.register_field<{base}>({var});")
+    lines.append(f"    scene->add_craft({craft_var});")
+    lines.append("")
+
+    if needs_jet:
+        lines += [
+            "    // ---- Jet shadow world (built identically) ----",
+            "    w_jet.clock().set_dt(DT);",
+            "    scene_jet = &w_jet.create_scene();",
+        ]
+        for i, f in enumerate(world.fields):
+            # Register the SAME field instance on the Jet world. Field state
+            # is shared between Real + Jet; the Real side adds disturbances
+            # in setup, the Jet side just reads them via state_at_templated.
+            var = f"field_{i}"
+            lines.append(f"    w_jet.register_field({var});")
+            for base in getattr(f, "register_as", []) or []:
+                lines.append(f"    w_jet.register_field<{base}>({var});")
+        lines.append(f"    scene_jet->add_craft({craft_var}_jet);")
+        lines.append("")
+
+    # Filter init + bind.
+    lines += [
+        "    // ---- Filter init ----",
+        f"    EkfT::StateVec x0 = EkfT::StateVec::Zero();",
+    ]
+    for k in range(num_crafts):
+        lines.append(f"    x0({k * 13 + 3}) = 1.0;     // craft {k}: identity quaternion w")
+    lines += [
         f"    EkfT::StateCov P0 = EkfT::StateCov::Identity() * "
         f"{_f(filter_obj.initial_covariance)};",
         f"    {filter_var}.set_state(x0);",
         f"    {filter_var}.set_covariance(P0);",
-        "",
     ]
+    if needs_jet:
+        lines.append(f"    {filter_var}.bind(w_jet, "
+                     f"{{&{craft_var}}}, {{&{craft_var}_jet}});")
+    else:
+        lines.append(f"    {filter_var}.bind(w, {{&{craft_var}}});")
+    lines.append("")
 
-    # Initialize R diag entries inside setup() (file-private state init).
+    # Initialize R diag entries.
     for m, spec in meas_specs:
         diag = spec.sigma_squared_diag(m)
         rname = f"R_{m.name}"
@@ -844,21 +701,12 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
     if meas_specs:
         lines.append("")
 
-    # Field setup: extras + register on the filter wrapper.
-    for i, f in enumerate(world.fields):
-        var = f"field_{i}"
-        for stmt in (f.emit_extra_setup(var) if hasattr(f, "emit_extra_setup") else []):
-            lines.append(f"    {stmt}")
-        lines.append(f"    {filter_var}.register_field({var});")
-        for base in getattr(f, "register_as", []) or []:
-            lines.append(f"    {filter_var}.template register_field<{base}>({var});")
-
+    # Zenoh.
     lines += [
-        "",
+        "    // ---- Zenoh ----",
         "    g_session.emplace(zenoh::Session::open(zenoh::Config::create_default()));",
         "",
     ]
-
     for bid, b in bind_assignments:
         if b.direction == "in":
             _emit_subscriber_setup(lines, bid, b)
@@ -866,11 +714,9 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
             lines.append(
                 f"    pub_{bid}.emplace(g_session->declare_publisher("
                 f"zenoh::KeyExpr({_quote(b.topic)})));")
-
     for i in sync_field_idxs:
         topic = world.fields[i].sync_topic or f"manta/{name}/field_{i}/disturbance"
         _emit_field_sync_setup(lines, i, topic, world.fields[i].cpp_class)
-
     lines += ["}", ""]
 
     # ---- tick() ----
@@ -881,7 +727,7 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
         if b.direction == "in":
             _emit_input_binding_apply_indented(
                 lines, bid, b, craft_var, filter_var,
-                templated_craft=templated_craft, indent="    ")
+                templated_craft=True, indent="    ")
 
     lines += [
         "",

@@ -45,8 +45,11 @@ struct _ekf_0_dvl_meas {
 
 namespace manta_gen::ex5_est {
 
-manta::estimation::WorldEKF<Ex5EstCraftT, 9> ekf_0;
+manta::WorldT<double>  w{};
+manta::SceneT<double>* scene = nullptr;
 manta::fields::GravityField field_0{};
+Ex5EstCraftT<double> craft{};
+manta::estimation::WorldEKF<1, 9> ekf_0;
 
 }  // namespace manta_gen::ex5_est
 
@@ -75,6 +78,14 @@ std::optional<zenoh::Session> g_session;
 using EkfT = decltype(manta_gen::ex5_est::ekf_0);
 EkfT::StateCov g_Q = EkfT::StateCov::Identity() * 1e-06f;
 
+// Jet shadow world. Built identically to the Real side in
+// setup(); WorldEKF::predict drives this through autodiff to
+// extract the state-transition Jacobian.
+using JetType = EkfT::Jet;
+manta::WorldT<JetType>   w_jet{};
+manta::SceneT<JetType>*  scene_jet = nullptr;
+Ex5EstCraftT<JetType> craft_jet{};
+
 Eigen::Matrix<double, 6, 6> R_imu = Eigen::Matrix<double, 6, 6>::Zero();
 Eigen::Matrix<double, 3, 3> R_dvl = Eigen::Matrix<double, 3, 3>::Zero();
 
@@ -88,12 +99,25 @@ constexpr int kPubEvery = 20;  // ~50 Hz publish
 namespace manta_gen::ex5_est {
 
 void setup() {
-    using EkfT = decltype(ekf_0);
+    // ---- Real world ----
+    w.clock().set_dt(DT);
+    scene = &w.create_scene();
+    w.register_field(field_0);
+    scene->add_craft(craft);
+
+    // ---- Jet shadow world (built identically) ----
+    w_jet.clock().set_dt(DT);
+    scene_jet = &w_jet.create_scene();
+    w_jet.register_field(field_0);
+    scene_jet->add_craft(craft_jet);
+
+    // ---- Filter init ----
     EkfT::StateVec x0 = EkfT::StateVec::Zero();
-    x0(3) = 1.0;     // identity quaternion w
+    x0(3) = 1.0;     // craft 0: identity quaternion w
     EkfT::StateCov P0 = EkfT::StateCov::Identity() * 1.0f;
     ekf_0.set_state(x0);
     ekf_0.set_covariance(P0);
+    ekf_0.bind(w_jet, {&craft}, {&craft_jet});
 
     R_imu(0, 0) = 0.0025f;
     R_imu(1, 1) = 0.0025f;
@@ -105,8 +129,7 @@ void setup() {
     R_dvl(1, 1) = 0.0004f;
     R_dvl(2, 2) = 0.0004f;
 
-    ekf_0.register_field(field_0);
-
+    // ---- Zenoh ----
     g_session.emplace(zenoh::Session::open(zenoh::Config::create_default()));
 
     pub_0.emplace(g_session->declare_publisher(zenoh::KeyExpr("manta/ex5/estimate")));
@@ -116,21 +139,21 @@ void tick() {
 
     ekf_0.predict(DT, g_Q);
 
-    if (ekf_0.craft().imu().consume_fresh()) {
+    if (craft.imu().consume_fresh()) {
         Eigen::Matrix<double, 6, 1> z;
-        z(0) = ekf_0.craft().imu().last_accel().raw()(0);
-        z(1) = ekf_0.craft().imu().last_accel().raw()(1);
-        z(2) = ekf_0.craft().imu().last_accel().raw()(2);
-        z(3) = ekf_0.craft().imu().last_gyro().raw()(0);
-        z(4) = ekf_0.craft().imu().last_gyro().raw()(1);
-        z(5) = ekf_0.craft().imu().last_gyro().raw()(2);
+        z(0) = craft.imu().last_accel().raw()(0);
+        z(1) = craft.imu().last_accel().raw()(1);
+        z(2) = craft.imu().last_accel().raw()(2);
+        z(3) = craft.imu().last_gyro().raw()(0);
+        z(4) = craft.imu().last_gyro().raw()(1);
+        z(5) = craft.imu().last_gyro().raw()(2);
         ekf_0.template update_n<6>(_ekf_0_imu_meas{}, z, R_imu);
     }
-    if (ekf_0.craft().dvl().consume_fresh()) {
+    if (craft.dvl().consume_fresh()) {
         Eigen::Matrix<double, 3, 1> z;
-        z(0) = ekf_0.craft().dvl().last_velocity().raw()(0);
-        z(1) = ekf_0.craft().dvl().last_velocity().raw()(1);
-        z(2) = ekf_0.craft().dvl().last_velocity().raw()(2);
+        z(0) = craft.dvl().last_velocity().raw()(0);
+        z(1) = craft.dvl().last_velocity().raw()(1);
+        z(2) = craft.dvl().last_velocity().raw()(2);
         ekf_0.template update_n<3>(_ekf_0_dvl_meas{}, z, R_dvl);
     }
 

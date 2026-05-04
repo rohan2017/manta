@@ -1,163 +1,246 @@
 #pragma once
 
-// WorldEKF — an EKF wired directly against a user's templated Craft class.
+// WorldEKF — an EKF wired directly against a user's templated WorldT/CraftT.
 //
-// The user authors a craft once as a class template:
+// The filter estimates the joint state of every Craft in a single World
+// simultaneously. State layout is the concatenation of each craft's 13-DOF
+// rigid-body state in the order the user binds them:
 //
-//     template <class Scalar>
-//     class MyCraft : public manta::CraftT<Scalar> {
-//     public:
-//         MyCraft() : manta::CraftT<Scalar>("my_craft") {
-//             this->root().template add<manta::parts::PointMassT<Scalar>>(
-//                 "body", Scalar(1.0));
-//             this->root().compute_params();
-//         }
-//     };
+//   [c0.p (3) | c0.q (4) | c0.v (3) | c0.ω (3) |
+//    c1.p (3) | c1.q (4) | c1.v (3) | c1.ω (3) | ... ]
 //
-// Then constructs the EKF:
+//   StateDim = 13 * NumCrafts
 //
-//     manta::estimation::WorldEKF<MyCraft, 13, 3> ekf;
-//     ekf.predict(dt);
-//     ekf.update(z, R);
+// The Jacobian step uses Ceres Jets — `Jet<double, StateDim>`. The user's
+// `WorldT<Jet>` instance, built identically to the Real-side world (same
+// crafts, same fields, same registered planet pose), runs full multi-craft
+// physics (kinematic pass, force aggregation, integration) for every Jet
+// `predict` call. Cross-craft physics (tethers, contacts, fluid coupling)
+// participates in the Jacobian for free — anything that's correct in the
+// Real World is automatically correct in the Jet World.
 //
-// Internally WorldEKF holds two instances: one with double scalars (the
-// value step), one with `ceres::Jet<double, StateDim>` (the Jacobian step).
-// Both are default-constructed (the user's craft template must be default-
-// constructible, which is the natural case when parts are added in the
-// constructor).
+// Selective Jet propagation: planets are Real-typed and shared between the
+// two worlds. Their KinematicLink<World, Planet> is cast Real→Jet
+// component-wise inside SceneT<Jet>::update with zero gradient. The EKF
+// thus treats planet pose as a non-estimated input.
 //
-// State layout: 13-DOF rigid-body state from `CraftT::RigidState`
-// (= [px py pz | qw qx qy qz | vx vy vz | wx wy wz]).
+// Performance note: today's predict is dense in `13·NumCrafts` partials per
+// Jet op. For NumCrafts ≤ ~10 this scales fine. For larger swarms a future
+// block-decomposed predict will codegen per-craft Jet seeds + stitch the
+// F matrix from blocks (using static coupling topology). See codegen
+// task #93.
 //
-// Measurement step: the user supplies a templated functor h<S>(craft) that
-// returns the predicted measurement. Typically this reads sensor parts'
-// last_*() values, which the user updates via set_measurement(...) on the
-// est-side craft from the data source.
+// Usage sketch:
+//
+//     // Build the Real world (same shape as a sim World).
+//     manta::World w_real;
+//     w_real.clock().set_dt(0.01f);
+//     auto& s_real = w_real.create_scene();
+//     w_real.register_field(gravity);
+//     MyCraft<double> craft_real;
+//     s_real.add_craft(craft_real);
+//
+//     // Build the Jet shadow World identically.
+//     using EkfT = manta::estimation::WorldEKF</*NumCrafts=*/1, /*MeasDim=*/3>;
+//     manta::WorldT<EkfT::Jet> w_jet;
+//     w_jet.clock().set_dt(0.01f);
+//     auto& s_jet = w_jet.create_scene();
+//     w_jet.register_field(gravity);   // SAME field instance — read-only
+//     MyCraft<EkfT::Jet> craft_jet;
+//     s_jet.add_craft(craft_jet);
+//
+//     // Construct the EKF and bind to both sides.
+//     EkfT ekf;
+//     ekf.bind(w_jet, {&craft_real}, {&craft_jet});
+//
+//     // Drive it.
+//     ekf.set_state(...); ekf.set_covariance(...);
+//     for (int i = 0; i < N; ++i) {
+//         ekf.predict(dt, Q);
+//         ekf.update_n<3>(some_h, z, R);
+//     }
+//
+// `craft.set_measurement(...)` writes happen on the REAL crafts the user
+// owns directly (via the namespace-scope handle the codegen exposes). The
+// Jet crafts are internal to the predict step.
 
+#include <array>
 #include <cmath>
+#include <type_traits>
+
 #include <Eigen/Core>
 #include <ceres/jet.h>
 
 #include "../core/craft.hpp"
+#include "../core/scene.hpp"
+#include "../core/world.hpp"
 #include "ekf.hpp"
 
 namespace manta::estimation {
 
-template <template <class> class CraftTpl, int MeasDim>
+template <int NumCrafts, int MeasDim>
 class WorldEKF {
+    static_assert(NumCrafts >= 1, "WorldEKF needs at least one craft");
+
 public:
-    static constexpr int StateDim = CraftT<double>::kRigidStateDim;
-    using Jet      = ceres::Jet<double, StateDim>;
-    using CraftR   = CraftTpl<double>;
-    using CraftJ   = CraftTpl<Jet>;
-    using StateVec = Eigen::Matrix<double, StateDim, 1>;
-    using StateCov = Eigen::Matrix<double, StateDim, StateDim>;
-    using MeasVec  = Eigen::Matrix<double, MeasDim,  1>;
-    using MeasCov  = Eigen::Matrix<double, MeasDim,  MeasDim>;
+    static constexpr int kCrafts        = NumCrafts;
+    static constexpr int kRigidStateDim = 13;
+    static constexpr int kStateDim      = NumCrafts * kRigidStateDim;
+
+    using Jet      = ceres::Jet<double, kStateDim>;
+    using WorldR   = WorldT<double>;
+    using WorldJ   = WorldT<Jet>;
+    using CraftR   = CraftT<double>;
+    using CraftJ   = CraftT<Jet>;
+
+    using StateVec = Eigen::Matrix<double, kStateDim, 1>;
+    using StateCov = Eigen::Matrix<double, kStateDim, kStateDim>;
+    using MeasVec  = Eigen::Matrix<double, MeasDim,   1>;
+    using MeasCov  = Eigen::Matrix<double, MeasDim,   MeasDim>;
 
     WorldEKF() = default;
 
-    // Live access to the underlying crafts. The "real" instance is what the
-    // user feeds sensor measurements into via `est.imu().set_measurement(...)`
-    // (typical pattern). The "jet" instance is internal scaffolding for
-    // Jacobian extraction; the user normally doesn't touch it.
-    CraftR&       craft()       noexcept { return craft_real_; }
-    const CraftR& craft() const noexcept { return craft_real_; }
-
-    // Register a field on BOTH internal crafts. Use this for any field the
-    // est-side parts (e.g. GravityPart) query in their update() — it must
-    // be visible to the value-step craft AND the Jacobian-step craft.
-    template <typename FieldT>
-    void register_field(FieldT& f) {
-        craft_real_.register_field(f);
-        craft_jet_.register_field(f);
+    // Bind the filter to its Jet shadow World + the matching craft pointers.
+    // Crafts must appear in the same slot order on both sides — that order
+    // is the one the state vector encodes (craft 0 = state[0..12], craft 1
+    // = state[13..25], ...).
+    //
+    // The Real World itself isn't needed by the EKF — `predict()` only ever
+    // advances the Jet world. The Real-craft pointers are kept so each
+    // post-predict state can be mirrored back into the user's Real-side
+    // crafts, keeping their `set_measurement`-fed sensor parts in sync
+    // with the filter's belief.
+    void bind(WorldJ& w_jet,
+              std::array<CraftR*, NumCrafts> real_crafts,
+              std::array<CraftJ*, NumCrafts> jet_crafts) noexcept {
+        w_jet_       = &w_jet;
+        crafts_real_ = real_crafts;
+        crafts_jet_  = jet_crafts;
     }
 
-    void set_state(const StateVec& x)      noexcept { ekf_.set_state(x); }
-    void set_covariance(const StateCov& P) noexcept { ekf_.set_covariance(P); }
+    void set_state(const StateVec& x)        noexcept { ekf_.set_state(x); }
+    void set_covariance(const StateCov& P)   noexcept { ekf_.set_covariance(P); }
 
     const StateVec& state()      const noexcept { return ekf_.state(); }
     const StateCov& covariance() const noexcept { return ekf_.covariance(); }
 
-    // Predict step: integrate the craft's dynamics forward by dt with the
-    // current EKF state as the input.
-    //   - Value step: set state on craft_real_, call evaluate(x, dt) for x_new.
-    //   - Jacobian step: set state on craft_jet_ with seeded Jets, call
-    //     evaluate, read partials off the output Jets.
+    // Predict step — drives a full Jet-typed `WorldT::update()` with seeded
+    // Jet state. Extracts the value + the kStateDim×kStateDim Jacobian. After
+    // the EKF state has advanced, mirrors back into the Real-side crafts.
+    //
+    // `dt` is the timestep in seconds. `Q` is the process-noise covariance.
     void predict(double dt, const StateCov& Q) {
-        // Build the process functor that the EKF expects: f(x, dt) → x_new.
-        // We capture a reference to the jet craft so the EKF's predict()
-        // can drive it with Jet scalars.
-        auto& jet_craft = craft_jet_;
-        auto& real_craft = craft_real_;
-        auto f = [&jet_craft, &real_craft, dt](const auto& x_arg, double /*dt_*/) {
+        if (!w_jet_) return;
+        w_jet_->clock().set_dt(static_cast<float>(dt));
+
+        auto f = [this, dt](const auto& x_arg, double /*dt_*/) {
             using S = typename std::decay_t<decltype(x_arg)>::Scalar;
-            // Dispatch on whether S is double (value path) or Jet (Jacobian path).
+            // EKF::predict always invokes f with Jet input; the inline cast
+            // covers Real inputs in case a unit test or future call site
+            // wants the value path standalone.
             if constexpr (std::is_same_v<S, double>) {
-                return real_craft.evaluate(x_arg, S(dt));
+                Eigen::Matrix<double, kStateDim, 1> y;
+                // Manual evaluation against per-craft real instances when
+                // available — but predict always goes through Jet. This
+                // branch isn't normally exercised.
+                for (int k = 0; k < NumCrafts; ++k) {
+                    typename CraftR::RigidState xk;
+                    for (int i = 0; i < 13; ++i) xk(i) = x_arg(13*k + i);
+                    auto y_k = crafts_real_[k]->evaluate(xk, S(dt));
+                    for (int i = 0; i < 13; ++i) y(13*k + i) = y_k(i);
+                }
+                return y;
             } else {
-                // S == Jet: route through craft_jet_.
-                typename CraftJ::RigidState x_jet;
-                for (int i = 0; i < StateDim; ++i) x_jet(i) = x_arg(i);
-                auto y_jet = jet_craft.evaluate(x_jet, S(dt));
-                Eigen::Matrix<S, StateDim, 1> y;
-                for (int i = 0; i < StateDim; ++i) y(i) = y_jet(i);
+                // Jet path — write each craft's state slice, advance the
+                // entire Jet world, read each craft's new state slice.
+                for (int k = 0; k < NumCrafts; ++k) {
+                    typename CraftJ::RigidState xk;
+                    for (int i = 0; i < 13; ++i) xk(i) = x_arg(13*k + i);
+                    crafts_jet_[k]->set_rigid_state(xk);
+                }
+                w_jet_->update();
+                Eigen::Matrix<S, kStateDim, 1> y;
+                for (int k = 0; k < NumCrafts; ++k) {
+                    auto xk_out = crafts_jet_[k]->get_rigid_state();
+                    for (int i = 0; i < 13; ++i) y(13*k + i) = xk_out(i);
+                }
                 return y;
             }
         };
         ekf_.predict(f, dt, Q);
+
+        // Mirror the new state back into the Real-side crafts so the user's
+        // sensor part `last_*` values, telemetry reads, and any subsequent
+        // `set_measurement` calls operate on the post-predict state.
+        for (int k = 0; k < NumCrafts; ++k) {
+            if (!crafts_real_[k]) continue;
+            typename CraftR::RigidState xk =
+                ekf_.state().template segment<kRigidStateDim>(kRigidStateDim * k);
+            crafts_real_[k]->set_rigid_state(xk);
+        }
     }
 
-    // Update step: user supplies a templated measurement functor.
-    template <class MeasureH>
-    void update(const MeasureH& h, const MeasVec& z, const MeasCov& R) {
-        ekf_.update(h, z, R);
-    }
-
-    // Per-sensor update: lets a single WorldEKF absorb measurements of
-    // varying width N (e.g. DVL=3, IMU=6, Mag=3) without instantiating
-    // separate filters. Codegen drives this from
-    //   if (ekf.craft().sensor().consume_fresh()) ekf.update_n<N>(h, z, R);
-    // patterns. Mathematically equivalent to a single fused update when
-    // sensors' R blocks are independent.
+    // Measurement update with a per-call dimension N. Lets a single EKF
+    // absorb varying-width per-sensor reads (DVL=3, IMU=6, Mag=3) without
+    // instantiating multiple filters.
     template <int N, class MeasureH>
     void update_n(const MeasureH& h,
                   const Eigen::Matrix<double, N, 1>& z,
                   const Eigen::Matrix<double, N, N>& R) {
         ekf_.template update_n<N>(h, z, R);
+
+        // Mirror updated state into Real crafts (consistent with predict's
+        // post-step mirror). Strictly only necessary when downstream code
+        // reads from the Real crafts before the next predict; cheap enough
+        // to do unconditionally.
+        for (int k = 0; k < NumCrafts; ++k) {
+            if (!crafts_real_[k]) continue;
+            typename CraftR::RigidState xk =
+                ekf_.state().template segment<kRigidStateDim>(kRigidStateDim * k);
+            crafts_real_[k]->set_rigid_state(xk);
+        }
     }
 
-    // Codegen-friendly accessors for the rigid-state slices. Output
-    // BoundSignals on the Python EKF descriptor read these via
-    //     ekf_<id>.position()(i)  /  .orientation()(i)  /  .vel_linear()(i)
-    // / .vel_angular()(i) / .full_state()(i)
-    // and the corresponding `_stddev()` variants.
-    Eigen::Matrix<double, 3, 1> position() const noexcept {
-        return ekf_.state().template segment<3>(0);
+    // Single-measurement convenience overload for callers that fixed
+    // MeasDim at template-construction time.
+    template <class MeasureH>
+    void update(const MeasureH& h, const MeasVec& z, const MeasCov& R) {
+        update_n<MeasDim>(h, z, R);
     }
-    Eigen::Matrix<double, 4, 1> orientation() const noexcept {
-        return ekf_.state().template segment<4>(3);
+
+    // ---- Per-craft slice accessors ----
+    // craft_idx defaults to 0 for backward-compat with single-craft callers.
+    Eigen::Matrix<double, 3, 1> position(int craft_idx = 0) const noexcept {
+        return ekf_.state().template segment<3>(craft_idx * kRigidStateDim + 0);
     }
-    Eigen::Matrix<double, 3, 1> vel_linear() const noexcept {
-        return ekf_.state().template segment<3>(7);
+    Eigen::Matrix<double, 4, 1> orientation(int craft_idx = 0) const noexcept {
+        return ekf_.state().template segment<4>(craft_idx * kRigidStateDim + 3);
     }
-    Eigen::Matrix<double, 3, 1> vel_angular() const noexcept {
-        return ekf_.state().template segment<3>(10);
+    Eigen::Matrix<double, 3, 1> vel_linear(int craft_idx = 0) const noexcept {
+        return ekf_.state().template segment<3>(craft_idx * kRigidStateDim + 7);
+    }
+    Eigen::Matrix<double, 3, 1> vel_angular(int craft_idx = 0) const noexcept {
+        return ekf_.state().template segment<3>(craft_idx * kRigidStateDim + 10);
     }
     const StateVec& full_state() const noexcept { return ekf_.state(); }
 
-    Eigen::Matrix<double, 3, 1> position_stddev() const noexcept {
-        return diag_stddev_segment<3>(0);
+    Eigen::Matrix<double, 3, 1> position_stddev(int craft_idx = 0) const noexcept {
+        return diag_stddev_segment<3>(craft_idx * kRigidStateDim + 0);
     }
-    Eigen::Matrix<double, 4, 1> orientation_stddev() const noexcept {
-        return diag_stddev_segment<4>(3);
+    Eigen::Matrix<double, 4, 1> orientation_stddev(int craft_idx = 0) const noexcept {
+        return diag_stddev_segment<4>(craft_idx * kRigidStateDim + 3);
     }
-    Eigen::Matrix<double, 3, 1> vel_linear_stddev() const noexcept {
-        return diag_stddev_segment<3>(7);
+    Eigen::Matrix<double, 3, 1> vel_linear_stddev(int craft_idx = 0) const noexcept {
+        return diag_stddev_segment<3>(craft_idx * kRigidStateDim + 7);
     }
-    Eigen::Matrix<double, 3, 1> vel_angular_stddev() const noexcept {
-        return diag_stddev_segment<3>(10);
+    Eigen::Matrix<double, 3, 1> vel_angular_stddev(int craft_idx = 0) const noexcept {
+        return diag_stddev_segment<3>(craft_idx * kRigidStateDim + 10);
     }
+
+    // Per-craft handle. Useful in measurement functors that read sensor
+    // last_* values from a specific Real craft.
+    CraftR&       craft(int idx = 0)       noexcept { return *crafts_real_[idx]; }
+    const CraftR& craft(int idx = 0) const noexcept { return *crafts_real_[idx]; }
 
 private:
     template <int N>
@@ -171,9 +254,10 @@ private:
         return out;
     }
 
-    CraftR              craft_real_;
-    CraftJ              craft_jet_;
-    EKF<StateDim, MeasDim> ekf_;
+    WorldJ*                          w_jet_       = nullptr;
+    std::array<CraftR*, NumCrafts>   crafts_real_{};
+    std::array<CraftJ*, NumCrafts>   crafts_jet_ {};
+    EKF<kStateDim, MeasDim>          ekf_;
 };
 
 } // namespace manta::estimation

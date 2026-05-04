@@ -1,9 +1,8 @@
 """ukf_smoke — minimal UKF-codegen smoke target.
 
-Exercises the UKF codegen path end-to-end: Mass + IMU + DVL on a
-non-templated craft (UKF doesn't require scalar templating), wrapped in
-a `manta::estimation::WorldUKFOf<...>`. Mostly here so CI catches
-regressions in the UKF emit path.
+Exercises the UKF codegen path end-to-end: Mass + IMU + DVL wrapped in
+`manta::estimation::WorldUKF<NumCrafts, MeasDim>`. Mostly here so CI
+catches regressions in the UKF emit path.
 
 Codegen:
 
@@ -19,7 +18,10 @@ from manta_codegen.parts import DVL, IMU, Mass
 
 def make_config() -> MantaConfig:
     c = Craft("ukf_smoke")
-    # No scalar_templated=True — UKF works on plain crafts.
+    # Filter targets need scalar_templated=True so the codegen can
+    # instantiate the craft as `<double>` for the WorldUKF's Real-side
+    # World (and `<Jet>` would be the EKF case — UKF stays Real-only).
+    c.scalar_templated = True
     c.add(Mass("body", mass=1.0, moi=(0.05, 0.05, 0.05)))
     imu = IMU("imu", accel_sigma=0.05, gyro_sigma=0.005)
     dvl = DVL("dvl", velocity_sigma=0.02)

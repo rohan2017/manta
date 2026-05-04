@@ -63,8 +63,11 @@ struct _ekf_0_mag_meas {
 
 namespace manta_gen::ex8_est {
 
-manta::estimation::WorldEKF<Ex8EstCraftT, 12> ekf_0;
+manta::WorldT<double>  w{};
+manta::SceneT<double>* scene = nullptr;
 manta::fields::MagField field_0{};
+Ex8EstCraftT<double> craft{};
+manta::estimation::WorldEKF<1, 12> ekf_0;
 
 }  // namespace manta_gen::ex8_est
 
@@ -93,6 +96,14 @@ std::optional<zenoh::Session> g_session;
 using EkfT = decltype(manta_gen::ex8_est::ekf_0);
 EkfT::StateCov g_Q = EkfT::StateCov::Identity() * 1e-05f;
 
+// Jet shadow world. Built identically to the Real side in
+// setup(); WorldEKF::predict drives this through autodiff to
+// extract the state-transition Jacobian.
+using JetType = EkfT::Jet;
+manta::WorldT<JetType>   w_jet{};
+manta::SceneT<JetType>*  scene_jet = nullptr;
+Ex8EstCraftT<JetType> craft_jet{};
+
 Eigen::Matrix<double, 6, 6> R_imu = Eigen::Matrix<double, 6, 6>::Zero();
 Eigen::Matrix<double, 3, 3> R_dvl = Eigen::Matrix<double, 3, 3>::Zero();
 Eigen::Matrix<double, 3, 3> R_mag = Eigen::Matrix<double, 3, 3>::Zero();
@@ -107,12 +118,26 @@ constexpr int kPubEvery = 20;  // ~50 Hz publish
 namespace manta_gen::ex8_est {
 
 void setup() {
-    using EkfT = decltype(ekf_0);
+    // ---- Real world ----
+    w.clock().set_dt(DT);
+    scene = &w.create_scene();
+    field_0.add(manta::fields::MagField::Disturbance::uniform(manta::geom::Vec3<manta::SceneFrame>{2.5e-05f, 0.0f, -4.5e-05f}), manta::fields::PERSISTENT);
+    w.register_field(field_0);
+    scene->add_craft(craft);
+
+    // ---- Jet shadow world (built identically) ----
+    w_jet.clock().set_dt(DT);
+    scene_jet = &w_jet.create_scene();
+    w_jet.register_field(field_0);
+    scene_jet->add_craft(craft_jet);
+
+    // ---- Filter init ----
     EkfT::StateVec x0 = EkfT::StateVec::Zero();
-    x0(3) = 1.0;     // identity quaternion w
+    x0(3) = 1.0;     // craft 0: identity quaternion w
     EkfT::StateCov P0 = EkfT::StateCov::Identity() * 1.0f;
     ekf_0.set_state(x0);
     ekf_0.set_covariance(P0);
+    ekf_0.bind(w_jet, {&craft}, {&craft_jet});
 
     R_imu(0, 0) = 0.0025f;
     R_imu(1, 1) = 0.0025f;
@@ -127,9 +152,7 @@ void setup() {
     R_mag(1, 1) = 4e-14f;
     R_mag(2, 2) = 4e-14f;
 
-    field_0.add(manta::fields::MagField::Disturbance::uniform(manta::geom::Vec3<manta::SceneFrame>{2.5e-05f, 0.0f, -4.5e-05f}), manta::fields::PERSISTENT);
-    ekf_0.register_field(field_0);
-
+    // ---- Zenoh ----
     g_session.emplace(zenoh::Session::open(zenoh::Config::create_default()));
 
     pub_0.emplace(g_session->declare_publisher(zenoh::KeyExpr("manta/ex8/estimate")));
@@ -139,33 +162,33 @@ void tick() {
 
     ekf_0.predict(DT, g_Q);
 
-    if (ekf_0.craft().imu().consume_fresh()) {
+    if (craft.imu().consume_fresh()) {
         Eigen::Matrix<double, 6, 1> z;
-        z(0) = ekf_0.craft().imu().last_accel().raw()(0);
-        z(1) = ekf_0.craft().imu().last_accel().raw()(1);
-        z(2) = ekf_0.craft().imu().last_accel().raw()(2);
-        z(3) = ekf_0.craft().imu().last_gyro().raw()(0);
-        z(4) = ekf_0.craft().imu().last_gyro().raw()(1);
-        z(5) = ekf_0.craft().imu().last_gyro().raw()(2);
+        z(0) = craft.imu().last_accel().raw()(0);
+        z(1) = craft.imu().last_accel().raw()(1);
+        z(2) = craft.imu().last_accel().raw()(2);
+        z(3) = craft.imu().last_gyro().raw()(0);
+        z(4) = craft.imu().last_gyro().raw()(1);
+        z(5) = craft.imu().last_gyro().raw()(2);
         ekf_0.template update_n<6>(_ekf_0_imu_meas{}, z, R_imu);
     }
-    if (ekf_0.craft().dvl().consume_fresh()) {
+    if (craft.dvl().consume_fresh()) {
         Eigen::Matrix<double, 3, 1> z;
-        z(0) = ekf_0.craft().dvl().last_velocity().raw()(0);
-        z(1) = ekf_0.craft().dvl().last_velocity().raw()(1);
-        z(2) = ekf_0.craft().dvl().last_velocity().raw()(2);
+        z(0) = craft.dvl().last_velocity().raw()(0);
+        z(1) = craft.dvl().last_velocity().raw()(1);
+        z(2) = craft.dvl().last_velocity().raw()(2);
         ekf_0.template update_n<3>(_ekf_0_dvl_meas{}, z, R_dvl);
     }
-    if (ekf_0.craft().mag().consume_fresh()) {
+    if (craft.mag().consume_fresh()) {
         _ekf_0_mag_meas _h;
         auto _p_d = ekf_0.position();
         Eigen::Matrix<float, 3, 1> _p_f(float(_p_d(0)), float(_p_d(1)), float(_p_d(2)));
         auto _b_now = field_0.state_at(manta::geom::Vec3<manta::SceneFrame>::from_raw(_p_f));
         _h.b_scene_now << double(_b_now.x()), double(_b_now.y()), double(_b_now.z());
         Eigen::Matrix<double, 3, 1> z;
-        z(0) = ekf_0.craft().mag().last_b().raw()(0);
-        z(1) = ekf_0.craft().mag().last_b().raw()(1);
-        z(2) = ekf_0.craft().mag().last_b().raw()(2);
+        z(0) = craft.mag().last_b().raw()(0);
+        z(1) = craft.mag().last_b().raw()(1);
+        z(2) = craft.mag().last_b().raw()(2);
         ekf_0.template update_n<3>(_h, z, R_mag);
     }
 

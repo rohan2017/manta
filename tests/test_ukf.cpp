@@ -111,8 +111,15 @@ struct PositionMeas3D_U {
 }  // namespace
 
 TEST_CASE("WorldUKF: free-body propagation matches kinematic prediction") {
-    using Ukf = WorldUKF<FreeBodyCraftU, 3>;
+    using Ukf = manta::estimation::WorldUKF</*NumCrafts=*/1, /*MeasDim=*/3>;
     Ukf ukf;
+
+    manta::WorldT<double> w_real;
+    w_real.clock().set_dt(0.01f);
+    auto& s = w_real.create_scene();
+    FreeBodyCraftU<double> craft;
+    s.add_craft(craft);
+    ukf.bind(w_real, {&craft});
 
     Ukf::StateVec x0; x0.setZero();
     x0(3) = 1.0;        // identity quaternion w
@@ -122,7 +129,6 @@ TEST_CASE("WorldUKF: free-body propagation matches kinematic prediction") {
     ukf.set_covariance(P0);
 
     Ukf::StateCov Q = Ukf::StateCov::Identity() * 1e-6;
-    Ukf::MeasCov  R = Ukf::MeasCov::Identity()  * 1e-4;
 
     constexpr double dt = 0.01;
     for (int i = 0; i < 100; ++i) ukf.predict(dt, Q);
@@ -135,8 +141,15 @@ TEST_CASE("WorldUKF: free-body propagation matches kinematic prediction") {
 }
 
 TEST_CASE("WorldUKF: position measurement pulls state toward observation") {
-    using Ukf = WorldUKF<FreeBodyCraftU, 3>;
+    using Ukf = manta::estimation::WorldUKF</*NumCrafts=*/1, /*MeasDim=*/3>;
     Ukf ukf;
+
+    manta::WorldT<double> w_real;
+    w_real.clock().set_dt(0.01f);
+    auto& s = w_real.create_scene();
+    FreeBodyCraftU<double> craft;
+    s.add_craft(craft);
+    ukf.bind(w_real, {&craft});
 
     Ukf::StateVec x0; x0.setZero();
     x0(3) = 1.0;
@@ -155,37 +168,9 @@ TEST_CASE("WorldUKF: position measurement pulls state toward observation") {
     CHECK(std::abs(x(0)) < 0.5);
 }
 
-TEST_CASE("WorldUKF: works with a non-templated Craft via WorldUKFOf") {
-    // Minimal non-templated craft: inherits manta::Craft (= CraftT<Real> =
-    // CraftT<float>) and adds a Mass. Demonstrates that UKF doesn't
-    // require Scalar templating; WorldUKFOf casts state at the float boundary.
-    //
-    // Key parameter choice: alpha=1.0 keeps sigma weights well-conditioned
-    // so float-precision craft eval doesn't get crushed by weight cancellation.
-    // (Default alpha=1e-3 produces weights with magnitude ~1e6, which is fine
-    // in double but eats float's 7 digits of precision.)
-    class PlainCraft : public manta::Craft {
-    public:
-        PlainCraft() : manta::Craft("plain") {
-            this->root().add<manta::parts::Mass>("body", 1.0f);
-            this->root().compute_params();
-        }
-    };
-
-    using Ukf = manta::estimation::WorldUKFOf<PlainCraft, 3>;
-    Ukf ukf(/*alpha=*/1.0, /*beta=*/2.0, /*kappa=*/0.0);
-
-    Ukf::StateVec x0; x0.setZero();
-    x0(3) = 1.0;
-    x0(7) = 1.0;
-    ukf.set_state(x0);
-    ukf.set_covariance(Ukf::StateCov::Identity() * 0.01);
-
-    Ukf::StateCov Q = Ukf::StateCov::Identity() * 1e-6;
-    constexpr double dt = 0.01;
-    for (int i = 0; i < 50; ++i) ukf.predict(dt, Q);
-
-    // After 0.5s at 1 m/s, p_x ≈ 0.5. Tolerance loose because float eval
-    // accumulates a few mm of drift over 50 steps.
-    CHECK(std::abs(ukf.state()(0) - 0.5) < 5e-3);
-}
+// Note: the historical "non-templated craft via WorldUKFOf" test has been
+// removed. With the new architecture, every filter-target craft must be
+// scalar_templated (instantiated as <double> for both EKF and UKF Real
+// worlds). The Scene/World templating ripples through to require this.
+// Existing non-templated user crafts can opt in by setting
+// `scalar_templated=True` on the descriptor.

@@ -4,6 +4,8 @@
 #pragma once
 
 
+#include "manta/core/scene.hpp"
+#include "manta/core/world.hpp"
 #include "manta/estimation/world_ekf.hpp"
 #include "ex8_est_craft.hpp"
 #include "manta/fields/mag_field.hpp"
@@ -14,16 +16,23 @@ namespace manta_gen::ex8_est {
 inline constexpr float DT             = 0.001f;
 inline constexpr float SIM_RATE_MULT  = 1.0f;
 
-// EKF wrapper. Owns the est-side craft pair (WorldEKF) or
-// single craft (WorldUKFOf) plus the 12-dim measurement
-// state. Default-constructed; setup() initializes state + cov.
-extern manta::estimation::WorldEKF<Ex8EstCraftT, 12> ekf_0;
-
-// Registered fields. setup() populates disturbances + registers.
+// Real-side simulation infrastructure. The filter holds its own
+// `manta::WorldT<double>` (estimator state lives in double, not the
+// sim's `Real`=float, for filter conditioning). The Jet shadow
+// `WorldT<Jet>` used for the Jacobian step lives file-private in
+// the .cpp.
+extern manta::WorldT<double>          w;
+extern manta::SceneT<double>*         scene;          // valid after setup()
 extern manta::fields::MagField field_0;
+extern Ex8EstCraftT<double>    craft;
 
-// One-time initialization. Sets the filter's initial state +
-// covariance, registers fields, opens Zenoh + declares pubs/subs.
+// EKF wrapper. Bound to `w` (Real) + the Jet shadow + the
+// craft pointer(s) inside setup(). State dim = 13 * num_crafts.
+extern manta::estimation::WorldEKF<1, 12> ekf_0;
+
+// One-time initialization. Builds both worlds (Real + Jet shadow),
+// registers fields, instantiates the filter wrapper + binds it to
+// the worlds, opens Zenoh + declares pubs/subs.
 void setup();
 
 // One step: applies in-bindings, runs predict(), then for each
@@ -31,9 +40,7 @@ void setup();
 // On every kPubEvery=20 ticks, publishes out-bindings.
 void tick();
 
-// Tear down Zenoh state before main() returns. Required because
-// destroying the Zenoh session at static-destruction time blows up
-// inside Tokio's TLS.
+// Tear down Zenoh state before main() returns.
 void shutdown();
 
 }  // namespace manta_gen::ex8_est

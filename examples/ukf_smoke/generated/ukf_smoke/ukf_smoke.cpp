@@ -45,7 +45,10 @@ struct _ukf_0_dvl_meas {
 
 namespace manta_gen::ukf_smoke {
 
-manta::estimation::WorldUKFOf<UkfSmokeCraft, 9> ukf_0(0.001f, 2.0f, 0.0f);
+manta::WorldT<double>  w{};
+manta::SceneT<double>* scene = nullptr;
+UkfSmokeCraftT<double> craft{};
+manta::estimation::WorldUKF<1, 9> ukf_0(0.001f, 2.0f, 0.0f);
 
 }  // namespace manta_gen::ukf_smoke
 
@@ -93,12 +96,18 @@ constexpr int kPubEvery = 20;  // ~50 Hz publish
 namespace manta_gen::ukf_smoke {
 
 void setup() {
-    using EkfT = decltype(ukf_0);
+    // ---- Real world ----
+    w.clock().set_dt(DT);
+    scene = &w.create_scene();
+    scene->add_craft(craft);
+
+    // ---- Filter init ----
     EkfT::StateVec x0 = EkfT::StateVec::Zero();
-    x0(3) = 1.0;     // identity quaternion w
+    x0(3) = 1.0;     // craft 0: identity quaternion w
     EkfT::StateCov P0 = EkfT::StateCov::Identity() * 1.0f;
     ukf_0.set_state(x0);
     ukf_0.set_covariance(P0);
+    ukf_0.bind(w, {&craft});
 
     R_imu(0, 0) = 0.0025f;
     R_imu(1, 1) = 0.0025f;
@@ -110,7 +119,7 @@ void setup() {
     R_dvl(1, 1) = 0.0004f;
     R_dvl(2, 2) = 0.0004f;
 
-
+    // ---- Zenoh ----
     g_session.emplace(zenoh::Session::open(zenoh::Config::create_default()));
 
     bind_0_sub.emplace(g_session->declare_subscriber(
@@ -139,32 +148,32 @@ void setup() {
 void tick() {
     { std::lock_guard<std::mutex> lk(bind_0_mtx);
       if (bind_0_payload.size() >= 6) {
-          ukf_0.craft().imu().set_measurement(manta::geom::Vec3<manta::PartFrame>{bind_0_payload[0], bind_0_payload[1], bind_0_payload[2]}, manta::geom::Vec3<manta::PartFrame>{bind_0_payload[3], bind_0_payload[4], bind_0_payload[5]});    // member: set_measurement
+          craft.imu().set_measurement(manta::geom::Vec3<manta::PartFrame, double>{bind_0_payload[0], bind_0_payload[1], bind_0_payload[2]}, manta::geom::Vec3<manta::PartFrame, double>{bind_0_payload[3], bind_0_payload[4], bind_0_payload[5]});    // member: set_measurement
           bind_0_payload.clear();
       } }
     { std::lock_guard<std::mutex> lk(bind_1_mtx);
       if (bind_1_payload.size() >= 3) {
-          ukf_0.craft().dvl().set_measurement(manta::geom::Vec3<manta::PartFrame>{bind_1_payload[0], bind_1_payload[1], bind_1_payload[2]});    // member: set_measurement
+          craft.dvl().set_measurement(manta::geom::Vec3<manta::PartFrame, double>{bind_1_payload[0], bind_1_payload[1], bind_1_payload[2]});    // member: set_measurement
           bind_1_payload.clear();
       } }
 
     ukf_0.predict(DT, g_Q);
 
-    if (ukf_0.craft().imu().consume_fresh()) {
+    if (craft.imu().consume_fresh()) {
         Eigen::Matrix<double, 6, 1> z;
-        z(0) = ukf_0.craft().imu().last_accel().raw()(0);
-        z(1) = ukf_0.craft().imu().last_accel().raw()(1);
-        z(2) = ukf_0.craft().imu().last_accel().raw()(2);
-        z(3) = ukf_0.craft().imu().last_gyro().raw()(0);
-        z(4) = ukf_0.craft().imu().last_gyro().raw()(1);
-        z(5) = ukf_0.craft().imu().last_gyro().raw()(2);
+        z(0) = craft.imu().last_accel().raw()(0);
+        z(1) = craft.imu().last_accel().raw()(1);
+        z(2) = craft.imu().last_accel().raw()(2);
+        z(3) = craft.imu().last_gyro().raw()(0);
+        z(4) = craft.imu().last_gyro().raw()(1);
+        z(5) = craft.imu().last_gyro().raw()(2);
         ukf_0.template update_n<6>(_ukf_0_imu_meas{}, z, R_imu);
     }
-    if (ukf_0.craft().dvl().consume_fresh()) {
+    if (craft.dvl().consume_fresh()) {
         Eigen::Matrix<double, 3, 1> z;
-        z(0) = ukf_0.craft().dvl().last_velocity().raw()(0);
-        z(1) = ukf_0.craft().dvl().last_velocity().raw()(1);
-        z(2) = ukf_0.craft().dvl().last_velocity().raw()(2);
+        z(0) = craft.dvl().last_velocity().raw()(0);
+        z(1) = craft.dvl().last_velocity().raw()(1);
+        z(2) = craft.dvl().last_velocity().raw()(2);
         ukf_0.template update_n<3>(_ukf_0_dvl_meas{}, z, R_dvl);
     }
 

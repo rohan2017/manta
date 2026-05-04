@@ -1,137 +1,174 @@
 #pragma once
 
-// WorldUKF — a UKF wired directly against a user's Craft.
+// WorldUKF — a UKF wired against a user's `manta::WorldT<double>` (the
+// sim/Real World). Estimates the joint state of every Craft in the World
+// via sigma-point propagation. State layout matches WorldEKF:
+//
+//   [c0.p (3) | c0.q (4) | c0.v (3) | c0.ω (3) |
+//    c1.p (3) | c1.q (4) | c1.v (3) | c1.ω (3) | ... ]
+//
+//   StateDim = 13 * NumCrafts
 //
 // Compared to WorldEKF, WorldUKF has a notable structural advantage: it
-// does NOT require the craft to be Scalar-templated, because the unscented
-// transform doesn't compute Jacobians via Jets. The user can pass either
-// a templated `MyCraftT<double>` (same authoring style as WorldEKF) or a
-// plain non-templated `manta::Craft` subclass — both work as long as the
-// craft exposes `evaluate(state, dt)` returning a 13-DOF rigid state.
+// does NOT need a Jet-shadow World. Every sigma point is a vector of
+// `double`s, propagated through the same Real `WorldT<double>`. The
+// craft scalar can be either `double` (templated craft) or a non-
+// templated `manta::Craft` — both work as long as `evaluate(state, dt)`
+// is available.
 //
-// API mirrors WorldEKF as closely as possible so callers can swap
-// estimators by changing the type:
+// Trade-offs vs EKF:
+//   * No autodiff, no Jet path — fewer compile-time templates, faster
+//     builds, parts that aren't Scalar-templated still work.
+//   * 2*StateDim+1 forward evaluations of the entire World per predict;
+//     EKF does one Jet-instantiated update. For NumCrafts crafts each
+//     with ~5 parts, the ratio depends on which is cheaper; both scale
+//     well to roughly 10 crafts.
+//   * Captures nonlinearity to second order; EKF only to first order.
 //
-//   manta::estimation::WorldUKF<MyCraft, 3> ukf;            // 3-DoF measurement
-//   ukf.predict(dt, Q);
-//   ukf.update(h, z, R);
-//
-// Internally WorldUKF holds a single CraftR (default-constructed) and a
-// UKF<13, MeasDim>. The 2N+1 sigma points are propagated by repeatedly
-// calling the same craft's evaluate() — cheap if evaluate() is cheap.
-//
-// State layout: 13-DOF rigid-body state from `CraftT::RigidState`.
-//
-// Caveat: the rigid state lives on R^7 × R^6 (with a quaternion in slots
-// 3–6), not pure R^13. We do straight R^13 sigma-point arithmetic and rely
-// on `CraftT::set_rigid_state` to renormalize the quaternion at each
-// evaluate() call. For small covariances and reasonable sigma spreads this
-// is fine; it's the same compromise EKF makes.
+// State layout, quaternion handling, and the bind-based API mirror
+// WorldEKF — see world_ekf.hpp for the design notes that apply to both.
 
+#include <array>
 #include <cmath>
-#include <type_traits>
 
 #include <Eigen/Core>
 
 #include "../core/craft.hpp"
+#include "../core/scene.hpp"
+#include "../core/world.hpp"
 #include "ukf.hpp"
 
 namespace manta::estimation {
 
-// Generic form: WorldUKF takes the concrete craft type directly. Works with
-// both templated (MyCraftT<double>) and non-templated (PlainCraft) crafts.
-template <class CraftType, int MeasDim>
-class WorldUKFOf {
-public:
-    static constexpr int StateDim = CraftType::kRigidStateDim;
-    using CraftR   = CraftType;
-    using StateVec = Eigen::Matrix<double, StateDim, 1>;
-    using StateCov = Eigen::Matrix<double, StateDim, StateDim>;
-    using MeasVec  = Eigen::Matrix<double, MeasDim,  1>;
-    using MeasCov  = Eigen::Matrix<double, MeasDim,  MeasDim>;
+template <int NumCrafts, int MeasDim>
+class WorldUKF {
+    static_assert(NumCrafts >= 1, "WorldUKF needs at least one craft");
 
-    explicit WorldUKFOf(double alpha = 1e-3, double beta = 2.0, double kappa = 0.0)
+public:
+    static constexpr int kCrafts        = NumCrafts;
+    static constexpr int kRigidStateDim = 13;
+    static constexpr int kStateDim      = NumCrafts * kRigidStateDim;
+
+    using WorldR   = WorldT<double>;
+    using CraftR   = CraftT<double>;
+
+    using StateVec = Eigen::Matrix<double, kStateDim, 1>;
+    using StateCov = Eigen::Matrix<double, kStateDim, kStateDim>;
+    using MeasVec  = Eigen::Matrix<double, MeasDim,   1>;
+    using MeasCov  = Eigen::Matrix<double, MeasDim,   MeasDim>;
+
+    explicit WorldUKF(double alpha = 1e-3, double beta = 2.0, double kappa = 0.0)
         : ukf_(alpha, beta, kappa) {}
 
-    CraftR&       craft()       noexcept { return craft_; }
-    const CraftR& craft() const noexcept { return craft_; }
+    // Bind to the Real World + craft pointers in slot order matching the
+    // state vector. Unlike WorldEKF, no Jet shadow is needed — sigma
+    // propagation runs through the same Real world.
+    void bind(WorldR& w_real,
+              std::array<CraftR*, NumCrafts> real_crafts) noexcept {
+        w_real_      = &w_real;
+        crafts_real_ = real_crafts;
+    }
 
-    // Register a field on the underlying craft. UKF only has one craft
-    // instance (no Jet shadow) so this is a thin pass-through.
-    template <typename FieldT>
-    void register_field(FieldT& f) { craft_.register_field(f); }
-
-    void set_state(const StateVec& x)      noexcept { ukf_.set_state(x); }
-    void set_covariance(const StateCov& P) noexcept { ukf_.set_covariance(P); }
+    void set_state(const StateVec& x)        noexcept { ukf_.set_state(x); }
+    void set_covariance(const StateCov& P)   noexcept { ukf_.set_covariance(P); }
 
     const StateVec& state()      const noexcept { return ukf_.state(); }
     const StateCov& covariance() const noexcept { return ukf_.covariance(); }
 
-    // Propagate each sigma point through craft.evaluate(x, dt). If the craft's
-    // internal Scalar isn't `double` (e.g. Craft = CraftT<float>), cast at the
-    // boundary — UKF works in double for numerical conditioning regardless.
+    // Propagate each sigma point through the entire Real World's update.
+    // Saves/restores craft state around each propagation so the World
+    // ends in the post-mean-state configuration after predict returns.
     void predict(double dt, const StateCov& Q) {
-        auto& craft = craft_;
-        using CraftScalar = typename CraftR::RigidState::Scalar;
-        auto f = [&craft, dt](const StateVec& x_in, double /*dt_*/) -> StateVec {
-            if constexpr (std::is_same_v<CraftScalar, double>) {
-                return craft.evaluate(x_in, dt);
-            } else {
-                Eigen::Matrix<CraftScalar, StateDim, 1> x_native = x_in.template cast<CraftScalar>();
-                auto y_native = craft.evaluate(x_native, CraftScalar(dt));
-                return y_native.template cast<double>();
+        if (!w_real_) return;
+        w_real_->clock().set_dt(static_cast<float>(dt));
+
+        // Save initial craft states so we can restore between sigma points.
+        std::array<typename CraftR::RigidState, NumCrafts> saved;
+        for (int k = 0; k < NumCrafts; ++k) {
+            saved[k] = crafts_real_[k]->get_rigid_state();
+        }
+
+        auto f = [this, &saved](const StateVec& x_in, double /*dt*/) -> StateVec {
+            // Reset every craft from its saved pre-predict state, then
+            // overwrite with this sigma point's values. This avoids
+            // residual cross-contamination between sigma evaluations
+            // (otherwise integrators reading stale state from the
+            // previous sigma would leak across).
+            for (int k = 0; k < NumCrafts; ++k) {
+                crafts_real_[k]->set_rigid_state(saved[k]);
+                typename CraftR::RigidState xk =
+                    x_in.template segment<kRigidStateDim>(kRigidStateDim * k);
+                crafts_real_[k]->set_rigid_state(xk);
             }
+            w_real_->update();
+            StateVec y;
+            for (int k = 0; k < NumCrafts; ++k) {
+                y.template segment<kRigidStateDim>(kRigidStateDim * k) =
+                    crafts_real_[k]->get_rigid_state();
+            }
+            return y;
         };
         ukf_.predict(f, dt, Q);
+
+        // Mirror the post-predict mean state back into the Real crafts so
+        // downstream sensor reads, telemetry, and `set_measurement` calls
+        // see the latest belief.
+        for (int k = 0; k < NumCrafts; ++k) {
+            typename CraftR::RigidState xk =
+                ukf_.state().template segment<kRigidStateDim>(kRigidStateDim * k);
+            crafts_real_[k]->set_rigid_state(xk);
+        }
     }
 
-    // Measurement step: user-supplied functor h(x) → predicted measurement.
-    // Unlike EKF, this does NOT need to be templated on Scalar — pure double.
-    template <class MeasureH>
-    void update(const MeasureH& h, const MeasVec& z, const MeasCov& R) {
-        ukf_.update(h, z, R);
-    }
-
-    // Per-sensor update: lets a single WorldUKF absorb measurements of
-    // varying width N. Codegen drives this from
-    //   if (ukf.craft().sensor().consume_fresh()) ukf.update_n<N>(h, z, R);
-    // Mathematically equivalent to a single fused update when per-sensor
-    // R blocks are independent.
     template <int N, class MeasureH>
     void update_n(const MeasureH& h,
                   const Eigen::Matrix<double, N, 1>& z,
                   const Eigen::Matrix<double, N, N>& R) {
         ukf_.template update_n<N>(h, z, R);
+        // Mirror updated mean state.
+        for (int k = 0; k < NumCrafts; ++k) {
+            if (!crafts_real_[k]) continue;
+            typename CraftR::RigidState xk =
+                ukf_.state().template segment<kRigidStateDim>(kRigidStateDim * k);
+            crafts_real_[k]->set_rigid_state(xk);
+        }
     }
 
-    // Codegen-friendly accessors for the rigid-state slices. Mirror
-    // WorldEKF so a UKF descriptor's BoundSignals route the same way.
-    Eigen::Matrix<double, 3, 1> position() const noexcept {
-        return ukf_.state().template segment<3>(0);
+    template <class MeasureH>
+    void update(const MeasureH& h, const MeasVec& z, const MeasCov& R) {
+        update_n<MeasDim>(h, z, R);
     }
-    Eigen::Matrix<double, 4, 1> orientation() const noexcept {
-        return ukf_.state().template segment<4>(3);
+
+    // ---- Per-craft slice accessors (mirror WorldEKF) ----
+    Eigen::Matrix<double, 3, 1> position(int craft_idx = 0) const noexcept {
+        return ukf_.state().template segment<3>(craft_idx * kRigidStateDim + 0);
     }
-    Eigen::Matrix<double, 3, 1> vel_linear() const noexcept {
-        return ukf_.state().template segment<3>(7);
+    Eigen::Matrix<double, 4, 1> orientation(int craft_idx = 0) const noexcept {
+        return ukf_.state().template segment<4>(craft_idx * kRigidStateDim + 3);
     }
-    Eigen::Matrix<double, 3, 1> vel_angular() const noexcept {
-        return ukf_.state().template segment<3>(10);
+    Eigen::Matrix<double, 3, 1> vel_linear(int craft_idx = 0) const noexcept {
+        return ukf_.state().template segment<3>(craft_idx * kRigidStateDim + 7);
+    }
+    Eigen::Matrix<double, 3, 1> vel_angular(int craft_idx = 0) const noexcept {
+        return ukf_.state().template segment<3>(craft_idx * kRigidStateDim + 10);
     }
     const StateVec& full_state() const noexcept { return ukf_.state(); }
 
-    Eigen::Matrix<double, 3, 1> position_stddev() const noexcept {
-        return diag_stddev_segment<3>(0);
+    Eigen::Matrix<double, 3, 1> position_stddev(int craft_idx = 0) const noexcept {
+        return diag_stddev_segment<3>(craft_idx * kRigidStateDim + 0);
     }
-    Eigen::Matrix<double, 4, 1> orientation_stddev() const noexcept {
-        return diag_stddev_segment<4>(3);
+    Eigen::Matrix<double, 4, 1> orientation_stddev(int craft_idx = 0) const noexcept {
+        return diag_stddev_segment<4>(craft_idx * kRigidStateDim + 3);
     }
-    Eigen::Matrix<double, 3, 1> vel_linear_stddev() const noexcept {
-        return diag_stddev_segment<3>(7);
+    Eigen::Matrix<double, 3, 1> vel_linear_stddev(int craft_idx = 0) const noexcept {
+        return diag_stddev_segment<3>(craft_idx * kRigidStateDim + 7);
     }
-    Eigen::Matrix<double, 3, 1> vel_angular_stddev() const noexcept {
-        return diag_stddev_segment<3>(10);
+    Eigen::Matrix<double, 3, 1> vel_angular_stddev(int craft_idx = 0) const noexcept {
+        return diag_stddev_segment<3>(craft_idx * kRigidStateDim + 10);
     }
+
+    CraftR&       craft(int idx = 0)       noexcept { return *crafts_real_[idx]; }
+    const CraftR& craft(int idx = 0) const noexcept { return *crafts_real_[idx]; }
 
 private:
     template <int N>
@@ -145,13 +182,9 @@ private:
         return out;
     }
 
-    CraftR              craft_;
-    UKF<StateDim, MeasDim> ukf_;
+    WorldR*                          w_real_      = nullptr;
+    std::array<CraftR*, NumCrafts>   crafts_real_{};
+    UKF<kStateDim, MeasDim>          ukf_;
 };
-
-// Convenience alias: same shape as WorldEKF<MyCraftTemplate, MeasDim> for
-// templated craft types. Picks the double instantiation.
-template <template <class> class CraftTpl, int MeasDim>
-using WorldUKF = WorldUKFOf<CraftTpl<double>, MeasDim>;
 
 } // namespace manta::estimation

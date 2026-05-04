@@ -22,26 +22,26 @@ void tick() {
         const double v0 = double(manta_gen::ex5_sim::craft.imu().last_accel().raw()(0));
         const double v1 = double(manta_gen::ex5_sim::craft.imu().last_accel().raw()(1));
         const double v2 = double(manta_gen::ex5_sim::craft.imu().last_accel().raw()(2));
-        manta_gen::ex5_est::ekf_0.craft().imu().set_measurement_accel(manta::geom::Vec3<manta::PartFrame, double>{v0, v1, v2});
+        manta_gen::ex5_est::craft.imu().set_measurement_accel(manta::geom::Vec3<manta::PartFrame, double>{v0, v1, v2});
     }
     // connect: imu.last_gyro → imu.set_measurement_gyro
     {
         const double v0 = double(manta_gen::ex5_sim::craft.imu().last_gyro().raw()(0));
         const double v1 = double(manta_gen::ex5_sim::craft.imu().last_gyro().raw()(1));
         const double v2 = double(manta_gen::ex5_sim::craft.imu().last_gyro().raw()(2));
-        manta_gen::ex5_est::ekf_0.craft().imu().set_measurement_gyro(manta::geom::Vec3<manta::PartFrame, double>{v0, v1, v2});
+        manta_gen::ex5_est::craft.imu().set_measurement_gyro(manta::geom::Vec3<manta::PartFrame, double>{v0, v1, v2});
     }
     // connect: dvl.last_velocity → dvl.set_measurement
     {
         const double v0 = double(manta_gen::ex5_sim::craft.dvl().last_velocity().raw()(0));
         const double v1 = double(manta_gen::ex5_sim::craft.dvl().last_velocity().raw()(1));
         const double v2 = double(manta_gen::ex5_sim::craft.dvl().last_velocity().raw()(2));
-        manta_gen::ex5_est::ekf_0.craft().dvl().set_measurement(manta::geom::Vec3<manta::PartFrame, double>{v0, v1, v2});
+        manta_gen::ex5_est::craft.dvl().set_measurement(manta::geom::Vec3<manta::PartFrame, double>{v0, v1, v2});
     }
     // connect: thrust.throttle → thrust.set_throttle
     {
         const double v0 = double(manta_gen::ex5_sim::craft.thrust().throttle());
-        manta_gen::ex5_est::ekf_0.craft().thrust().set_throttle(v0);
+        manta_gen::ex5_est::craft.thrust().set_throttle(v0);
     }
 
     manta_gen::ex5_est::tick();

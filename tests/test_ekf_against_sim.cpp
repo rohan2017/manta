@@ -496,8 +496,25 @@ struct PositionMeas3D {
 };
 
 TEST_CASE("WorldEKF: free-body predict+update extracts Jacobians from CraftT") {
-    using Ekf = manta::estimation::WorldEKF<FreeBodyCraft, 3>;
+    using Ekf = manta::estimation::WorldEKF</*NumCrafts=*/1, /*MeasDim=*/3>;
+    using Jet = Ekf::Jet;
+
+    // Build the Real-side world with one craft.
+    manta::WorldT<double> w_real;
+    w_real.clock().set_dt(0.01f);
+    auto& s_real = w_real.create_scene();
+    FreeBodyCraft<double> craft_real;
+    s_real.add_craft(craft_real);
+
+    // Build the Jet-shadow world identically.
+    manta::WorldT<Jet> w_jet;
+    w_jet.clock().set_dt(0.01f);
+    auto& s_jet = w_jet.create_scene();
+    FreeBodyCraft<Jet> craft_jet;
+    s_jet.add_craft(craft_jet);
+
     Ekf ekf;
+    ekf.bind(w_jet, {&craft_real}, {&craft_jet});
 
     // Initial state: at origin, identity orientation, small initial velocity.
     Ekf::StateVec x0;
