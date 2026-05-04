@@ -83,19 +83,33 @@ class _MeasFunctor:
     def __init__(self, n_floats: int, body: str, z_read: list[str],
                  functor_name: str,
                  mag_field_var: str | None = None,
-                 craft_idx: int = 0):
+                 craft_idx: int = 0,
+                 scope: str = "file",
+                 update_method: str = "update_n"):
         self.n_floats = n_floats
         self.body = body
         self.z_read = z_read
         self.functor_name = functor_name
         self.mag_field_var = mag_field_var   # set for magnetometer specs only
         self.craft_idx = craft_idx           # which craft slot in the joint state
+        # "file": functor is purely a pure function of x (DVL, Mag) and
+        # gets emitted at file scope above the public namespace.
+        # "anon": functor reaches into the Jet shadow world (e.g. IMU,
+        # which calls `w_jet.evaluate()`) and must live inside the
+        # anonymous namespace alongside `w_jet` / `craft_jet`.
+        self.scope = scope
+        # Which filter API method `emit_update_block` should call:
+        # "update_n" for UKF (legacy single-shot path) or "add_update"
+        # for the EKF's fused begin_step / add_update / end_step bracket.
+        self.update_method = update_method
 
     @classmethod
     def for_part(cls, part, ekf_var: str, part_var: str,
                  craft_idx: int = 0,
                  state_dim: int = 13,
-                 mag_field_var: str | None = None) -> "_MeasFunctor":
+                 mag_field_var: str | None = None,
+                 craft_jet_vars: list[str] | None = None,
+                 kind: str = "ekf") -> "_MeasFunctor":
         """Dispatch by part type. Supported: DVL, IMU, Magnetometer.
 
         `part_var` is the sensor's C++ accessor (e.g.
@@ -116,10 +130,46 @@ class _MeasFunctor:
         functor_name = f"_{ekf_var}_c{craft_idx}_{part.name}_meas"
         # Per-craft state offset into the joint state vector.
         s0 = craft_idx * 13
+        # EKF uses the fused begin_step / add_update / end_step API;
+        # UKF uses the legacy update_n (one Jet pass per measurement
+        # is irrelevant for UKF since it doesn't autodiff anyway).
+        update_method = "add_update" if kind == "ekf" else "update_n"
         if cct == "manta::parts::DVLT":
+            z_read = [
+                f"{part_var}.last_velocity().raw()(0)",
+                f"{part_var}.last_velocity().raw()(1)",
+                f"{part_var}.last_velocity().raw()(2)",
+            ]
+            if kind == "ekf":
+                # Read from the Jet sensor directly. After begin_step's
+                # `evaluate()` the Jet craft's scene_to_part is populated
+                # at x_pre with identity-seeded derivatives, so
+                # `velocity_body()` gives both h(x_pre) and ∂h/∂x_pre in
+                # one read — no separate state-vector parsing. Reaches
+                # into the anon-namespace Jet craft global by name (the
+                # WorldEKF::craft_jet() accessor returns the base type
+                # which doesn't expose the templated part accessors).
+                if craft_jet_vars is None:
+                    raise RuntimeError(
+                        "EKF DVL codegen: craft_jet_vars must be provided.")
+                jet_var = craft_jet_vars[craft_idx]
+                body = (
+                    f"// DVL (EKF): h = R(q)^T * v_scene, read from Jet sensor.\n"
+                    f"struct {functor_name} {{\n"
+                    f"    Eigen::Matrix<JetType, 3, 1> operator()(EkfT&) const {{\n"
+                    f"        return {jet_var}.{part.name}()"
+                    f".velocity_body().raw();\n"
+                    f"    }}\n"
+                    f"}};\n"
+                )
+                return cls(3, body, z_read, functor_name,
+                           craft_idx=craft_idx, scope="anon",
+                           update_method=update_method)
+            # UKF path keeps the closed-form sigma-point form (h(x) on a
+            # plain state vector, no Jet seeds, no Jet world).
             body = (
-                f"// DVL: predicted body-frame velocity = R(q)^T * v_scene.\n"
-                f"// Reads craft-{craft_idx}'s state slice (offset {s0}).\n"
+                f"// DVL (UKF): closed-form h(x) on the joint state vector.\n"
+                f"// Reads craft-{craft_idx} slice (offset {s0}).\n"
                 f"struct {functor_name} {{\n"
                 f"    template <class S>\n"
                 f"    Eigen::Matrix<S, 3, 1> operator()(const Eigen::Matrix<S, {state_dim}, 1>& x) const {{\n"
@@ -129,28 +179,9 @@ class _MeasFunctor:
                 f"    }}\n"
                 f"}};\n"
             )
-            z_read = [
-                f"{part_var}.last_velocity().raw()(0)",
-                f"{part_var}.last_velocity().raw()(1)",
-                f"{part_var}.last_velocity().raw()(2)",
-            ]
-            return cls(3, body, z_read, functor_name, craft_idx=craft_idx)
+            return cls(3, body, z_read, functor_name, craft_idx=craft_idx,
+                       update_method=update_method)
         if cct == "manta::parts::IMUT":
-            body = (
-                f"// IMU: predicted [accel_body=0; gyro_body=ω_body] under the\n"
-                f"// no-net-force / free-flight assumption (est dynamics has\n"
-                f"// no thrusters or gravity). Reads craft-{craft_idx} slice\n"
-                f"// (offset {s0}).\n"
-                f"struct {functor_name} {{\n"
-                f"    template <class S>\n"
-                f"    Eigen::Matrix<S, 6, 1> operator()(const Eigen::Matrix<S, {state_dim}, 1>& x) const {{\n"
-                f"        Eigen::Matrix<S, 6, 1> z;\n"
-                f"        z(0) = S(0); z(1) = S(0); z(2) = S(0);\n"
-                f"        z(3) = x({s0+10}); z(4) = x({s0+11}); z(5) = x({s0+12});\n"
-                f"        return z;\n"
-                f"    }}\n"
-                f"}};\n"
-            )
             z_read = [
                 f"{part_var}.last_accel().raw()(0)",
                 f"{part_var}.last_accel().raw()(1)",
@@ -159,15 +190,112 @@ class _MeasFunctor:
                 f"{part_var}.last_gyro().raw()(1)",
                 f"{part_var}.last_gyro().raw()(2)",
             ]
-            return cls(6, body, z_read, functor_name, craft_idx=craft_idx)
+            if kind != "ekf":
+                # UKF path keeps the analytic free-fall placeholder for
+                # now — the UKF doesn't autodiff h, so a dynamics-driven
+                # h(x) would mutate the (single, user-facing) Real world's
+                # crafts inside each sigma-point evaluation. Wiring a
+                # save/restore is out of scope for this fix.
+                body = (
+                    f"// IMU (UKF): placeholder no-net-force prediction.\n"
+                    f"// TODO: dynamics-driven h(x) once UKF has a state-\n"
+                    f"// preserving evaluate path. Reads craft-{craft_idx}\n"
+                    f"// slice (offset {s0}).\n"
+                    f"struct {functor_name} {{\n"
+                    f"    template <class S>\n"
+                    f"    Eigen::Matrix<S, 6, 1> operator()(const Eigen::Matrix<S, {state_dim}, 1>& x) const {{\n"
+                    f"        Eigen::Matrix<S, 6, 1> z;\n"
+                    f"        z(0) = S(0); z(1) = S(0); z(2) = S(0);\n"
+                    f"        z(3) = x({s0+10}); z(4) = x({s0+11}); z(5) = x({s0+12});\n"
+                    f"        return z;\n"
+                    f"    }}\n"
+                    f"}};\n"
+                )
+                return cls(6, body, z_read, functor_name,
+                           craft_idx=craft_idx, scope="file",
+                           update_method=update_method)
+
+            # EKF path: read specific_force_body + body angular velocity
+            # straight from the Jet sensor. begin_step has already seeded
+            # the Jet craft at x_pre with identity derivatives and run
+            # w_jet.evaluate(), so the cached acc_linear (which feeds
+            # specific_force_body) and scene_to_part vel_angular both
+            # carry the right Jet derivatives — one read gives both h
+            # and H.
+            #
+            # Specific force = (kinematic body accel − gravity_body):
+            # what a real accelerometer reports. Free fall reads zero,
+            # stationary craft on the ground reads −g_body (≈ +9.81 ẑ
+            # at q=identity). Thrust, drag, contact, cross-craft
+            # coupling all flow through via the dynamics; gravity is
+            # queried from the registered GravityField and subtracted
+            # out. Reads craft-{craft_idx} slice (offset {s0}).
+            if craft_jet_vars is None:
+                raise RuntimeError(
+                    "EKF IMU codegen: craft_jet_vars must be provided.")
+            jet_var = craft_jet_vars[craft_idx]
+            body = (
+                f"// IMU (EKF): h(x) = [specific_force_body; ω_body].\n"
+                f"// Reads the Jet sensor directly; values + H come\n"
+                f"// from the begin_step evaluate at x_pre.\n"
+                f"struct {functor_name} {{\n"
+                f"    Eigen::Matrix<JetType, 6, 1> operator()(EkfT&) const {{\n"
+                f"        Eigen::Matrix<JetType, 6, 1> z;\n"
+                f"        const auto _a = {jet_var}.{part.name}().specific_force_body();\n"
+                f"        const auto _w = {jet_var}.{part.name}().angular_velocity_body();\n"
+                f"        z(0) = _a.raw()(0);\n"
+                f"        z(1) = _a.raw()(1);\n"
+                f"        z(2) = _a.raw()(2);\n"
+                f"        z(3) = _w.raw()(0);\n"
+                f"        z(4) = _w.raw()(1);\n"
+                f"        z(5) = _w.raw()(2);\n"
+                f"        return z;\n"
+                f"    }}\n"
+                f"}};\n"
+            )
+            return cls(6, body, z_read, functor_name,
+                       craft_idx=craft_idx, scope="anon",
+                       update_method=update_method)
         if cct == "manta::parts::MagnetometerT":
             if mag_field_var is None:
                 raise RuntimeError(
                     f"EKF codegen: Magnetometer {part.name!r} requires a "
                     f"`MagField` registered on the EKF's wrapped world.")
+            z_read = [
+                f"{part_var}.last_b().raw()(0)",
+                f"{part_var}.last_b().raw()(1)",
+                f"{part_var}.last_b().raw()(2)",
+            ]
+            if kind == "ekf":
+                # Locally-constant-B: capture B at the Real-side position
+                # before each update, then h(x_pre) = R(q_pre)^T · B. q
+                # comes from the Jet craft post-evaluate. ∂h/∂q is exact
+                # through autodiff; ∂h/∂p ≈ 0 from the const-B approx.
+                if craft_jet_vars is None:
+                    raise RuntimeError(
+                        "EKF Magnetometer codegen: craft_jet_vars must be provided.")
+                jet_var = craft_jet_vars[craft_idx]
+                body = (
+                    f"// Magnetometer (EKF): h = R(q_pre)^T · B_captured.\n"
+                    f"struct {functor_name} {{\n"
+                    f"    Eigen::Matrix<double, 3, 1> b_scene_now;\n"
+                    f"    Eigen::Matrix<JetType, 3, 1> operator()(EkfT&) const {{\n"
+                    f"        const auto& q = {jet_var}"
+                    f".scene_to_craft().orientation().raw();\n"
+                    f"        Eigen::Matrix<JetType, 3, 1> b;\n"
+                    f"        b(0) = JetType(b_scene_now(0));\n"
+                    f"        b(1) = JetType(b_scene_now(1));\n"
+                    f"        b(2) = JetType(b_scene_now(2));\n"
+                    f"        return q.conjugate() * b;\n"
+                    f"    }}\n"
+                    f"}};\n"
+                )
+                return cls(3, body, z_read, functor_name,
+                           mag_field_var=mag_field_var, craft_idx=craft_idx,
+                           scope="anon", update_method=update_method)
+            # UKF path: closed-form on state vector.
             body = (
-                f"// Magnetometer: predicted body-frame B = R(q)^T * B(p_now).\n"
-                f"// Locally-constant-B; reads craft-{craft_idx} slice (offset {s0}).\n"
+                f"// Magnetometer (UKF): closed-form h(x) on state vector.\n"
                 f"struct {functor_name} {{\n"
                 f"    Eigen::Matrix<double, 3, 1> b_scene_now;\n"
                 f"    template <class S>\n"
@@ -181,13 +309,9 @@ class _MeasFunctor:
                 f"    }}\n"
                 f"}};\n"
             )
-            z_read = [
-                f"{part_var}.last_b().raw()(0)",
-                f"{part_var}.last_b().raw()(1)",
-                f"{part_var}.last_b().raw()(2)",
-            ]
             return cls(3, body, z_read, functor_name,
-                       mag_field_var=mag_field_var, craft_idx=craft_idx)
+                       mag_field_var=mag_field_var, craft_idx=craft_idx,
+                       update_method=update_method)
         raise NotImplementedError(
             f"EKF codegen: no measurement-functor template for "
             f"{type(part).__name__} ({part.name!r}, cpp_class_template={cct!r}).")
@@ -213,9 +337,16 @@ class _MeasFunctor:
     def emit_update_block(self, lines: list[str], ekf_var: str,
                           part_var: str, rname: str,
                           indent: str = "        ") -> None:
-        """Append the `if (consume_fresh()) { ... update_n<N>(...); }` block
-        for this sensor. Magnetometer adds a pre-update position lookup +
-        B capture step; everything else uses the default form."""
+        """Append the `if (consume_fresh()) { ... add_update<N>(...); }`
+        block for this sensor. Magnetometer adds a pre-update B-capture
+        step (locally-constant-B approximation); everything else just
+        constructs the functor and queues the update.
+
+        Lives inside a `begin_step / end_step` bracket emitted by the
+        caller — `add_update` reads h + H from the Jet sensors that the
+        begin_step's evaluate already populated, so no extra Jet world
+        pass is needed per measurement.
+        """
         n = self.n_floats
         lines.append(f"{indent}if ({part_var}.consume_fresh()) {{")
         if self.mag_field_var is not None:
@@ -233,14 +364,14 @@ class _MeasFunctor:
             for i, expr in enumerate(self.z_read):
                 lines.append(f"{indent}    z({i}) = {expr};")
             lines.append(
-                f"{indent}    {ekf_var}.template update_n<{n}>(_h, z, {rname});"
+                f"{indent}    {ekf_var}.template {self.update_method}<{n}>(_h, z, {rname});"
             )
         else:
             lines.append(f"{indent}    Eigen::Matrix<double, {n}, 1> z;")
             for i, expr in enumerate(self.z_read):
                 lines.append(f"{indent}    z({i}) = {expr};")
             lines.append(
-                f"{indent}    {ekf_var}.template update_n<{n}>("
+                f"{indent}    {ekf_var}.template {self.update_method}<{n}>("
                 f"{self.functor_name}{{}}, z, {rname});"
             )
         lines.append(f"{indent}}}")
@@ -383,7 +514,9 @@ def _filter_collect(target, filter_obj, kind):
             m, filter_var, part_var,
             craft_idx=c_idx,
             state_dim=state_dim,
-            mag_field_var=mag_field_var)
+            mag_field_var=mag_field_var,
+            craft_jet_vars=[craft_jet_var_for(k) for k in range(num_crafts)],
+            kind=kind)
         meas_specs.append((m, spec))
 
     meas_dim = sum(s.n_floats for _, s in meas_specs) if meas_specs else 1
@@ -553,6 +686,7 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
     bind_assignments  = ctx["bind_assignments"]
     sync_field_idxs   = ctx["sync_field_idxs"]
     world             = ctx["world"]
+    unique_crafts     = ctx["unique_crafts"]
 
     needs_jet = (kind == "ekf")
 
@@ -576,8 +710,13 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
         "",
     ]
 
-    # Per-sensor measurement functors at file scope (above any namespace).
+    # File-scope measurement functors (pure functions of x — DVL, Mag).
+    # Anon-scope ones (IMU's dynamics-driven h, which calls into w_jet)
+    # are emitted later, inside the anonymous namespace alongside the
+    # Jet shadow declarations.
     for _, spec in meas_specs:
+        if spec.scope != "file":
+            continue
         for ln in spec.body.rstrip("\n").split("\n"):
             lines.append(ln)
         lines.append("")
@@ -644,6 +783,15 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
             lines.append(
                 f"{jet_class_tmpls[i]}<JetType> {craft_jet_var_for(i)}{{}};")
         lines.append("")
+
+        # Anon-scope measurement functors (the dynamics-driven IMU h(x)
+        # reaches into `w_jet` and `craft_jet[*]`, which are only
+        # accessible from inside this anonymous namespace).
+        anon_specs = [(m, s) for m, s in meas_specs if s.scope == "anon"]
+        for _, spec in anon_specs:
+            for ln in spec.body.rstrip("\n").split("\n"):
+                lines.append(ln)
+            lines.append("")
 
     for m, spec in meas_specs:
         n = spec.n_floats
@@ -789,18 +937,70 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
                 lines, bid, b, _craft_var_for_binding(b), filter_var,
                 templated_craft=True, indent="    ")
 
-    lines += [
-        "",
-        f"    {filter_var}.predict(DT, g_Q);",
-        "",
-    ]
+    # Mirror per-tick actuator command state from each Real-side craft to
+    # its Jet shadow before predict(). Without this, predict()'s Jacobian
+    # step (which runs `w_jet.update()` with Jet-typed scalars) would see
+    # default-valued actuators — zero throttle, zero motor torque, etc. —
+    # regardless of what the user just commanded on the Real craft via
+    # cross-world `connect()` or external Zenoh inputs. The Real craft
+    # holds the user-facing command state; the Jet shadow gets it copied
+    # one-way each tick. Sensor measurement state (last_accel etc.) is
+    # NOT mirrored: the Jet sensors recompute from the Jet kinematic
+    # state inside `w_jet.update()` and we never read from them.
+    if needs_jet:
+        mirror_lines: list[str] = []
+        for c_idx, c in enumerate(unique_crafts):
+            real_var = craft_var_for(c_idx)
+            jet_var  = craft_jet_var_for(c_idx)
+            for part in c.all_parts():
+                pairs = getattr(type(part), "actuator_state", None) or []
+                for setter, getter in pairs:
+                    # Wrap in JetType(...) so scalar getters' `double`
+                    # returns become Jets with zero gradient (the actuator
+                    # command is an external input, not a state variable
+                    # being differentiated).
+                    mirror_lines.append(
+                        f"    {jet_var}.{part.name}().{setter}("
+                        f"JetType({real_var}.{part.name}().{getter}()));")
+        if mirror_lines:
+            lines.append("")
+            lines += mirror_lines
 
-    for m, spec in meas_specs:
-        rname = f"R_c{spec.craft_idx}_{m.name}"
-        part_acc = f"{craft_var_for(spec.craft_idx)}.{m.name}()"
-        spec.emit_update_block(lines, filter_var, part_acc, rname, indent="    ")
-    if meas_specs:
-        lines.append("")
+    # Fused single-pass predict + update (PyPose-style). begin_step seeds
+    # Jets at x_pre with identity, runs `w_jet.evaluate()` to populate
+    # the Jet sensor caches; each `add_update` reads h(x_pre) + H from
+    # those caches and queues a sequential update; end_step advances
+    # the Jet world to x_post (no re-aggregate), reads F, computes
+    # P_pre, applies queued updates, and mirrors posterior to Real.
+    if needs_jet:
+        lines += [
+            "",
+            f"    {filter_var}.begin_step(DT, g_Q);",
+            "",
+        ]
+        for m, spec in meas_specs:
+            rname = f"R_c{spec.craft_idx}_{m.name}"
+            part_acc = f"{craft_var_for(spec.craft_idx)}.{m.name}()"
+            spec.emit_update_block(lines, filter_var, part_acc, rname, indent="    ")
+        lines += [
+            "",
+            f"    {filter_var}.end_step();",
+            "",
+        ]
+    else:
+        # UKF path keeps the legacy predict + per-sensor update_n flow
+        # (no Jet world, no fused step).
+        lines += [
+            "",
+            f"    {filter_var}.predict(DT, g_Q);",
+            "",
+        ]
+        for m, spec in meas_specs:
+            rname = f"R_c{spec.craft_idx}_{m.name}"
+            part_acc = f"{craft_var_for(spec.craft_idx)}.{m.name}()"
+            spec.emit_update_block(lines, filter_var, part_acc, rname, indent="    ")
+        if meas_specs:
+            lines.append("")
 
     if any(b.direction == "out" for _, b in bind_assignments):
         lines += [

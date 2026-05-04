@@ -214,6 +214,22 @@ class PartDescriptor:
     # is empty (the part exposes no publishable/subscribable values).
     signals: ClassVar[list[Signal]] = []
 
+    # Actuator command state — non-rigid-body data that lives on the Part
+    # instance and feeds into the dynamics. For an EKF target, the codegen
+    # emits a `craft_jet.<part>().<setter>(craft.<part>().<getter>())` line
+    # in tick() before `predict()` so the Jet shadow's actuators see the
+    # same commanded values the Real-side craft was just told to apply via
+    # `set_<x>()`. Without this, predict() would integrate with default
+    # (zero) actuator state regardless of what the user / cross-world
+    # connect just commanded.
+    #
+    # List of (setter_method, getter_method) tuples. e.g. Thruster:
+    #     actuator_state = [("set_throttle", "throttle")]
+    # which produces `dst.set_throttle(src.throttle())` per tick.
+    #
+    # Default: no actuator state (sensors, masses, surfaces, etc.).
+    actuator_state: ClassVar[list[tuple[str, str]]] = []
+
     def __init__(self,
                  name: str,
                  transform: StaticTransform | None = None,

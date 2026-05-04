@@ -18,56 +18,6 @@
 #include <Eigen/Geometry>
 #include <zenoh.hxx>
 
-// IMU: predicted [accel_body=0; gyro_body=ω_body] under the
-// no-net-force / free-flight assumption (est dynamics has
-// no thrusters or gravity). Reads craft-0 slice
-// (offset 0).
-struct _ekf_0_c0_imu_meas {
-    template <class S>
-    Eigen::Matrix<S, 6, 1> operator()(const Eigen::Matrix<S, 26, 1>& x) const {
-        Eigen::Matrix<S, 6, 1> z;
-        z(0) = S(0); z(1) = S(0); z(2) = S(0);
-        z(3) = x(10); z(4) = x(11); z(5) = x(12);
-        return z;
-    }
-};
-
-// DVL: predicted body-frame velocity = R(q)^T * v_scene.
-// Reads craft-0's state slice (offset 0).
-struct _ekf_0_c0_dvl_meas {
-    template <class S>
-    Eigen::Matrix<S, 3, 1> operator()(const Eigen::Matrix<S, 26, 1>& x) const {
-        Eigen::Quaternion<S> q(x(3), x(4), x(5), x(6));
-        Eigen::Matrix<S, 3, 1> v_scene(x(7), x(8), x(9));
-        return q.conjugate() * v_scene;
-    }
-};
-
-// IMU: predicted [accel_body=0; gyro_body=ω_body] under the
-// no-net-force / free-flight assumption (est dynamics has
-// no thrusters or gravity). Reads craft-1 slice
-// (offset 13).
-struct _ekf_0_c1_imu_meas {
-    template <class S>
-    Eigen::Matrix<S, 6, 1> operator()(const Eigen::Matrix<S, 26, 1>& x) const {
-        Eigen::Matrix<S, 6, 1> z;
-        z(0) = S(0); z(1) = S(0); z(2) = S(0);
-        z(3) = x(23); z(4) = x(24); z(5) = x(25);
-        return z;
-    }
-};
-
-// DVL: predicted body-frame velocity = R(q)^T * v_scene.
-// Reads craft-1's state slice (offset 13).
-struct _ekf_0_c1_dvl_meas {
-    template <class S>
-    Eigen::Matrix<S, 3, 1> operator()(const Eigen::Matrix<S, 26, 1>& x) const {
-        Eigen::Quaternion<S> q(x(16), x(17), x(18), x(19));
-        Eigen::Matrix<S, 3, 1> v_scene(x(20), x(21), x(22));
-        return q.conjugate() * v_scene;
-    }
-};
-
 namespace manta_gen::ex9 {
 
 manta::WorldT<double>  w{};
@@ -111,6 +61,56 @@ manta::WorldT<JetType>   w_jet{};
 manta::SceneT<JetType>*  scene_jet = nullptr;
 Drone0CraftT<JetType> craft_0_jet{};
 Drone1CraftT<JetType> craft_1_jet{};
+
+// IMU (EKF): h(x) = [specific_force_body; ω_body].
+// Reads the Jet sensor directly; values + H come
+// from the begin_step evaluate at x_pre.
+struct _ekf_0_c0_imu_meas {
+    Eigen::Matrix<JetType, 6, 1> operator()(EkfT&) const {
+        Eigen::Matrix<JetType, 6, 1> z;
+        const auto _a = craft_0_jet.imu().specific_force_body();
+        const auto _w = craft_0_jet.imu().angular_velocity_body();
+        z(0) = _a.raw()(0);
+        z(1) = _a.raw()(1);
+        z(2) = _a.raw()(2);
+        z(3) = _w.raw()(0);
+        z(4) = _w.raw()(1);
+        z(5) = _w.raw()(2);
+        return z;
+    }
+};
+
+// DVL (EKF): h = R(q)^T * v_scene, read from Jet sensor.
+struct _ekf_0_c0_dvl_meas {
+    Eigen::Matrix<JetType, 3, 1> operator()(EkfT&) const {
+        return craft_0_jet.dvl().velocity_body().raw();
+    }
+};
+
+// IMU (EKF): h(x) = [specific_force_body; ω_body].
+// Reads the Jet sensor directly; values + H come
+// from the begin_step evaluate at x_pre.
+struct _ekf_0_c1_imu_meas {
+    Eigen::Matrix<JetType, 6, 1> operator()(EkfT&) const {
+        Eigen::Matrix<JetType, 6, 1> z;
+        const auto _a = craft_1_jet.imu().specific_force_body();
+        const auto _w = craft_1_jet.imu().angular_velocity_body();
+        z(0) = _a.raw()(0);
+        z(1) = _a.raw()(1);
+        z(2) = _a.raw()(2);
+        z(3) = _w.raw()(0);
+        z(4) = _w.raw()(1);
+        z(5) = _w.raw()(2);
+        return z;
+    }
+};
+
+// DVL (EKF): h = R(q)^T * v_scene, read from Jet sensor.
+struct _ekf_0_c1_dvl_meas {
+    Eigen::Matrix<JetType, 3, 1> operator()(EkfT&) const {
+        return craft_1_jet.dvl().velocity_body().raw();
+    }
+};
 
 Eigen::Matrix<double, 6, 6> R_c0_imu = Eigen::Matrix<double, 6, 6>::Zero();
 Eigen::Matrix<double, 3, 3> R_c0_dvl = Eigen::Matrix<double, 3, 3>::Zero();
@@ -247,7 +247,7 @@ void tick() {
           bind_3_payload.clear();
       } }
 
-    ekf_0.predict(DT, g_Q);
+    ekf_0.begin_step(DT, g_Q);
 
     if (craft_0.imu().consume_fresh()) {
         Eigen::Matrix<double, 6, 1> z;
@@ -257,14 +257,14 @@ void tick() {
         z(3) = craft_0.imu().last_gyro().raw()(0);
         z(4) = craft_0.imu().last_gyro().raw()(1);
         z(5) = craft_0.imu().last_gyro().raw()(2);
-        ekf_0.template update_n<6>(_ekf_0_c0_imu_meas{}, z, R_c0_imu);
+        ekf_0.template add_update<6>(_ekf_0_c0_imu_meas{}, z, R_c0_imu);
     }
     if (craft_0.dvl().consume_fresh()) {
         Eigen::Matrix<double, 3, 1> z;
         z(0) = craft_0.dvl().last_velocity().raw()(0);
         z(1) = craft_0.dvl().last_velocity().raw()(1);
         z(2) = craft_0.dvl().last_velocity().raw()(2);
-        ekf_0.template update_n<3>(_ekf_0_c0_dvl_meas{}, z, R_c0_dvl);
+        ekf_0.template add_update<3>(_ekf_0_c0_dvl_meas{}, z, R_c0_dvl);
     }
     if (craft_1.imu().consume_fresh()) {
         Eigen::Matrix<double, 6, 1> z;
@@ -274,15 +274,17 @@ void tick() {
         z(3) = craft_1.imu().last_gyro().raw()(0);
         z(4) = craft_1.imu().last_gyro().raw()(1);
         z(5) = craft_1.imu().last_gyro().raw()(2);
-        ekf_0.template update_n<6>(_ekf_0_c1_imu_meas{}, z, R_c1_imu);
+        ekf_0.template add_update<6>(_ekf_0_c1_imu_meas{}, z, R_c1_imu);
     }
     if (craft_1.dvl().consume_fresh()) {
         Eigen::Matrix<double, 3, 1> z;
         z(0) = craft_1.dvl().last_velocity().raw()(0);
         z(1) = craft_1.dvl().last_velocity().raw()(1);
         z(2) = craft_1.dvl().last_velocity().raw()(2);
-        ekf_0.template update_n<3>(_ekf_0_c1_dvl_meas{}, z, R_c1_dvl);
+        ekf_0.template add_update<3>(_ekf_0_c1_dvl_meas{}, z, R_c1_dvl);
     }
+
+    ekf_0.end_step();
 
     if (++g_pub_decim >= kPubEvery) {
         g_pub_decim = 0;

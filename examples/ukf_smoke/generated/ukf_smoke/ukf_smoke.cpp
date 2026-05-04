@@ -18,10 +18,10 @@
 #include <Eigen/Geometry>
 #include <zenoh.hxx>
 
-// IMU: predicted [accel_body=0; gyro_body=ω_body] under the
-// no-net-force / free-flight assumption (est dynamics has
-// no thrusters or gravity). Reads craft-0 slice
-// (offset 0).
+// IMU (UKF): placeholder no-net-force prediction.
+// TODO: dynamics-driven h(x) once UKF has a state-
+// preserving evaluate path. Reads craft-0
+// slice (offset 0).
 struct _ukf_0_c0_imu_meas {
     template <class S>
     Eigen::Matrix<S, 6, 1> operator()(const Eigen::Matrix<S, 13, 1>& x) const {
@@ -32,8 +32,8 @@ struct _ukf_0_c0_imu_meas {
     }
 };
 
-// DVL: predicted body-frame velocity = R(q)^T * v_scene.
-// Reads craft-0's state slice (offset 0).
+// DVL (UKF): closed-form h(x) on the joint state vector.
+// Reads craft-0 slice (offset 0).
 struct _ukf_0_c0_dvl_meas {
     template <class S>
     Eigen::Matrix<S, 3, 1> operator()(const Eigen::Matrix<S, 13, 1>& x) const {

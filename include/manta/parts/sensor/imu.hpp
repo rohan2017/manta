@@ -2,6 +2,8 @@
 
 #include "../../core/noise.hpp"
 #include "../../core/part.hpp"
+#include "../../fields/gravity_field.hpp"
+#include "../../fields/templated_query.hpp"
 #include "../../sim/rate_gate.hpp"
 
 namespace manta::parts {
@@ -33,10 +35,40 @@ public:
         , gyro_noise_{p.gyro_sigma}
         , gate_{rate_hz} {}
 
+    // Body-frame specific force — what a real accelerometer reports.
+    //
+    // Specific force = (housing_inertial_accel − gravity), so a craft in
+    // free fall reads zero (housing accelerates at exactly g, sensor mass
+    // doesn't deflect) and a stationary craft reads −g_body (≈ +9.81 ẑ
+    // in body frame at q=identity). The kinematic `acceleration_body()`
+    // accessor returns body-frame inertial accel including gravity's
+    // contribution (since `sense_and_aggregate` sums gravity into the
+    // wrench), so we subtract `R(q)^T · g_scene` to recover specific
+    // force. Worlds with no GravityField registered fall back to the
+    // raw kinematic accel (specific force == kinematic accel when the
+    // only forces are non-gravitational).
+    geom::Vec3<PartFrame, Scalar> specific_force_body() const {
+        auto a_body = this->acceleration_body();
+        if (!this->craft_ || !this->craft_->has_world()) return a_body;
+        const auto* gf = this->craft().world().field_ptr(
+            typeid(fields::GravityField));
+        if (!gf) return a_body;
+        const auto& g_field = *static_cast<const fields::GravityField*>(gf);
+        // Query gravity at the part's scene position; `state_at_templated`
+        // handles Real/Jet automatically (finite-diff for the position
+        // gradient when Scalar=Jet).
+        auto pos_scene = this->scene_to_part().position();
+        auto g_scene   = fields::state_at_templated<Scalar>(g_field, pos_scene);
+        // Rotate scene-frame gravity into body frame and subtract.
+        auto g_body = this->scene_to_part().rotate_inverse(g_scene);
+        return geom::Vec3<PartFrame, Scalar>::from_raw(
+            a_body.raw() - g_body.raw());
+    }
+
     void update() override {
         Real dt = (this->craft_ && this->craft_->has_world()) ? this->craft().world().clock().dt() : Real(0);
         if (!gate_.tick(dt)) return;
-        last_accel_ = this->acceleration_body() + accel_noise_;
+        last_accel_ = this->specific_force_body() + accel_noise_;
         last_gyro_  = this->angular_velocity_body() + gyro_noise_;
         fresh_ = true;
     }

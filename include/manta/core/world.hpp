@@ -108,6 +108,32 @@ public:
     SimClock&       clock()       noexcept { return clock_; }
     const SimClock& clock() const noexcept { return clock_; }
 
+    // Evaluate every scene at its current state — runs kinematic pass +
+    // force aggregation but does NOT integrate, advance planets, update
+    // fields, or tick the clock. Used by EKF measurement functors that
+    // need h(x) to query post-aggregation sensor values (e.g. an IMU's
+    // body-frame inertial acceleration) without changing the world's
+    // canonical state. The Jet world's planet pose is re-cast from the
+    // Real-side planet inside SceneT::evaluate, so calling this on a Jet
+    // world after a Real-side planet advance is safe.
+    void evaluate() {
+        for (auto& scene : scenes_) {
+            scene->evaluate();
+        }
+    }
+
+    // Advance every scene's crafts using their currently-cached
+    // accelerations, no re-aggregate, no clock tick, no field/planet
+    // advance. Used by `WorldEKF::end_step()` to push the Jet world from
+    // x_pre to x_post for the F = ∂x_post/∂x_pre Jacobian extraction
+    // after `evaluate()` has already given us H from the pre-integrate
+    // cache.
+    void advance_only(Scalar dt) {
+        for (auto& scene : scenes_) {
+            scene->advance_only(dt);
+        }
+    }
+
     // --- Main update ---
     // One full simulation tick using clock_.dt():
     //   1. Planets advance (Real world only — Jet world reuses the

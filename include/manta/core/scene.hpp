@@ -81,14 +81,59 @@ public:
 
     const std::vector<CraftT<Scalar>*>& crafts() const noexcept { return crafts_; }
 
-    // Call once per tick. Drives all crafts in three phases (kinematic /
-    // sense+aggregate / integrate) so cross-craft couplings see globally
-    // consistent state.
+    // Refresh world_to_scene_, run the kinematic pass and force
+    // aggregation for every craft, but do NOT advance state. Leaves each
+    // craft's `acc_linear` / `acc_angular` populated so sensors can be
+    // queried without integrating. Also flips `bootstrapped_` so a
+    // subsequent `update()` skips its initial-cache fill.
+    void evaluate() {
+        refresh_world_to_scene();
+        for (CraftT<Scalar>* c : crafts_) c->kinematic_pass();
+        for (CraftT<Scalar>* c : crafts_) c->sense_and_aggregate();
+        bootstrapped_ = true;
+    }
+
+    // Advance every craft by `dt` using the currently-cached
+    // acceleration, but do NOT re-aggregate afterward. Used by the
+    // EKF predict step (after a one-shot `evaluate()` at x_pre):
+    // we've already extracted h and H from the pre-integrate cache,
+    // so re-aggregating at x_post would be wasted Jet work — the next
+    // predict will re-seed and re-evaluate from scratch anyway.
+    void advance_only(Scalar dt) {
+        for (CraftT<Scalar>* c : crafts_) c->integrate_pre_aggregate(dt);
+        for (CraftT<Scalar>* c : crafts_) c->integrate_post_aggregate(dt);
+    }
+
+    // Per-tick driver. End-of-tick invariant: every craft's pos/q/v AND
+    // its cached acc_linear/acc_angular are at the new state x_k —
+    // sensors that read the cache (IMU specific force) report the
+    // CURRENT acceleration, not the previous tick's.
+    //
+    // Tick 1 integrates with a default-zero cache (no kick), giving a
+    // drift-only step before the first aggregate populates real
+    // acceleration values for tick 2+. That introduces a one-tick lag
+    // on whatever forces would have acted at t=0 (typically gravity);
+    // at 1 kHz it's a 1 ms delay, negligible. Callers that need
+    // pre-integrate state can prime the cache explicitly with
+    // `evaluate()` before the first `update()`.
+    //
+    // Cost: one kin + one agg + one integrate per tick (each part
+    // sees `update()` exactly once per tick — same as the old ordering,
+    // so rate-gated sensors fire on the same schedule).
     void update(Scalar dt) {
-        // Refresh world_to_scene_ from the planet anchor (if any). Planets
-        // are Real-typed; we cast their KinematicLink into Scalar component-
-        // wise. For Scalar=Jet, the cast carries zero gradients — the EKF
-        // treats planet pose as a non-estimated input.
+        refresh_world_to_scene();
+        for (CraftT<Scalar>* c : crafts_) c->integrate_pre_aggregate(dt);
+        for (CraftT<Scalar>* c : crafts_) c->kinematic_pass();
+        for (CraftT<Scalar>* c : crafts_) c->sense_and_aggregate();
+        for (CraftT<Scalar>* c : crafts_) c->integrate_post_aggregate(dt);
+    }
+
+private:
+    // Refresh world_to_scene_ from the planet anchor (if any). Planets
+    // are Real-typed; we cast their KinematicLink into Scalar component-
+    // wise. For Scalar=Jet, the cast carries zero gradients — the EKF
+    // treats planet pose as a non-estimated input.
+    void refresh_world_to_scene() {
         if (planet_) {
             using KL_real = geom::KinematicLink<WorldFrame, PlanetFrame, Real>;
             using SL_ps   = geom::StaticLink<PlanetFrame, SceneFrame, Scalar>;
@@ -130,14 +175,9 @@ public:
                 geom::Vec3<SceneFrame, Scalar>::zero(),
             };
         }
-
-        // Phase 1 — kinematic pass for ALL crafts.
-        for (CraftT<Scalar>* c : crafts_) c->kinematic_pass();
-        // Phase 2 — per-part update + wrench aggregation + accel computation.
-        for (CraftT<Scalar>* c : crafts_) c->sense_and_aggregate();
-        // Phase 3 — each craft advances its own state independently.
-        for (CraftT<Scalar>* c : crafts_) c->integrate(dt);
     }
+
+public:
 
     // Floating origin: position of the scene in PlanetFrame.
     const geom::StaticLink<PlanetFrame, SceneFrame>& planet_to_scene() const noexcept {
@@ -191,6 +231,7 @@ private:
     geom::StaticLink<PlanetFrame, SceneFrame>             planet_to_scene_real_ =
         geom::StaticLink<PlanetFrame, SceneFrame>::identity();
     geom::KinematicLink<WorldFrame, SceneFrame, Scalar>   world_to_scene_;
+    bool                                                  bootstrapped_ = false;
 };
 
 // Real instantiation alias.

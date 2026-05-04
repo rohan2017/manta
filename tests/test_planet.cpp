@@ -152,7 +152,12 @@ TEST_CASE("Planet: Coriolis acceleration on a radially-moving craft") {
     init.vel_linear = Vec3<SceneFrame>{1.0f, 0.0f, 0.0f};
     s.add_craft(c, init);
 
-    w.update();
+    // evaluate() (no integrate) — read pseudo-force acc at the EXACT
+    // initial state. update() would integrate first under the new
+    // ordering, shifting position by v·dt before the aggregate, which
+    // adds a tiny centrifugal contribution to a.x that just nips the
+    // 1e-3 threshold.
+    w.evaluate();
 
     auto a = c.scene_to_craft().acc_linear();
     INFO("a = (", a.x(), ",", a.y(), ",", a.z(), ")");

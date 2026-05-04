@@ -212,6 +212,12 @@ TEST_CASE("World: multiple crafts in same scene all update under gravity") {
     c2.root().compute_params();
     scene.add_craft(c2);
 
+    // Prime the acceleration cache at the initial state so the first
+    // integrate consumes the correct gravity force. Under the integrate-
+    // then-aggregate ordering, an unprimed update() would drift first
+    // (cache=0 → no kick) and only capture gravity in the aggregate
+    // afterward, leaving v at zero on tick 1.
+    w.evaluate();
     w.update();
 
     auto v1 = c1.scene_to_craft().vel_linear();

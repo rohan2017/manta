@@ -221,11 +221,43 @@ public:
             geom::Vec3<CraftFrame, Scalar>::from_raw(alpha_craft));
     }
 
-    void integrate(Scalar dt) {
+    // ---- Integrator hooks (Verlet-ready split) ----
+    //
+    // The world tick is structured as:
+    //   integrate_pre_aggregate(dt)
+    //   kinematic_pass()
+    //   sense_and_aggregate()        <-- caches a_k at the new state
+    //   integrate_post_aggregate(dt)
+    //
+    // Today (explicit Euler): pre runs the full step using cached a_{k-1},
+    // post is a no-op. The cache that pre consumes was populated either at
+    // setup time (bootstrap) or by the previous tick's post-integrate
+    // sense_and_aggregate, which leaves end-of-tick state self-consistent
+    // (pos/q/v AND cached a both at x_k).
+    //
+    // Future symplectic upgrade (velocity Verlet, kick-drift-kick) drops in
+    // here without touching call sites: pre becomes a half-kick + drift,
+    // post becomes the second half-kick using the freshly aggregated a_k.
+    // One force evaluation per tick, second-order accurate, energy-bounded
+    // — orbits stay closed.
+    void integrate_pre_aggregate(Scalar dt) {
         if (dt <= Scalar(0)) return;
         integrate_joints_recurse(root_, dt);
         if (root_.get_mass() <= Scalar(0)) return;
         scene_to_craft_.update(dt);
+    }
+
+    void integrate_post_aggregate(Scalar /*dt*/) {
+        // Explicit Euler placeholder. Verlet upgrade goes here:
+        //   v_lin    += 0.5 * a_lin    * dt;
+        //   v_angular += 0.5 * a_angular * dt;
+    }
+
+    // Combined (single-shot) integrate — kept for the EKF predict path
+    // and for unit tests that drive a craft outside a full Scene.
+    void integrate(Scalar dt) {
+        integrate_pre_aggregate(dt);
+        integrate_post_aggregate(dt);
     }
 
     // Convenience: full tick on this craft alone (no Scene barriers).

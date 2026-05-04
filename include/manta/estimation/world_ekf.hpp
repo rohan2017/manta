@@ -66,7 +66,9 @@
 
 #include <array>
 #include <cmath>
+#include <functional>
 #include <type_traits>
+#include <vector>
 
 #include <Eigen/Core>
 #include <ceres/jet.h>
@@ -242,6 +244,165 @@ public:
     CraftR&       craft(int idx = 0)       noexcept { return *crafts_real_[idx]; }
     const CraftR& craft(int idx = 0) const noexcept { return *crafts_real_[idx]; }
 
+    // Per-craft handle on the Jet-shadow craft. Used by measurement
+    // functors written for the fused begin_step / add_update / end_step
+    // path: between begin_step and end_step the Jet craft holds x_pre
+    // values with identity Jet derivatives, and `evaluate()` has already
+    // populated the kinematic + acc_linear caches at x_pre. Functors
+    // read sensor accessors (e.g. `imu().specific_force_body()`) and
+    // return the result as Jet vectors; the Jet derivatives are the
+    // measurement Jacobian H.
+    CraftJ&       craft_jet(int idx = 0)       noexcept { return *crafts_jet_[idx]; }
+    const CraftJ& craft_jet(int idx = 0) const noexcept { return *crafts_jet_[idx]; }
+
+    // ===========================================================
+    // Fused single-pass predict + update (PyPose-style linearize-at-
+    // x_{k-1} formulation).
+    //
+    // Lifecycle for one tick:
+    //
+    //   ekf.begin_step(dt, Q);                 // seeds Jets at x_pre
+    //                                          // with identity, runs
+    //                                          // w_jet.evaluate()
+    //                                          // (kinematic + agg).
+    //                                          // Cache is now at x_pre
+    //                                          // with derivs w.r.t.
+    //                                          // x_pre.
+    //
+    //   if (sensor.consume_fresh())
+    //       ekf.add_update<N>(h_at_pre, z, R);
+    //                                          // Reads h(x_pre) +
+    //                                          // H = ∂h/∂x_pre from
+    //                                          // the Jet sensors.
+    //                                          // Queues the (h, H, z, R)
+    //                                          // tuple for application
+    //                                          // in end_step.
+    //   ...
+    //
+    //   ekf.end_step();                        // advances Jet world
+    //                                          // (no re-aggregate);
+    //                                          // reads x_post + F;
+    //                                          // P_pre = F P F^T + Q;
+    //                                          // applies queued updates
+    //                                          // sequentially; mirrors
+    //                                          // posterior to Real
+    //                                          // crafts.
+    //
+    // Cost: one Jet world pass (kin + agg + integrate) per tick — h
+    // evaluations are cheap reads on the same Jet caches that predict
+    // already had to populate. Compare to the older predict()+update_n
+    // path which ran (predict's update + IMU's evaluate) = roughly 1.7×
+    // a single pass.
+    //
+    // Innovation linearization happens at x_{k-1|k-1} (PyPose / fixed-
+    // reference variant) rather than at the predicted x_{k|k-1}. The
+    // approximation is O(dt · ||F − I||); for high-rate filters
+    // (kHz) this is below other modeling errors.
+    void begin_step(double dt, const StateCov& Q) {
+        if (!w_jet_) return;
+        w_jet_->clock().set_dt(static_cast<float>(dt));
+        dt_pending_ = dt;
+        Q_pending_  = Q;
+        queue_.clear();
+
+        // Seed Jet crafts at x_pre with identity derivatives.
+        const auto& x_pre = ekf_.state();
+        for (int k = 0; k < NumCrafts; ++k) {
+            typename CraftJ::RigidState xk;
+            for (int i = 0; i < kRigidStateDim; ++i) {
+                xk(i) = Jet(x_pre(kRigidStateDim*k + i),
+                            kRigidStateDim*k + i);
+            }
+            crafts_jet_[k]->set_rigid_state(xk);
+        }
+
+        // One Jet pass: kin + agg at x_pre. Caches the Jet sensors'
+        // last_* values and the scene_to_part acc_linear field; both
+        // carry derivs w.r.t. x_pre suitable for measurement functors.
+        w_jet_->evaluate();
+    }
+
+    // Read a measurement functor's h(x_pre) + Jacobian and queue the
+    // (h, H, z, R) tuple for application in end_step.
+    //
+    // The HReader is a callable invoked as `h(*this)` — it returns
+    // `Eigen::Matrix<Jet, N, 1>`. Functors reach into the Jet sensors
+    // via `craft_jet(i).<sensor>().<accessor>()`; the cached values
+    // are at x_pre with identity-seeded derivatives so each Jet's `.v`
+    // slot holds one row of H.
+    template <int N, class HReader>
+    void add_update(const HReader& h,
+                    const Eigen::Matrix<double, N, 1>& z,
+                    const Eigen::Matrix<double, N, N>& R) {
+        Eigen::Matrix<Jet, N, 1> h_jet = h(*this);
+
+        Eigen::Matrix<double, N, 1>        h_pre;
+        Eigen::Matrix<double, N, kStateDim> H;
+        for (int i = 0; i < N; ++i) {
+            h_pre(i) = h_jet(i).a;
+            for (int j = 0; j < kStateDim; ++j) {
+                H(i, j) = h_jet(i).v[j];
+            }
+        }
+        Eigen::Matrix<double, N, 1> y_innov = z - h_pre;
+
+        // Capture H, y, R by value into a type-erased apply step.
+        queue_.push_back([H, y_innov, R](StateVec& x, StateCov& P) {
+            Eigen::Matrix<double, N, N> S = H * P * H.transpose() + R;
+            Eigen::Matrix<double, kStateDim, N> K =
+                P * H.transpose() * S.inverse();
+            x = x + K * y_innov;
+            P = (StateCov::Identity() - K * H) * P;
+            P = 0.5 * (P + P.transpose().eval());
+        });
+    }
+
+    void end_step() {
+        if (!w_jet_) return;
+
+        // Advance Jet world from x_pre to x_post via integrate-only
+        // (no re-aggregate; the next begin_step re-seeds + re-evaluates
+        // anyway, so refreshing the cache here would be wasted work).
+        w_jet_->advance_only(static_cast<Jet>(dt_pending_));
+
+        // Extract x_post + F from the Jet craft state.
+        StateVec x_post;
+        StateCov F;
+        for (int k = 0; k < NumCrafts; ++k) {
+            auto xk_jet = crafts_jet_[k]->get_rigid_state();
+            for (int i = 0; i < kRigidStateDim; ++i) {
+                x_post(kRigidStateDim*k + i) = xk_jet(i).a;
+                for (int j = 0; j < kStateDim; ++j) {
+                    F(kRigidStateDim*k + i, j) = xk_jet(i).v[j];
+                }
+            }
+        }
+
+        // P_pre = F P F^T + Q.
+        StateCov P = F * ekf_.covariance() * F.transpose() + Q_pending_;
+        StateVec x = x_post;
+
+        // Apply queued sensor updates sequentially (each shrinks P,
+        // shifts x). All H matrices were captured at x_pre so the
+        // ordering doesn't matter for correctness — they share the
+        // same linearization point.
+        for (auto& apply : queue_) apply(x, P);
+        queue_.clear();
+
+        ekf_.set_state(x);
+        ekf_.set_covariance(P);
+
+        // Mirror posterior to Real-side crafts so user-facing handles
+        // (sensor `set_measurement` writes, telemetry reads) reflect
+        // the filter's current belief.
+        for (int k = 0; k < NumCrafts; ++k) {
+            if (!crafts_real_[k]) continue;
+            typename CraftR::RigidState xk =
+                x.template segment<kRigidStateDim>(kRigidStateDim * k);
+            crafts_real_[k]->set_rigid_state(xk);
+        }
+    }
+
 private:
     template <int N>
     Eigen::Matrix<double, N, 1> diag_stddev_segment(int start) const noexcept {
@@ -258,6 +419,11 @@ private:
     std::array<CraftR*, NumCrafts>   crafts_real_{};
     std::array<CraftJ*, NumCrafts>   crafts_jet_ {};
     EKF<kStateDim, MeasDim>          ekf_;
+
+    // Fused step state: held between begin_step() and end_step().
+    double                                                       dt_pending_ = 0.0;
+    StateCov                                                     Q_pending_  = StateCov::Zero();
+    std::vector<std::function<void(StateVec&, StateCov&)>>       queue_;
 };
 
 } // namespace manta::estimation
