@@ -2,7 +2,7 @@
 // point for your own customizations — re-running codegen will overwrite.
 
 
-#include "ex6_est.hpp"
+#include "ex9.hpp"
 
 #include <cstdint>
 #include <cstdio>
@@ -24,7 +24,7 @@
 // (offset 0).
 struct _ekf_0_c0_imu_meas {
     template <class S>
-    Eigen::Matrix<S, 6, 1> operator()(const Eigen::Matrix<S, 13, 1>& x) const {
+    Eigen::Matrix<S, 6, 1> operator()(const Eigen::Matrix<S, 26, 1>& x) const {
         Eigen::Matrix<S, 6, 1> z;
         z(0) = S(0); z(1) = S(0); z(2) = S(0);
         z(3) = x(10); z(4) = x(11); z(5) = x(12);
@@ -36,21 +36,47 @@ struct _ekf_0_c0_imu_meas {
 // Reads craft-0's state slice (offset 0).
 struct _ekf_0_c0_dvl_meas {
     template <class S>
-    Eigen::Matrix<S, 3, 1> operator()(const Eigen::Matrix<S, 13, 1>& x) const {
+    Eigen::Matrix<S, 3, 1> operator()(const Eigen::Matrix<S, 26, 1>& x) const {
         Eigen::Quaternion<S> q(x(3), x(4), x(5), x(6));
         Eigen::Matrix<S, 3, 1> v_scene(x(7), x(8), x(9));
         return q.conjugate() * v_scene;
     }
 };
 
-namespace manta_gen::ex6_est {
+// IMU: predicted [accel_body=0; gyro_body=ω_body] under the
+// no-net-force / free-flight assumption (est dynamics has
+// no thrusters or gravity). Reads craft-1 slice
+// (offset 13).
+struct _ekf_0_c1_imu_meas {
+    template <class S>
+    Eigen::Matrix<S, 6, 1> operator()(const Eigen::Matrix<S, 26, 1>& x) const {
+        Eigen::Matrix<S, 6, 1> z;
+        z(0) = S(0); z(1) = S(0); z(2) = S(0);
+        z(3) = x(23); z(4) = x(24); z(5) = x(25);
+        return z;
+    }
+};
+
+// DVL: predicted body-frame velocity = R(q)^T * v_scene.
+// Reads craft-1's state slice (offset 13).
+struct _ekf_0_c1_dvl_meas {
+    template <class S>
+    Eigen::Matrix<S, 3, 1> operator()(const Eigen::Matrix<S, 26, 1>& x) const {
+        Eigen::Quaternion<S> q(x(16), x(17), x(18), x(19));
+        Eigen::Matrix<S, 3, 1> v_scene(x(20), x(21), x(22));
+        return q.conjugate() * v_scene;
+    }
+};
+
+namespace manta_gen::ex9 {
 
 manta::WorldT<double>  w{};
 manta::SceneT<double>* scene = nullptr;
-Ex6EstCraftT<double> craft{};
-manta::estimation::WorldEKF<1, 9> ekf_0;
+Drone0CraftT<double> craft_0{};
+Drone1CraftT<double> craft_1{};
+manta::estimation::WorldEKF<2, 18> ekf_0;
 
-}  // namespace manta_gen::ex6_est
+}  // namespace manta_gen::ex9
 
 namespace {
 
@@ -74,7 +100,7 @@ bool parse_float_array(std::string_view s, std::vector<float>& out) {
 
 std::optional<zenoh::Session> g_session;
 
-using EkfT = decltype(manta_gen::ex6_est::ekf_0);
+using EkfT = decltype(manta_gen::ex9::ekf_0);
 EkfT::StateCov g_Q = EkfT::StateCov::Identity() * 1e-06f;
 
 // Jet shadow world. Built identically to the Real side in
@@ -83,10 +109,13 @@ EkfT::StateCov g_Q = EkfT::StateCov::Identity() * 1e-06f;
 using JetType = EkfT::Jet;
 manta::WorldT<JetType>   w_jet{};
 manta::SceneT<JetType>*  scene_jet = nullptr;
-Ex6EstCraftT<JetType> craft_jet{};
+Drone0CraftT<JetType> craft_0_jet{};
+Drone1CraftT<JetType> craft_1_jet{};
 
 Eigen::Matrix<double, 6, 6> R_c0_imu = Eigen::Matrix<double, 6, 6>::Zero();
 Eigen::Matrix<double, 3, 3> R_c0_dvl = Eigen::Matrix<double, 3, 3>::Zero();
+Eigen::Matrix<double, 6, 6> R_c1_imu = Eigen::Matrix<double, 6, 6>::Zero();
+Eigen::Matrix<double, 3, 3> R_c1_dvl = Eigen::Matrix<double, 3, 3>::Zero();
 
 std::mutex bind_0_mtx;
 std::vector<float> bind_0_payload;
@@ -94,33 +123,42 @@ std::optional<zenoh::Subscriber<void>> bind_0_sub;
 std::mutex bind_1_mtx;
 std::vector<float> bind_1_payload;
 std::optional<zenoh::Subscriber<void>> bind_1_sub;
-std::optional<zenoh::Publisher> pub_2;
+std::mutex bind_2_mtx;
+std::vector<float> bind_2_payload;
+std::optional<zenoh::Subscriber<void>> bind_2_sub;
+std::mutex bind_3_mtx;
+std::vector<float> bind_3_payload;
+std::optional<zenoh::Subscriber<void>> bind_3_sub;
+std::optional<zenoh::Publisher> pub_4;
 
 int g_pub_decim = 0;
 constexpr int kPubEvery = 20;  // ~50 Hz publish
 
 }  // anonymous namespace
 
-namespace manta_gen::ex6_est {
+namespace manta_gen::ex9 {
 
 void setup() {
     // ---- Real world ----
     w.clock().set_dt(DT);
     scene = &w.create_scene();
-    scene->add_craft(craft);
+    scene->add_craft(craft_0);
+    scene->add_craft(craft_1);
 
     // ---- Jet shadow world (built identically) ----
     w_jet.clock().set_dt(DT);
     scene_jet = &w_jet.create_scene();
-    scene_jet->add_craft(craft_jet);
+    scene_jet->add_craft(craft_0_jet);
+    scene_jet->add_craft(craft_1_jet);
 
     // ---- Filter init ----
     EkfT::StateVec x0 = EkfT::StateVec::Zero();
     x0(3) = 1.0;     // craft 0: identity quaternion w
+    x0(16) = 1.0;     // craft 1: identity quaternion w
     EkfT::StateCov P0 = EkfT::StateCov::Identity() * 1.0f;
     ekf_0.set_state(x0);
     ekf_0.set_covariance(P0);
-    ekf_0.bind(w_jet, {&craft}, {&craft_jet});
+    ekf_0.bind(w_jet, {&craft_0, &craft_1}, {&craft_0_jet, &craft_1_jet});
 
     R_c0_imu(0, 0) = 0.0025f;
     R_c0_imu(1, 1) = 0.0025f;
@@ -131,12 +169,21 @@ void setup() {
     R_c0_dvl(0, 0) = 0.0004f;
     R_c0_dvl(1, 1) = 0.0004f;
     R_c0_dvl(2, 2) = 0.0004f;
+    R_c1_imu(0, 0) = 0.0025f;
+    R_c1_imu(1, 1) = 0.0025f;
+    R_c1_imu(2, 2) = 0.0025f;
+    R_c1_imu(3, 3) = 2.5e-05f;
+    R_c1_imu(4, 4) = 2.5e-05f;
+    R_c1_imu(5, 5) = 2.5e-05f;
+    R_c1_dvl(0, 0) = 0.0004f;
+    R_c1_dvl(1, 1) = 0.0004f;
+    R_c1_dvl(2, 2) = 0.0004f;
 
     // ---- Zenoh ----
     g_session.emplace(zenoh::Session::open(zenoh::Config::create_default()));
 
     bind_0_sub.emplace(g_session->declare_subscriber(
-        zenoh::KeyExpr("manta/ex6/imu"),
+        zenoh::KeyExpr("manta/ex9/imu/0"),
         [](const zenoh::Sample& s) {
             std::vector<float> v;
             std::string payload(s.get_payload().as_string());
@@ -146,7 +193,7 @@ void setup() {
             }
         }, zenoh::closures::none));
     bind_1_sub.emplace(g_session->declare_subscriber(
-        zenoh::KeyExpr("manta/ex6/dvl"),
+        zenoh::KeyExpr("manta/ex9/dvl/0"),
         [](const zenoh::Sample& s) {
             std::vector<float> v;
             std::string payload(s.get_payload().as_string());
@@ -155,51 +202,98 @@ void setup() {
                 bind_1_payload = std::move(v);
             }
         }, zenoh::closures::none));
-    pub_2.emplace(g_session->declare_publisher(zenoh::KeyExpr("manta/ex6/estimate")));
+    bind_2_sub.emplace(g_session->declare_subscriber(
+        zenoh::KeyExpr("manta/ex9/imu/1"),
+        [](const zenoh::Sample& s) {
+            std::vector<float> v;
+            std::string payload(s.get_payload().as_string());
+            if (parse_float_array(payload, v) && v.size() >= 6) {
+                std::lock_guard<std::mutex> lk(bind_2_mtx);
+                bind_2_payload = std::move(v);
+            }
+        }, zenoh::closures::none));
+    bind_3_sub.emplace(g_session->declare_subscriber(
+        zenoh::KeyExpr("manta/ex9/dvl/1"),
+        [](const zenoh::Sample& s) {
+            std::vector<float> v;
+            std::string payload(s.get_payload().as_string());
+            if (parse_float_array(payload, v) && v.size() >= 3) {
+                std::lock_guard<std::mutex> lk(bind_3_mtx);
+                bind_3_payload = std::move(v);
+            }
+        }, zenoh::closures::none));
+    pub_4.emplace(g_session->declare_publisher(zenoh::KeyExpr("manta/ex9/estimate")));
 }
 
 void tick() {
     { std::lock_guard<std::mutex> lk(bind_0_mtx);
       if (bind_0_payload.size() >= 6) {
-          craft.imu().set_measurement(manta::geom::Vec3<manta::PartFrame, double>{bind_0_payload[0], bind_0_payload[1], bind_0_payload[2]}, manta::geom::Vec3<manta::PartFrame, double>{bind_0_payload[3], bind_0_payload[4], bind_0_payload[5]});    // member: set_measurement
+          craft_0.imu().set_measurement(manta::geom::Vec3<manta::PartFrame, double>{bind_0_payload[0], bind_0_payload[1], bind_0_payload[2]}, manta::geom::Vec3<manta::PartFrame, double>{bind_0_payload[3], bind_0_payload[4], bind_0_payload[5]});    // member: set_measurement
           bind_0_payload.clear();
       } }
     { std::lock_guard<std::mutex> lk(bind_1_mtx);
       if (bind_1_payload.size() >= 3) {
-          craft.dvl().set_measurement(manta::geom::Vec3<manta::PartFrame, double>{bind_1_payload[0], bind_1_payload[1], bind_1_payload[2]});    // member: set_measurement
+          craft_0.dvl().set_measurement(manta::geom::Vec3<manta::PartFrame, double>{bind_1_payload[0], bind_1_payload[1], bind_1_payload[2]});    // member: set_measurement
           bind_1_payload.clear();
+      } }
+    { std::lock_guard<std::mutex> lk(bind_2_mtx);
+      if (bind_2_payload.size() >= 6) {
+          craft_1.imu().set_measurement(manta::geom::Vec3<manta::PartFrame, double>{bind_2_payload[0], bind_2_payload[1], bind_2_payload[2]}, manta::geom::Vec3<manta::PartFrame, double>{bind_2_payload[3], bind_2_payload[4], bind_2_payload[5]});    // member: set_measurement
+          bind_2_payload.clear();
+      } }
+    { std::lock_guard<std::mutex> lk(bind_3_mtx);
+      if (bind_3_payload.size() >= 3) {
+          craft_1.dvl().set_measurement(manta::geom::Vec3<manta::PartFrame, double>{bind_3_payload[0], bind_3_payload[1], bind_3_payload[2]});    // member: set_measurement
+          bind_3_payload.clear();
       } }
 
     ekf_0.predict(DT, g_Q);
 
-    if (craft.imu().consume_fresh()) {
+    if (craft_0.imu().consume_fresh()) {
         Eigen::Matrix<double, 6, 1> z;
-        z(0) = craft.imu().last_accel().raw()(0);
-        z(1) = craft.imu().last_accel().raw()(1);
-        z(2) = craft.imu().last_accel().raw()(2);
-        z(3) = craft.imu().last_gyro().raw()(0);
-        z(4) = craft.imu().last_gyro().raw()(1);
-        z(5) = craft.imu().last_gyro().raw()(2);
+        z(0) = craft_0.imu().last_accel().raw()(0);
+        z(1) = craft_0.imu().last_accel().raw()(1);
+        z(2) = craft_0.imu().last_accel().raw()(2);
+        z(3) = craft_0.imu().last_gyro().raw()(0);
+        z(4) = craft_0.imu().last_gyro().raw()(1);
+        z(5) = craft_0.imu().last_gyro().raw()(2);
         ekf_0.template update_n<6>(_ekf_0_c0_imu_meas{}, z, R_c0_imu);
     }
-    if (craft.dvl().consume_fresh()) {
+    if (craft_0.dvl().consume_fresh()) {
         Eigen::Matrix<double, 3, 1> z;
-        z(0) = craft.dvl().last_velocity().raw()(0);
-        z(1) = craft.dvl().last_velocity().raw()(1);
-        z(2) = craft.dvl().last_velocity().raw()(2);
+        z(0) = craft_0.dvl().last_velocity().raw()(0);
+        z(1) = craft_0.dvl().last_velocity().raw()(1);
+        z(2) = craft_0.dvl().last_velocity().raw()(2);
         ekf_0.template update_n<3>(_ekf_0_c0_dvl_meas{}, z, R_c0_dvl);
+    }
+    if (craft_1.imu().consume_fresh()) {
+        Eigen::Matrix<double, 6, 1> z;
+        z(0) = craft_1.imu().last_accel().raw()(0);
+        z(1) = craft_1.imu().last_accel().raw()(1);
+        z(2) = craft_1.imu().last_accel().raw()(2);
+        z(3) = craft_1.imu().last_gyro().raw()(0);
+        z(4) = craft_1.imu().last_gyro().raw()(1);
+        z(5) = craft_1.imu().last_gyro().raw()(2);
+        ekf_0.template update_n<6>(_ekf_0_c1_imu_meas{}, z, R_c1_imu);
+    }
+    if (craft_1.dvl().consume_fresh()) {
+        Eigen::Matrix<double, 3, 1> z;
+        z(0) = craft_1.dvl().last_velocity().raw()(0);
+        z(1) = craft_1.dvl().last_velocity().raw()(1);
+        z(2) = craft_1.dvl().last_velocity().raw()(2);
+        ekf_0.template update_n<3>(_ekf_0_c1_dvl_meas{}, z, R_c1_dvl);
     }
 
     if (++g_pub_decim >= kPubEvery) {
         g_pub_decim = 0;
         { std::string _json = "{";
-          _json += "\"p\":[";
+          _json += "\"p0\":[";
           { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(ekf_0.position()(0))); _json += _b; }
           { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ekf_0.position()(1))); _json += _b; }
           { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ekf_0.position()(2))); _json += _b; }
           _json += "]";
           _json += ",";
-          _json += "\"v\":[";
+          _json += "\"v0\":[";
           { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(ekf_0.vel_linear()(0))); _json += _b; }
           { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ekf_0.vel_linear()(1))); _json += _b; }
           { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ekf_0.vel_linear()(2))); _json += _b; }
@@ -217,7 +311,7 @@ void tick() {
           { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ekf_0.vel_linear_stddev()(2))); _json += _b; }
           _json += "]";
           _json += "}";
-          pub_2->put(zenoh::Bytes(_json));
+          pub_4->put(zenoh::Bytes(_json));
         }
     }
 }
@@ -225,14 +319,16 @@ void tick() {
 void shutdown() {
     bind_0_sub.reset();
     bind_1_sub.reset();
-    pub_2.reset();
+    bind_2_sub.reset();
+    bind_3_sub.reset();
+    pub_4.reset();
     g_session.reset();
 }
 
 // ---- Polymorphic Harness adapter ----
-void Harness::setup()    { ::manta_gen::ex6_est::setup();    }
-void Harness::tick()     { ::manta_gen::ex6_est::tick();     }
-void Harness::shutdown() { ::manta_gen::ex6_est::shutdown(); }
+void Harness::setup()    { ::manta_gen::ex9::setup();    }
+void Harness::tick()     { ::manta_gen::ex9::tick();     }
+void Harness::shutdown() { ::manta_gen::ex9::shutdown(); }
 Harness harness;
 
-}  // namespace manta_gen::ex6_est
+}  // namespace manta_gen::ex9

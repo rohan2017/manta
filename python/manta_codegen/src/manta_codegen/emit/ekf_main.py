@@ -82,33 +82,49 @@ class _MeasFunctor:
     """
     def __init__(self, n_floats: int, body: str, z_read: list[str],
                  functor_name: str,
-                 mag_field_var: str | None = None):
+                 mag_field_var: str | None = None,
+                 craft_idx: int = 0):
         self.n_floats = n_floats
         self.body = body
         self.z_read = z_read
         self.functor_name = functor_name
         self.mag_field_var = mag_field_var   # set for magnetometer specs only
+        self.craft_idx = craft_idx           # which craft slot in the joint state
 
     @classmethod
     def for_part(cls, part, ekf_var: str, part_var: str,
+                 craft_idx: int = 0,
+                 state_dim: int = 13,
                  mag_field_var: str | None = None) -> "_MeasFunctor":
         """Dispatch by part type. Supported: DVL, IMU, Magnetometer.
 
-        `part_var` is the sensor's C++ accessor (e.g. `ekf_0.craft().dvl()`).
-        `mag_field_var` is the C++ var name of the first registered MagField
-        in the surrounding scope — required if Magnetometer is among the
-        measurements; ignored otherwise.
+        `part_var` is the sensor's C++ accessor (e.g.
+            `manta_gen::ex9::craft_0.dvl()`).
+        `craft_idx` selects which 13-DOF block of the joint state vector
+            this sensor's craft occupies. For single-craft worlds it's 0;
+            for multi-craft, sensor-on-craft-1 reads from state segment
+            [13, 26).
+        `state_dim` is the full filter state width (13 * num_crafts);
+            used for the templated functor input matrix size hint.
+        `mag_field_var` is the C++ var name of the first registered
+            MagField in the surrounding scope — required if Magnetometer
+            is among the measurements; ignored otherwise.
         """
         cct = getattr(type(part), "cpp_class_template", "")
-        functor_name = f"_{ekf_var}_{part.name}_meas"
+        # Functor name includes craft_idx — multi-craft worlds typically
+        # have parts with the same name (e.g. each drone's `imu`).
+        functor_name = f"_{ekf_var}_c{craft_idx}_{part.name}_meas"
+        # Per-craft state offset into the joint state vector.
+        s0 = craft_idx * 13
         if cct == "manta::parts::DVLT":
             body = (
                 f"// DVL: predicted body-frame velocity = R(q)^T * v_scene.\n"
+                f"// Reads craft-{craft_idx}'s state slice (offset {s0}).\n"
                 f"struct {functor_name} {{\n"
                 f"    template <class S>\n"
-                f"    Eigen::Matrix<S, 3, 1> operator()(const Eigen::Matrix<S, 13, 1>& x) const {{\n"
-                f"        Eigen::Quaternion<S> q(x(3), x(4), x(5), x(6));\n"
-                f"        Eigen::Matrix<S, 3, 1> v_scene(x(7), x(8), x(9));\n"
+                f"    Eigen::Matrix<S, 3, 1> operator()(const Eigen::Matrix<S, {state_dim}, 1>& x) const {{\n"
+                f"        Eigen::Quaternion<S> q(x({s0+3}), x({s0+4}), x({s0+5}), x({s0+6}));\n"
+                f"        Eigen::Matrix<S, 3, 1> v_scene(x({s0+7}), x({s0+8}), x({s0+9}));\n"
                 f"        return q.conjugate() * v_scene;\n"
                 f"    }}\n"
                 f"}};\n"
@@ -118,20 +134,19 @@ class _MeasFunctor:
                 f"{part_var}.last_velocity().raw()(1)",
                 f"{part_var}.last_velocity().raw()(2)",
             ]
-            return cls(3, body, z_read, functor_name)
+            return cls(3, body, z_read, functor_name, craft_idx=craft_idx)
         if cct == "manta::parts::IMUT":
             body = (
                 f"// IMU: predicted [accel_body=0; gyro_body=ω_body] under the\n"
                 f"// no-net-force / free-flight assumption (est dynamics has\n"
-                f"// no thrusters or gravity). gyro_body is a direct state\n"
-                f"// slice; accel_body is zero. For est crafts with active\n"
-                f"// forces, replace this functor.\n"
+                f"// no thrusters or gravity). Reads craft-{craft_idx} slice\n"
+                f"// (offset {s0}).\n"
                 f"struct {functor_name} {{\n"
                 f"    template <class S>\n"
-                f"    Eigen::Matrix<S, 6, 1> operator()(const Eigen::Matrix<S, 13, 1>& x) const {{\n"
+                f"    Eigen::Matrix<S, 6, 1> operator()(const Eigen::Matrix<S, {state_dim}, 1>& x) const {{\n"
                 f"        Eigen::Matrix<S, 6, 1> z;\n"
                 f"        z(0) = S(0); z(1) = S(0); z(2) = S(0);\n"
-                f"        z(3) = x(10); z(4) = x(11); z(5) = x(12);\n"
+                f"        z(3) = x({s0+10}); z(4) = x({s0+11}); z(5) = x({s0+12});\n"
                 f"        return z;\n"
                 f"    }}\n"
                 f"}};\n"
@@ -144,33 +159,20 @@ class _MeasFunctor:
                 f"{part_var}.last_gyro().raw()(1)",
                 f"{part_var}.last_gyro().raw()(2)",
             ]
-            return cls(6, body, z_read, functor_name)
+            return cls(6, body, z_read, functor_name, craft_idx=craft_idx)
         if cct == "manta::parts::MagnetometerT":
             if mag_field_var is None:
                 raise RuntimeError(
                     f"EKF codegen: Magnetometer {part.name!r} requires a "
-                    f"`MagField` registered on the EKF's wrapped world. Add "
-                    f"`world.add_field(MagField()...)` (or wire one via "
-                    f"`Earth(dipole_moment=...)`) so the codegen can query "
-                    f"B at the current state position each update.")
-            # Locally-constant-B approximation: B(p) is treated as constant
-            # at update time — we read it once from the registered field at
-            # the current best-estimate position, then h(x) just rotates by
-            # R(q)^T. The Jacobian is exact in q (the dominant term) and
-            # zero in p (the small-position-gradient simplification). For
-            # most magnetometer applications |grad B|*|dp| << |B| over a
-            # single tick, so the loss is in the noise.
+                    f"`MagField` registered on the EKF's wrapped world.")
             body = (
                 f"// Magnetometer: predicted body-frame B = R(q)^T * B(p_now).\n"
-                f"// B is captured at update-time from the registered MagField\n"
-                f"// (locally-constant-B approximation: dh/dq is exact,\n"
-                f"// dh/dp is dropped). Set b_scene_now before passing the\n"
-                f"// functor instance to update_n<3>.\n"
+                f"// Locally-constant-B; reads craft-{craft_idx} slice (offset {s0}).\n"
                 f"struct {functor_name} {{\n"
                 f"    Eigen::Matrix<double, 3, 1> b_scene_now;\n"
                 f"    template <class S>\n"
-                f"    Eigen::Matrix<S, 3, 1> operator()(const Eigen::Matrix<S, 13, 1>& x) const {{\n"
-                f"        Eigen::Quaternion<S> q(x(3), x(4), x(5), x(6));\n"
+                f"    Eigen::Matrix<S, 3, 1> operator()(const Eigen::Matrix<S, {state_dim}, 1>& x) const {{\n"
+                f"        Eigen::Quaternion<S> q(x({s0+3}), x({s0+4}), x({s0+5}), x({s0+6}));\n"
                 f"        Eigen::Matrix<S, 3, 1> b;\n"
                 f"        b(0) = S(b_scene_now(0));\n"
                 f"        b(1) = S(b_scene_now(1));\n"
@@ -185,7 +187,7 @@ class _MeasFunctor:
                 f"{part_var}.last_b().raw()(2)",
             ]
             return cls(3, body, z_read, functor_name,
-                       mag_field_var=mag_field_var)
+                       mag_field_var=mag_field_var, craft_idx=craft_idx)
         raise NotImplementedError(
             f"EKF codegen: no measurement-functor template for "
             f"{type(part).__name__} ({part.name!r}, cpp_class_template={cct!r}).")
@@ -218,7 +220,7 @@ class _MeasFunctor:
         lines.append(f"{indent}if ({part_var}.consume_fresh()) {{")
         if self.mag_field_var is not None:
             lines.append(f"{indent}    {self.functor_name} _h;")
-            lines.append(f"{indent}    auto _p_d = {ekf_var}.position();")
+            lines.append(f"{indent}    auto _p_d = {ekf_var}.position({self.craft_idx});")
             lines.append(f"{indent}    Eigen::Matrix<float, 3, 1> _p_f("
                          f"float(_p_d(0)), float(_p_d(1)), float(_p_d(2)));")
             lines.append(
@@ -324,40 +326,64 @@ def _filter_jet_craft_type(craft) -> str:
 
 def _filter_collect(target, filter_obj, kind):
     """Gather the per-target metadata both emit_filter_hpp and
-    emit_filter_cpp need: unique crafts, the C++ wrapper-class string,
-    a list of (part, _MeasFunctor) measurement specs, the meas_dim,
-    the bind-id assignments, and the field-sync indices."""
+    emit_filter_cpp need: per-craft type info + var names, measurement
+    specs (each tagged with its craft_idx), bind-id assignments,
+    field-sync indices.
+
+    Multi-craft filter targets work: each Craft becomes craft_0/1/...
+    in the namespace, the EKF state is the concat of every craft's
+    13-DOF rigid-body state, and per-sensor measurement functors
+    offset their state-segment reads by `13 * craft_idx`.
+    """
     world = filter_obj.world
     if not world.crafts:
         raise RuntimeError(
             f"emit_{kind}_main_cpp: filter's wrapped world has no crafts")
-    if len(world.crafts) > 1:
-        raise NotImplementedError(
-            f"emit_{kind}_main_cpp: only single-craft worlds are supported in v1.")
     if world.planets:
         raise NotImplementedError(
             f"emit_{kind}_main_cpp: planets in a filter-wrapped world aren't "
-            f"supported yet (WorldEKF/WorldUKFOf don't own a Scene). "
-            f"Register fields directly via World.fields for now.")
+            f"supported yet. Register fields directly via World.fields for now.")
 
     unique_crafts = _world_unique_crafts(world)
-    primary = unique_crafts[0]
-    real_craft_type = _filter_real_craft_type(primary)
-    jet_class_tmpl  = _filter_jet_craft_type(primary)
-    num_crafts      = len(world.crafts)
+    num_crafts    = len(unique_crafts)
+    state_dim     = 13 * num_crafts
+
+    # Per-craft naming + types.
+    def craft_var_for(idx: int) -> str:
+        return "craft" if num_crafts == 1 else f"craft_{idx}"
+
+    def craft_jet_var_for(idx: int) -> str:
+        return f"{craft_var_for(idx)}_jet"
+
+    craft_id_to_idx: dict[int, int] = {
+        id(c): i for i, c in enumerate(unique_crafts)
+    }
+
+    real_craft_types = [_filter_real_craft_type(c) for c in unique_crafts]
+    jet_class_tmpls  = [_filter_jet_craft_type(c)  for c in unique_crafts]
 
     filter_var = filter_obj.cpp_var_name()
-    # The Real craft is a namespace-scope variable named `craft` (or
-    # `craft_<i>` for multi-craft worlds — single-craft is the only
-    # case currently supported).
-    craft_var = "craft"
     mag_field_var = _first_mag_field_var(world)
 
     meas_specs: list[tuple[object, _MeasFunctor]] = []
     for m in filter_obj.measurements:
-        part_var = f"{craft_var}.{m.name}()"
-        spec = _MeasFunctor.for_part(m, filter_var, part_var,
-                                     mag_field_var=mag_field_var)
+        # Resolve the craft this part is attached to.
+        m_craft = getattr(m, "_craft", None)
+        if m_craft is None:
+            raise RuntimeError(
+                f"EKF codegen: measurement part {m.name!r} not attached "
+                f"to a craft (call craft.add(part) before adding to EKF).")
+        if id(m_craft) not in craft_id_to_idx:
+            raise RuntimeError(
+                f"EKF codegen: measurement part {m.name!r}'s craft "
+                f"{m_craft.name!r} is not in the filter's wrapped world.")
+        c_idx = craft_id_to_idx[id(m_craft)]
+        part_var = f"{craft_var_for(c_idx)}.{m.name}()"
+        spec = _MeasFunctor.for_part(
+            m, filter_var, part_var,
+            craft_idx=c_idx,
+            state_dim=state_dim,
+            mag_field_var=mag_field_var)
         meas_specs.append((m, spec))
 
     meas_dim = sum(s.n_floats for _, s in meas_specs) if meas_specs else 1
@@ -375,11 +401,14 @@ def _filter_collect(target, filter_obj, kind):
         "name":              world.name,
         "kind":              kind,
         "unique_crafts":     unique_crafts,
-        "real_craft_type":   real_craft_type,
-        "jet_class_tmpl":    jet_class_tmpl,
+        "real_craft_types":  real_craft_types,
+        "jet_class_tmpls":   jet_class_tmpls,
         "num_crafts":        num_crafts,
+        "state_dim":         state_dim,
+        "craft_id_to_idx":   craft_id_to_idx,
+        "craft_var_for":     craft_var_for,
+        "craft_jet_var_for": craft_jet_var_for,
         "filter_var":        filter_var,
-        "craft_var":         craft_var,
         "filter_header_inc": filter_header_inc,
         "filter_ctor":       filter_ctor,
         "meas_specs":        meas_specs,
@@ -393,15 +422,16 @@ def emit_filter_hpp(target, filter_obj, kind: str = "ekf") -> str:
     ctx = _filter_collect(target, filter_obj, kind)
     name             = ctx["name"]
     unique_crafts    = ctx["unique_crafts"]
+    real_craft_types = ctx["real_craft_types"]
+    num_crafts       = ctx["num_crafts"]
+    craft_var_for    = ctx["craft_var_for"]
     filter_var       = ctx["filter_var"]
     filter_inc       = ctx["filter_header_inc"]
     filter_ctor      = ctx["filter_ctor"]
-    real_craft_type  = ctx["real_craft_type"]
     meas_dim         = ctx["meas_dim"]
     world            = ctx["world"]
 
-    # Strip ctor args off the line to recover the bare wrapper type for
-    # the extern decl in the header.
+    # Strip ctor args off the line to recover the bare wrapper type.
     filter_type = filter_ctor.split(" " + filter_var, 1)[0].strip()
 
     lines: list[str] = [
@@ -427,21 +457,27 @@ def emit_filter_hpp(target, filter_obj, kind: str = "ekf") -> str:
         f"inline constexpr float SIM_RATE_MULT  = {_f(target.sim_rate_mult)};",
         "",
         f"// Real-side simulation infrastructure. The filter holds its own",
-        f"// `manta::WorldT<double>` (estimator state lives in double, not the",
-        f"// sim's `Real`=float, for filter conditioning). The Jet shadow",
-        f"// `WorldT<Jet>` used for the Jacobian step lives file-private in",
-        f"// the .cpp.",
+        f"// `manta::WorldT<double>` (estimator state lives in double for",
+        f"// filter conditioning). The Jet shadow `WorldT<Jet>` for the",
+        f"// Jacobian step lives file-private in the .cpp.",
         f"extern manta::WorldT<double>          w;",
         f"extern manta::SceneT<double>*         scene;          // valid after setup()",
     ]
     if world.fields:
         for i, f in enumerate(world.fields):
             lines.append(f"extern {f.cpp_class} field_{i};")
-    lines.append(f"extern {real_craft_type}    craft;")
+    if num_crafts == 1:
+        lines.append(f"extern {real_craft_types[0]} craft;")
+    else:
+        lines.append(f"// Crafts are concatenated in the EKF state vector in the order")
+        lines.append(f"// they're declared here: state[0..12]=craft_0, state[13..25]=craft_1, ...")
+        for i, t in enumerate(real_craft_types):
+            lines.append(f"extern {t} {craft_var_for(i)};")
     lines += [
         "",
-        f"// {kind.upper()} wrapper. Bound to `w` (Real) + the Jet shadow + the",
-        f"// craft pointer(s) inside setup(). State dim = 13 * num_crafts.",
+        f"// {kind.upper()} wrapper. State dim = 13 * {num_crafts} = {13*num_crafts}.",
+        f"// Bound inside setup() to the Real world + (for EKF) Jet shadow +",
+        f"// per-craft pointer arrays.",
         f"extern {filter_type} {filter_var};",
         "",
         "// One-time initialization. Builds both worlds (Real + Jet shadow),",
@@ -504,17 +540,19 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
         - shutdown() resets Zenoh handles in reverse-init order
     """
     ctx = _filter_collect(target, filter_obj, kind)
-    name             = ctx["name"]
-    filter_var       = ctx["filter_var"]
-    craft_var        = ctx["craft_var"]
-    filter_ctor      = ctx["filter_ctor"]
-    real_craft_type  = ctx["real_craft_type"]
-    jet_class_tmpl   = ctx["jet_class_tmpl"]
-    num_crafts       = ctx["num_crafts"]
-    meas_specs       = ctx["meas_specs"]
-    bind_assignments = ctx["bind_assignments"]
-    sync_field_idxs  = ctx["sync_field_idxs"]
-    world            = ctx["world"]
+    name              = ctx["name"]
+    filter_var        = ctx["filter_var"]
+    filter_ctor       = ctx["filter_ctor"]
+    real_craft_types  = ctx["real_craft_types"]
+    jet_class_tmpls   = ctx["jet_class_tmpls"]
+    num_crafts        = ctx["num_crafts"]
+    craft_var_for     = ctx["craft_var_for"]
+    craft_jet_var_for = ctx["craft_jet_var_for"]
+    craft_id_to_idx   = ctx["craft_id_to_idx"]
+    meas_specs        = ctx["meas_specs"]
+    bind_assignments  = ctx["bind_assignments"]
+    sync_field_idxs   = ctx["sync_field_idxs"]
+    world             = ctx["world"]
 
     needs_jet = (kind == "ekf")
 
@@ -553,7 +591,8 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
     ]
     for i, f in enumerate(world.fields):
         lines.append(f.emit_construction(f"field_{i}"))
-    lines.append(f"{real_craft_type} {craft_var}{{}};")
+    for i in range(num_crafts):
+        lines.append(f"{real_craft_types[i]} {craft_var_for(i)}{{}};")
     lines.append(filter_ctor)
     lines += [
         "",
@@ -601,17 +640,14 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
             f"manta::WorldT<JetType>   w_jet{{}};",
             f"manta::SceneT<JetType>*  scene_jet = nullptr;",
         ]
-        for i, f in enumerate(world.fields):
-            # The same field instance is shared between Real and Jet worlds
-            # (registration is by-pointer; field state is non-templated).
-            # No separate Jet field decl needed.
-            pass
-        lines.append(f"{jet_class_tmpl}<JetType> {craft_var}_jet{{}};")
+        for i in range(num_crafts):
+            lines.append(
+                f"{jet_class_tmpls[i]}<JetType> {craft_jet_var_for(i)}{{}};")
         lines.append("")
 
     for m, spec in meas_specs:
         n = spec.n_floats
-        rname = f"R_{m.name}"
+        rname = f"R_c{spec.craft_idx}_{m.name}"
         lines.append(f"Eigen::Matrix<double, {n}, {n}> {rname} = "
                      f"Eigen::Matrix<double, {n}, {n}>::Zero();")
     if meas_specs:
@@ -661,7 +697,8 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
         lines.append(f"    w.register_field({var});")
         for base in getattr(f, "register_as", []) or []:
             lines.append(f"    w.register_field<{base}>({var});")
-    lines.append(f"    scene->add_craft({craft_var});")
+    for i in range(num_crafts):
+        lines.append(f"    scene->add_craft({craft_var_for(i)});")
     lines.append("")
 
     if needs_jet:
@@ -678,7 +715,8 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
             lines.append(f"    w_jet.register_field({var});")
             for base in getattr(f, "register_as", []) or []:
                 lines.append(f"    w_jet.register_field<{base}>({var});")
-        lines.append(f"    scene_jet->add_craft({craft_var}_jet);")
+        for i in range(num_crafts):
+            lines.append(f"    scene_jet->add_craft({craft_jet_var_for(i)});")
         lines.append("")
 
     # Filter init + bind.
@@ -694,17 +732,18 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
         f"    {filter_var}.set_state(x0);",
         f"    {filter_var}.set_covariance(P0);",
     ]
+    real_arr = "{" + ", ".join(f"&{craft_var_for(i)}" for i in range(num_crafts)) + "}"
     if needs_jet:
-        lines.append(f"    {filter_var}.bind(w_jet, "
-                     f"{{&{craft_var}}}, {{&{craft_var}_jet}});")
+        jet_arr = "{" + ", ".join(f"&{craft_jet_var_for(i)}" for i in range(num_crafts)) + "}"
+        lines.append(f"    {filter_var}.bind(w_jet, {real_arr}, {jet_arr});")
     else:
-        lines.append(f"    {filter_var}.bind(w, {{&{craft_var}}});")
+        lines.append(f"    {filter_var}.bind(w, {real_arr});")
     lines.append("")
 
     # Initialize R diag entries.
     for m, spec in meas_specs:
         diag = spec.sigma_squared_diag(m)
-        rname = f"R_{m.name}"
+        rname = f"R_c{spec.craft_idx}_{m.name}"
         for i, v in enumerate(diag):
             lines.append(f"    {rname}({i}, {i}) = {_f(v)};")
     if meas_specs:
@@ -731,11 +770,23 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
     # ---- tick() ----
     lines += ["void tick() {"]
 
+    # Resolve which craft each binding member belongs to. For single-craft
+    # worlds the lookup collapses to "craft" / `filter_var`; for multi-craft
+    # we look up by craft_ref's id().
+    def _craft_var_for_binding(b):
+        # All members of one binding must share a craft (the bindings system
+        # already enforces this for non-EKF-rooted signals).
+        m0 = next(iter(b.members.values()))
+        if _is_filter_signal(m0):
+            return craft_var_for(0)   # not used for filter-rooted signals
+        cidx = craft_id_to_idx.get(id(m0.craft_ref), 0)
+        return craft_var_for(cidx)
+
     # Apply in-bindings.
     for bid, b in bind_assignments:
         if b.direction == "in":
             _emit_input_binding_apply_indented(
-                lines, bid, b, craft_var, filter_var,
+                lines, bid, b, _craft_var_for_binding(b), filter_var,
                 templated_craft=True, indent="    ")
 
     lines += [
@@ -745,8 +796,8 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
     ]
 
     for m, spec in meas_specs:
-        rname = f"R_{m.name}"
-        part_acc = f"{craft_var}.{m.name}()"
+        rname = f"R_c{spec.craft_idx}_{m.name}"
+        part_acc = f"{craft_var_for(spec.craft_idx)}.{m.name}()"
         spec.emit_update_block(lines, filter_var, part_acc, rname, indent="    ")
     if meas_specs:
         lines.append("")
@@ -759,7 +810,8 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
         for bid, b in bind_assignments:
             if b.direction == "out":
                 _emit_output_binding_publish_indented(
-                    lines, bid, b, craft_var, filter_var, indent="        ")
+                    lines, bid, b, _craft_var_for_binding(b), filter_var,
+                    indent="        ")
         lines.append("    }")
 
     lines += ["}", ""]
@@ -794,6 +846,7 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
 
 def emit_filter_main_cpp(target, filter_obj, kind: str = "ekf") -> str:
     name = filter_obj.world.name
+    n_crafts = len(filter_obj.world.crafts)
     n_meas = len(filter_obj.measurements)
     n_bindings = len(filter_obj.world.bindings)
     kind_label = kind.upper()
@@ -819,7 +872,7 @@ def emit_filter_main_cpp(target, filter_obj, kind: str = "ekf") -> str:
         "    std::signal(SIGTERM, on_signal);",
         "",
         f"    manta_gen::{name}::setup();",
-        f'    std::printf("{target.name}: ready ({kind_label}). 1 craft, '
+        f'    std::printf("{target.name}: ready ({kind_label}). {n_crafts} craft(s), '
         f'{n_bindings} binding(s), {n_meas} measurement sensor(s).\\n");',
         "",
         f"    constexpr float WALL_PERIOD = manta_gen::{name}::DT "

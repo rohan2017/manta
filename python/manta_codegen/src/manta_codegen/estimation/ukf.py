@@ -86,14 +86,20 @@ class UKF:
             raise ValueError(
                 "UKF: world must have at least one craft "
                 "(world.add_craft(c) before constructing the UKF).")
-        if len(self.world.crafts) > 1:
-            raise NotImplementedError(
-                "UKF: only single-craft worlds are supported in v1.")
+        # Multi-craft worlds work — the joint sigma-point propagation
+        # runs the full World.update for every sigma vector; the per-
+        # craft slice lives at state[craft_idx*13 : (craft_idx+1)*13].
 
-        # UKF doesn't require scalar_templated — `evaluate` is only
-        # called with `double` (sigma-point propagation). Templated
-        # crafts work too; we instantiate the <double> form.
-        wrapped_craft = self.world.crafts[0].craft
+        # Filter targets always require scalar_templated crafts now —
+        # the codegen's Real-side WorldT<double> needs every craft as
+        # `<double>` (and EKF additionally needs `<Jet>`).
+        world_crafts = [e.craft for e in self.world.crafts]
+        for c in world_crafts:
+            if not getattr(c, "scalar_templated", False):
+                raise ValueError(
+                    f"UKF: craft {c.name!r} must have "
+                    f"`scalar_templated = True` (required by the templated "
+                    f"WorldT<double> filter path).")
 
         from ..core import PartDescriptor
         for m in self.measurements:
@@ -101,10 +107,11 @@ class UKF:
                 raise TypeError(
                     f"UKF.measurements: expected PartDescriptor instances, "
                     f"got {type(m).__name__} ({m!r}).")
-            if getattr(m, "_craft", None) is not wrapped_craft:
+            if getattr(m, "_craft", None) not in world_crafts:
+                names = [c.name for c in world_crafts]
                 raise ValueError(
                     f"UKF: measurement part {m.name!r} is not attached to "
-                    f"the UKF's wrapped craft {wrapped_craft.name!r}.")
+                    f"any craft in the UKF's wrapped world (crafts: {names}).")
 
         sd = self.STATE_DIM
         self.position        = self._make_signal("position",         "position",         3)

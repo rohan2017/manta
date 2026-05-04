@@ -101,28 +101,33 @@ class EKF:
             raise ValueError(
                 "EKF: world must have at least one craft "
                 "(world.add_craft(c) before constructing the EKF).")
-        if len(self.world.crafts) > 1:
-            raise NotImplementedError(
-                "EKF: only single-craft worlds are supported in v1.")
-        # The wrapped craft must be scalar-templated for Jet autodiff.
-        wrapped_craft = self.world.crafts[0].craft
-        if not getattr(wrapped_craft, "scalar_templated", False):
-            raise ValueError(
-                f"EKF: wrapped craft {wrapped_craft.name!r} must have "
-                f"`scalar_templated = True` (required for Jet autodiff).")
+        # Multi-craft worlds work natively under the templated-World
+        # architecture: state is the concat of every craft's 13-DOF rigid
+        # state, and the Jet shadow World propagates Jacobians through
+        # any inter-craft physics (tethers, contacts, fluid coupling).
+        # Every craft in the wrapped world must be scalar-templated —
+        # the EKF's Jet shadow World instantiates each craft as
+        # `<JetType>` for the Jacobian step.
+        world_crafts = [e.craft for e in self.world.crafts]
+        for c in world_crafts:
+            if not getattr(c, "scalar_templated", False):
+                raise ValueError(
+                    f"EKF: craft {c.name!r} must have "
+                    f"`scalar_templated = True` (required for Jet autodiff).")
 
-        # Validate each measurement is a PartDescriptor attached to the
-        # same world's craft. Lazy import avoids a circular dependency.
+        # Validate each measurement is a PartDescriptor attached to one of
+        # the wrapped world's crafts.
         from ..core import PartDescriptor
         for m in self.measurements:
             if not isinstance(m, PartDescriptor):
                 raise TypeError(
                     f"EKF.measurements: expected PartDescriptor instances, "
                     f"got {type(m).__name__} ({m!r}).")
-            if getattr(m, "_craft", None) is not wrapped_craft:
+            if getattr(m, "_craft", None) not in world_crafts:
+                names = [c.name for c in world_crafts]
                 raise ValueError(
                     f"EKF: measurement part {m.name!r} is not attached to "
-                    f"the EKF's wrapped craft {wrapped_craft.name!r}.")
+                    f"any craft in the EKF's wrapped world (crafts: {names}).")
 
         # Build the output BoundSignals once. They share a synthetic
         # `craft_ref` (this EKF) so the module-level publish/connect

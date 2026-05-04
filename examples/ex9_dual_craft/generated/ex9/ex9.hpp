@@ -8,10 +8,10 @@
 #include "manta/core/scene.hpp"
 #include "manta/core/world.hpp"
 #include "manta/estimation/world_ekf.hpp"
-#include "ex8_est_craft.hpp"
-#include "manta/fields/mag_field.hpp"
+#include "drone_0_craft.hpp"
+#include "drone_1_craft.hpp"
 
-namespace manta_gen::ex8_est {
+namespace manta_gen::ex9 {
 
 // Sim-tick parameters, frozen at codegen time.
 inline constexpr float DT             = 0.001f;
@@ -23,13 +23,15 @@ inline constexpr float SIM_RATE_MULT  = 1.0f;
 // Jacobian step lives file-private in the .cpp.
 extern manta::WorldT<double>          w;
 extern manta::SceneT<double>*         scene;          // valid after setup()
-extern manta::fields::MagField field_0;
-extern Ex8EstCraftT<double> craft;
+// Crafts are concatenated in the EKF state vector in the order
+// they're declared here: state[0..12]=craft_0, state[13..25]=craft_1, ...
+extern Drone0CraftT<double> craft_0;
+extern Drone1CraftT<double> craft_1;
 
-// EKF wrapper. State dim = 13 * 1 = 13.
+// EKF wrapper. State dim = 13 * 2 = 26.
 // Bound inside setup() to the Real world + (for EKF) Jet shadow +
 // per-craft pointer arrays.
-extern manta::estimation::WorldEKF<1, 12> ekf_0;
+extern manta::estimation::WorldEKF<2, 18> ekf_0;
 
 // One-time initialization. Builds both worlds (Real + Jet shadow),
 // registers fields, instantiates the filter wrapper + binds it to
@@ -52,4 +54,4 @@ struct Harness : public manta::Harness {
 };
 extern Harness harness;
 
-}  // namespace manta_gen::ex8_est
+}  // namespace manta_gen::ex9

@@ -21,7 +21,7 @@ int main() {
     std::signal(SIGTERM, on_signal);
 
     manta_gen::ukf_smoke::setup();
-    std::printf("ukf_smoke: ready (UKF). 1 craft, 3 binding(s), 2 measurement sensor(s).\n");
+    std::printf("ukf_smoke: ready (UKF). 1 craft(s), 3 binding(s), 2 measurement sensor(s).\n");
 
     constexpr float WALL_PERIOD = manta_gen::ukf_smoke::DT / manta_gen::ukf_smoke::SIM_RATE_MULT;
     auto next = std::chrono::steady_clock::now();

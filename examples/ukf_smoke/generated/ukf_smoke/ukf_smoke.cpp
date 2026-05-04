@@ -20,10 +20,9 @@
 
 // IMU: predicted [accel_body=0; gyro_body=ω_body] under the
 // no-net-force / free-flight assumption (est dynamics has
-// no thrusters or gravity). gyro_body is a direct state
-// slice; accel_body is zero. For est crafts with active
-// forces, replace this functor.
-struct _ukf_0_imu_meas {
+// no thrusters or gravity). Reads craft-0 slice
+// (offset 0).
+struct _ukf_0_c0_imu_meas {
     template <class S>
     Eigen::Matrix<S, 6, 1> operator()(const Eigen::Matrix<S, 13, 1>& x) const {
         Eigen::Matrix<S, 6, 1> z;
@@ -34,7 +33,8 @@ struct _ukf_0_imu_meas {
 };
 
 // DVL: predicted body-frame velocity = R(q)^T * v_scene.
-struct _ukf_0_dvl_meas {
+// Reads craft-0's state slice (offset 0).
+struct _ukf_0_c0_dvl_meas {
     template <class S>
     Eigen::Matrix<S, 3, 1> operator()(const Eigen::Matrix<S, 13, 1>& x) const {
         Eigen::Quaternion<S> q(x(3), x(4), x(5), x(6));
@@ -77,8 +77,8 @@ std::optional<zenoh::Session> g_session;
 using EkfT = decltype(manta_gen::ukf_smoke::ukf_0);
 EkfT::StateCov g_Q = EkfT::StateCov::Identity() * 1e-06f;
 
-Eigen::Matrix<double, 6, 6> R_imu = Eigen::Matrix<double, 6, 6>::Zero();
-Eigen::Matrix<double, 3, 3> R_dvl = Eigen::Matrix<double, 3, 3>::Zero();
+Eigen::Matrix<double, 6, 6> R_c0_imu = Eigen::Matrix<double, 6, 6>::Zero();
+Eigen::Matrix<double, 3, 3> R_c0_dvl = Eigen::Matrix<double, 3, 3>::Zero();
 
 std::mutex bind_0_mtx;
 std::vector<float> bind_0_payload;
@@ -109,15 +109,15 @@ void setup() {
     ukf_0.set_covariance(P0);
     ukf_0.bind(w, {&craft});
 
-    R_imu(0, 0) = 0.0025f;
-    R_imu(1, 1) = 0.0025f;
-    R_imu(2, 2) = 0.0025f;
-    R_imu(3, 3) = 2.5e-05f;
-    R_imu(4, 4) = 2.5e-05f;
-    R_imu(5, 5) = 2.5e-05f;
-    R_dvl(0, 0) = 0.0004f;
-    R_dvl(1, 1) = 0.0004f;
-    R_dvl(2, 2) = 0.0004f;
+    R_c0_imu(0, 0) = 0.0025f;
+    R_c0_imu(1, 1) = 0.0025f;
+    R_c0_imu(2, 2) = 0.0025f;
+    R_c0_imu(3, 3) = 2.5e-05f;
+    R_c0_imu(4, 4) = 2.5e-05f;
+    R_c0_imu(5, 5) = 2.5e-05f;
+    R_c0_dvl(0, 0) = 0.0004f;
+    R_c0_dvl(1, 1) = 0.0004f;
+    R_c0_dvl(2, 2) = 0.0004f;
 
     // ---- Zenoh ----
     g_session.emplace(zenoh::Session::open(zenoh::Config::create_default()));
@@ -167,14 +167,14 @@ void tick() {
         z(3) = craft.imu().last_gyro().raw()(0);
         z(4) = craft.imu().last_gyro().raw()(1);
         z(5) = craft.imu().last_gyro().raw()(2);
-        ukf_0.template update_n<6>(_ukf_0_imu_meas{}, z, R_imu);
+        ukf_0.template update_n<6>(_ukf_0_c0_imu_meas{}, z, R_c0_imu);
     }
     if (craft.dvl().consume_fresh()) {
         Eigen::Matrix<double, 3, 1> z;
         z(0) = craft.dvl().last_velocity().raw()(0);
         z(1) = craft.dvl().last_velocity().raw()(1);
         z(2) = craft.dvl().last_velocity().raw()(2);
-        ukf_0.template update_n<3>(_ukf_0_dvl_meas{}, z, R_dvl);
+        ukf_0.template update_n<3>(_ukf_0_c0_dvl_meas{}, z, R_c0_dvl);
     }
 
     if (++g_pub_decim >= kPubEvery) {

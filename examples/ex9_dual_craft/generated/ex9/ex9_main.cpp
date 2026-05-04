@@ -9,7 +9,7 @@
 #include <cstdio>
 #include <thread>
 
-#include "ex6_est.hpp"
+#include "ex9.hpp"
 
 namespace {
 std::atomic<bool> g_run{true};
@@ -20,20 +20,20 @@ int main() {
     std::signal(SIGINT,  on_signal);
     std::signal(SIGTERM, on_signal);
 
-    manta_gen::ex6_est::setup();
-    std::printf("ex6_est: ready (EKF). 1 craft(s), 3 binding(s), 2 measurement sensor(s).\n");
+    manta_gen::ex9::setup();
+    std::printf("ex9: ready (EKF). 2 craft(s), 5 binding(s), 4 measurement sensor(s).\n");
 
-    constexpr float WALL_PERIOD = manta_gen::ex6_est::DT / manta_gen::ex6_est::SIM_RATE_MULT;
+    constexpr float WALL_PERIOD = manta_gen::ex9::DT / manta_gen::ex9::SIM_RATE_MULT;
     auto next = std::chrono::steady_clock::now();
     const auto period = std::chrono::microseconds(int64_t(WALL_PERIOD * 1e6));
 
     while (g_run.load()) {
-        manta_gen::ex6_est::tick();
+        manta_gen::ex9::tick();
         next += period;
         std::this_thread::sleep_until(next);
     }
 
-    std::printf("ex6_est: shutting down.\n");
-    manta_gen::ex6_est::shutdown();
+    std::printf("ex9: shutting down.\n");
+    manta_gen::ex9::shutdown();
     return 0;
 }

@@ -17,16 +17,16 @@ inline constexpr float DT             = 0.001f;
 inline constexpr float SIM_RATE_MULT  = 1.0f;
 
 // Real-side simulation infrastructure. The filter holds its own
-// `manta::WorldT<double>` (estimator state lives in double, not the
-// sim's `Real`=float, for filter conditioning). The Jet shadow
-// `WorldT<Jet>` used for the Jacobian step lives file-private in
-// the .cpp.
+// `manta::WorldT<double>` (estimator state lives in double for
+// filter conditioning). The Jet shadow `WorldT<Jet>` for the
+// Jacobian step lives file-private in the .cpp.
 extern manta::WorldT<double>          w;
 extern manta::SceneT<double>*         scene;          // valid after setup()
-extern Ex6EstCraftT<double>    craft;
+extern Ex6EstCraftT<double> craft;
 
-// EKF wrapper. Bound to `w` (Real) + the Jet shadow + the
-// craft pointer(s) inside setup(). State dim = 13 * num_crafts.
+// EKF wrapper. State dim = 13 * 1 = 13.
+// Bound inside setup() to the Real world + (for EKF) Jet shadow +
+// per-craft pointer arrays.
 extern manta::estimation::WorldEKF<1, 9> ekf_0;
 
 // One-time initialization. Builds both worlds (Real + Jet shadow),
