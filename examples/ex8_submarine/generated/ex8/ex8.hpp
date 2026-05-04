@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "manta/core/harness.hpp"
 #include "ex8_sim.hpp"
 #include "ex8_est.hpp"
 
@@ -26,5 +27,13 @@ void tick();
 // Composed shutdown: tears down the filter then the sim, in
 // reverse-init order, before main() returns.
 void shutdown();
+
+// Polymorphic adapter — see manta/core/harness.hpp.
+struct Harness : public manta::Harness {
+    void setup()    override;
+    void tick()     override;
+    void shutdown() override;
+};
+extern Harness harness;
 
 }  // namespace manta_gen::ex8

@@ -216,4 +216,10 @@ void shutdown() {
     g_session.reset();
 }
 
+// ---- Polymorphic Harness adapter ----
+void Harness::setup()    { ::manta_gen::ukf_smoke::setup();    }
+void Harness::tick()     { ::manta_gen::ukf_smoke::tick();     }
+void Harness::shutdown() { ::manta_gen::ukf_smoke::shutdown(); }
+Harness harness;
+
 }  // namespace manta_gen::ukf_smoke

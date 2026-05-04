@@ -229,4 +229,10 @@ void shutdown() {
     g_session.reset();
 }
 
+// ---- Polymorphic Harness adapter ----
+void Harness::setup()    { ::manta_gen::ex6_est::setup();    }
+void Harness::tick()     { ::manta_gen::ex6_est::tick();     }
+void Harness::shutdown() { ::manta_gen::ex6_est::shutdown(); }
+Harness harness;
+
 }  // namespace manta_gen::ex6_est

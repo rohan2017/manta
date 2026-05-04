@@ -77,6 +77,7 @@ def _craft_var_name(world: World, idx: int) -> str:
 def _world_includes(world: World) -> list[str]:
     """Standard set of `#include` lines a World harness needs."""
     out = [
+        '#include "manta/core/harness.hpp"',
         '#include "manta/core/scene.hpp"',
         '#include "manta/core/world.hpp"',
     ]
@@ -191,6 +192,18 @@ def emit_world_hpp(world: World) -> str:
         "// inside the Tokio runtime. The codegen-emitted main calls this",
         "// before returning from main().",
         "void shutdown();",
+        "",
+        "// Polymorphic adapter: implements `manta::Harness` by delegating",
+        "// to the free functions above. Use this when passing the harness",
+        "// through a `manta::Harness*` interface (composition, plugin",
+        "// dispatch, generic test rigs). Hot-path code should call the",
+        "// free functions directly to avoid virtual dispatch.",
+        "struct Harness : public manta::Harness {",
+        "    void setup()    override;",
+        "    void tick()     override;",
+        "    void shutdown() override;",
+        "};",
+        "extern Harness harness;",
         "",
         f"}}  // namespace manta_gen::{name}",
         "",
@@ -451,6 +464,12 @@ def emit_world_cpp(world: World) -> str:
     lines += [
         "    g_session.reset();",
         "}",
+        "",
+        "// ---- Polymorphic Harness adapter ----",
+        "void Harness::setup()    { ::manta_gen::" + name + "::setup();    }",
+        "void Harness::tick()     { ::manta_gen::" + name + "::tick();     }",
+        "void Harness::shutdown() { ::manta_gen::" + name + "::shutdown(); }",
+        "Harness harness;",
         "",
         f"}}  // namespace manta_gen::{name}",
         "",

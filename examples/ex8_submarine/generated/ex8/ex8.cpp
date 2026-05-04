@@ -64,4 +64,10 @@ void shutdown() {
     manta_gen::ex8_sim::shutdown();
 }
 
+// ---- Polymorphic Harness adapter ----
+void Harness::setup()    { ::manta_gen::ex8::setup();    }
+void Harness::tick()     { ::manta_gen::ex8::tick();     }
+void Harness::shutdown() { ::manta_gen::ex8::shutdown(); }
+Harness harness;
+
 }  // namespace manta_gen::ex8

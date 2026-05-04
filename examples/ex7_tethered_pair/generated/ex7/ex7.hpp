@@ -4,6 +4,7 @@
 #pragma once
 
 
+#include "manta/core/harness.hpp"
 #include "manta/core/scene.hpp"
 #include "manta/core/world.hpp"
 #include "leader_craft.hpp"
@@ -43,5 +44,17 @@ void tick();
 // inside the Tokio runtime. The codegen-emitted main calls this
 // before returning from main().
 void shutdown();
+
+// Polymorphic adapter: implements `manta::Harness` by delegating
+// to the free functions above. Use this when passing the harness
+// through a `manta::Harness*` interface (composition, plugin
+// dispatch, generic test rigs). Hot-path code should call the
+// free functions directly to avoid virtual dispatch.
+struct Harness : public manta::Harness {
+    void setup()    override;
+    void tick()     override;
+    void shutdown() override;
+};
+extern Harness harness;
 
 }  // namespace manta_gen::ex7

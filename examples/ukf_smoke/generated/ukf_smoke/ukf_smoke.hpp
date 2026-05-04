@@ -4,6 +4,7 @@
 #pragma once
 
 
+#include "manta/core/harness.hpp"
 #include "manta/core/scene.hpp"
 #include "manta/core/world.hpp"
 #include "manta/estimation/world_ukf.hpp"
@@ -40,5 +41,13 @@ void tick();
 
 // Tear down Zenoh state before main() returns.
 void shutdown();
+
+// Polymorphic adapter — see manta/core/harness.hpp.
+struct Harness : public manta::Harness {
+    void setup()    override;
+    void tick()     override;
+    void shutdown() override;
+};
+extern Harness harness;
 
 }  // namespace manta_gen::ukf_smoke
