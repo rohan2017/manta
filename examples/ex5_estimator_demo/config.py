@@ -2,7 +2,7 @@
 
 Two crafts in the same Target's drive list:
   * `Ex5Craft` — sim, runs in a manta::World/Scene with full physics.
-  * `Ex5EstCraftT<Scalar>` — templated estimator wrapped by CraftEKF.
+  * `Ex5EstCraftT<Scalar>` — templated estimator wrapped by WorldEKF.
 
 Cross-world `connect()` pipes the sim's noisy IMU + DVL outputs into the
 est's `set_measurement()` hooks each tick, mirrors the throttle so the
@@ -12,7 +12,7 @@ codegen-emitted main runs both in lockstep.
 Codegen:
 
     PYTHONPATH=python/manta_codegen/src \\
-        python -m manta_codegen.cli examples/ex5_estimator_demo/ex5.py \\
+        python -m manta_codegen.cli examples/ex5_estimator_demo/config.py \\
             --workflow binary
 """
 

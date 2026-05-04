@@ -333,7 +333,7 @@ class Craft:
         # When True, codegen emits the craft as a class template
         # (`template <class Scalar = manta::Real> class FooCraftT : public
         # CraftT<Scalar>`) plus a `using FooCraft = FooCraftT<manta::Real>`
-        # alias. Required for use with `manta::estimation::CraftEKF`. All
+        # alias. Required for use with `manta::estimation::WorldEKF`. All
         # parts in the craft must have `cpp_class_template` set; codegen
         # raises if any part lacks it.
         self.scalar_templated: bool = False

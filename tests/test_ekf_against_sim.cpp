@@ -469,13 +469,13 @@ TEST_CASE("CraftT<Jet>: autodiff yields process Jacobian from evaluate()") {
     CHECK(std::abs(x_new(2).v[9] - dt)  < 1e-10);    // ∂p_z_new/∂v_z = dt
 }
 
-// ---- CraftEKF: full EKF wired directly to a user-templated Craft ----
+// ---- WorldEKF: full EKF wired directly to a user-templated Craft ----
 //
-// User authors the craft once as a class template. CraftEKF instantiates it
+// User authors the craft once as a class template. WorldEKF instantiates it
 // twice internally (double for value step, Jet for Jacobian step) and runs
 // predict + update without any hand-written process functor.
 
-#include "../include/manta/estimation/craft_ekf.hpp"
+#include "../include/manta/estimation/world_ekf.hpp"
 
 template <class Scalar>
 class FreeBodyCraft : public manta::CraftT<Scalar> {
@@ -495,8 +495,8 @@ struct PositionMeas3D {
     }
 };
 
-TEST_CASE("CraftEKF: free-body predict+update extracts Jacobians from CraftT") {
-    using Ekf = manta::estimation::CraftEKF<FreeBodyCraft, 3>;
+TEST_CASE("WorldEKF: free-body predict+update extracts Jacobians from CraftT") {
+    using Ekf = manta::estimation::WorldEKF<FreeBodyCraft, 3>;
     Ekf ekf;
 
     // Initial state: at origin, identity orientation, small initial velocity.

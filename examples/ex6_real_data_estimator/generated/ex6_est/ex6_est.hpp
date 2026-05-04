@@ -4,7 +4,7 @@
 #pragma once
 
 
-#include "manta/estimation/craft_ekf.hpp"
+#include "manta/estimation/world_ekf.hpp"
 #include "ex6_est_craft.hpp"
 
 namespace manta_gen::ex6_est {
@@ -13,10 +13,10 @@ namespace manta_gen::ex6_est {
 inline constexpr float DT             = 0.001f;
 inline constexpr float SIM_RATE_MULT  = 1.0f;
 
-// EKF wrapper. Owns the est-side craft pair (CraftEKF) or
-// single craft (CraftUKFOf) plus the 9-dim measurement
+// EKF wrapper. Owns the est-side craft pair (WorldEKF) or
+// single craft (WorldUKFOf) plus the 9-dim measurement
 // state. Default-constructed; setup() initializes state + cov.
-extern manta::estimation::CraftEKF<Ex6EstCraftT, 9> ekf_0;
+extern manta::estimation::WorldEKF<Ex6EstCraftT, 9> ekf_0;
 
 // One-time initialization. Sets the filter's initial state +
 // covariance, registers fields, opens Zenoh + declares pubs/subs.

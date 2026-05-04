@@ -6,7 +6,7 @@ Sim runs at 200x realtime so a full orbit completes in ~28 wall-seconds.
 Generate from the repo root:
 
     PYTHONPATH=python/manta_codegen/src \
-        python -m manta_codegen.cli examples/ex1_orbit/craft.py --workflow binary
+        python -m manta_codegen.cli examples/ex1_orbit/config.py --workflow binary
 """
 
 import math

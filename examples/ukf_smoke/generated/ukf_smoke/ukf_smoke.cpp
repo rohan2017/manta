@@ -45,7 +45,7 @@ struct _ukf_0_dvl_meas {
 
 namespace manta_gen::ukf_smoke {
 
-manta::estimation::CraftUKFOf<UkfSmokeCraft, 9> ukf_0(0.001f, 2.0f, 0.0f);
+manta::estimation::WorldUKFOf<UkfSmokeCraft, 9> ukf_0(0.001f, 2.0f, 0.0f);
 
 }  // namespace manta_gen::ukf_smoke
 

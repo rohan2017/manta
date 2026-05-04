@@ -8,7 +8,7 @@ data fed via Zenoh — typical robot deployment shape:
                               publishes  manta/ex6/estimate
 
 The Craft is `scalar_templated=True` so it plugs into
-`manta::estimation::CraftEKF<Ex6EstCraftT, MeasDim>`. Both the IMU and
+`manta::estimation::WorldEKF<Ex6EstCraftT, MeasDim>`. Both the IMU and
 DVL drive measurement updates: the IMU under the no-net-force
 assumption (predicted accel_body = 0, gyro_body = state ω) and the DVL
 under R(q)^T · v_scene. Each sensor's `consume_fresh()` gates its own
@@ -16,7 +16,7 @@ update inside the generated tick loop.
 
 Codegen:
     PYTHONPATH=python/manta_codegen/src \\
-        python -m manta_codegen.cli examples/ex6_real_data_estimator/est_craft.py \\
+        python -m manta_codegen.cli examples/ex6_real_data_estimator/config.py \\
             --workflow binary
 """
 

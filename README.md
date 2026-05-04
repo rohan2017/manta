@@ -212,7 +212,7 @@ Three Target shapes are supported today:
   a Zenoh main that drives `w.update()` per tick.
 - **`drives=[EKF]`** or **`drives=[UKF]`** — pure estimator. The
   filter wraps its own internal World; codegen emits a
-  `manta::estimation::CraftEKF<...>` (or `CraftUKFOf<...>`) main with
+  `manta::estimation::WorldEKF<...>` (or `WorldUKFOf<...>`) main with
   per-sensor `consume_fresh + update_n<N>` (Pattern C — real-data
   filter fed from external Zenoh topics, see ex6).
 - **`drives=[World, EKF/UKF]`** — sim + filter in one binary, the two
@@ -239,7 +239,7 @@ Most parts are templated on `Scalar` so they work under both `double` (sim)
 and `ceres::Jet<double, N>` (autodiff Jacobians for the EKF). Set
 `craft.scalar_templated = True` to opt in; the codegen emits the craft as a
 class template with a `using FooCraft = FooCraftT<Real>` alias. Required to
-plug into `manta::estimation::CraftEKF<MyCraftT, MeasDim>`.
+plug into `manta::estimation::WorldEKF<MyCraftT, MeasDim>`.
 
 For Jet-templated parts that query a Field, use
 `fields::state_at_templated<Scalar>(field, pos)` (already wired into
@@ -250,12 +250,12 @@ so EKF / system-ID Jacobians capture `∂g/∂pos` for orbital regimes.
 ### Estimators
 Two flavors share an API:
 
-- **`CraftEKF<MyCraftT, MeasDim>`** — Jet-based autodiff EKF. No
+- **`WorldEKF<MyCraftT, MeasDim>`** — Jet-based autodiff EKF. No
   hand-written process model; the same templated craft runs both for the
   value step (`double`) and the Jacobian step (`Jet`). Best when the
   craft's evaluate() is autodiffable and reasonably linear locally.
 
-- **`CraftUKF<MyCraftT, MeasDim>` / `CraftUKFOf<PlainCraft, MeasDim>`** —
+- **`WorldUKF<MyCraftT, MeasDim>` / `WorldUKFOf<PlainCraft, MeasDim>`** —
   sigma-point UKF. No autodiff, so the craft doesn't need to be
   scalar-templated — works on plain `manta::Craft` too. Captures
   second-order nonlinearity. 2N+1 evaluates per predict step vs. EKF's
@@ -275,8 +275,8 @@ ukf = UKF(est_world, measurements=[imu, dvl], alpha=1e-3, beta=2.0, kappa=0.0)
 ```
 
 Both shapes share the same emit pipeline. Codegen emits the
-`manta::estimation::CraftEKF<EstCraftT, MeasDim>` (or
-`CraftUKFOf<EstCraft<double>, MeasDim>`) instance, the `predict(dt, Q)`
+`manta::estimation::WorldEKF<EstCraftT, MeasDim>` (or
+`WorldUKFOf<EstCraft<double>, MeasDim>`) instance, the `predict(dt, Q)`
 per tick, and one `if (sensor.consume_fresh()) update_n<N>(...)` block
 per measurement part.
 

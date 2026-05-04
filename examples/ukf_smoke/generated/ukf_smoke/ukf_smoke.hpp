@@ -4,7 +4,7 @@
 #pragma once
 
 
-#include "manta/estimation/craft_ukf.hpp"
+#include "manta/estimation/world_ukf.hpp"
 #include "ukf_smoke_craft.hpp"
 
 namespace manta_gen::ukf_smoke {
@@ -13,10 +13,10 @@ namespace manta_gen::ukf_smoke {
 inline constexpr float DT             = 0.001f;
 inline constexpr float SIM_RATE_MULT  = 1.0f;
 
-// UKF wrapper. Owns the est-side craft pair (CraftEKF) or
-// single craft (CraftUKFOf) plus the 9-dim measurement
+// UKF wrapper. Owns the est-side craft pair (WorldEKF) or
+// single craft (WorldUKFOf) plus the 9-dim measurement
 // state. Default-constructed; setup() initializes state + cov.
-extern manta::estimation::CraftUKFOf<UkfSmokeCraft, 9> ukf_0;
+extern manta::estimation::WorldUKFOf<UkfSmokeCraft, 9> ukf_0;
 
 // One-time initialization. Sets the filter's initial state +
 // covariance, registers fields, opens Zenoh + declares pubs/subs.

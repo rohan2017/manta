@@ -81,7 +81,7 @@ def main() -> int:
     # We don't know I exactly here, but conservation gives:
     #   L_z = I_body * body_wz + I_wheel * (body_wz + wheel_rate)
     # which should be ≈ 0 (started at rest, no external torque on the system).
-    # Use the values we baked into craft.py.
+    # Use the values we baked into config.py.
     I_body  = 0.02       # body MOI z (kg·m²)
     I_wheel = 0.005      # flywheel ring MOI z (kg·m²)
     Lz_total = I_body * body_wz + I_wheel * (body_wz + wheel_rate)

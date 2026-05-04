@@ -4,7 +4,7 @@
 #pragma once
 
 
-#include "manta/estimation/craft_ekf.hpp"
+#include "manta/estimation/world_ekf.hpp"
 #include "ex5_est_craft.hpp"
 #include "manta/fields/gravity_field.hpp"
 
@@ -14,10 +14,10 @@ namespace manta_gen::ex5_est {
 inline constexpr float DT             = 0.001f;
 inline constexpr float SIM_RATE_MULT  = 1.0f;
 
-// EKF wrapper. Owns the est-side craft pair (CraftEKF) or
-// single craft (CraftUKFOf) plus the 9-dim measurement
+// EKF wrapper. Owns the est-side craft pair (WorldEKF) or
+// single craft (WorldUKFOf) plus the 9-dim measurement
 // state. Default-constructed; setup() initializes state + cov.
-extern manta::estimation::CraftEKF<Ex5EstCraftT, 9> ekf_0;
+extern manta::estimation::WorldEKF<Ex5EstCraftT, 9> ekf_0;
 
 // Registered fields. setup() populates disturbances + registers.
 extern manta::fields::GravityField field_0;

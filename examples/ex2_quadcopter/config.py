@@ -12,7 +12,7 @@ This is the new tensor API replacement for the deleted `PropThruster`.
 Generate from the repo root:
 
     PYTHONPATH=python/manta_codegen/src \
-        python -m manta_codegen.cli examples/ex2_quadcopter/craft.py --workflow library
+        python -m manta_codegen.cli examples/ex2_quadcopter/config.py --workflow library
 """
 
 from manta_codegen import Craft, MantaConfig, Target, World, tf

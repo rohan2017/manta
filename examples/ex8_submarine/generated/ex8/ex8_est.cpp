@@ -63,7 +63,7 @@ struct _ekf_0_mag_meas {
 
 namespace manta_gen::ex8_est {
 
-manta::estimation::CraftEKF<Ex8EstCraftT, 12> ekf_0;
+manta::estimation::WorldEKF<Ex8EstCraftT, 12> ekf_0;
 manta::fields::MagField field_0{};
 
 }  // namespace manta_gen::ex8_est

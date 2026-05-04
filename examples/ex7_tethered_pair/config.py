@@ -12,7 +12,7 @@ since they connect signals across two crafts.
 Regenerate from the repo root:
 
     PYTHONPATH=python/manta_codegen/src python -m manta_codegen.cli \
-        examples/ex7_tethered_pair/craft.py --workflow binary \
+        examples/ex7_tethered_pair/config.py --workflow binary \
         --out examples/ex7_tethered_pair/generated/ex7
 """
 

@@ -13,7 +13,7 @@ estimation_workflow.md). Tick layout:
 
 The sim world keeps its full setup (planets, fields, scene, crafts,
 tethers, field-sync). The EKF holds its own internal craft-pair via
-CraftEKF, with `register_field` propagating any field instances the
+WorldEKF, with `register_field` propagating any field instances the
 est-side parts query during predict.
 
 Naming convention to keep the two worlds non-colliding:
@@ -113,8 +113,8 @@ def emit_sim_plus_ekf_main_cpp(target, sim_world, filter_obj,
                                 kind: str = "ekf") -> str:
     """Emit main.cpp for a Target whose drives are [sim_world, filter].
 
-    `kind` selects EKF (CraftEKF, requires scalar_templated craft) vs UKF
-    (CraftUKFOf, takes any craft). Most of the body is filter-agnostic;
+    `kind` selects EKF (WorldEKF, requires scalar_templated craft) vs UKF
+    (WorldUKFOf, takes any craft). Most of the body is filter-agnostic;
     the wrapper-type/ctor differences come from
     `_filter_construction` and `_filter_concrete_craft_type`.
     """
@@ -197,7 +197,7 @@ def emit_sim_plus_ekf_main_cpp(target, sim_world, filter_obj,
     if filter_obj.world.planets:
         raise NotImplementedError(
             "emit_sim_plus_filter_main_cpp: planets in the filter's wrapped "
-            "world aren't supported (CraftEKF/UKF don't own a Scene). "
+            "world aren't supported (WorldEKF/UKF don't own a Scene). "
             "Register fields directly via World.fields on the est-side world.")
 
     lines += [

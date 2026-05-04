@@ -2,13 +2,13 @@
 
 Exercises the UKF codegen path end-to-end: Mass + IMU + DVL on a
 non-templated craft (UKF doesn't require scalar templating), wrapped in
-a `manta::estimation::CraftUKFOf<...>`. Mostly here so CI catches
+a `manta::estimation::WorldUKFOf<...>`. Mostly here so CI catches
 regressions in the UKF emit path.
 
 Codegen:
 
     PYTHONPATH=python/manta_codegen/src \\
-        python -m manta_codegen.cli examples/ukf_smoke/craft.py \\
+        python -m manta_codegen.cli examples/ukf_smoke/config.py \\
             --workflow binary
 """
 

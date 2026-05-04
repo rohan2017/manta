@@ -1,5 +1,5 @@
 // Tests for the unscented Kalman filter (manta::estimation::UKF) and its
-// craft-aware wrapper (manta::estimation::CraftUKF).
+// craft-aware wrapper (manta::estimation::WorldUKF).
 //
 // UKF mirrors EKF's API but uses sigma-point propagation instead of Jet
 // autodiff Jacobians, so the user functors only need to accept double.
@@ -8,7 +8,7 @@
 #include <doctest/doctest.h>
 
 #include "../include/manta/estimation/ukf.hpp"
-#include "../include/manta/estimation/craft_ukf.hpp"
+#include "../include/manta/estimation/world_ukf.hpp"
 #include "../include/manta/core/craft.hpp"
 #include "../include/manta/parts/structure/mass.hpp"
 
@@ -91,7 +91,7 @@ TEST_CASE("UKF: covariance stays symmetric after update") {
     CHECK(P(0, 1) == doctest::Approx(P(1, 0)).epsilon(1e-12));
 }
 
-// ---- CraftUKF on a 13-state free-body craft ----
+// ---- WorldUKF on a 13-state free-body craft ----
 
 template <class Scalar>
 class FreeBodyCraftU : public manta::CraftT<Scalar> {
@@ -110,8 +110,8 @@ struct PositionMeas3D_U {
 };
 }  // namespace
 
-TEST_CASE("CraftUKF: free-body propagation matches kinematic prediction") {
-    using Ukf = CraftUKF<FreeBodyCraftU, 3>;
+TEST_CASE("WorldUKF: free-body propagation matches kinematic prediction") {
+    using Ukf = WorldUKF<FreeBodyCraftU, 3>;
     Ukf ukf;
 
     Ukf::StateVec x0; x0.setZero();
@@ -134,8 +134,8 @@ TEST_CASE("CraftUKF: free-body propagation matches kinematic prediction") {
     CHECK(std::abs(x(7) - 1.0) < 1e-3);
 }
 
-TEST_CASE("CraftUKF: position measurement pulls state toward observation") {
-    using Ukf = CraftUKF<FreeBodyCraftU, 3>;
+TEST_CASE("WorldUKF: position measurement pulls state toward observation") {
+    using Ukf = WorldUKF<FreeBodyCraftU, 3>;
     Ukf ukf;
 
     Ukf::StateVec x0; x0.setZero();
@@ -155,10 +155,10 @@ TEST_CASE("CraftUKF: position measurement pulls state toward observation") {
     CHECK(std::abs(x(0)) < 0.5);
 }
 
-TEST_CASE("CraftUKF: works with a non-templated Craft via CraftUKFOf") {
+TEST_CASE("WorldUKF: works with a non-templated Craft via WorldUKFOf") {
     // Minimal non-templated craft: inherits manta::Craft (= CraftT<Real> =
     // CraftT<float>) and adds a Mass. Demonstrates that UKF doesn't
-    // require Scalar templating; CraftUKFOf casts state at the float boundary.
+    // require Scalar templating; WorldUKFOf casts state at the float boundary.
     //
     // Key parameter choice: alpha=1.0 keeps sigma weights well-conditioned
     // so float-precision craft eval doesn't get crushed by weight cancellation.
@@ -172,7 +172,7 @@ TEST_CASE("CraftUKF: works with a non-templated Craft via CraftUKFOf") {
         }
     };
 
-    using Ukf = manta::estimation::CraftUKFOf<PlainCraft, 3>;
+    using Ukf = manta::estimation::WorldUKFOf<PlainCraft, 3>;
     Ukf ukf(/*alpha=*/1.0, /*beta=*/2.0, /*kappa=*/0.0);
 
     Ukf::StateVec x0; x0.setZero();

@@ -11,7 +11,7 @@ main.cpp does the rate PIDs, gimbal mapping, and Zenoh wiring.
 Generate from the repo root:
 
     PYTHONPATH=python/manta_codegen/src \
-        python -m manta_codegen.cli examples/ex3_tvc_rocket/craft.py --workflow library
+        python -m manta_codegen.cli examples/ex3_tvc_rocket/config.py --workflow library
 """
 
 from manta_codegen import Craft, MantaConfig, Target, World, tf

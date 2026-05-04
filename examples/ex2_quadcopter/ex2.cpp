@@ -14,7 +14,7 @@
 //
 // To regenerate the harness:
 //   PYTHONPATH=python/manta_codegen/src \
-//       python -m manta_codegen.cli examples/ex2_quadcopter/craft.py \
+//       python -m manta_codegen.cli examples/ex2_quadcopter/config.py \
 //           --workflow library
 
 #include <atomic>

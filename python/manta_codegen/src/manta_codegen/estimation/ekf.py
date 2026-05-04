@@ -158,7 +158,7 @@ class EKF:
 
     def measurement_dim(self) -> int:
         """Total measurement-vector width (sum of n_floats over all
-        sensor parts). Used to instantiate `CraftEKF<EstCraftT, MeasDim>`."""
+        sensor parts). Used to instantiate `WorldEKF<EstCraftT, MeasDim>`."""
         from ..signal import Signal as _S
         total = 0
         for m in self.measurements:

@@ -45,7 +45,7 @@ struct _ekf_0_dvl_meas {
 
 namespace manta_gen::ex6_est {
 
-manta::estimation::CraftEKF<Ex6EstCraftT, 9> ekf_0;
+manta::estimation::WorldEKF<Ex6EstCraftT, 9> ekf_0;
 
 }  // namespace manta_gen::ex6_est
 

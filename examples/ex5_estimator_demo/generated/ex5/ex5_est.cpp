@@ -45,7 +45,7 @@ struct _ekf_0_dvl_meas {
 
 namespace manta_gen::ex5_est {
 
-manta::estimation::CraftEKF<Ex5EstCraftT, 9> ekf_0;
+manta::estimation::WorldEKF<Ex5EstCraftT, 9> ekf_0;
 manta::fields::GravityField field_0{};
 
 }  // namespace manta_gen::ex5_est

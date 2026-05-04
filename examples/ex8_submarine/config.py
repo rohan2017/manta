@@ -18,7 +18,7 @@ Single binary `ex8` — both the sim and the EKF run in one process.
 Codegen:
 
     PYTHONPATH=python/manta_codegen/src \\
-        python -m manta_codegen.cli examples/ex8_submarine/ex8.py \\
+        python -m manta_codegen.cli examples/ex8_submarine/config.py \\
             --workflow binary
 """
 

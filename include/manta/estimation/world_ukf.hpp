@@ -1,22 +1,22 @@
 #pragma once
 
-// CraftUKF — a UKF wired directly against a user's Craft.
+// WorldUKF — a UKF wired directly against a user's Craft.
 //
-// Compared to CraftEKF, CraftUKF has a notable structural advantage: it
+// Compared to WorldEKF, WorldUKF has a notable structural advantage: it
 // does NOT require the craft to be Scalar-templated, because the unscented
 // transform doesn't compute Jacobians via Jets. The user can pass either
-// a templated `MyCraftT<double>` (same authoring style as CraftEKF) or a
+// a templated `MyCraftT<double>` (same authoring style as WorldEKF) or a
 // plain non-templated `manta::Craft` subclass — both work as long as the
 // craft exposes `evaluate(state, dt)` returning a 13-DOF rigid state.
 //
-// API mirrors CraftEKF as closely as possible so callers can swap
+// API mirrors WorldEKF as closely as possible so callers can swap
 // estimators by changing the type:
 //
-//   manta::estimation::CraftUKF<MyCraft, 3> ukf;            // 3-DoF measurement
+//   manta::estimation::WorldUKF<MyCraft, 3> ukf;            // 3-DoF measurement
 //   ukf.predict(dt, Q);
 //   ukf.update(h, z, R);
 //
-// Internally CraftUKF holds a single CraftR (default-constructed) and a
+// Internally WorldUKF holds a single CraftR (default-constructed) and a
 // UKF<13, MeasDim>. The 2N+1 sigma points are propagated by repeatedly
 // calling the same craft's evaluate() — cheap if evaluate() is cheap.
 //
@@ -38,10 +38,10 @@
 
 namespace manta::estimation {
 
-// Generic form: CraftUKF takes the concrete craft type directly. Works with
+// Generic form: WorldUKF takes the concrete craft type directly. Works with
 // both templated (MyCraftT<double>) and non-templated (PlainCraft) crafts.
 template <class CraftType, int MeasDim>
-class CraftUKFOf {
+class WorldUKFOf {
 public:
     static constexpr int StateDim = CraftType::kRigidStateDim;
     using CraftR   = CraftType;
@@ -50,7 +50,7 @@ public:
     using MeasVec  = Eigen::Matrix<double, MeasDim,  1>;
     using MeasCov  = Eigen::Matrix<double, MeasDim,  MeasDim>;
 
-    explicit CraftUKFOf(double alpha = 1e-3, double beta = 2.0, double kappa = 0.0)
+    explicit WorldUKFOf(double alpha = 1e-3, double beta = 2.0, double kappa = 0.0)
         : ukf_(alpha, beta, kappa) {}
 
     CraftR&       craft()       noexcept { return craft_; }
@@ -92,7 +92,7 @@ public:
         ukf_.update(h, z, R);
     }
 
-    // Per-sensor update: lets a single CraftUKF absorb measurements of
+    // Per-sensor update: lets a single WorldUKF absorb measurements of
     // varying width N. Codegen drives this from
     //   if (ukf.craft().sensor().consume_fresh()) ukf.update_n<N>(h, z, R);
     // Mathematically equivalent to a single fused update when per-sensor
@@ -105,7 +105,7 @@ public:
     }
 
     // Codegen-friendly accessors for the rigid-state slices. Mirror
-    // CraftEKF so a UKF descriptor's BoundSignals route the same way.
+    // WorldEKF so a UKF descriptor's BoundSignals route the same way.
     Eigen::Matrix<double, 3, 1> position() const noexcept {
         return ukf_.state().template segment<3>(0);
     }
@@ -149,9 +149,9 @@ private:
     UKF<StateDim, MeasDim> ukf_;
 };
 
-// Convenience alias: same shape as CraftEKF<MyCraftTemplate, MeasDim> for
+// Convenience alias: same shape as WorldEKF<MyCraftTemplate, MeasDim> for
 // templated craft types. Picks the double instantiation.
 template <template <class> class CraftTpl, int MeasDim>
-using CraftUKF = CraftUKFOf<CraftTpl<double>, MeasDim>;
+using WorldUKF = WorldUKFOf<CraftTpl<double>, MeasDim>;
 
 } // namespace manta::estimation

@@ -9,7 +9,7 @@ satellite attitude control.
 Codegen:
 
     PYTHONPATH=python/manta_codegen/src \\
-        python -m manta_codegen.cli examples/ex4_reaction_wheel/craft.py \\
+        python -m manta_codegen.cli examples/ex4_reaction_wheel/config.py \\
             --workflow binary
 
 Workflow: binary — the generated main subscribes to a single command topic

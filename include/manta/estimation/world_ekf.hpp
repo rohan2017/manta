@@ -1,6 +1,6 @@
 #pragma once
 
-// CraftEKF — an EKF wired directly against a user's templated Craft class.
+// WorldEKF — an EKF wired directly against a user's templated Craft class.
 //
 // The user authors a craft once as a class template:
 //
@@ -16,11 +16,11 @@
 //
 // Then constructs the EKF:
 //
-//     manta::estimation::CraftEKF<MyCraft, 13, 3> ekf;
+//     manta::estimation::WorldEKF<MyCraft, 13, 3> ekf;
 //     ekf.predict(dt);
 //     ekf.update(z, R);
 //
-// Internally CraftEKF holds two instances: one with double scalars (the
+// Internally WorldEKF holds two instances: one with double scalars (the
 // value step), one with `ceres::Jet<double, StateDim>` (the Jacobian step).
 // Both are default-constructed (the user's craft template must be default-
 // constructible, which is the natural case when parts are added in the
@@ -44,7 +44,7 @@
 namespace manta::estimation {
 
 template <template <class> class CraftTpl, int MeasDim>
-class CraftEKF {
+class WorldEKF {
 public:
     static constexpr int StateDim = CraftT<double>::kRigidStateDim;
     using Jet      = ceres::Jet<double, StateDim>;
@@ -55,7 +55,7 @@ public:
     using MeasVec  = Eigen::Matrix<double, MeasDim,  1>;
     using MeasCov  = Eigen::Matrix<double, MeasDim,  MeasDim>;
 
-    CraftEKF() = default;
+    WorldEKF() = default;
 
     // Live access to the underlying crafts. The "real" instance is what the
     // user feeds sensor measurements into via `est.imu().set_measurement(...)`
@@ -114,7 +114,7 @@ public:
         ekf_.update(h, z, R);
     }
 
-    // Per-sensor update: lets a single CraftEKF absorb measurements of
+    // Per-sensor update: lets a single WorldEKF absorb measurements of
     // varying width N (e.g. DVL=3, IMU=6, Mag=3) without instantiating
     // separate filters. Codegen drives this from
     //   if (ekf.craft().sensor().consume_fresh()) ekf.update_n<N>(h, z, R);

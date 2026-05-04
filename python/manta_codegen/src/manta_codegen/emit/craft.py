@@ -7,7 +7,7 @@ Two modes:
     `template <class Scalar = manta::Real> class FooCraftT : public
     manta::CraftT<Scalar>` as a header-only class, plus a
     `using FooCraft = FooCraftT<manta::Real>` alias. Required for use with
-    `manta::estimation::CraftEKF`. All parts must have `cpp_class_template`
+    `manta::estimation::WorldEKF`. All parts must have `cpp_class_template`
     set; codegen raises otherwise.
 """
 

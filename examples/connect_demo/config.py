@@ -7,7 +7,7 @@ throttle is driven from Zenoh.
 Regenerate from the repo root:
 
     PYTHONPATH=python/manta_codegen/src python -m manta_codegen.cli \\
-        examples/connect_demo/craft.py --workflow binary \\
+        examples/connect_demo/config.py --workflow binary \\
         --out examples/connect_demo/generated/connect_demo
 """
 

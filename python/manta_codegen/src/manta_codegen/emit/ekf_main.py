@@ -1,7 +1,7 @@
 """Emit <name>_main.cpp for an EKF Target.
 
 Shape mirrors emit_main_cpp() but the tick loop is driven by a
-`manta::estimation::CraftEKF<EstCraftT, MeasDim>` instance:
+`manta::estimation::WorldEKF<EstCraftT, MeasDim>` instance:
 
     ekf.predict(dt, Q);
     if (ekf.craft().dvl().consume_fresh()) {
@@ -262,20 +262,20 @@ def _filter_construction(kind: str, filter_obj, primary_class_tmpl: str,
                          filter_var: str, meas_dim: int) -> tuple[str, str]:
     """Return (header_include_line, ctor_line) for the filter wrapper.
 
-    EKF instantiates `CraftEKF<EstCraftT, MeasDim>` (template-template
+    EKF instantiates `WorldEKF<EstCraftT, MeasDim>` (template-template
     parameter — the templated craft class is passed verbatim). UKF
-    uses `CraftUKFOf<EstCraft<double>, MeasDim>` so non-templated
+    uses `WorldUKFOf<EstCraft<double>, MeasDim>` so non-templated
     crafts work too — the codegen always picks the `<double>` form
     for a templated craft.
     """
     if kind == "ekf":
         return (
-            "#include \"manta/estimation/craft_ekf.hpp\"",
-            f"manta::estimation::CraftEKF<{primary_class_tmpl}, {meas_dim}> "
+            "#include \"manta/estimation/world_ekf.hpp\"",
+            f"manta::estimation::WorldEKF<{primary_class_tmpl}, {meas_dim}> "
             f"{filter_var};",
         )
     if kind == "ukf":
-        # CraftUKFOf takes a concrete type. Use Tmpl<double> when the craft
+        # WorldUKFOf takes a concrete type. Use Tmpl<double> when the craft
         # is scalar-templated; otherwise the class name is the concrete
         # craft itself (no <Scalar>).
         # We pass the templated form here because `class_name_for_craft + 'T'`
@@ -283,8 +283,8 @@ def _filter_construction(kind: str, filter_obj, primary_class_tmpl: str,
         # caller passes the plain class name without the trailing 'T'.
         a, b, k = filter_obj.alpha, filter_obj.beta, filter_obj.kappa
         return (
-            "#include \"manta/estimation/craft_ukf.hpp\"",
-            f"manta::estimation::CraftUKFOf<{primary_class_tmpl}, {meas_dim}> "
+            "#include \"manta/estimation/world_ukf.hpp\"",
+            f"manta::estimation::WorldUKFOf<{primary_class_tmpl}, {meas_dim}> "
             f"{filter_var}({_f(a)}, {_f(b)}, {_f(k)});",
         )
     raise ValueError(f"unknown filter kind {kind!r}")
@@ -375,7 +375,7 @@ def emit_ekf_main_cpp(target, filter_obj, kind: str = "ekf") -> str:
     if world.planets:
         raise NotImplementedError(
             "emit_ekf_main_cpp: planets in an EKF-wrapped world aren't "
-            "supported yet (CraftEKF doesn't own a Scene). Register the "
+            "supported yet (WorldEKF doesn't own a Scene). Register the "
             "needed fields directly via World.fields for now.")
 
     lines += [
@@ -577,7 +577,7 @@ def _filter_collect(target, filter_obj, kind):
     if world.planets:
         raise NotImplementedError(
             f"emit_{kind}_main_cpp: planets in a filter-wrapped world aren't "
-            f"supported yet (CraftEKF/CraftUKFOf don't own a Scene). "
+            f"supported yet (WorldEKF/WorldUKFOf don't own a Scene). "
             f"Register fields directly via World.fields for now.")
 
     unique_crafts = _world_unique_crafts(world)
@@ -659,8 +659,8 @@ def emit_filter_hpp(target, filter_obj, kind: str = "ekf") -> str:
         f"inline constexpr float DT             = {_f(target.dt)};",
         f"inline constexpr float SIM_RATE_MULT  = {_f(target.sim_rate_mult)};",
         "",
-        f"// {kind.upper()} wrapper. Owns the est-side craft pair (CraftEKF) or",
-        f"// single craft (CraftUKFOf) plus the {meas_dim}-dim measurement",
+        f"// {kind.upper()} wrapper. Owns the est-side craft pair (WorldEKF) or",
+        f"// single craft (WorldUKFOf) plus the {meas_dim}-dim measurement",
         f"// state. Default-constructed; setup() initializes state + cov.",
         f"extern {filter_type} {filter_var};",
         "",
