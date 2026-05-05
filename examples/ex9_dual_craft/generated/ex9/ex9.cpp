@@ -24,7 +24,7 @@ manta::WorldT<double>  w{};
 manta::SceneT<double>* scene = nullptr;
 Drone0CraftT<double> craft_0{};
 Drone1CraftT<double> craft_1{};
-manta::estimation::WorldEKF<2, 18> ekf_0;
+manta::estimation::WorldEKFBlockDecomposed<2, 18> ekf_0;
 
 }  // namespace manta_gen::ex9
 
@@ -273,6 +273,8 @@ void tick() {
 
     ekf_0.begin_step(DT, g_Q);
 
+    // ---- craft 0: per-craft Jet pass ----
+    ekf_0.begin_craft(0);
     if (craft_0.imu().consume_fresh()) {
         Eigen::Matrix<double, 6, 1> z;
         z(0) = craft_0.imu().last_accel().raw()(0);
@@ -290,6 +292,10 @@ void tick() {
         z(2) = craft_0.dvl().last_velocity().raw()(2);
         ekf_0.template add_update<3>(_ekf_0_c0_dvl_meas{}, z, R_c0_dvl);
     }
+    ekf_0.end_craft();
+
+    // ---- craft 1: per-craft Jet pass ----
+    ekf_0.begin_craft(1);
     if (craft_1.imu().consume_fresh()) {
         Eigen::Matrix<double, 6, 1> z;
         z(0) = craft_1.imu().last_accel().raw()(0);
@@ -307,6 +313,8 @@ void tick() {
         z(2) = craft_1.dvl().last_velocity().raw()(2);
         ekf_0.template add_update<3>(_ekf_0_c1_dvl_meas{}, z, R_c1_dvl);
     }
+    ekf_0.end_craft();
+
 
     ekf_0.end_step();
 

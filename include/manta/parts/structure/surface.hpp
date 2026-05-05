@@ -40,6 +40,11 @@ public:
     const std::array<Tensor, N>& force_tensors()  const noexcept { return A_; }
     const std::array<Tensor, N>& torque_tensors() const noexcept { return B_; }
 
+    MANTA_PART_REQUIRES_FIELD(MANTA_HAS_FLUID_FIELD,
+        "Surface requires a FluidField on the world (drag/lift are "
+        "ρ-scaled). Register one with World.add_field(FluidField(...)), "
+        "or remove the Surface part.");
+
     void update() override {
         auto& fluid = this->template field<fields::FluidField>();
 

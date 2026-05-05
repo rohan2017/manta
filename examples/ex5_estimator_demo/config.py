@@ -39,7 +39,6 @@ def make_config() -> MantaConfig:
 
     # ---- Est craft (templated) ----
     est_c = Craft("ex5_est")
-    est_c.scalar_templated = True
     est_c.add(Mass("body", mass=1.0, moi=(0.05, 0.05, 0.05)))
     est_imu = IMU("imu", accel_sigma=0.05, gyro_sigma=0.005)
     est_dvl = DVL("dvl", velocity_sigma=0.02)

@@ -47,7 +47,7 @@ class DVL(PartDescriptor):
 
     def emit_constructor_args(self, scalar: str = "manta::Real") -> str:
         return (f'"{self.name}", '
-                f'manta::parts::DvlNoiseParams{{{_f(self.velocity_sigma)}}}, '
+                f'{_f(self.velocity_sigma)}, '
                 f'manta::Real({_f(self.rate_hz)})')
 
     def telemetry_fields(self) -> list[tuple[str, str]]:

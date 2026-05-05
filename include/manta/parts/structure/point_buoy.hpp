@@ -24,6 +24,14 @@ public:
     Scalar volume() const noexcept { return volume_; }
     void   set_volume(Scalar v) noexcept { volume_ = v; }
 
+    MANTA_PART_REQUIRES_FIELD(MANTA_HAS_FLUID_FIELD,
+        "PointBuoy requires a FluidField on the world. Register one "
+        "with World.add_field(FluidField(...)), or remove the buoy.");
+    MANTA_PART_REQUIRES_FIELD(MANTA_HAS_GRAVITY_FIELD,
+        "PointBuoy requires a GravityField on the world (buoyancy "
+        "force is ρV·g). Register one with "
+        "World.add_field(GravityField(...)), or remove the buoy.");
+
     void update() override {
         if (volume_ <= Scalar(0)) return;
         auto& fluid = this->template field<fields::FluidField>();

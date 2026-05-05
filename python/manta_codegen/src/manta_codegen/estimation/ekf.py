@@ -154,8 +154,11 @@ class EKF:
             # uses the default isotropic P_0:
             EKF(w, ..., initial_attitude_var={"leader": 1e-9})
 
-        scalar_templated: forced True; included for API consistency with
-               Craft. Estimator crafts must be templated for autodiff.
+    Note: every craft in the EKF's wrapped world is automatically
+    flipped to `scalar_templated = True` at construction time. Users
+    don't need to set that flag manually — templating is purely a
+    codegen detail (it switches the emitted C++ class shape to
+    `MyCraftT<Scalar>` so the Jet shadow world can instantiate it).
     """
     world: "World"
     measurements: list = field(default_factory=list)
@@ -171,6 +174,22 @@ class EKF:
     initial_attitude_var:         float | None = None
     initial_velocity_var:         float | None = None
     initial_angular_velocity_var: float | None = None
+
+    # Block-decomposed predict — assume crafts don't physically couple
+    # (no tether, contact, or cross-craft fluid term) so F is block-
+    # diagonal: ∂x_i_post/∂x_j_pre = 0 for i ≠ j. Each tick runs
+    # NumCrafts separate Jet passes, each with 13 partials (seeding
+    # one craft with identity, the others with zero-deriv values),
+    # instead of one monolithic pass with 13·NumCrafts partials. Cost
+    # per tick scales as NumCrafts (linear) instead of NumCrafts²
+    # (quadratic) — the full Jet world pass becomes ~NumCrafts× faster
+    # at NumCrafts ≥ ~5.
+    #
+    # Default False: the monolithic predict is correct for any coupling
+    # topology (tethers, contacts, fluids — the autodiff through the
+    # joint state captures every cross-craft Jacobian). Use True only
+    # when crafts are guaranteed independent (decoupled swarm).
+    block_decomposed: bool = False
 
     # Static dimension of the rigid-body state — matches CraftT::kRigidStateDim.
     STATE_DIM: int = 13
@@ -201,15 +220,16 @@ class EKF:
         # architecture: state is the concat of every craft's 13-DOF rigid
         # state, and the Jet shadow World propagates Jacobians through
         # any inter-craft physics (tethers, contacts, fluid coupling).
-        # Every craft in the wrapped world must be scalar-templated —
-        # the EKF's Jet shadow World instantiates each craft as
-        # `<JetType>` for the Jacobian step.
+        # The EKF's Jet shadow World instantiates each wrapped craft as
+        # `<JetType>` for the Jacobian step, so every craft here MUST be
+        # scalar-templated. Templating is purely a codegen detail (it
+        # picks the C++ class shape — `MyCraftT<Scalar>` instead of
+        # `MyCraft`) — users shouldn't have to think about it. Just
+        # flip the flag automatically; the codegen sees `True` either
+        # way.
         world_crafts = [e.craft for e in self.world.crafts]
         for c in world_crafts:
-            if not getattr(c, "scalar_templated", False):
-                raise ValueError(
-                    f"EKF: craft {c.name!r} must have "
-                    f"`scalar_templated = True` (required for Jet autodiff).")
+            c.scalar_templated = True
 
         # Validate each measurement is a PartDescriptor attached to one of
         # the wrapped world's crafts.

@@ -58,5 +58,16 @@ target_link_libraries(manta_tests PRIVATE
     manta::manta
     doctest::doctest)
 
+# The hand-written tests exercise every part — Mass under gravity,
+# Magnetometer in a MagField, PointBuoy in a FluidField, etc. — so they
+# need every feature macro that codegen would normally emit into a
+# target-specific config.h. Define them all up front; the same TU mixes
+# tests for crafts with and without each field, so the runtime
+# `world().field_ptr(...)` registry already gates the inactive paths.
+target_compile_definitions(manta_tests PRIVATE
+    MANTA_HAS_GRAVITY_FIELD=1
+    MANTA_HAS_MAG_FIELD=1
+    MANTA_HAS_FLUID_FIELD=1)
+
 include(${doctest_SOURCE_DIR}/scripts/cmake/doctest.cmake)
 doctest_discover_tests(manta_tests)

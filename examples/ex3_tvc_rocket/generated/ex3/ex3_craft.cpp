@@ -10,6 +10,6 @@ Ex3Craft::Ex3Craft()
     yaw_motor_->set_transform(manta::geom::StaticLink<manta::ParentFrame, manta::PartFrame, manta::Real>{manta::geom::Vec3<manta::ParentFrame, manta::Real>{manta::Real(0.0f), manta::Real(0.0f), manta::Real(-1.0f)}, manta::geom::Ori<manta::ParentFrame, manta::Real>{Eigen::Quaternionf{manta::Real(1.0f), manta::Real(0.0f), manta::Real(0.0f), manta::Real(0.0f)}}});
     pitch_motor_ = &(*yaw_motor_).add<manta::parts::Motor>("pitch_motor", manta::geom::Vec3<manta::PartFrame>::from_raw(Eigen::Matrix<manta::Real, 3, 1>(0.0f, 1.0f, 0.0f)), 100.0f, 0.0f);
     engine_ = &(*pitch_motor_).add<manta::parts::Thruster1>("engine", std::array<manta::geom::Vec3<manta::PartFrame, manta::Real>, 1>{manta::geom::Vec3<manta::PartFrame, manta::Real>{manta::Real(0.0f), manta::Real(0.0f), manta::Real(73.575f)}}, std::array<manta::geom::Vec3<manta::PartFrame, manta::Real>, 1>{manta::geom::Vec3<manta::PartFrame, manta::Real>{manta::Real(0.0f), manta::Real(0.0f), manta::Real(0.0f)}});
-    imu_ = &this->root().add<manta::parts::IMU>("imu", manta::parts::ImuNoiseParams{0.0f, 0.0f}, manta::Real(0.0f));
+    imu_ = &this->root().add<manta::parts::IMU>("imu", 0.0f, 0.0f, manta::Real(0.0f));
     this->root().compute_params();
 }

@@ -3,6 +3,7 @@
 #include <string>
 #include <typeinfo>
 #include <type_traits>
+#include "features.hpp"   // MANTA_HAS_<FIELD> defaults + REQUIRES/AUGMENTS macros
 #include "frame.hpp"
 #include "types.hpp"
 #include "wrench.hpp"

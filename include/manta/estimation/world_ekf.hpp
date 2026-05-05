@@ -24,11 +24,13 @@
 // component-wise inside SceneT<Jet>::update with zero gradient. The EKF
 // thus treats planet pose as a non-estimated input.
 //
-// Performance note: today's predict is dense in `13·NumCrafts` partials per
-// Jet op. For NumCrafts ≤ ~10 this scales fine. For larger swarms a future
-// block-decomposed predict will codegen per-craft Jet seeds + stitch the
-// F matrix from blocks (using static coupling topology). See codegen
-// task #93.
+// Performance note: this monolithic predict tracks `13·NumCrafts` partials
+// per Jet op, so a Jet world pass costs O(NumCrafts²). It's the right
+// choice when crafts physically couple (tethers, contact, fluid coupling)
+// — the autodiff captures every cross-craft Jacobian for free. For
+// decoupled-craft swarms where F is block-diagonal, see
+// `WorldEKFBlockDecomposed` (world_ekf_block.hpp): per-craft Jet passes
+// with width 13, NumCrafts passes per tick, linear scaling.
 //
 // Usage sketch:
 //

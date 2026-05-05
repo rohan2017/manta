@@ -92,7 +92,6 @@ def make_config() -> MantaConfig:
 
     # ---- Est craft: minimal predict-only model ----
     est_c = Craft("ex8_est")
-    est_c.scalar_templated = True
     # Gravity off in the est dynamics — IMU's update absorbs the
     # gravitational signature of the body's motion. Buoyancy + drag are
     # not modeled est-side either; the estimator absorbs the integrated
@@ -106,10 +105,20 @@ def make_config() -> MantaConfig:
     # sim uses; Magnetometer.h(x) reads B at update-time (locally-
     # constant-B approximation).
     est_mag_field = MagField().add_uniform(B_FIELD)
-    est_w = (World("ex8_est").add_field(est_mag_field).add_craft(est_c))
+    est_w = (World("ex8_est")
+                .add_field(est_mag_field)
+                .add_craft(est_c, pos=INIT_POS))
 
+    # Same initial pose as the sim (the EKF picks it up from add_craft
+    # automatically). Tight position prior reflects "I know where the
+    # vehicle started"; velocity prior moderate; magnetometer plus tight
+    # initial attitude lock keeps q observable through the dive.
     ekf = EKF(est_w, measurements=[est_imu, est_dvl, est_mag],
-              process_noise=1e-5, initial_covariance=1.0)
+              process_noise=1e-5, initial_covariance=1.0,
+              initial_position_var=1e-4,
+              initial_attitude_var=1e-4,
+              initial_velocity_var=1e-2,
+              initial_angular_velocity_var=1e-4)
 
     # ---- Cross-world plumbing ----
     # Sim sensor outputs feed est sensor measurement inputs.

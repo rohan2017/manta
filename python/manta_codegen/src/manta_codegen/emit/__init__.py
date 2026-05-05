@@ -16,7 +16,43 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from ..core import Craft, World
+from ..core import Craft, FieldDescriptor, World
+
+
+def _validate_required_fields(world: World) -> None:
+    """Walk every Part on every Craft in `world` and verify each Part's
+    `requires_fields` declarations are satisfied by the world's
+    registered fields.
+
+    A field requirement is satisfied if `world.fields` contains at least
+    one descriptor that's an instance of the required class (or a
+    subclass — `MagField` covers `DipoleMagField`, etc.).
+
+    Raises a `RuntimeError` listing every offense in one shot, so users
+    fix all gaps in a single edit cycle. The C++ side carries a mirroring
+    `MANTA_PART_REQUIRES_FIELD` static_assert as defense-in-depth.
+    """
+    registered: list[FieldDescriptor] = list(world.fields)
+
+    def satisfied(req_cls: type) -> bool:
+        return any(isinstance(f, req_cls) for f in registered)
+
+    offenses: list[str] = []
+    for entry in world.crafts:
+        for part in entry.craft.all_parts():
+            for req in getattr(type(part), "requires_fields", []) or []:
+                if not satisfied(req):
+                    offenses.append(
+                        f"  - Craft {entry.craft.name!r}, part "
+                        f"{part.name!r} ({type(part).__name__}) "
+                        f"requires {req.__name__} on the world.")
+    if offenses:
+        raise RuntimeError(
+            "Field requirements not satisfied:\n"
+            + "\n".join(offenses)
+            + "\n\nFix: register the missing field via "
+              "`world.add_field(<FieldClass>(...))`, or remove the part "
+              "from the craft.")
 from .craft import emit_craft_hpp, emit_craft_cpp
 from .config import emit_config_h
 from .telemetry import emit_telemetry_hpp
@@ -43,6 +79,8 @@ def emit(world: World,
 
     if not world.crafts:
         raise RuntimeError("emit(): World has no crafts")
+
+    _validate_required_fields(world)
 
     # Identify unique Craft objects (by Python identity). A multi-craft
     # world that adds the same Craft instance multiple times shares a single
@@ -231,6 +269,8 @@ def _emit_filter_target(target, filter_obj, world, out_dir: Path,
         raise RuntimeError(
             f"emit_config ({kind} target): wrapped world has no crafts")
 
+    _validate_required_fields(world)
+
     seen: set[int] = set()
     unique_crafts: list[Craft] = []
     for entry in world.crafts:
@@ -298,6 +338,9 @@ def _emit_sim_plus_filter_target(target, sim_world: World, filter_obj,
     if not filter_obj.world.crafts:
         raise RuntimeError(
             f"emit_config (sim+{kind}): filter wrapped world has no crafts")
+
+    _validate_required_fields(sim_world)
+    _validate_required_fields(filter_obj.world)
 
     # Union the per-craft fileset across both worlds — no name collisions
     # are possible because sim and est crafts are required to have

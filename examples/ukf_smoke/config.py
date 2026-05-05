@@ -18,10 +18,6 @@ from manta_codegen.parts import DVL, IMU, Mass
 
 def make_config() -> MantaConfig:
     c = Craft("ukf_smoke")
-    # Filter targets need scalar_templated=True so the codegen can
-    # instantiate the craft as `<double>` for the WorldUKF's Real-side
-    # World (and `<Jet>` would be the EKF case — UKF stays Real-only).
-    c.scalar_templated = True
     c.add(Mass("body", mass=1.0, moi=(0.05, 0.05, 0.05)))
     imu = IMU("imu", accel_sigma=0.05, gyro_sigma=0.005)
     dvl = DVL("dvl", velocity_sigma=0.02)

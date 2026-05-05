@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from ..._format import cpp_float as _f
 from ...core import PartDescriptor
+from ...fields.fluid_field import FluidField
 
 
 def _emit_mat3(m: tuple[float, ...], scalar: str) -> str:
@@ -58,6 +59,10 @@ class _SurfaceBase(PartDescriptor):
     N: int = 0    # subclasses override
 
     cpp_header = "manta/parts/structure/surface.hpp"
+
+    # Drag/lift forces are ρ-scaled — Surface is meaningless without
+    # a FluidField in the world.
+    requires_fields = [FluidField]
 
     def __init__(self,
                  name: str,

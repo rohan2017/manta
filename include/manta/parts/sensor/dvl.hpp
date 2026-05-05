@@ -6,10 +6,6 @@
 
 namespace manta::parts {
 
-struct DvlNoiseParams {
-    float velocity_sigma = 0.0f;
-};
-
 // Doppler Velocity Log — body-frame linear velocity sensor.
 //
 // `rate_hz` caps the effective sample rate; default 0 = every tick.
@@ -18,10 +14,10 @@ template <class Scalar = Real>
 class DVLT : public PartT<Scalar> {
 public:
     explicit DVLT(std::string name,
-                  DvlNoiseParams p = DvlNoiseParams{},
-                  Real rate_hz     = Real(0))
+                  float velocity_sigma = 0.0f,
+                  Real  rate_hz        = Real(0))
         : PartT<Scalar>(std::move(name))
-        , noise_{p.velocity_sigma}
+        , noise_{velocity_sigma}
         , gate_{rate_hz} {}
 
     void update() override {

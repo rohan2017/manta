@@ -400,6 +400,16 @@ def _filter_construction(kind: str, filter_obj, num_crafts: int,
     no longer mentions a specific craft class.
     """
     if kind == "ekf":
+        # Block-decomposed variant for decoupled-craft swarms: per-craft
+        # Jet width = 13, NumCrafts passes per tick. Cost scales linearly
+        # in NumCrafts instead of quadratically; only valid when crafts
+        # don't physically couple (no tether/contact/fluid coupling).
+        if getattr(filter_obj, "block_decomposed", False):
+            return (
+                "#include \"manta/estimation/world_ekf_block.hpp\"",
+                f"manta::estimation::WorldEKFBlockDecomposed<"
+                f"{num_crafts}, {meas_dim}> {filter_var};",
+            )
         return (
             "#include \"manta/estimation/world_ekf.hpp\"",
             f"manta::estimation::WorldEKF<{num_crafts}, {meas_dim}> "
@@ -1067,16 +1077,44 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
     # those caches and queues a sequential update; end_step advances
     # the Jet world to x_post (no re-aggregate), reads F, computes
     # P_pre, applies queued updates, and mirrors posterior to Real.
+    #
+    # Block-decomposed variant runs NumCrafts smaller Jet passes
+    # bracketed by begin_craft/end_craft. Each pass seeds one craft
+    # with identity-deriv Jets, others with zero-deriv values, evaluates,
+    # collects that craft's measurements, then advances. All sensors
+    # for craft k must be added between `begin_craft(k)` and
+    # `end_craft()` so the H block lands in the right column slice.
     if needs_jet:
+        block_decomposed = getattr(filter_obj, "block_decomposed", False)
         lines += [
             "",
             f"    {filter_var}.begin_step(DT, g_Q);",
             "",
         ]
-        for m, spec in meas_specs:
-            rname = f"R_c{spec.craft_idx}_{m.name}"
-            part_acc = f"{craft_var_for(spec.craft_idx)}.{m.name}()"
-            spec.emit_update_block(lines, filter_var, part_acc, rname, indent="    ")
+        if block_decomposed:
+            # Group measurement specs by craft_idx so each pass picks
+            # up exactly one craft's sensors. Stable ordering keeps
+            # codegen deterministic.
+            specs_by_craft: list[list[tuple[object, _MeasFunctor]]] = [
+                [] for _ in range(num_crafts)
+            ]
+            for m, spec in meas_specs:
+                specs_by_craft[spec.craft_idx].append((m, spec))
+            for k in range(num_crafts):
+                lines.append(f"    // ---- craft {k}: per-craft Jet pass ----")
+                lines.append(f"    {filter_var}.begin_craft({k});")
+                for m, spec in specs_by_craft[k]:
+                    rname = f"R_c{spec.craft_idx}_{m.name}"
+                    part_acc = f"{craft_var_for(spec.craft_idx)}.{m.name}()"
+                    spec.emit_update_block(
+                        lines, filter_var, part_acc, rname, indent="    ")
+                lines.append(f"    {filter_var}.end_craft();")
+                lines.append("")
+        else:
+            for m, spec in meas_specs:
+                rname = f"R_c{spec.craft_idx}_{m.name}"
+                part_acc = f"{craft_var_for(spec.craft_idx)}.{m.name}()"
+                spec.emit_update_block(lines, filter_var, part_acc, rname, indent="    ")
         lines += [
             "",
             f"    {filter_var}.end_step();",

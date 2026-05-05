@@ -41,7 +41,6 @@ from manta_codegen.parts import DVL, IMU, Mass
 def _make_drone(name: str):
     """Return (craft, imu, dvl). Both drones are identical save for name."""
     c = Craft(name)
-    c.scalar_templated = True   # filter targets need <double>/<Jet> instantiations
     c.add(Mass("body", mass=1.0, moi=(0.05, 0.05, 0.05)))
     imu = IMU("imu", accel_sigma=0.05, gyro_sigma=0.005, rate_hz=100.0)
     dvl = DVL("dvl", velocity_sigma=0.02,                rate_hz=10.0)
@@ -70,11 +69,19 @@ def make_config() -> MantaConfig:
     #   * initial_attitude_var: dict by name — only drone_0 gets a tight
     #     attitude prior; drone_1 stays at the isotropic default.
     #   * initial_velocity_var: list — different per craft positionally.
+    # block_decomposed=True: the two drones don't physically couple
+    # (no tether, no contact, no shared field forces beyond gravity
+    # which is read-only), so F is block-diagonal and we can compute
+    # each craft's 13×13 F-block in its own Jet pass with only 13
+    # partials. For NumCrafts ≥ ~5 this is roughly NumCrafts× faster
+    # than the monolithic predict; for two crafts it's ~2× — already
+    # a measurable win.
     ekf = EKF(w, measurements=[imu_0, dvl_0, imu_1, dvl_1],
               process_noise=1e-6, initial_covariance=1.0,
               initial_position_var=1e-4,
               initial_attitude_var={"drone_0": 1e-4},
-              initial_velocity_var=[1e-2, 1e-3])
+              initial_velocity_var=[1e-2, 1e-3],
+              block_decomposed=True)
 
     # Each drone's sensor data arrives on its own Zenoh topic.
     subscribe(imu_0.set_measurement, "manta/ex9/imu/0")

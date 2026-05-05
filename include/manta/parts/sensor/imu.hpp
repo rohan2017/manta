@@ -8,11 +8,6 @@
 
 namespace manta::parts {
 
-struct ImuNoiseParams {
-    float accel_sigma = 0.0f;
-    float gyro_sigma  = 0.0f;
-};
-
 // An inertial measurement unit. Reads the kinematic-pass acceleration and
 // angular velocity caches and records them each tick, with optional
 // white-noise injection.
@@ -28,11 +23,12 @@ template <class Scalar = Real>
 class IMUT : public PartT<Scalar> {
 public:
     explicit IMUT(std::string name,
-                  ImuNoiseParams p = ImuNoiseParams{},
-                  Real rate_hz     = Real(0))
+                  float accel_sigma = 0.0f,
+                  float gyro_sigma  = 0.0f,
+                  Real  rate_hz     = Real(0))
         : PartT<Scalar>(std::move(name))
-        , accel_noise_{p.accel_sigma}
-        , gyro_noise_{p.gyro_sigma}
+        , accel_noise_{accel_sigma}
+        , gyro_noise_{gyro_sigma}
         , gate_{rate_hz} {}
 
     // Body-frame specific force — what a real accelerometer reports.
@@ -44,25 +40,41 @@ public:
     // accessor returns body-frame inertial accel including gravity's
     // contribution (since `sense_and_aggregate` sums gravity into the
     // wrench), so we subtract `R(q)^T · g_scene` to recover specific
-    // force. Worlds with no GravityField registered fall back to the
-    // raw kinematic accel (specific force == kinematic accel when the
-    // only forces are non-gravitational).
+    // force.
+    //
+    // Whether to subtract gravity is a COMPILE-TIME decision: the codegen
+    // force-includes <world>_config.h into every TU and that header
+    // `#define`s `MANTA_HAS_GRAVITY_FIELD` exactly when a GravityField
+    // was registered with the world. Worlds without one compile out the
+    // gravity branch entirely — no runtime field-registry lookup, no
+    // typeid dispatch.
+    // GravityField is OPTIONAL augmentation. If present we subtract
+    // body-frame gravity to report specific force (the convention real
+    // accelerometers follow); otherwise we hand back the raw kinematic
+    // body acceleration.
     geom::Vec3<PartFrame, Scalar> specific_force_body() const {
         auto a_body = this->acceleration_body();
-        if (!this->craft_ || !this->craft_->has_world()) return a_body;
-        const auto* gf = this->craft().world().field_ptr(
-            typeid(fields::GravityField));
-        if (!gf) return a_body;
-        const auto& g_field = *static_cast<const fields::GravityField*>(gf);
-        // Query gravity at the part's scene position; `state_at_templated`
-        // handles Real/Jet automatically (finite-diff for the position
-        // gradient when Scalar=Jet).
-        auto pos_scene = this->scene_to_part().position();
-        auto g_scene   = fields::state_at_templated<Scalar>(g_field, pos_scene);
-        // Rotate scene-frame gravity into body frame and subtract.
-        auto g_body = this->scene_to_part().rotate_inverse(g_scene);
-        return geom::Vec3<PartFrame, Scalar>::from_raw(
-            a_body.raw() - g_body.raw());
+        if constexpr (MANTA_PART_AUGMENTS_FIELD(MANTA_HAS_GRAVITY_FIELD)) {
+            // Inner null-check covers multi-world TUs where one world has
+            // a GravityField and another in the same TU doesn't. The
+            // null-safe `Part::field_ptr` traverses craft → world without
+            // tripping the world() assertion on unattached test crafts.
+            if (!this->craft_) return a_body;
+            const auto* gf_base = this->field_ptr(typeid(fields::GravityField));
+            if (!gf_base) return a_body;
+            const auto& g_field = *static_cast<const fields::GravityField*>(gf_base);
+            // Query gravity at the part's scene position;
+            // `state_at_templated` handles Real/Jet automatically
+            // (finite-diff for position gradient when Scalar=Jet).
+            auto pos_scene = this->scene_to_part().position();
+            auto g_scene   = fields::state_at_templated<Scalar>(g_field, pos_scene);
+            // Rotate scene-frame gravity into body frame and subtract.
+            auto g_body = this->scene_to_part().rotate_inverse(g_scene);
+            return geom::Vec3<PartFrame, Scalar>::from_raw(
+                a_body.raw() - g_body.raw());
+        } else {
+            return a_body;
+        }
     }
 
     void update() override {

@@ -10,10 +10,6 @@
 
 namespace manta::parts {
 
-struct MagnetometerNoiseParams {
-    float sigma = 0.0f;   // Tesla
-};
-
 // A 3-axis magnetometer. Each tick, queries the registered MagField at the
 // part's scene-frame position, rotates the result into part frame, optionally
 // adds white-Gaussian noise, and stores the value.
@@ -32,17 +28,28 @@ struct MagnetometerNoiseParams {
 template <class Scalar = Real>
 class MagnetometerT : public PartT<Scalar> {
 public:
+    // Hard-required field. The Python codegen also validates this at
+    // config time; the static_assert below is defense-in-depth for any
+    // path that bypasses the codegen.
+    MANTA_PART_REQUIRES_FIELD(MANTA_HAS_MAG_FIELD,
+        "Magnetometer requires a MagField on the world. Register one "
+        "with World.add_field(MagField(...)) (or DipoleMagField / "
+        "future IGRF subclasses), or remove the Magnetometer part.");
+
     explicit MagnetometerT(std::string name,
-                           MagnetometerNoiseParams p = MagnetometerNoiseParams{},
-                           Real rate_hz = Real(0))
+                           float sigma   = 0.0f,    // Tesla
+                           Real  rate_hz = Real(0))
         : PartT<Scalar>(std::move(name))
-        , noise_{WhiteGaussian{p.sigma}}
+        , noise_{WhiteGaussian{sigma}}
         , gate_{rate_hz} {}
 
     void update() override {
-        Real dt = (this->craft_ && this->craft_->has_world()) ? this->craft().world().clock().dt() : Real(0);
+        Real dt = (this->craft_ && this->craft_->has_world())
+                  ? this->craft().world().clock().dt() : Real(0);
         if (!gate_.tick(dt)) return;
-
+        // Inner runtime null-check covers the multi-world TU case
+        // (e.g. an EKF target where one world has a MagField and another
+        // in the same TU doesn't share the same macro state).
         const auto* mf_base = this->field_ptr(typeid(fields::MagField));
         if (!mf_base) {
             last_b_ = geom::Vec3<PartFrame, Scalar>::zero();
@@ -54,7 +61,8 @@ public:
         auto p_scaled = this->template position<SceneFrame>();
         auto b_scene_v = fields::state_at_templated<Scalar>(*mf, p_scaled);
 
-        auto q_part_from_scene = this->template orientation<SceneFrame>().raw().conjugate();
+        auto q_part_from_scene =
+            this->template orientation<SceneFrame>().raw().conjugate();
         auto b_part = geom::Vec3<PartFrame, Scalar>::from_raw(
             q_part_from_scene * b_scene_v.raw());
 

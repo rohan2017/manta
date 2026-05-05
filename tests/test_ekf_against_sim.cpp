@@ -83,9 +83,9 @@ TEST_CASE("EKF: tracks 1-D free-fall sim using IMU + DVL") {
     auto& body = sim.root().add<Mass>("body", 1.0f);
     (void)body;
     auto& imu = sim.root().add<IMU>("imu",
-        ImuNoiseParams{.accel_sigma = IMU_SIGMA, .gyro_sigma = 0.0f});
+        IMU_SIGMA, 0.0f);
     auto& dvl = sim.root().add<DVL>("dvl",
-        DvlNoiseParams{.velocity_sigma = DVL_SIGMA});
+        DVL_SIGMA);
     sim.root().compute_params();
     scene.add_craft(sim, InitialState{});
 
@@ -213,9 +213,9 @@ TEST_CASE("EKF: estimates IMU bias as augmented state") {
     auto& body = sim.root().add<Mass>("body", 1.0f);
     (void)body;
     auto& imu = sim.root().add<IMU>("imu",
-        ImuNoiseParams{.accel_sigma = IMU_SIGMA, .gyro_sigma = 0.0f});
+        IMU_SIGMA, 0.0f);
     auto& dvl = sim.root().add<DVL>("dvl",
-        DvlNoiseParams{.velocity_sigma = DVL_SIGMA});
+        DVL_SIGMA);
     sim.root().compute_params();
     scene.add_craft(sim, InitialState{});
 
@@ -321,9 +321,9 @@ TEST_CASE("EKF: 3-D pose tracker against thrust+gravity sim") {
     Craft sim("pose3d_sim");
     sim.root().add<Mass>("body", 1.0f);
     auto& imu = sim.root().add<IMU>("imu",
-        ImuNoiseParams{.accel_sigma = IMU_SIGMA, .gyro_sigma = 0.0f});
+        IMU_SIGMA, 0.0f);
     auto& dvl = sim.root().add<DVL>("dvl",
-        DvlNoiseParams{.velocity_sigma = DVL_SIGMA});
+        DVL_SIGMA);
     // Add a small non-axis-aligned thruster to give all 3 axes content.
     auto& thr = sim.root().add<Thruster>("t", 5.0f, geom::Vec3<PartFrame>{1, 1, 0});
     sim.root().compute_params();

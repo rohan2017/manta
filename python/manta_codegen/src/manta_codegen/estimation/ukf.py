@@ -119,16 +119,13 @@ class UKF:
         # runs the full World.update for every sigma vector; the per-
         # craft slice lives at state[craft_idx*13 : (craft_idx+1)*13].
 
-        # Filter targets always require scalar_templated crafts now —
-        # the codegen's Real-side WorldT<double> needs every craft as
-        # `<double>` (and EKF additionally needs `<Jet>`).
+        # Filter targets need scalar_templated crafts (the Real-side
+        # WorldT<double> requires every craft as `<double>`). Templating
+        # is a codegen detail — set it automatically rather than making
+        # users write boilerplate.
         world_crafts = [e.craft for e in self.world.crafts]
         for c in world_crafts:
-            if not getattr(c, "scalar_templated", False):
-                raise ValueError(
-                    f"UKF: craft {c.name!r} must have "
-                    f"`scalar_templated = True` (required by the templated "
-                    f"WorldT<double> filter path).")
+            c.scalar_templated = True
 
         from ..core import PartDescriptor
         for m in self.measurements:

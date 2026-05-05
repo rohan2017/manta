@@ -14,7 +14,11 @@ templated C++ that compiles into a regular binary.
 ```
 include/manta/        C++ runtime: parts, fields, planets, scenes, EKF/UKF
 python/manta_codegen/ Python descriptors + emitter
-examples/             ex0..ex7 + connect_demo + sync_smoke + wire_debug
+examples/             ex0 (free flight), ex1 (orbit), ex2 (quad), ex3 (TVC),
+                      ex4 (reaction wheel), ex5 (sim+EKF), ex6 (real-data
+                      EKF), ex7 (tethered pair), ex8 (submarine + Mag),
+                      ex9 (block-decomposed dual-craft EKF), ukf_smoke,
+                      connect_demo, sync_smoke, wire_debug
 tests/                doctest unit + integration tests (231 cases)
 ```
 
@@ -212,9 +216,12 @@ Three Target shapes are supported today:
   a Zenoh main that drives `w.update()` per tick.
 - **`drives=[EKF]`** or **`drives=[UKF]`** — pure estimator. The
   filter wraps its own internal World; codegen emits a
-  `manta::estimation::WorldEKF<...>` (or `WorldUKFOf<...>`) main with
-  per-sensor `consume_fresh + update_n<N>` (Pattern C — real-data
-  filter fed from external Zenoh topics, see ex6).
+  `manta::estimation::WorldEKF<...>` (or `WorldUKFOf<...>`) main. EKF
+  uses a fused `begin_step` / `add_update` / `end_step` lifecycle (one
+  Jet world pass per tick covering both predict and every fresh
+  measurement); UKF uses the legacy `predict(dt, Q)` + per-sensor
+  `consume_fresh + update_n<N>` flow (Pattern C — real-data filter fed
+  from external Zenoh topics, see ex6).
 - **`drives=[World, EKF/UKF]`** — sim + filter in one binary, the two
   worlds ticked from one wall clock. Cross-world `connect()` pipes
   sim sensor outputs into the filter craft's `set_measurement` hooks;
@@ -254,11 +261,12 @@ This generalizes to inter-craft physics. Tethers, contacts, fluid
 coupling — anything correct in the Real World is automatically correct
 in the Jet World. Cross-craft Jacobian entries propagate naturally.
 
-Set `craft.scalar_templated = True` in the descriptor; the codegen
-emits the craft as `FooCraftT<Scalar>` with a `using FooCraft =
-FooCraftT<Real>` alias. Required for filter-target crafts (the codegen
-needs to instantiate them as `<double>` for the Real filter world and
-`<Jet>` for the Jet shadow).
+Wrapping a Craft in an `EKF(...)` or `UKF(...)` descriptor flips
+`scalar_templated = True` on it automatically — users don't need to
+think about codegen-shape details. The emitted craft becomes
+`FooCraftT<Scalar>` with a `using FooCraft = FooCraftT<Real>` alias so
+the codegen can instantiate it as `<double>` for the Real filter world
+and `<Jet>` for the Jet shadow.
 
 For Jet-templated parts that query a Field, use
 `fields::state_at_templated<Scalar>(field, pos)` (already wired into
@@ -281,20 +289,34 @@ Two flavors share an API:
   `WorldT<double>::update()`. Captures second-order nonlinearity;
   `2*StateDim+1` World evaluations per predict.
 
-Both expose `predict(dt, Q)`, `update_n<N>(h, z, R)`, and per-craft
-slice accessors (`position(idx)`, `vel_linear(idx)`, etc.). Single-
-craft callers can omit the index — defaults to craft 0.
+Both expose per-craft slice accessors (`position(idx)`, `vel_linear(idx)`,
+etc.). Single-craft callers can omit the index — defaults to craft 0.
+
+The EKF uses a fused predict + update lifecycle that runs **one Jet
+world pass per tick**, regardless of how many sensors fire (PyPose-style
+linearize-at-`x_{k-1}` formulation; the chained `f` and `h` Jacobians
+fall out of one autodiff pass):
 
 ```cpp
-manta::WorldT<double> w_real;     // Real world the user populates
-manta::WorldT<EkfT::Jet> w_jet;   // Jet shadow, built identically
-
-EkfT ekf;
 ekf.bind(w_jet, {&craft_real}, {&craft_jet});
 ekf.set_state(...);
-ekf.predict(dt, Q);
-ekf.update_n<3>(some_h, z, R);
+ekf.set_covariance(...);
+
+// Per tick:
+ekf.begin_step(dt, Q);                      // seed Jets at x_pre, evaluate
+if (sensor.consume_fresh())
+    ekf.add_update<N>(h_at_pre, z, R);      // read h(x_pre) + H from caches
+ekf.end_step();                             // advance, P_pre = F P F^T + Q,
+                                            // apply queued updates, mirror
 ```
+
+For decoupled-craft swarms (no tether/contact/fluid coupling) flip
+`block_decomposed=True` on the EKF descriptor: the codegen instantiates
+`WorldEKFBlockDecomposed<...>` which runs `NumCrafts` smaller Jet passes
+(width 13 each instead of `13·NumCrafts`), giving linear scaling.
+
+UKF keeps the legacy `predict(dt, Q)` + `update_n<N>(h, z, R)` API —
+no Jet shadow, no fused step.
 
 ### Estimator codegen
 
@@ -311,23 +333,67 @@ Both shapes share the same emit pipeline. The codegen-emitted harness:
   World harness.
 - For EKF, builds a Jet shadow `WorldT<Jet>` (identical setup; same
   field instances shared by-pointer between Real and Jet).
-- Instantiates `WorldEKF<NumCrafts, MeasDim>` (or `WorldUKF<...>`) and
-  binds it to both worlds + per-craft pointer arrays.
-- Runs `predict(DT, Q)` + per-sensor `consume_fresh + update_n<N>` in
-  `tick()`.
+- Instantiates `WorldEKF<NumCrafts, MeasDim>` (or `WorldEKFBlockDecomposed`,
+  or `WorldUKF<...>`) and binds it to both worlds + per-craft pointer
+  arrays.
+- For EKF: emits `begin_step / per-sensor add_update / end_step` brackets
+  in `tick()`. For UKF: emits `predict + per-sensor update_n`.
 
 Multi-craft worlds work natively. Each measurement part lives on a
 specific craft; the codegen routes the per-sensor measurement update
 through that craft's state slice (`13 * craft_idx + offset`). See
-ex9 for a two-craft EKF.
+ex9 for a two-craft EKF (block-decomposed).
+
+#### Per-craft initial state and variance
+
+The EKF/UKF descriptors accept four shapes for every initial-state and
+initial-variance knob:
+
+| Form | Behavior |
+|---|---|
+| `None` (default) | State: inherit from `World.add_craft(c, pos=..., ori=..., vel=...)`. Variance: fall back to `initial_covariance`. |
+| Single value | Broadcast to all crafts. |
+| `list` of values, length = num_crafts | Positional per-craft (matches `world.crafts` order). |
+| `dict` keyed by craft name | Override only the named crafts; others use the broadcast / world-default. |
+
+```python
+EKF(world, ...,
+    initial_position=[(0,0,0), (5,0,0)],          # list: per-craft positional
+    initial_attitude_var={"drone_0": 1e-9},       # dict: only drone_0
+    initial_velocity_var=1e-2)                    # scalar: broadcast
+```
+
+#### Field requirements per part
+
+Parts declare their field dependencies on the `PartDescriptor`
+subclass via `requires_fields = [<FieldClass>, ...]`. Codegen validates
+at config time (raises a friendly Python error before C++ compilation
+starts); the C++ side carries a mirroring `MANTA_PART_REQUIRES_FIELD`
+static_assert as defense-in-depth. Optional augmentations use
+`MANTA_PART_AUGMENTS_FIELD(MANTA_HAS_<FIELD>)` inside `if constexpr (...)` —
+the inactive branch fully compiles out, no field-registry traffic.
+
+| Part | Required | Optional augmentation |
+|---|---|---|
+| IMU | — | GravityField (subtracts gravity to report specific force) |
+| Mass | — | GravityField (gated by `apply_gravity` flag) |
+| DVL | — | — |
+| Magnetometer | MagField | — |
+| PointGravitySrc | GravityField | — |
+| PointBuoy | FluidField + GravityField | — |
+| Surface | FluidField | — |
+
+#### Per-sensor measurement functors
 
 Per-sensor measurement-functor templates are built in for:
 
-- **DVL** — `h(x) = R(q)^T · v_scene` (body-frame velocity).
-- **IMU** — `h(x) = [0; ω_body]` under the no-net-force assumption.
-  User overrides for crafts with active forces.
-- **Magnetometer** — `h(x) = R(q)^T · B(p_now)` with B captured at
-  update-time from the registered MagField (locally-constant-B:
+- **DVL** — `h(x) = R(q)^T · v_scene` read from the Jet sensor's
+  `velocity_body()` accessor.
+- **IMU** — `h(x) = [specific_force_body; ω_body]` read from the Jet
+  IMU's `specific_force_body()` (accel includes gravity contribution
+  when a GravityField is registered) and `angular_velocity_body()`.
+- **Magnetometer** — `h(x) = R(q)^T · B(p_now)` with B captured
+  pre-update from the registered MagField (locally-constant-B:
   ∂h/∂q exact, ∂h/∂p dropped).
 
 R blocks are populated automatically from each part's noise sigmas.
@@ -401,7 +467,7 @@ The codegen has two output modes:
 | ex6 | binary  | Real-data-only EKF, fed from external Zenoh topics (Pattern C) |
 | ex7 | binary  | Codegen-driven Tether between two crafts |
 | ex8 | binary  | Submarine — Mass + PointBuoy + Surface drag + 2× thruster + IMU/DVL/Mag, sim+EKF |
-| ex9 | binary  | Dual-craft EKF — two drones jointly estimated by `WorldEKF<2, 18>` (Pattern C) |
+| ex9 | binary  | Dual-craft EKF — block-decomposed `WorldEKFBlockDecomposed<2, 18>`, per-craft Jet width 13 |
 | connect_demo | binary | Two-thruster `connect()` mirror — minimal in-process binding demo |
 | ukf_smoke | binary | Minimal UKF codegen smoke — Mass + IMU + DVL |
 | sync_smoke | — | Round-trips a GravityField disturbance through real Zenoh |
@@ -424,12 +490,6 @@ Early/active development. The public API is stable enough for ex0..ex9
 to drive it without back-compat shims, but any of it can still move.
 Notable items not yet built:
 
-- **Block-decomposed predict** for `NumCrafts` larger than ~10. Today
-  the EKF predict step is dense in `13·NumCrafts` Jet partials — fine
-  through 10 crafts, expensive past that. The static coupling topology
-  (which crafts touch which via tethers, contacts) is knowable at
-  codegen time, so a block-decomposed predict that codegens per-craft
-  Jet seeds is tractable. Deferred until a real swarm example asks.
 - **Per-disturbance exact `state_at_jet` opt-in.** Today the templated
   field query falls back to finite-diff for Jet scalars; an analytic
   override slot on `Disturbance` can be added when a consumer wants it.

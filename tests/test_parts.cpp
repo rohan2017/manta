@@ -169,7 +169,7 @@ TEST_CASE("IMU: reports non-zero acceleration under thrust (no noise)") {
 TEST_CASE("IMU: noise zero-sigma leaves measurement unchanged") {
     noise_seed(0);
     Craft c("test");
-    auto& imu = c.root().add<IMU>("imu", ImuNoiseParams{.accel_sigma=0.0f, .gyro_sigma=0.0f});
+    auto& imu = c.root().add<IMU>("imu", /*accel_sigma=*/0.0f, /*gyro_sigma=*/0.0f);
     c.root().compute_params();
     c.update(0.01f);
     c.update(0.01f);

@@ -36,6 +36,14 @@ public:
     bool persistent() const noexcept             { return persistent_; }
     void set_persistent(bool b) noexcept         { persistent_ = b; }
 
+    // PointGravitySrc REQUIRES a GravityField — its job is to add
+    // disturbances to one. Both Python codegen and the static_assert
+    // below catch a missing field.
+    MANTA_PART_REQUIRES_FIELD(MANTA_HAS_GRAVITY_FIELD,
+        "PointGravitySrc requires a GravityField on the world. "
+        "Register one with World.add_field(GravityField()), or "
+        "remove this part from the craft.");
+
     void update() override {
         auto* gf = this->field_ptr(typeid(fields::GravityField));
         if (!gf) return;

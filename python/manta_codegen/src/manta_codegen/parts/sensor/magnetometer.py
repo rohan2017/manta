@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from ..._format import cpp_float as _f
 from ...core import PartDescriptor
+from ...fields.mag_field import MagField
 from ...signal import Signal, vec3_out_signal
 
 
@@ -26,6 +27,11 @@ class Magnetometer(PartDescriptor):
     cpp_class          = "manta::parts::Magnetometer"
     cpp_class_template = "manta::parts::MagnetometerT"
     cpp_header         = "manta/parts/sensor/magnetometer.hpp"
+
+    # Hard requirement — Magnetometer is meaningless without a MagField.
+    # Codegen validates this at config time and the C++ side has a
+    # mirroring `MANTA_PART_REQUIRES_FIELD` static_assert.
+    requires_fields    = [MagField]
 
     signals = [
         vec3_out_signal("last_b", "last_b"),
@@ -51,5 +57,5 @@ class Magnetometer(PartDescriptor):
 
     def emit_constructor_args(self, scalar: str = "manta::Real") -> str:
         return (f'"{self.name}", '
-                f'manta::parts::MagnetometerNoiseParams{{{_f(self.sigma)}}}, '
+                f'{_f(self.sigma)}, '
                 f'manta::Real({_f(self.rate_hz)})')

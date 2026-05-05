@@ -53,8 +53,15 @@ target_link_libraries(manta_examples_shared INTERFACE
 # files (library workflow) are added by each example's CMake block below.
 
 # ex0 — pure C++, no codegen, no Zenoh. Drag-comparison freefall.
+# Hand-written examples that exercise field-dependent parts (here:
+# Surface needs FluidField, Mass auto-gravity needs GravityField) must
+# set the matching feature macros themselves — codegen would otherwise
+# emit them via the per-target <name>_config.h.
 add_executable(ex0_free_flight ex0_free_flight/ex0.cpp)
 target_link_libraries(ex0_free_flight PRIVATE manta::manta)
+target_compile_definitions(ex0_free_flight PRIVATE
+    MANTA_HAS_GRAVITY_FIELD=1
+    MANTA_HAS_FLUID_FIELD=1)
 
 # ex1 — binary workflow (orbit, 200x realtime).
 include(${CMAKE_CURRENT_SOURCE_DIR}/ex1_orbit/generated/ex1/ex1.cmake)

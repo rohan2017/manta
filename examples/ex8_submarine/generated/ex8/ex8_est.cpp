@@ -129,11 +129,24 @@ void setup() {
     // ---- Filter init ----
     EkfT::StateVec x0 = EkfT::StateVec::Zero();
     // craft 0 initial state
-    x0(0) = 0.0f; x0(1) = 0.0f; x0(2) = 0.0f;
+    x0(0) = 0.0f; x0(1) = 0.0f; x0(2) = -5.0f;
     x0(3) = 1.0f; x0(4) = 0.0f; x0(5) = 0.0f; x0(6) = 0.0f;
     x0(7) = 0.0f; x0(8) = 0.0f; x0(9) = 0.0f;
     x0(10) = 0.0f; x0(11) = 0.0f; x0(12) = 0.0f;
     EkfT::StateCov P0 = EkfT::StateCov::Identity() * 1.0f;
+    P0(0, 0) = 0.0001f;
+    P0(1, 1) = 0.0001f;
+    P0(2, 2) = 0.0001f;
+    P0(3, 3) = 0.0001f;
+    P0(4, 4) = 0.0001f;
+    P0(5, 5) = 0.0001f;
+    P0(6, 6) = 0.0001f;
+    P0(7, 7) = 0.01f;
+    P0(8, 8) = 0.01f;
+    P0(9, 9) = 0.01f;
+    P0(10, 10) = 0.0001f;
+    P0(11, 11) = 0.0001f;
+    P0(12, 12) = 0.0001f;
     ekf_0.set_state(x0);
     ekf_0.set_covariance(P0);
     ekf_0.bind(w_jet, {&craft}, {&craft_jet});
