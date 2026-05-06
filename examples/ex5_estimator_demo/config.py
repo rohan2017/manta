@@ -2,7 +2,7 @@
 
 Two crafts in the same Target's drive list:
   * `Ex5Craft` — sim, runs in a manta::World/Scene with full physics.
-  * `Ex5EstCraftT<Scalar>` — templated estimator wrapped by WorldEKF.
+  * `Ex5EstCraftT<Scalar>` — templated estimator wrapped by manta::estimation::EKF.
 
 Cross-world `connect()` pipes the sim's noisy IMU + DVL outputs into the
 est's `set_measurement()` hooks each tick, mirrors the throttle so the

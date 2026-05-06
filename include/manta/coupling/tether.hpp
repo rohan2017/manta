@@ -20,6 +20,12 @@ namespace coupling {
 // use the same Scalar — typically all crafts in a multi-craft estimator are
 // templated on the same Scalar.
 //
+// Lifetime: TetherT and its two TetherEndpointT parts hold non-owning
+// pointers at each other. Either side may be destroyed first; the dtors
+// null the surviving side's pointer so a stale endpoint or a dead tether
+// is observable as `endpoint_a()/b() == nullptr` or `tether_ == nullptr`
+// rather than dangling.
+//
 // Force model:
 //   d = |p2 - p1|
 //   if d <= rest_length:  F = 0  (slack — ropes don't push)
@@ -33,6 +39,10 @@ class TetherT {
 public:
     TetherT(Scalar rest_length, Scalar stiffness, Scalar damping = Scalar(0)) noexcept
         : rest_length_(rest_length), k_(stiffness), c_(damping) {}
+
+    ~TetherT();
+    TetherT(const TetherT&) = delete;
+    TetherT& operator=(const TetherT&) = delete;
 
     // Compute the SceneFrame force ON the body at p_self, pulling toward
     // p_other when the tether is stretched. v_self / v_other are linear
@@ -79,3 +89,8 @@ using Tether = TetherT<Real>;
 
 } // namespace coupling
 } // namespace manta
+
+// Cross-class dtor: needs the full TetherEndpointT definition to clear
+// the survivor's tether pointer. Defined inline at the bottom of
+// tether_endpoint.hpp.
+

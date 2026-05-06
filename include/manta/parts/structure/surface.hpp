@@ -1,10 +1,10 @@
 #pragma once
 
 #include <array>
-#include <type_traits>
 
 #include "../../core/craft.hpp"
 #include "../../fields/fluid_field.hpp"
+#include "../../geom/casts.hpp"
 
 namespace manta::parts {
 
@@ -50,14 +50,7 @@ public:
 
         // Bridge templated position to Real for the FluidField query.
         auto p_scaled = this->template position<SceneFrame>();
-        Eigen::Matrix<Real, 3, 1> p_real;
-        if constexpr (std::is_floating_point_v<Scalar>) {
-            p_real = p_scaled.raw().template cast<Real>();
-        } else {
-            for (int i = 0; i < 3; ++i)
-                p_real(i) = Real(p_scaled.raw()(i).a);
-        }
-        auto fs = fluid.state_at(geom::Vec3<SceneFrame>::from_raw(p_real));
+        auto fs       = fluid.state_at(geom::cast_to_real(p_scaled));
 
         Eigen::Matrix<Scalar, 3, 1> v_fluid_scene =
             fs.velocity.raw().template cast<Scalar>();

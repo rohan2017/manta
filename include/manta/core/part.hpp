@@ -1,8 +1,10 @@
 #pragma once
 
+#include <memory>
 #include <string>
 #include <typeinfo>
 #include <type_traits>
+#include <vector>
 #include "features.hpp"   // MANTA_HAS_<FIELD> defaults + REQUIRES/AUGMENTS macros
 #include "frame.hpp"
 #include "types.hpp"
@@ -58,6 +60,41 @@ public:
     const geom::Vec3<PartFrame, Scalar>&                get_com()       const noexcept { return com_; }
     const geom::StaticLink<PartFrame, PartFrame, Scalar>& get_transform() const noexcept { return transform_; }
 
+    // ---- Tree / kinematic hooks (overridden by composite / articulated) ----
+    //
+    // These replace per-tick `dynamic_cast` in the kinematic + aggregate
+    // recursion. Plain leaf parts inherit the no-op defaults; composites
+    // expose their children, articulated parts contribute a joint-link
+    // composition and a per-joint integration step.
+
+    // Leaf parts have no children. CompositePartT overrides to return its
+    // children container.
+    using ChildVec = std::vector<std::unique_ptr<PartT<Scalar>>>;
+    virtual ChildVec*       children()       noexcept { return nullptr; }
+    virtual const ChildVec* children() const noexcept { return nullptr; }
+
+    // Joint-output kinematic link: identity for non-articulated parts.
+    // ArticulatedPartT overrides with the actual revolute-joint link.
+    virtual geom::KinematicLink<PartFrame, PartFrame, Scalar>
+    joint_link() const noexcept {
+        return geom::KinematicLink<PartFrame, PartFrame, Scalar>::identity();
+    }
+    // Returns true when this part inserts a joint link (skips an identity
+    // composition in the hot kinematic loop).
+    virtual bool has_joint_link() const noexcept { return false; }
+
+    // Aggregate child wrenches into this part's wrench_accum_. Default
+    // no-op (leaf parts have no children). CompositePartT overrides.
+    virtual void aggregate_wrenches() {}
+
+    // Recompute mass / MOI / COM from children. Default no-op.
+    // CompositePartT overrides.
+    virtual void compute_params() {}
+
+    // Integrate any per-part joint state (joint angle / rate). Default
+    // no-op. ArticulatedPartT overrides.
+    virtual void integrate_joint_state(Scalar /*dt*/) noexcept {}
+
     // Wrench application — accumulates within a single tick. Multiple calls add.
     void apply_force_at(const geom::Vec3<PartFrame, Scalar>& force,
                         const geom::Vec3<PartFrame, Scalar>& point =
@@ -88,10 +125,33 @@ public:
     geom::Vec3<PartFrame, Scalar> angular_velocity_body()     const noexcept;
     geom::Vec3<PartFrame, Scalar> angular_acceleration_body() const noexcept;
 
-    // Field access — delegates to craft().field<FieldT>().
+    // ---- Field access ----
+    //
+    // Two accessors covering the two field-use patterns:
+    //
+    //   field<FieldT>()         — registered FieldT&. Use when the part
+    //                             genuinely requires the field (paired
+    //                             with MANTA_PART_REQUIRES_FIELD). UB if
+    //                             the part is unattached or the field
+    //                             isn't registered.
+    //
+    //   field_or_null<FieldT>() — FieldT* or nullptr. Use when the part
+    //                             gracefully handles a missing field
+    //                             (paired with MANTA_PART_AUGMENTS_FIELD).
+    //                             Safe to call from unattached test
+    //                             crafts.
+    //
+    // Keying uses `typeid(FieldT)`. Subclasses of a stock field key as a
+    // separate type — `field<MagField>()` and `field<IGRFMagField>()` are
+    // distinct keys; register and query with the same concrete type.
     template<typename FieldT>
-    FieldT& field() const {
+    FieldT& field() const noexcept {
         return *static_cast<FieldT*>(field_ptr(typeid(FieldT)));
+    }
+    template<typename FieldT>
+    FieldT* field_or_null() const noexcept {
+        if (!craft_) return nullptr;
+        return static_cast<FieldT*>(field_ptr(typeid(FieldT)));
     }
 
     const std::string& name()    const noexcept { return name_; }
@@ -216,10 +276,13 @@ geom::Ori<F, Scalar> PartT<Scalar>::orientation() const noexcept {
 template <class Scalar>
 template <typename F>
 geom::Vec3<F, Scalar> PartT<Scalar>::acceleration() const noexcept {
-    static_assert(std::is_same_v<F, SceneFrame> || std::is_same_v<F, PartFrame>,
+    static_assert(std::is_same_v<F, SceneFrame> ||
+                  std::is_same_v<F, CraftFrame> || std::is_same_v<F, PartFrame>,
                   "PartT::acceleration<F>: unsupported frame");
     if constexpr (std::is_same_v<F, SceneFrame>) {
         return scene_to_part_.acc_linear();
+    } else if constexpr (std::is_same_v<F, CraftFrame>) {
+        return craft_to_part_.acc_linear();
     } else {
         return geom::Vec3<PartFrame, Scalar>::zero();
     }
@@ -228,10 +291,13 @@ geom::Vec3<F, Scalar> PartT<Scalar>::acceleration() const noexcept {
 template <class Scalar>
 template <typename F>
 geom::Vec3<F, Scalar> PartT<Scalar>::angular_acceleration() const noexcept {
-    static_assert(std::is_same_v<F, SceneFrame> || std::is_same_v<F, PartFrame>,
+    static_assert(std::is_same_v<F, SceneFrame> ||
+                  std::is_same_v<F, CraftFrame> || std::is_same_v<F, PartFrame>,
                   "PartT::angular_acceleration<F>: unsupported frame");
     if constexpr (std::is_same_v<F, SceneFrame>) {
         return scene_to_part_.rotate(scene_to_part_.acc_angular());
+    } else if constexpr (std::is_same_v<F, CraftFrame>) {
+        return craft_to_part_.rotate(craft_to_part_.acc_angular());
     } else {
         return geom::Vec3<PartFrame, Scalar>::zero();
     }

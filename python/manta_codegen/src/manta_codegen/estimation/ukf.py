@@ -2,8 +2,8 @@
 
 Mirrors `EKF` (same wrap-a-World contract, same per-sensor measurement
 list, same BoundSignal output surface) but generates a
-`manta::estimation::WorldUKFOf<EstCraft<double>, MeasDim>` instance
-instead of `WorldEKF<EstCraftT, MeasDim>`.
+`manta::estimation::UKF<EstCraft<double>, MeasDim>` instance
+instead of `EKF<EstCraftT, MeasDim>`.
 
 Two structural differences from EKF:
 

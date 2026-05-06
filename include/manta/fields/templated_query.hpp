@@ -4,6 +4,7 @@
 
 #include "../core/frame.hpp"
 #include "../core/types.hpp"
+#include "../geom/casts.hpp"
 #include "../geom/vec3.hpp"
 
 // Scalar-templated query helpers for the Vec3-output fields (Gravity, Mag).
@@ -56,14 +57,13 @@ state_at_templated(const FieldT& f,
     using RealVec = geom::Vec3<SceneFrame>;
 
     if constexpr (std::is_floating_point_v<Scalar>) {
-        Eigen::Matrix<Real, 3, 1> p_real = pos.raw().template cast<Real>();
-        auto v_real = f.state_at(RealVec::from_raw(p_real));
-        return OutVec::from_raw(v_real.raw().template cast<Scalar>());
+        auto v_real = f.state_at(geom::cast_to_real(pos));
+        return geom::lift_from_real<Scalar>(v_real);
     } else {
         // Jet path. Strip .a values, run 1 + 6 evaluations, compose.
-        Eigen::Matrix<Real, 3, 1> p0;
-        for (int i = 0; i < 3; ++i) p0(i) = Real(pos.raw()(i).a);
-        auto v0 = f.state_at(RealVec::from_raw(p0));
+        auto p_real = geom::cast_to_real(pos);
+        Eigen::Matrix<Real, 3, 1> p0 = p_real.raw();
+        auto v0 = f.state_at(p_real);
 
         Real eps = detail::kFiniteDiffEps<Scalar>;
         Eigen::Matrix<Real, 3, 3> J;

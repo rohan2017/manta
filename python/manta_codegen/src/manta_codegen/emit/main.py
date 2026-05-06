@@ -12,7 +12,7 @@ Three artifacts:
   * `<world>.cpp` — storage definitions for everything declared in the
     header, plus `setup()` (build the scene, register planets/fields,
     add crafts, declare Zenoh pubs/subs) and `tick()` (apply
-    in-bindings, `w.update()`, in-process `connect()` steps,
+    in-bindings, `w.step()`, in-process `connect()` steps,
     decimated publish). Zenoh session + per-binding state live in
     file-private anonymous-namespace storage.
 
@@ -183,7 +183,7 @@ def emit_world_hpp(world: World) -> str:
         "void setup();",
         "",
         "// One simulation step: applies pending in-bindings, runs",
-        "// w.update() to advance physics, executes in-process connect()",
+        "// w.step() to advance physics, executes in-process connect()",
         "// links, and (every ~50 Hz) publishes out-bindings.",
         "void tick();",
         "",
@@ -418,11 +418,11 @@ def emit_world_cpp(world: World) -> str:
 
     lines += [
         "",
-        "    w.update();",
+        "    w.step();",
         "",
     ]
 
-    # Connect steps run after w.update() so propagated values are fresh.
+    # Connect steps run after w.step() so propagated values are fresh.
     # Only intra-world connects belong here — cross-world ones (e.g. ex5's
     # sim.dvl → est.dvl) defer to a containing composed harness, which
     # walks both worlds' connection lists.
@@ -564,7 +564,7 @@ def _emit_field_sync_setup(lines: list[str], i: int, topic: str, cpp_class: str)
         f"    pub_field_{i}.emplace(g_session->declare_publisher("
         f"zenoh::KeyExpr({_quote(topic)})));",
         f"    field_{i}.set_tx_hook(",
-        f"        [](std::uint16_t tag, const {cpp_class}::Params& params, int lifetime) {{",
+        f"        [](std::uint16_t tag, const manta::fields::Params& params, int lifetime) {{",
         f"            std::vector<std::uint8_t> buf;",
         f"            buf.resize(2 + 2 + 4 + params.size());",
         f"            std::uint16_t ver = 1;",
@@ -578,14 +578,14 @@ def _emit_field_sync_setup(lines: list[str], i: int, topic: str, cpp_class: str)
         f"        zenoh::KeyExpr({_quote(topic)}),",
         f"        [](const zenoh::Sample& s) {{",
         f"            auto payload = s.get_payload().as_vector();",
-        f"            if (payload.size() < 8 + {cpp_class}::kParamsBytes) return;",
+        f"            if (payload.size() < 8 + manta::fields::kParamsBytes) return;",
         f"            std::uint16_t ver = 0, tag = 0;",
         f"            std::int32_t  lifetime = 0;",
         f"            std::memcpy(&ver,      payload.data() + 0, 2);",
         f"            std::memcpy(&tag,      payload.data() + 2, 2);",
         f"            std::memcpy(&lifetime, payload.data() + 4, 4);",
         f"            if (ver != 1) return;",
-        f"            {cpp_class}::Params p{{}};",
+        f"            manta::fields::Params p{{}};",
         f"            std::memcpy(p.data(), payload.data() + 8, p.size());",
         f"            field_{i}.receive(tag, p, lifetime);",
         f"        }}, zenoh::closures::none));",

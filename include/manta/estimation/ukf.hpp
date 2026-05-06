@@ -1,8 +1,11 @@
 #pragma once
 
-// Unscented Kalman Filter — header-only template using sigma-point
-// propagation. Unlike EKF, UKF does NOT require autodiff: the user's process
-// and measurement functors only need to accept double scalars.
+// Pure-math Unscented Kalman Filter — header-only template using sigma-point
+// propagation. This is the kernel; the manta-aware filter wrapper that knows
+// about Crafts/Worlds is `manta::estimation::UKF` (declared in
+// `world_ukf.hpp`). Unlike EKFKernel, UKFKernel does NOT require autodiff:
+// the user's process and measurement functors only need to accept double
+// scalars.
 //
 // Tradeoffs vs EKF:
 //   * No Jacobians, so no Jet instantiation of user code → fewer compile-time
@@ -23,7 +26,7 @@
 // Usage sketch — same functor signatures as EKF except the templated scalar
 // is always double:
 //
-//   manta::estimation::UKF<2, 1> ukf;
+//   manta::estimation::UKFKernel<2, 1> ukf;
 //   ukf.set_state(...); ukf.set_covariance(...);
 //   ukf.predict(ConstVelProcess{}, dt, Q);
 //   ukf.update(PositionMeas{},  z, R);
@@ -35,7 +38,7 @@
 namespace manta::estimation {
 
 template <int StateDim, int MeasDim>
-class UKF {
+class UKFKernel {
 public:
     static constexpr int NSigma = 2 * StateDim + 1;
 
@@ -47,7 +50,7 @@ public:
     using MeasSigma    = Eigen::Matrix<double, MeasDim,  NSigma>;
     using WeightVec    = Eigen::Matrix<double, NSigma,   1>;
 
-    explicit UKF(double alpha = 1e-3, double beta = 2.0, double kappa = 0.0) noexcept
+    explicit UKFKernel(double alpha = 1e-3, double beta = 2.0, double kappa = 0.0) noexcept
         : x_(StateVec::Zero())
         , P_(StateCov::Identity())
         , alpha_(alpha), beta_(beta), kappa_(kappa) {

@@ -23,10 +23,10 @@ TEST_CASE("SimClock: advances time by dt each tick") {
 
     auto& s = w.create_scene();
     (void)s;
-    w.update();
+    w.step();
     CHECK(w.clock().time() == doctest::Approx(0.1f));
 
-    w.update();
+    w.step();
     CHECK(w.clock().time() == doctest::Approx(0.2f));
 }
 
@@ -97,7 +97,7 @@ TEST_CASE("World: update calls craft update (clock advances)") {
     c.root().compute_params();
     s.add_craft(c);
 
-    w.update();
+    w.step();
     CHECK(w.clock().time() == doctest::Approx(0.05f));
 }
 
@@ -120,7 +120,7 @@ TEST_CASE("World: field registered at World level accessible from Part") {
     Craft c("test");
     auto& qp = c.root().add<QueryPart>("q");
     s.add_craft(c);
-    w.update();
+    w.step();
 
     CHECK(qp.g_z_seen == doctest::Approx(-9.81f));
 }
@@ -145,7 +145,7 @@ TEST_CASE("World: craft-local field shadows world field") {
     c.register_field(craft_gf);
     auto& qp = c.root().add<QueryPart>("q");
     s.add_craft(c);
-    w.update();
+    w.step();
 
     CHECK(qp.g_z_seen == doctest::Approx(-1.62f));
 }
@@ -165,7 +165,7 @@ TEST_CASE("Mass auto-gravity: free fall under -9.81 m/s^2 for 1 s") {
     scene.add_craft(c);
 
     const int steps = 1000;
-    for (int i = 0; i < steps; ++i) w.update();
+    for (int i = 0; i < steps; ++i) w.step();
 
     auto vel = c.scene_to_craft().vel_linear();
     auto pos = c.scene_to_craft().position();
@@ -188,7 +188,7 @@ TEST_CASE("Mass + Thruster: craft hovers at constant velocity") {
     c.root().compute_params();
     scene.add_craft(c);
 
-    for (int i = 0; i < 100; ++i) w.update();
+    for (int i = 0; i < 100; ++i) w.step();
 
     auto vel = c.scene_to_craft().vel_linear();
     CHECK(test::approx_equal(vel, Vec3<SceneFrame>::zero(), Real(0.01f)));
@@ -217,8 +217,8 @@ TEST_CASE("World: multiple crafts in same scene all update under gravity") {
     // then-aggregate ordering, an unprimed update() would drift first
     // (cache=0 → no kick) and only capture gravity in the aggregate
     // afterward, leaving v at zero on tick 1.
-    w.evaluate();
-    w.update();
+    w.kinematic_and_aggregate();
+    w.step();
 
     auto v1 = c1.scene_to_craft().vel_linear();
     auto v2 = c2.scene_to_craft().vel_linear();
@@ -238,7 +238,7 @@ TEST_CASE("Mass: apply_gravity=false opts out of auto-gravity") {
     c.root().compute_params();
     scene.add_craft(c);
 
-    for (int i = 0; i < 100; ++i) w.update();
+    for (int i = 0; i < 100; ++i) w.step();
 
     auto vel = c.scene_to_craft().vel_linear();
     CHECK(vel.z() == doctest::Approx(0.0f).epsilon(1e-3f));

@@ -24,7 +24,7 @@ manta::WorldT<double>  w{};
 manta::SceneT<double>* scene = nullptr;
 Drone0CraftT<double> craft_0{};
 Drone1CraftT<double> craft_1{};
-manta::estimation::WorldEKFBlockDecomposed<2, 18> ekf_0;
+manta::estimation::BlockDecomposedEKF<2, 18> ekf_0;
 
 }  // namespace manta_gen::ex9
 
@@ -54,7 +54,7 @@ using EkfT = decltype(manta_gen::ex9::ekf_0);
 EkfT::StateCov g_Q = EkfT::StateCov::Identity() * 1e-06f;
 
 // Jet shadow world. Built identically to the Real side in
-// setup(); WorldEKF::predict drives this through autodiff to
+// setup(); EKF::predict drives this through autodiff to
 // extract the state-transition Jacobian.
 using JetType = EkfT::Jet;
 manta::WorldT<JetType>   w_jet{};

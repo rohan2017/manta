@@ -133,7 +133,7 @@ TEST_CASE("Articulation invariant: balanced Motor preserves COM and Lz") {
     scene.add_craft(c, InitialState{});
 
     for (int i = 0; i < N; ++i) {
-        w.update();
+        w.step();
     }
     c.kinematic_pass();   // refresh caches for inspection
 
@@ -201,7 +201,7 @@ TEST_CASE("Articulation invariant: asymmetric Motor preserves COM and Lz") {
     scene.add_craft(c, InitialState{});
 
     for (int i = 0; i < N; ++i) {
-        w.update();
+        w.step();
     }
     c.kinematic_pass();
 

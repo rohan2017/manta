@@ -61,11 +61,11 @@ TEST_CASE("IMU: default (no rate cap) is fresh after every update") {
     s.add_craft(c);
 
     CHECK(imu.fresh() == false);
-    w.update();
+    w.step();
     CHECK(imu.fresh() == true);
     CHECK(imu.consume_fresh() == true);
     CHECK(imu.fresh() == false);
-    w.update();
+    w.step();
     CHECK(imu.fresh() == true);
 }
 
@@ -81,7 +81,7 @@ TEST_CASE("IMU: rate_hz=100 on 1kHz sim fires every 10 ticks") {
 
     int fires = 0;
     for (int i = 0; i < 50; ++i) {
-        w.update();
+        w.step();
         if (imu.consume_fresh()) ++fires;
     }
     CHECK(fires == 5);   // tick 0, 10, 20, 30, 40
@@ -99,7 +99,7 @@ TEST_CASE("DVL: rate_hz=50 on 1kHz sim fires every 20 ticks") {
 
     int fires = 0;
     for (int i = 0; i < 100; ++i) {
-        w.update();
+        w.step();
         if (dvl.consume_fresh()) ++fires;
     }
     CHECK(fires == 5);   // tick 0, 20, 40, 60, 80
@@ -115,9 +115,9 @@ TEST_CASE("set_measurement bypasses the gate (always fresh)") {
     c.root().compute_params();
     s.add_craft(c);
 
-    w.update();              // first tick fires
+    w.step();              // first tick fires
     (void)imu.consume_fresh();
-    w.update();              // gate would block this one
+    w.step();              // gate would block this one
     CHECK(imu.fresh() == false);
 
     // External feed: should mark fresh regardless of rate cap.

@@ -7,7 +7,7 @@ data fed via Zenoh — typical robot deployment shape:
     ex6_real_data_estimator → subscribes, runs the codegen-emitted EKF,
                               publishes  manta/ex6/estimate
 
-The Craft plugs into `manta::estimation::WorldEKF`; the EKF descriptor
+The Craft plugs into `manta::estimation::EKF`; the EKF descriptor
 flips the wrapped craft to scalar-templated automatically so the codegen
 emits `Ex6EstCraftT<Scalar>`. Both IMU and DVL drive measurement updates;
 each sensor's `consume_fresh()` gates its own update inside the

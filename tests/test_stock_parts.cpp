@@ -124,7 +124,7 @@ TEST_CASE("PointBuoy composition: 4 buoys ~ neutral buoyancy at depth") {
     c.set_position(Vec3<SceneFrame>{0, 0, -1.0f});
     scene.add_craft(c);
 
-    for (int i = 0; i < 100; ++i) w.update();
+    for (int i = 0; i < 100; ++i) w.step();
 
     auto v = c.scene_to_craft().vel_linear();
     auto p = c.scene_to_craft().position();

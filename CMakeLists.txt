@@ -10,7 +10,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(MANTA_BUILD_TESTS    "Build manta tests"    ON)
 option(MANTA_BUILD_EXAMPLES "Build manta examples" ON)
-option(MANTA_DEBUG_FRAMES   "Enable runtime FrameId checks" ON)
+option(MANTA_DEBUG_FRAMES   "Enable runtime FrameId checks" OFF)
 
 find_package(Eigen3 3.4 REQUIRED NO_MODULE)
 # Ceres is optional at this stage — only required for estimation-mode crafts.
@@ -19,10 +19,6 @@ find_package(Ceres QUIET)
 add_library(manta STATIC
     src/core/frame.cpp
     src/core/noise.cpp
-    src/core/part.cpp
-    src/core/composite_part.cpp
-    src/core/articulated_part.cpp
-    src/core/craft.cpp
     src/parts/articulation/motor.cpp)
 add_library(manta::manta ALIAS manta)
 

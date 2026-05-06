@@ -149,7 +149,7 @@ void setup() {
         }, zenoh::closures::none));
     pub_field_0.emplace(g_session->declare_publisher(zenoh::KeyExpr("manta/ex1/field_0/disturbance")));
     field_0.set_tx_hook(
-        [](std::uint16_t tag, const manta::fields::GravityField::Params& params, int lifetime) {
+        [](std::uint16_t tag, const manta::fields::Params& params, int lifetime) {
             std::vector<std::uint8_t> buf;
             buf.resize(2 + 2 + 4 + params.size());
             std::uint16_t ver = 1;
@@ -163,14 +163,14 @@ void setup() {
         zenoh::KeyExpr("manta/ex1/field_0/disturbance"),
         [](const zenoh::Sample& s) {
             auto payload = s.get_payload().as_vector();
-            if (payload.size() < 8 + manta::fields::GravityField::kParamsBytes) return;
+            if (payload.size() < 8 + manta::fields::kParamsBytes) return;
             std::uint16_t ver = 0, tag = 0;
             std::int32_t  lifetime = 0;
             std::memcpy(&ver,      payload.data() + 0, 2);
             std::memcpy(&tag,      payload.data() + 2, 2);
             std::memcpy(&lifetime, payload.data() + 4, 4);
             if (ver != 1) return;
-            manta::fields::GravityField::Params p{};
+            manta::fields::Params p{};
             std::memcpy(p.data(), payload.data() + 8, p.size());
             field_0.receive(tag, p, lifetime);
         }, zenoh::closures::none));
@@ -208,7 +208,7 @@ void tick() {
           bind_6_payload.clear();
       } }
 
-    w.update();
+    w.step();
 
     if (++g_pub_decim >= kPubEvery) {
         g_pub_decim = 0;

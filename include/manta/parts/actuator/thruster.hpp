@@ -97,20 +97,63 @@ public:
                std::array<Vec, 1>{Vec::zero()}) {}
 };
 
+// detail helper: a Thruster of order N where only the linear term is set,
+// from (max_thrust, direction). Higher-order coefficients are zero.
+namespace detail {
+    template <int N, class Scalar>
+    inline std::array<geom::Vec3<PartFrame, Scalar>, N>
+    linear_only_force_coefs(geom::Vec3<PartFrame, Scalar> direction, Scalar max_thrust) {
+        std::array<geom::Vec3<PartFrame, Scalar>, N> a{};
+        a[0] = direction * max_thrust;
+        return a;
+    }
+    template <int N, class Scalar>
+    inline std::array<geom::Vec3<PartFrame, Scalar>, N> zero_coefs() {
+        std::array<geom::Vec3<PartFrame, Scalar>, N> a{};
+        return a;
+    }
+} // namespace detail
+
 template <class Scalar = Real>
 class Thruster2T : public detail::ThrusterImpl<2, Scalar> {
 public:
-    using detail::ThrusterImpl<2, Scalar>::ThrusterImpl;
+    using Base = detail::ThrusterImpl<2, Scalar>;
+    using Vec  = typename Base::Vec;
+    using Base::Base;
+
+    Thruster2T(std::string name, Scalar max_thrust,
+               Vec direction = Vec{Scalar(0), Scalar(0), Scalar(1)})
+        : Base(std::move(name),
+               detail::linear_only_force_coefs<2, Scalar>(direction, max_thrust),
+               detail::zero_coefs<2, Scalar>()) {}
 };
+
 template <class Scalar = Real>
 class Thruster3T : public detail::ThrusterImpl<3, Scalar> {
 public:
-    using detail::ThrusterImpl<3, Scalar>::ThrusterImpl;
+    using Base = detail::ThrusterImpl<3, Scalar>;
+    using Vec  = typename Base::Vec;
+    using Base::Base;
+
+    Thruster3T(std::string name, Scalar max_thrust,
+               Vec direction = Vec{Scalar(0), Scalar(0), Scalar(1)})
+        : Base(std::move(name),
+               detail::linear_only_force_coefs<3, Scalar>(direction, max_thrust),
+               detail::zero_coefs<3, Scalar>()) {}
 };
+
 template <class Scalar = Real>
 class Thruster4T : public detail::ThrusterImpl<4, Scalar> {
 public:
-    using detail::ThrusterImpl<4, Scalar>::ThrusterImpl;
+    using Base = detail::ThrusterImpl<4, Scalar>;
+    using Vec  = typename Base::Vec;
+    using Base::Base;
+
+    Thruster4T(std::string name, Scalar max_thrust,
+               Vec direction = Vec{Scalar(0), Scalar(0), Scalar(1)})
+        : Base(std::move(name),
+               detail::linear_only_force_coefs<4, Scalar>(direction, max_thrust),
+               detail::zero_coefs<4, Scalar>()) {}
 };
 
 using Thruster1 = Thruster1T<Real>;

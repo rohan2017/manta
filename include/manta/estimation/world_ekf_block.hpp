@@ -1,9 +1,9 @@
 #pragma once
 
-// WorldEKFBlockDecomposed — block-decomposed EKF for swarms of decoupled
-// crafts.
+// `manta::estimation::BlockDecomposedEKF` — block-decomposed EKF for swarms
+// of decoupled crafts.
 //
-// For NumCrafts ≥ ~5 the monolithic `WorldEKF<NumCrafts, MeasDim>`
+// For NumCrafts ≥ ~5 the monolithic `EKF<NumCrafts, MeasDim>`
 // becomes expensive: every Jet operation tracks `13·NumCrafts` partial
 // derivatives, so a Jet world pass costs O(NumCrafts²) work per part-
 // tick. For 20 crafts that's 400× the single-craft cost.
@@ -21,10 +21,10 @@
 //   for k in 0..NumCrafts:
 //     seed craft k's state with identity-derivative Jets
 //     seed every other craft j ≠ k with value-only Jets (zero derivs)
-//     w_jet.evaluate()
+//     w_jet.kinematic_and_aggregate()
 //     for each measurement on craft k:
 //         read h_jet from craft k's sensors → store h_pre + H[meas, k-cols]
-//     w_jet.advance_only(dt)
+//     w_jet.integrate(dt)
 //     read craft k's post-integrate state → x_k_post + F[k-rows, k-cols]
 //
 // The off-diagonal F blocks stay at zero. Cost: NumCrafts ×
@@ -37,9 +37,9 @@
 // dynamics through cross-craft physics goes uncomputed (the Jacobian
 // row would be zero where it should be non-zero). Tethers, contact,
 // fluid drag from a neighbor's wake — all unmodeled here. Use the
-// monolithic WorldEKF for those cases.
+// monolithic EKF for those cases.
 //
-// Usage mirrors WorldEKF but with explicit per-craft brackets:
+// Usage mirrors EKF but with explicit per-craft brackets:
 //
 //   ekf.begin_step(dt, Q);
 //   for (int k = 0; k < NumCrafts; ++k) {
@@ -67,8 +67,8 @@
 namespace manta::estimation {
 
 template <int NumCrafts, int MeasDim>
-class WorldEKFBlockDecomposed {
-    static_assert(NumCrafts >= 1, "WorldEKFBlockDecomposed needs at least one craft");
+class BlockDecomposedEKF {
+    static_assert(NumCrafts >= 1, "BlockDecomposedEKF needs at least one craft");
 
 public:
     static constexpr int kCrafts        = NumCrafts;
@@ -86,7 +86,7 @@ public:
     using MeasVec  = Eigen::Matrix<double, MeasDim,   1>;
     using MeasCov  = Eigen::Matrix<double, MeasDim,   MeasDim>;
 
-    WorldEKFBlockDecomposed() = default;
+    BlockDecomposedEKF() = default;
 
     void bind(WorldJ& w_jet,
               std::array<CraftR*, NumCrafts> real_crafts,
@@ -102,7 +102,7 @@ public:
     const StateVec& state()      const noexcept { return x_; }
     const StateCov& covariance() const noexcept { return P_; }
 
-    // ---- Per-craft slice accessors (mirror WorldEKF) ----
+    // ---- Per-craft slice accessors (mirror EKF) ----
     Eigen::Matrix<double, 3, 1> position(int idx = 0) const noexcept {
         return x_.template segment<3>(idx * kRigidStateDim + 0);
     }
@@ -150,7 +150,7 @@ public:
 
     // Begin Jet pass for craft `k`: seed craft k's state with identity-
     // derivative Jets, every other craft j ≠ k with value-only Jets
-    // (zero derivatives), and run `w_jet.evaluate()`. After this call
+    // (zero derivatives), and run `w_jet.kinematic_and_aggregate()`. After this call
     // the Jet sensor caches are populated at x_pre and the active
     // craft's H block can be read by `add_update`.
     void begin_craft(int k) {
@@ -167,7 +167,7 @@ public:
             }
             crafts_jet_[j]->set_rigid_state(xk);
         }
-        w_jet_->evaluate();
+        w_jet_->kinematic_and_aggregate();
     }
 
     // Read h(x_pre) + H block for the currently active craft. Called
@@ -211,7 +211,7 @@ public:
     void end_craft() {
         if (!w_jet_) return;
         const int k = active_craft_;
-        w_jet_->advance_only(static_cast<Jet>(dt_pending_));
+        w_jet_->integrate(static_cast<Jet>(dt_pending_));
 
         auto xk_jet = crafts_jet_[k]->get_rigid_state();
         for (int i = 0; i < kRigidStateDim; ++i) {
@@ -233,7 +233,7 @@ public:
         for (auto& apply : queue_) apply(x, P);
         queue_.clear();
 
-        // Renormalize each craft's quaternion (see WorldEKF for the
+        // Renormalize each craft's quaternion (see EKF for the
         // rationale; same convention).
         for (int k = 0; k < NumCrafts; ++k) {
             const int qw = kRigidStateDim*k + 3;

@@ -4,7 +4,7 @@ This is the in-process two-world shape (Pattern A from the original
 estimation_workflow.md). Tick layout:
 
     1. Apply input bindings  (Zenoh sub → sim parts | est sensors)
-    2. sim_w.update()        (run sim physics)
+    2. sim_w.step()          (run sim physics)
     3. Cross-world connect() (sim sensor outputs → est set_measurement,
                               sim throttle → est throttle for predict)
     4. ekf.predict(dt, Q)
@@ -13,8 +13,8 @@ estimation_workflow.md). Tick layout:
 
 The sim world keeps its full setup (planets, fields, scene, crafts,
 tethers, field-sync). The EKF holds its own internal craft-pair via
-WorldEKF, with `register_field` propagating any field instances the
-est-side parts query during predict.
+manta::estimation::EKF, with `register_field` propagating any field
+instances the est-side parts query during predict.
 
 Naming convention to keep the two worlds non-colliding:
   * Sim manta::World variable     → `sim_w`

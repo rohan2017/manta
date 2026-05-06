@@ -21,7 +21,7 @@ template <class Scalar> class WorldT;
 // body state. Templated on Scalar so the same authoring artifact serves
 // the sim path (Scalar = Real, driven by a Scene/World) and the estimator
 // path (Scalar = ceres::Jet<...>, driven by a Jet-instantiated SceneT/WorldT
-// from inside WorldEKF::predict()).
+// from inside EKF::predict()).
 //
 // `using Craft = CraftT<Real>` below is what existing code uses. A Jet-
 // instantiated WorldT<Jet> holds Jet-typed crafts via the same Scene API
@@ -29,33 +29,52 @@ template <class Scalar> class WorldT;
 template <class Scalar = Real>
 class CraftT {
 public:
+    using State = CraftStateT<Scalar>;
+
     explicit CraftT(std::string name) noexcept : name_(std::move(name)) {
         root_.craft_  = this;
         root_.parent_ = nullptr;
     }
-    virtual ~CraftT() = default;
+    virtual ~CraftT();
 
-    using RootPartT_   = CompositePartT<Scalar>;   // RootPart is just a marker subclass
+    CraftT(const CraftT&) = delete;
+    CraftT& operator=(const CraftT&) = delete;
+
+    using RootPartT_   = CompositePartT<Scalar>;
     using SceneToCraft = geom::KinematicLink<SceneFrame, CraftFrame, Scalar>;
 
-    // The root composite. We use CompositePartT<Scalar> directly here to keep
-    // the templated path uniform; the existing `RootPart` alias (= a tagged
-    // subclass for Real) keeps working.
-    PartT<Scalar>&       root_part()       noexcept { return root_; }
-    const PartT<Scalar>& root_part() const noexcept { return root_; }
-
-    // The legacy accessor returns the underlying composite as RootPart-like.
-    // For Scalar=Real this is `RootPart&` via the alias chain.
-    auto&       root()       noexcept { return root_; }
-    const auto& root() const noexcept { return root_; }
+    // The root composite. Always returns the underlying CompositePartT so
+    // callers can `craft.root().add<...>()`.
+    CompositePartT<Scalar>&       root()       noexcept { return root_; }
+    const CompositePartT<Scalar>& root() const noexcept { return root_; }
 
     const std::string& name() const noexcept { return name_; }
 
     // Scene-frame rigid-body state.
     const SceneToCraft& scene_to_craft() const noexcept { return scene_to_craft_; }
 
-    // Initial-condition setters.
-    void set_position(const geom::Vec3<SceneFrame, Scalar>& p)  noexcept { scene_to_craft_.set_position(p); }
+    // Canonical state setter. All other paths (Scene::add_craft with
+    // an InitialState, the per-channel setters below, the EKF's
+    // set_rigid_state) funnel through here.
+    void set_state(const State& s) noexcept {
+        scene_to_craft_.set_position(s.position);
+        scene_to_craft_.set_orientation(s.orientation);
+        scene_to_craft_.set_vel_linear(s.vel_linear);
+        scene_to_craft_.set_vel_angular(s.vel_angular);
+    }
+
+    State get_state() const noexcept {
+        return State{
+            scene_to_craft_.position(),
+            scene_to_craft_.orientation(),
+            scene_to_craft_.vel_linear(),
+            scene_to_craft_.vel_angular(),
+        };
+    }
+
+    // Per-channel ergonomic setters. Equivalent to building a State,
+    // mutating one field, and calling set_state.
+    void set_position(const geom::Vec3<SceneFrame, Scalar>& p)   noexcept { scene_to_craft_.set_position(p); }
     void set_orientation(const geom::Ori<SceneFrame, Scalar>& q) noexcept { scene_to_craft_.set_orientation(q); }
     void set_vel_linear(const geom::Vec3<SceneFrame, Scalar>& v) noexcept { scene_to_craft_.set_vel_linear(v); }
     void set_vel_angular(const geom::Vec3<CraftFrame, Scalar>& w) noexcept { scene_to_craft_.set_vel_angular(w); }
@@ -165,15 +184,16 @@ public:
         EigenV r_com_craft = root_.get_com().raw();    // COM in CraftFrame
 
         if (scene_) {
+            // omega_S, alpha_S = scene's angular velocity / acceleration
+            // relative to WorldFrame, in scene-frame components.
             const auto& wts = scene_->world_to_scene();
-            EigenV omega_scene  = wts.vel_angular().raw().template cast<Scalar>();
-            EigenV alpha_scene  = wts.acc_angular().raw().template cast<Scalar>();
+            EigenV omega_S = wts.vel_angular().raw().template cast<Scalar>();
+            EigenV alpha_S = wts.acc_angular().raw().template cast<Scalar>();
             // a_S lives in WorldFrame (the From frame of world_to_scene); rotate
             // into SceneFrame using R_WS^T = R_SW.
             Eigen::Matrix<Scalar, 3, 3> R_WS =
                 wts.orientation().raw().toRotationMatrix().template cast<Scalar>();
-            EigenV a_S_world =
-                wts.acc_linear().raw().template cast<Scalar>();
+            EigenV a_S_world = wts.acc_linear().raw().template cast<Scalar>();
             EigenV a_S_scene = R_WS.transpose() * a_S_world;
 
             EigenV r_scene = scene_to_craft_.position().raw();
@@ -181,9 +201,9 @@ public:
 
             EigenV a_pseudo_scene =
                   -a_S_scene
-                  - alpha_scene.cross(r_scene)
-                  - omega_scene.cross(omega_scene.cross(r_scene))
-                  - Scalar(2) * omega_scene.cross(v_scene);
+                  - alpha_S.cross(r_scene)
+                  - omega_S.cross(omega_S.cross(r_scene))
+                  - Scalar(2) * omega_S.cross(v_scene);
 
             EigenV f_extra_scene = m * a_pseudo_scene;
             EigenV f_extra_craft =
@@ -208,13 +228,15 @@ public:
         }
 
         // Origin acceleration: a_COM + α × r_OC + ω × (ω × r_OC), all in scene.
+        // omega_C / alpha_C = craft's angular velocity / acceleration (vs Scene)
+        // expressed in scene-frame components.
         EigenV r_oc_craft = -r_com_craft;              // origin − COM, craft frame
         EigenV r_oc_scene = scene_to_craft_.orientation().raw() * r_oc_craft;
-        EigenV alpha_scene = scene_to_craft_.orientation().raw() * alpha_craft;
-        EigenV omega_scene = scene_to_craft_.orientation().raw() * omega_craft;
+        EigenV alpha_C    = scene_to_craft_.orientation().raw() * alpha_craft;
+        EigenV omega_C    = scene_to_craft_.orientation().raw() * omega_craft;
         EigenV a_origin_scene = a_com_scene
-                              + alpha_scene.cross(r_oc_scene)
-                              + omega_scene.cross(omega_scene.cross(r_oc_scene));
+                              + alpha_C.cross(r_oc_scene)
+                              + omega_C.cross(omega_C.cross(r_oc_scene));
 
         scene_to_craft_.set_acc_linear(
             geom::Vec3<SceneFrame, Scalar>::from_raw(a_origin_scene));
@@ -283,26 +305,17 @@ public:
     using RigidState = Eigen::Matrix<Scalar, kRigidStateDim, 1>;
 
     void set_rigid_state(const RigidState& x) noexcept {
-        scene_to_craft_.set_position(geom::Vec3<SceneFrame, Scalar>::from_raw(x.template segment<3>(0)));
+        // Quaternion always renormalized (including under autodiff): Eigen's
+        // quat-vec product on non-unit q yields |q|²·R·v, which would leak a
+        // spurious |q| sensitivity through the Jacobian.
         Eigen::Quaternion<Scalar> q(x(3), x(4), x(5), x(6));
-        // Always normalize, including for autodiff scalars. Skipping
-        // normalize was tempting (it preserves the qw column of the
-        // raw Jacobian) but it breaks a deeper invariant: Eigen's
-        // quaternion-vector product on a non-unit q evaluates to
-        // |q|² · R_unit · v rather than R · v, so R^T · R · F equals
-        // |q|⁴ · F instead of F — the autodiff then attributes a fake
-        // |q|⁴ sensitivity to qw, the EKF treats that as real
-        // observability, and the orientation diverges. Normalize keeps
-        // R orthonormal so the cancellation in R^T · R is exact.
-        // The collapsed qw Jacobian column at unit q is the correct
-        // mathematical derivative (rotation is 3-DOF; the radial
-        // direction is genuinely unobservable). The EKF wrapper
-        // projects P's quaternion block onto the tangent space after
-        // each end_step to keep the redundant direction zero.
         q.normalize();
-        scene_to_craft_.set_orientation(geom::Ori<SceneFrame, Scalar>{q});
-        scene_to_craft_.set_vel_linear(geom::Vec3<SceneFrame, Scalar>::from_raw(x.template segment<3>(7)));
-        scene_to_craft_.set_vel_angular(geom::Vec3<CraftFrame, Scalar>::from_raw(x.template segment<3>(10)));
+        State s;
+        s.position    = geom::Vec3<SceneFrame, Scalar>::from_raw(x.template segment<3>(0));
+        s.orientation = geom::Ori<SceneFrame, Scalar>{q};
+        s.vel_linear  = geom::Vec3<SceneFrame, Scalar>::from_raw(x.template segment<3>(7));
+        s.vel_angular = geom::Vec3<CraftFrame, Scalar>::from_raw(x.template segment<3>(10));
+        set_state(s);
     }
 
     RigidState get_rigid_state() const noexcept {
@@ -328,8 +341,8 @@ private:
         auto craft_to_mount = parent_craft_link * part.transform_;
         auto scene_to_mount = parent_scene_link * part.transform_;
 
-        if (auto* a = dynamic_cast<ArticulatedPartT<Scalar>*>(&part)) {
-            auto jl = a->joint_link();
+        if (part.has_joint_link()) {
+            auto jl = part.joint_link();
             part.craft_to_part_ = craft_to_mount * jl;
             part.scene_to_part_ = scene_to_mount * jl;
         } else {
@@ -337,9 +350,9 @@ private:
             part.scene_to_part_ = scene_to_mount;
         }
 
-        auto* cp = dynamic_cast<CompositePartT<Scalar>*>(&part);
-        if (!cp) return;
-        for (auto& child : cp->children_) {
+        auto* kids = part.children();
+        if (!kids) return;
+        for (auto& child : *kids) {
             kinematic_recurse(*child, part.craft_to_part_, part.scene_to_part_);
         }
     }
@@ -347,21 +360,19 @@ private:
     static void sense_force_recurse(PartT<Scalar>& part) {
         part.wrench_accum_ = Wrench<PartFrame, Scalar>::zero();
         part.update();
-        auto* cp = dynamic_cast<CompositePartT<Scalar>*>(&part);
-        if (!cp) return;
-        for (auto& child : cp->children_) {
+        auto* kids = part.children();
+        if (!kids) return;
+        for (auto& child : *kids) {
             sense_force_recurse(*child);
         }
     }
 
     static void integrate_joints_recurse(PartT<Scalar>& part, Scalar dt) {
-        if (auto* a = dynamic_cast<ArticulatedPartT<Scalar>*>(&part)) {
-            a->integrate_joint(dt);
-        }
-        if (auto* cp = dynamic_cast<CompositePartT<Scalar>*>(&part)) {
-            for (auto& child : cp->children_) {
-                integrate_joints_recurse(*child, dt);
-            }
+        part.integrate_joint_state(dt);
+        auto* kids = part.children();
+        if (!kids) return;
+        for (auto& child : *kids) {
+            integrate_joints_recurse(*child, dt);
         }
     }
 
@@ -434,6 +445,14 @@ template <class Scalar>
 inline const WorldT<Scalar>& CraftT<Scalar>::world() const {
     assert(world_ && "Craft is not attached to a World");
     return *world_;
+}
+
+// Defined here (not inline in the class body) because it dereferences
+// SceneT, which forward-declares CraftT. By this point in the
+// translation unit both are complete.
+template <class Scalar>
+inline CraftT<Scalar>::~CraftT() {
+    if (scene_) scene_->remove_craft(*this);
 }
 
 } // namespace manta

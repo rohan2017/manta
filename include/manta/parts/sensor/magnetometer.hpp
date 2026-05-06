@@ -47,18 +47,18 @@ public:
         Real dt = (this->craft_ && this->craft_->has_world())
                   ? this->craft().world().clock().dt() : Real(0);
         if (!gate_.tick(dt)) return;
-        // Inner runtime null-check covers the multi-world TU case
-        // (e.g. an EKF target where one world has a MagField and another
-        // in the same TU doesn't share the same macro state).
-        const auto* mf_base = this->field_ptr(typeid(fields::MagField));
-        if (!mf_base) {
+        // MagField is REQUIRED at build time. Use field_or_null at runtime
+        // so an unattached test craft, or a craft whose world (in a
+        // multi-world TU) deliberately omitted the field, reports zero
+        // rather than crashing.
+        const auto* mf = this->template field_or_null<fields::MagField>();
+        if (!mf) {
             last_b_ = geom::Vec3<PartFrame, Scalar>::zero();
             fresh_ = true;
             return;
         }
-        const auto* mf = static_cast<const fields::MagField*>(mf_base);
 
-        auto p_scaled = this->template position<SceneFrame>();
+        auto p_scaled  = this->template position<SceneFrame>();
         auto b_scene_v = fields::state_at_templated<Scalar>(*mf, p_scaled);
 
         auto q_part_from_scene =

@@ -90,7 +90,7 @@ TEST_CASE("EKF: tracks 1-D free-fall sim using IMU + DVL") {
     scene.add_craft(sim, InitialState{});
 
     // ----- EKF -----
-    EKF<2, 1> ekf;
+    EKFKernel<2, 1> ekf;
     Eigen::Vector2d x0(0.5, 0.5);     // wrong initial guess
     Eigen::Matrix2d P0;
     P0 << 1.0, 0.0,
@@ -110,10 +110,10 @@ TEST_CASE("EKF: tracks 1-D free-fall sim using IMU + DVL") {
     noise_seed(7);
 
     // First tick: kinematic pass + sense_and_aggregate populate the IMU/DVL
-    // caches before we read them. We call w.update() (which advances the
+    // caches before we read them. We call w.step() (which advances the
     // sim by one DT) per loop iteration.
     for (int i = 0; i < N_STEPS; ++i) {
-        w.update();
+        w.step();
 
         // EKF predict: use IMU's reading as the inertial acceleration input.
         if (i % IMU_HZ_DECIM == 0) {
@@ -219,7 +219,7 @@ TEST_CASE("EKF: estimates IMU bias as augmented state") {
     sim.root().compute_params();
     scene.add_craft(sim, InitialState{});
 
-    EKF<3, 1> ekf;
+    EKFKernel<3, 1> ekf;
     Eigen::Vector3d x0(0.0, 0.0, 0.0);  // bias guess starts at 0 (wrong by 0.3)
     Eigen::Matrix3d P0 = Eigen::Matrix3d::Identity();
     P0(2, 2) = 1.0;                      // open uncertainty on bias
@@ -237,7 +237,7 @@ TEST_CASE("EKF: estimates IMU bias as augmented state") {
     noise_seed(11);
 
     for (int i = 0; i < N_STEPS; ++i) {
-        w.update();
+        w.step();
 
         // Inject a constant bias on top of the IMU reading — that's what a
         // physically-biased IMU returns. The EKF doesn't know about TRUE_BIAS;
@@ -329,7 +329,7 @@ TEST_CASE("EKF: 3-D pose tracker against thrust+gravity sim") {
     sim.root().compute_params();
     scene.add_craft(sim, InitialState{});
 
-    EKF<6, 3> ekf;
+    EKFKernel<6, 3> ekf;
     Eigen::Matrix<double, 6, 1> x0;
     x0.setZero();
     Eigen::Matrix<double, 6, 6> P0 = Eigen::Matrix<double, 6, 6>::Identity();
@@ -348,7 +348,7 @@ TEST_CASE("EKF: 3-D pose tracker against thrust+gravity sim") {
     thr.set_throttle(0.5f);   // partial thrust → diagonal motion in xy + falling
 
     for (int i = 0; i < N_STEPS; ++i) {
-        w.update();
+        w.step();
 
         Eigen::Matrix<double, 3, 1> u;
         auto a = imu.last_accel();
@@ -469,9 +469,9 @@ TEST_CASE("CraftT<Jet>: autodiff yields process Jacobian from evaluate()") {
     CHECK(std::abs(x_new(2).v[9] - dt)  < 1e-10);    // ∂p_z_new/∂v_z = dt
 }
 
-// ---- WorldEKF: full EKF wired directly to a user-templated Craft ----
+// ---- EKF: full EKF wired directly to a user-templated Craft ----
 //
-// User authors the craft once as a class template. WorldEKF instantiates it
+// User authors the craft once as a class template. EKF instantiates it
 // twice internally (double for value step, Jet for Jacobian step) and runs
 // predict + update without any hand-written process functor.
 
@@ -495,8 +495,8 @@ struct PositionMeas3D {
     }
 };
 
-TEST_CASE("WorldEKF: free-body predict+update extracts Jacobians from CraftT") {
-    using Ekf = manta::estimation::WorldEKF</*NumCrafts=*/1, /*MeasDim=*/3>;
+TEST_CASE("EKF: free-body predict+update extracts Jacobians from CraftT") {
+    using Ekf = manta::estimation::EKF</*NumCrafts=*/1, /*MeasDim=*/3>;
     using Jet = Ekf::Jet;
 
     // Build the Real-side world with one craft.

@@ -59,7 +59,7 @@ int main() {
     auto pub_a = session_a.declare_publisher(
         zenoh::KeyExpr("manta/sync_smoke/grav"));
     field_a.set_tx_hook([&pub_a](std::uint16_t tag,
-                                 const GravityField::Params& params,
+                                 const manta::fields::Params& params,
                                  int lifetime) {
         std::vector<std::uint8_t> buf(2 + 2 + 4 + params.size());
         std::uint16_t ver = 1;
@@ -74,14 +74,14 @@ int main() {
         zenoh::KeyExpr("manta/sync_smoke/grav"),
         [&field_b](const zenoh::Sample& sample) {
             auto payload = sample.get_payload().as_vector();
-            if (payload.size() < 8 + GravityField::kParamsBytes) return;
+            if (payload.size() < 8 + manta::fields::kParamsBytes) return;
             std::uint16_t ver = 0, tag = 0;
             std::int32_t  lifetime = 0;
             std::memcpy(&ver,      payload.data() + 0, 2);
             std::memcpy(&tag,      payload.data() + 2, 2);
             std::memcpy(&lifetime, payload.data() + 4, 4);
             if (ver != 1) return;
-            GravityField::Params p{};
+            manta::fields::Params p{};
             std::memcpy(p.data(), payload.data() + 8, p.size());
             field_b.receive(tag, p, lifetime);
         },

@@ -48,6 +48,8 @@
 //      No code from the inactive branch is emitted; field-registry
 //      traffic for absent fields is fully compiled out.
 
+#include <type_traits>
+
 #include "types.hpp"   // pulls in Scalar/Real machinery for downstream parts
 
 // ---- Default values for all known feature macros ----
@@ -69,14 +71,20 @@
 #endif
 
 // ---- Part-side declaration macros ----
-//
+
+namespace manta::detail {
+// Dependent-false template — used to defer `static_assert` evaluation
+// until the enclosing template is instantiated. Naming a dependent
+// member of `T` makes the value depend on T, so the assert fires only
+// when a concrete part class is instantiated, not at declaration.
+template <class T> struct dependent_false : std::false_type {};
+} // namespace manta::detail
+
 // MANTA_PART_REQUIRES_FIELD(feature_macro, message)
 //   Hard requirement. Fires `static_assert` at template instantiation
-//   time with the given message if the feature macro is 0. The
-//   `sizeof(Scalar) == 0` short-circuit defers evaluation so just
-//   declaring (without instantiating) the part class is fine.
-#define MANTA_PART_REQUIRES_FIELD(FEATURE, MESSAGE)        \
-    static_assert((FEATURE) || sizeof(Scalar) == 0, MESSAGE)
+//   time with the given message if the feature macro is 0.
+#define MANTA_PART_REQUIRES_FIELD(FEATURE, MESSAGE)                      \
+    static_assert((FEATURE) || ::manta::detail::dependent_false<Scalar>::value, MESSAGE)
 
 // MANTA_PART_AUGMENTS_FIELD(feature_macro)
 //   Yields a constexpr boolean for use inside `if constexpr (...)`.

@@ -67,7 +67,7 @@ void setup() {
 
 void tick() {
 
-    w.update();
+    w.step();
 
 }
 

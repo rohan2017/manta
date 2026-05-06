@@ -4,6 +4,7 @@
 #include <cassert>
 #include <vector>
 
+#include "../geom/casts.hpp"
 #include "../geom/kinematic_link.hpp"
 #include "../geom/ori.hpp"
 #include "../geom/static_link.hpp"
@@ -17,21 +18,23 @@ namespace manta {
 template <class Scalar> class CraftT;
 template <class Scalar> class WorldT;
 
-// Initial conditions applied to a craft when it joins a scene. Default values
-// are the natural identity: at origin, axis-aligned, at rest.
-//
-// The state lives at the boundary (Scene::add_craft), not on the Craft. Crafts
-// don't own initial state — they just expose runtime mutation via
-// Craft::set_position / set_orientation / set_vel_*.
-//
-// Stored as Real-typed (the codegen and user-facing API speak in Real); the
-// templated Scene path casts these into Scalar at add time.
-struct InitialState {
-    geom::Vec3<SceneFrame> position    = geom::Vec3<SceneFrame>::zero();
-    geom::Ori<SceneFrame>  orientation = geom::Ori<SceneFrame>::identity();
-    geom::Vec3<SceneFrame> vel_linear  = geom::Vec3<SceneFrame>::zero();
-    geom::Vec3<CraftFrame> vel_angular = geom::Vec3<CraftFrame>::zero();
+// The full rigid-body state of a craft expressed in its scene's frame.
+// One canonical struct shared by Scene::add_craft (boundary), Craft state
+// setters (runtime mutation), and the EKF (filter belief).
+template <class Scalar = Real>
+struct CraftStateT {
+    geom::Vec3<SceneFrame, Scalar> position    = geom::Vec3<SceneFrame, Scalar>::zero();
+    geom::Ori<SceneFrame, Scalar>  orientation = geom::Ori<SceneFrame, Scalar>::identity();
+    geom::Vec3<SceneFrame, Scalar> vel_linear  = geom::Vec3<SceneFrame, Scalar>::zero();
+    geom::Vec3<CraftFrame, Scalar> vel_angular = geom::Vec3<CraftFrame, Scalar>::zero();
 };
+using CraftState = CraftStateT<Real>;
+
+// Boundary alias: `InitialState` is the Real-typed CraftState used by
+// Scene::add_craft. Defining it as an alias keeps a single canonical
+// state shape; the per-Scalar Scene path lifts the Real fields into
+// Scalar at add time.
+using InitialState = CraftStateT<Real>;
 
 // A floating-origin reference frame shared by a set of nearby crafts. Each
 // craft's scene_to_craft_ transform is relative to this scene's origin.
@@ -41,10 +44,24 @@ struct InitialState {
 // Jacobian step, with planets' world_to_planet link cast into Jet (their
 // motion is a non-estimated input, so the cast carries zero gradient — i.e.
 // the EKF treats planet pose as constant within a tick).
+//
+// Lifetime: Scene holds non-owning craft pointers. Either side can be
+// destroyed first — Scene's dtor unbinds remaining crafts (clears their
+// scene_/world_ pointers), and CraftT's dtor removes itself from its
+// owning Scene.
 template <class Scalar>
 class SceneT {
 public:
     SceneT() noexcept = default;
+    ~SceneT() {
+        // Unbind any remaining crafts so a craft outliving its Scene
+        // observes scene_ == nullptr instead of a dangling pointer.
+        for (CraftT<Scalar>* c : crafts_) {
+            if (c) { c->scene_ = nullptr; c->world_ = nullptr; }
+        }
+    }
+    SceneT(const SceneT&) = delete;
+    SceneT& operator=(const SceneT&) = delete;
 
     // Craft lifecycle. Craft ownership stays with the caller; the Scene holds
     // a non-owning pointer. add_craft wires the craft's world_/scene_ pointers.
@@ -56,18 +73,12 @@ public:
 
     void add_craft(CraftT<Scalar>& c, const InitialState& init) {
         add_craft(c);
-        c.set_position(geom::Vec3<SceneFrame, Scalar>::from_raw(
-            init.position.raw().template cast<Scalar>()));
-        Eigen::Quaternion<Scalar> q_init(
-            Scalar(init.orientation.raw().w()),
-            Scalar(init.orientation.raw().x()),
-            Scalar(init.orientation.raw().y()),
-            Scalar(init.orientation.raw().z()));
-        c.set_orientation(geom::Ori<SceneFrame, Scalar>{q_init});
-        c.set_vel_linear(geom::Vec3<SceneFrame, Scalar>::from_raw(
-            init.vel_linear.raw().template cast<Scalar>()));
-        c.set_vel_angular(geom::Vec3<CraftFrame, Scalar>::from_raw(
-            init.vel_angular.raw().template cast<Scalar>()));
+        typename CraftT<Scalar>::State s;
+        s.position    = geom::lift_from_real<Scalar>(init.position);
+        s.orientation = geom::lift_from_real<Scalar>(init.orientation);
+        s.vel_linear  = geom::lift_from_real<Scalar>(init.vel_linear);
+        s.vel_angular = geom::lift_from_real<Scalar>(init.vel_angular);
+        c.set_state(s);
     }
 
     void remove_craft(CraftT<Scalar>& c) {
@@ -84,22 +95,19 @@ public:
     // Refresh world_to_scene_, run the kinematic pass and force
     // aggregation for every craft, but do NOT advance state. Leaves each
     // craft's `acc_linear` / `acc_angular` populated so sensors can be
-    // queried without integrating. Also flips `bootstrapped_` so a
-    // subsequent `update()` skips its initial-cache fill.
-    void evaluate() {
+    // queried without integrating.
+    void kinematic_and_aggregate() {
         refresh_world_to_scene();
         for (CraftT<Scalar>* c : crafts_) c->kinematic_pass();
         for (CraftT<Scalar>* c : crafts_) c->sense_and_aggregate();
-        bootstrapped_ = true;
     }
 
     // Advance every craft by `dt` using the currently-cached
-    // acceleration, but do NOT re-aggregate afterward. Used by the
-    // EKF predict step (after a one-shot `evaluate()` at x_pre):
-    // we've already extracted h and H from the pre-integrate cache,
-    // so re-aggregating at x_post would be wasted Jet work — the next
-    // predict will re-seed and re-evaluate from scratch anyway.
-    void advance_only(Scalar dt) {
+    // acceleration, but do NOT re-aggregate afterward. Used by the EKF
+    // predict step (after a one-shot `kinematic_and_aggregate()` at
+    // x_pre): h and H are extracted from the pre-integrate cache, and
+    // the next predict re-seeds and re-evaluates from scratch anyway.
+    void integrate(Scalar dt) {
         for (CraftT<Scalar>* c : crafts_) c->integrate_pre_aggregate(dt);
         for (CraftT<Scalar>* c : crafts_) c->integrate_post_aggregate(dt);
     }
@@ -115,18 +123,15 @@ public:
     // on whatever forces would have acted at t=0 (typically gravity);
     // at 1 kHz it's a 1 ms delay, negligible. Callers that need
     // pre-integrate state can prime the cache explicitly with
-    // `evaluate()` before the first `update()`.
-    //
-    // Cost: one kin + one agg + one integrate per tick (each part
-    // sees `update()` exactly once per tick — same as the old ordering,
-    // so rate-gated sensors fire on the same schedule).
-    void update(Scalar dt) {
+    // `kinematic_and_aggregate()` before the first `step()`.
+    void step(Scalar dt) {
         refresh_world_to_scene();
         for (CraftT<Scalar>* c : crafts_) c->integrate_pre_aggregate(dt);
         for (CraftT<Scalar>* c : crafts_) c->kinematic_pass();
         for (CraftT<Scalar>* c : crafts_) c->sense_and_aggregate();
         for (CraftT<Scalar>* c : crafts_) c->integrate_post_aggregate(dt);
     }
+
 
 private:
     // Refresh world_to_scene_ from the planet anchor (if any). Planets
@@ -135,34 +140,13 @@ private:
     // treats planet pose as a non-estimated input.
     void refresh_world_to_scene() {
         if (planet_) {
-            using KL_real = geom::KinematicLink<WorldFrame, PlanetFrame, Real>;
-            using SL_ps   = geom::StaticLink<PlanetFrame, SceneFrame, Scalar>;
-            const KL_real& wp = planet_->world_to_planet();
-
-            geom::KinematicLink<WorldFrame, PlanetFrame, Scalar> wp_s{
-                geom::Vec3<WorldFrame, Scalar>::from_raw(
-                    wp.position().raw().template cast<Scalar>()),
-                geom::Ori<WorldFrame, Scalar>{Eigen::Quaternion<Scalar>(
-                    Scalar(wp.orientation().raw().w()),
-                    Scalar(wp.orientation().raw().x()),
-                    Scalar(wp.orientation().raw().y()),
-                    Scalar(wp.orientation().raw().z()))},
-                geom::Vec3<WorldFrame, Scalar>::from_raw(
-                    wp.vel_linear().raw().template cast<Scalar>()),
-                geom::Vec3<PlanetFrame, Scalar>::from_raw(
-                    wp.vel_angular().raw().template cast<Scalar>()),
-                geom::Vec3<WorldFrame, Scalar>::from_raw(
-                    wp.acc_linear().raw().template cast<Scalar>()),
-                geom::Vec3<PlanetFrame, Scalar>::from_raw(
-                    wp.acc_angular().raw().template cast<Scalar>()),
-            };
-            // Compose with the static planet→scene link (same identity at
-            // either Scalar — it's just a translation).
-            SL_ps ps_s = static_link_planet_to_scene<Scalar>();
-            world_to_scene_ = wp_s * ps_s;
+            // Compose Real→Scene moving link with the static Planet→Scene
+            // link (just a translation; same at either Scalar).
+            auto wp_s = geom::cast_kinematic_link<Scalar>(planet_->world_to_planet());
+            world_to_scene_ = wp_s * geom::cast_static_link<Scalar>(planet_to_scene_real_);
         } else {
-            // No planet anchor: the static planet→scene link reinterpreted
-            // as living in WorldFrame (the planet IS the world).
+            // No planet anchor: the planet IS the world. Reinterpret the
+            // static planet→scene link as a kinematic link in WorldFrame.
             world_to_scene_ = geom::KinematicLink<WorldFrame, SceneFrame, Scalar>{
                 geom::Vec3<WorldFrame, Scalar>::from_raw(
                     planet_to_scene_real_.position().raw().template cast<Scalar>()),
@@ -210,19 +194,6 @@ public:
     }
 
 private:
-    template <class S>
-    geom::StaticLink<PlanetFrame, SceneFrame, S> static_link_planet_to_scene() const noexcept {
-        return geom::StaticLink<PlanetFrame, SceneFrame, S>{
-            geom::Vec3<PlanetFrame, S>::from_raw(
-                planet_to_scene_real_.position().raw().template cast<S>()),
-            geom::Ori<PlanetFrame, S>{Eigen::Quaternion<S>(
-                S(planet_to_scene_real_.orientation().raw().w()),
-                S(planet_to_scene_real_.orientation().raw().x()),
-                S(planet_to_scene_real_.orientation().raw().y()),
-                S(planet_to_scene_real_.orientation().raw().z()))},
-        };
-    }
-
     friend class WorldT<Scalar>;
 
     std::vector<CraftT<Scalar>*>                          crafts_;
@@ -231,7 +202,6 @@ private:
     geom::StaticLink<PlanetFrame, SceneFrame>             planet_to_scene_real_ =
         geom::StaticLink<PlanetFrame, SceneFrame>::identity();
     geom::KinematicLink<WorldFrame, SceneFrame, Scalar>   world_to_scene_;
-    bool                                                  bootstrapped_ = false;
 };
 
 // Real instantiation alias.

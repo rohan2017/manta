@@ -1,7 +1,7 @@
 """ukf_smoke — minimal UKF-codegen smoke target.
 
 Exercises the UKF codegen path end-to-end: Mass + IMU + DVL wrapped in
-`manta::estimation::WorldUKF<NumCrafts, MeasDim>`. Mostly here so CI
+`manta::estimation::UKF<NumCrafts, MeasDim>`. Mostly here so CI
 catches regressions in the UKF emit path.
 
 Codegen:

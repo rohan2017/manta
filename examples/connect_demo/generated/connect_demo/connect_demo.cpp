@@ -85,7 +85,7 @@ void tick() {
           bind_0_payload.clear();
       } }
 
-    w.update();
+    w.step();
 
     // connect: leader.throttle → follower.set_throttle
     {

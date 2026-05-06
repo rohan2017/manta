@@ -4,6 +4,7 @@
 
 #include "../../core/craft.hpp"
 #include "../../fields/gravity_field.hpp"
+#include "../../geom/casts.hpp"
 
 namespace manta::parts {
 
@@ -45,23 +46,18 @@ public:
         "remove this part from the craft.");
 
     void update() override {
-        auto* gf = this->field_ptr(typeid(fields::GravityField));
-        if (!gf) return;
-        auto& g = *static_cast<fields::GravityField*>(gf);
+        // PointGravitySrc REQUIRES a GravityField (build-time static_assert).
+        // Use field_or_null at runtime so unattached test crafts and
+        // multi-world setups omitting the field no-op gracefully.
+        auto* gp = this->template field_or_null<fields::GravityField>();
+        if (!gp) return;
+        auto& g = *gp;
 
         // Position of the source in scene frame.
         auto p_scaled = this->template position<SceneFrame>();
-        Eigen::Matrix<Real, 3, 1> p_real;
-        if constexpr (std::is_floating_point_v<Scalar>) {
-            p_real = p_scaled.raw().template cast<Real>();
-        } else {
-            for (int i = 0; i < 3; ++i) p_real(i) = Real(p_scaled.raw()(i).a);
-        }
-        auto origin = geom::Vec3<SceneFrame>::from_raw(p_real);
+        auto origin   = geom::cast_to_real(p_scaled);
 
-        Real mu;
-        if constexpr (std::is_floating_point_v<Scalar>) mu = Real(kBigG * grav_mass_);
-        else                                            mu = Real(kBigG * grav_mass_.a);
+        Real mu = kBigG * geom::strip_to_real(grav_mass_);
 
         // For non-persistent sources we let the previous tick's disturbance
         // expire on its own (lifetime=1), keeping update() symmetric across

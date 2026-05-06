@@ -53,7 +53,6 @@ public:
 
     explicit Earth(Real sea_level     = Real(0),
                    Real water_density = Real(1000.0f),
-                   Real /*air_density_unused*/ = Real(1.225f),
                    Real rotation_rate = Real(0),
                    // mu = 0 → no gravity field; user can add one separately.
                    Real gravity_mu    = Real(0),

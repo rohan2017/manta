@@ -34,7 +34,8 @@ public:
     // Build the kinematic link from mount frame to joint-output frame using
     // current angle/rate. The kinematic pass composes this with the part's
     // static mount transform to get parent_link → joint output.
-    geom::KinematicLink<PartFrame, PartFrame, Scalar> joint_link() const noexcept {
+    geom::KinematicLink<PartFrame, PartFrame, Scalar>
+    joint_link() const noexcept override {
         using KL = geom::KinematicLink<PartFrame, PartFrame, Scalar>;
         using V  = geom::Vec3<PartFrame, Scalar>;
 
@@ -48,30 +49,22 @@ public:
         return KL{V::zero(), orientation, V::zero(), omega,
                   V::zero(), V::zero()};
     }
+    bool has_joint_link() const noexcept override { return true; }
 
     // Subclass hook (Motor, FreeHinge, ...).
     virtual void resolve(const Wrench<PartFrame, Scalar>& child_total,
                          Wrench<PartFrame, Scalar>&       parent_out,
                          Scalar&                          joint_accel_out) = 0;
 
-    // aggregate_wrenches override.
+    // aggregate_wrenches override. Composite gathers child wrenches into
+    // wrench_accum_; we then call resolve() to split that into a child
+    // total (consumed by the joint) and a parent reaction expressed in
+    // the joint-output frame, finally rotated into the mount frame.
     void aggregate_wrenches() override {
         using V      = geom::Vec3<PartFrame, Scalar>;
         using EigenV = Eigen::Matrix<Scalar, 3, 1>;
 
-        this->wrench_accum_ = Wrench<PartFrame, Scalar>::zero();
-        for (auto& child_ptr : this->children_) {
-            PartT<Scalar>& child = *child_ptr;
-            if (auto* cp = dynamic_cast<CompositePartT<Scalar>*>(&child)) {
-                cp->aggregate_wrenches();
-            }
-            Wrench<PartFrame, Scalar> cw = child.drain_wrench();
-            V force_p  = child.transform_.rotate(cw.force());
-            V torque_p = child.transform_.rotate(cw.torque())
-                       + child.transform_.position().cross(force_p);
-            this->wrench_accum_ += Wrench<PartFrame, Scalar>{force_p, torque_p};
-        }
-
+        CompositePartT<Scalar>::aggregate_wrenches();
         const Wrench<PartFrame, Scalar> child_total = this->wrench_accum_;
 
         Wrench<PartFrame, Scalar> parent_reaction =
@@ -90,22 +83,15 @@ public:
         };
     }
 
-    // compute_params override.
+    // compute_params override. Composite leaves COM and MOI in the joint-
+    // output frame about the composite COM; we rotate both into the mount
+    // frame so the parent assembly sees them as if attached statically.
     void compute_params() override {
         using V      = geom::Vec3<PartFrame, Scalar>;
-        using EigenV = Eigen::Matrix<Scalar, 3, 1>;
         using EigenM = Eigen::Matrix<Scalar, 3, 3>;
 
         CompositePartT<Scalar>::compute_params();
 
-        // MOI about the joint origin in the joint-output frame.
-        EigenV com_jo = this->com_.raw();
-        EigenM I_origin = this->moi_.raw()
-                        + this->mass_ * (com_jo.squaredNorm() * EigenM::Identity()
-                                         - com_jo * com_jo.transpose());
-        moi_origin_jo_ = geom::Mat3<PartFrame, PartFrame, Scalar>{I_origin};
-
-        // Rotate com/moi from joint-output frame to mount frame.
         auto q_jo_to_mount = Eigen::Quaternion<Scalar>{
             Eigen::AngleAxis<Scalar>{angle_, axis_.raw()}};
         EigenM R = q_jo_to_mount.toRotationMatrix();
@@ -121,18 +107,14 @@ public:
         rate_  += accel_ * dt;
     }
 
-    const geom::Mat3<PartFrame, PartFrame, Scalar>& moi_about_origin_jo() const noexcept {
-        return moi_origin_jo_;
-    }
+    // PartT hook used by Craft's integrator pass.
+    void integrate_joint_state(Scalar dt) noexcept override { integrate_joint(dt); }
 
 protected:
     geom::Vec3<PartFrame, Scalar> axis_;
     Scalar angle_ = Scalar(0);
     Scalar rate_  = Scalar(0);
     Scalar accel_ = Scalar(0);
-
-    geom::Mat3<PartFrame, PartFrame, Scalar> moi_origin_jo_ =
-        geom::Mat3<PartFrame, PartFrame, Scalar>::zero();
 };
 
 // Backwards-compat alias.

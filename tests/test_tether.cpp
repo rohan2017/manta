@@ -112,7 +112,7 @@ TEST_CASE("TetherEndpoint: stretched between two crafts → force pulls them tog
     scene.add_craft(c2);
 
     // Run a few ticks; verify both crafts have non-zero velocity toward each other.
-    for (int i = 0; i < 50; ++i) w.update();
+    for (int i = 0; i < 50; ++i) w.step();
 
     auto v1 = c1.scene_to_craft().vel_linear();
     auto v2 = c2.scene_to_craft().vel_linear();
@@ -146,7 +146,7 @@ TEST_CASE("TetherEndpoint: slack → no force, crafts drift independently") {
     c2.set_position(Vec3<SceneFrame>{5, 0, 0});
     scene.add_craft(c2);
 
-    for (int i = 0; i < 100; ++i) w.update();  // 1 s
+    for (int i = 0; i < 100; ++i) w.step();  // 1 s
 
     auto v1 = c1.scene_to_craft().vel_linear();
     auto v2 = c2.scene_to_craft().vel_linear();
@@ -182,7 +182,7 @@ TEST_CASE("TetherEndpoint: same-craft tether between two parts produces zero net
     c.root().compute_params();
     scene.add_craft(c);
 
-    for (int i = 0; i < 50; ++i) w.update();
+    for (int i = 0; i < 50; ++i) w.step();
 
     // Internal force pair → no net translational motion of the craft origin.
     auto v = c.scene_to_craft().vel_linear();

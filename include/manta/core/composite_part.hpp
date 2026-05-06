@@ -36,16 +36,18 @@ public:
         return ref;
     }
 
+    // Expose children container for the framework's tree walks.
+    typename PartT<Scalar>::ChildVec*       children()       noexcept override { return &children_; }
+    const typename PartT<Scalar>::ChildVec* children() const noexcept override { return &children_; }
+
     // Collect child wrenches (after their update()) into wrench_accum_.
     // ArticulatedPart overrides to call resolve() instead.
-    virtual void aggregate_wrenches() {
+    void aggregate_wrenches() override {
         for (auto& child_ptr : children_) {
             PartT<Scalar>& child = *child_ptr;
 
             // Recurse first so the child's subtree is aggregated before we drain it.
-            if (auto* cp = dynamic_cast<CompositePartT<Scalar>*>(&child)) {
-                cp->aggregate_wrenches();
-            }
+            child.aggregate_wrenches();
 
             Wrench<PartFrame, Scalar> cw = child.drain_wrench();
 
@@ -60,7 +62,7 @@ public:
     }
 
     // Recompute mass / MOI / COM from children (lazy; called before integration).
-    virtual void compute_params() {
+    void compute_params() override {
         using EigenV = Eigen::Matrix<Scalar, 3, 1>;
         using EigenM = Eigen::Matrix<Scalar, 3, 3>;
 
@@ -70,9 +72,7 @@ public:
         // Pass 1: recurse, accumulate mass and mass-weighted COM positions.
         for (auto& child_ptr : children_) {
             PartT<Scalar>& child = *child_ptr;
-            if (auto* cp = dynamic_cast<CompositePartT<Scalar>*>(&child)) {
-                cp->compute_params();
-            }
+            child.compute_params();
 
             Scalar m = child.get_mass();
             total_mass += m;
@@ -123,9 +123,9 @@ private:
     // Recursively propagate a Craft pointer to a subtree.
     static void propagate_craft(PartT<Scalar>& root, CraftT<Scalar>* craft) {
         root.craft_ = craft;
-        auto* cp = dynamic_cast<CompositePartT<Scalar>*>(&root);
-        if (!cp) return;
-        for (auto& child : cp->children_) {
+        auto* kids = root.children();
+        if (!kids) return;
+        for (auto& child : *kids) {
             propagate_craft(*child, craft);
         }
     }

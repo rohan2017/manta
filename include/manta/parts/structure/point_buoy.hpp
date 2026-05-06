@@ -1,11 +1,10 @@
 #pragma once
 
-#include <type_traits>
-
 #include "../../core/craft.hpp"
 #include "../../fields/fluid_field.hpp"
 #include "../../fields/gravity_field.hpp"
 #include "../../fields/templated_query.hpp"
+#include "../../geom/casts.hpp"
 
 namespace manta::parts {
 
@@ -41,14 +40,8 @@ public:
         // input from the Jet perspective (no autodiff through ρ). Switch to
         // templated FluidField queries when a use case demands ∂ρ/∂pos.
         auto p_scaled = this->template position<SceneFrame>();
-        Eigen::Matrix<Real, 3, 1> p_real;
-        if constexpr (std::is_floating_point_v<Scalar>) {
-            p_real = p_scaled.raw().template cast<Real>();
-        } else {
-            for (int i = 0; i < 3; ++i) p_real(i) = Real(p_scaled.raw()(i).a);
-        }
-        auto state = fluid.state_at(geom::Vec3<SceneFrame>::from_raw(p_real));
-        Scalar rho = Scalar(state.density);
+        auto state    = fluid.state_at(geom::cast_to_real(p_scaled));
+        Scalar rho    = Scalar(state.density);
 
         // Gravity uses the templated query so Jet crafts pick up ∂g/∂pos.
         auto g_scene_v = fields::state_at_templated<Scalar>(gf, p_scaled);

@@ -60,9 +60,9 @@ TEST_CASE("Planet: World::update advances each planet via update()") {
     auto& p = w.add_planet<TestPlanet>("p1");
 
     CHECK(p.update_count() == 0);
-    w.update();
+    w.step();
     CHECK(p.update_count() == 1);
-    w.update();
+    w.step();
     CHECK(p.update_count() == 2);
 }
 
@@ -90,7 +90,7 @@ TEST_CASE("Scene: world_to_scene with no planet — static, zero motion") {
     World w;
     w.clock().set_dt(0.01f);
     auto& s = w.create_scene();
-    w.update();
+    w.step();
     const auto& wts = s.world_to_scene();
     CHECK(wts.position().raw().norm() == doctest::Approx(0.0));
     CHECK(wts.vel_angular().raw().norm() == doctest::Approx(0.0));
@@ -104,7 +104,7 @@ TEST_CASE("Scene: world_to_scene picks up planet's rotation rate") {
     auto& s = w.create_scene();
     s.set_planet(&p);
 
-    w.update();
+    w.step();
 
     const auto& wts = s.world_to_scene();
     CHECK(wts.vel_angular().z() == doctest::Approx(0.5));
@@ -127,7 +127,7 @@ TEST_CASE("Planet: centrifugal acceleration on a craft at rest in a rotating sce
     init.position = Vec3<SceneFrame>{1.0f, 0.0f, 0.0f};
     s.add_craft(c, init);
 
-    w.update();
+    w.step();
 
     auto a = c.scene_to_craft().acc_linear();
     INFO("a = (", a.x(), ",", a.y(), ",", a.z(), ")");
@@ -157,7 +157,7 @@ TEST_CASE("Planet: Coriolis acceleration on a radially-moving craft") {
     // ordering, shifting position by v·dt before the aggregate, which
     // adds a tiny centrifugal contribution to a.x that just nips the
     // 1e-3 threshold.
-    w.evaluate();
+    w.kinematic_and_aggregate();
 
     auto a = c.scene_to_craft().acc_linear();
     INFO("a = (", a.x(), ",", a.y(), ",", a.z(), ")");
@@ -183,7 +183,7 @@ TEST_CASE("Planet: translational pseudo-force from non-inertial scene origin") {
     InitialState init;
     s.add_craft(c, init);
 
-    w.update();
+    w.step();
 
     auto a = c.scene_to_craft().acc_linear();
     INFO("a = (", a.x(), ",", a.y(), ",", a.z(), ")");
@@ -209,7 +209,7 @@ TEST_CASE("Planet: Euler pseudo-force from angular acceleration") {
     init.position = Vec3<SceneFrame>{1.0f, 0.0f, 0.0f};
     s.add_craft(c, init);
 
-    w.update();
+    w.step();
 
     auto a = c.scene_to_craft().acc_linear();
     INFO("a = (", a.x(), ",", a.y(), ",", a.z(), ")");
@@ -236,7 +236,7 @@ TEST_CASE("Planet: translational + centrifugal compose to expected total") {
     init.position = Vec3<SceneFrame>{1.0f, 0.0f, 0.0f};
     s.add_craft(c, init);
 
-    w.update();
+    w.step();
 
     auto a = c.scene_to_craft().acc_linear();
     INFO("a = (", a.x(), ",", a.y(), ",", a.z(), ")");
@@ -275,11 +275,10 @@ TEST_CASE("Earth: optional sidereal rotation pushes Coriolis through") {
     auto& earth = w.add_planet<manta::planets::Earth>(
         /*sea_level=*/0.0f,
         /*water_density=*/1000.0f,
-        /*air_density=*/1.225f,
         /*rotation_rate=*/1.0f);
     auto& s = w.create_scene();
     s.set_planet(&earth);
-    w.update();
+    w.step();
 
     CHECK(s.world_to_scene().vel_angular().z() == doctest::Approx(1.0));
 }
@@ -289,7 +288,6 @@ TEST_CASE("Earth: gravity_mu activates a point-mass + J2 disturbance under Gravi
     auto& earth = w.add_planet<manta::planets::Earth>(
         /*sea_level=*/0.0f,
         /*water_density=*/1000.0f,
-        /*air_density=*/1.225f,
         /*rotation_rate=*/0.0f,
         /*gravity_mu=*/manta::planets::Earth::kMu,
         /*include_j2=*/true);
@@ -318,7 +316,6 @@ TEST_CASE("Earth: dipole_moment activates a dipole MagField disturbance") {
     auto& earth = w.add_planet<manta::planets::Earth>(
         /*sea_level=*/0.0f,
         /*water_density=*/1000.0f,
-        /*air_density=*/1.225f,
         /*rotation_rate=*/0.0f,
         /*gravity_mu=*/0.0f,
         /*include_j2=*/false,
@@ -384,7 +381,7 @@ TEST_CASE("Magnetometer: reads MagField at part position, rotates to part frame"
     c.set_position(Vec3<SceneFrame>{0, 0, 10.0f});
     s.add_craft(c);
 
-    w.update();
+    w.step();
 
     auto b = magp.last_b();
     INFO("b = (", b.x(), ",", b.y(), ",", b.z(), ")");
@@ -404,7 +401,7 @@ TEST_CASE("Magnetometer: zero output when no MagField is registered") {
     c.root().compute_params();
     s.add_craft(c);
 
-    w.update();
+    w.step();
     auto b = mag.last_b();
     CHECK(std::abs(b.x()) < 1e-6f);
     CHECK(std::abs(b.y()) < 1e-6f);

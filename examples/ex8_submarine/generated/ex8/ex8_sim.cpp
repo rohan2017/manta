@@ -112,7 +112,7 @@ void tick() {
           bind_1_payload.clear();
       } }
 
-    w.update();
+    w.step();
 
     if (++g_pub_decim >= kPubEvery) {
         g_pub_decim = 0;

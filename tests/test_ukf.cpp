@@ -1,5 +1,5 @@
 // Tests for the unscented Kalman filter (manta::estimation::UKF) and its
-// craft-aware wrapper (manta::estimation::WorldUKF).
+// craft-aware wrapper (manta::estimation::UKF).
 //
 // UKF mirrors EKF's API but uses sigma-point propagation instead of Jet
 // autodiff Jacobians, so the user functors only need to accept double.
@@ -35,7 +35,7 @@ struct PositionMeas1D {
 }  // namespace
 
 TEST_CASE("UKF: weights sum to 1 (mean) and match standard formulation") {
-    UKF<2, 1> ukf;          // default alpha=1e-3, beta=2, kappa=0
+    UKFKernel<2, 1> ukf;          // default alpha=1e-3, beta=2, kappa=0
     auto wm = ukf.weights_mean();
     auto wc = ukf.weights_covariance();
     // Default α=1e-3 produces weights with magnitude ~1e6, so the analytical
@@ -50,7 +50,7 @@ TEST_CASE("UKF: weights sum to 1 (mean) and match standard formulation") {
 TEST_CASE("UKF: linear system reproduces Kalman update (predict+update)") {
     // Constant-velocity 1D, perfectly linear. Sigma-point propagation should
     // produce the same answer as the linear KF.
-    UKF<2, 1> ukf(/*alpha=*/1.0, /*beta=*/0.0, /*kappa=*/2.0);
+    UKFKernel<2, 1> ukf(/*alpha=*/1.0, /*beta=*/0.0, /*kappa=*/2.0);
     Eigen::Matrix<double, 2, 1> x0; x0 << 0.0, 1.0;     // p=0, v=1
     Eigen::Matrix<double, 2, 2> P0 = Eigen::Matrix<double, 2, 2>::Identity() * 0.1;
     ukf.set_state(x0);
@@ -76,7 +76,7 @@ TEST_CASE("UKF: linear system reproduces Kalman update (predict+update)") {
 }
 
 TEST_CASE("UKF: covariance stays symmetric after update") {
-    UKF<2, 1> ukf;
+    UKFKernel<2, 1> ukf;
     Eigen::Matrix<double, 2, 1> x0; x0 << 0.0, 1.0;
     Eigen::Matrix<double, 2, 2> P0;
     P0 << 0.5, 0.1, 0.1, 0.3;
@@ -91,7 +91,7 @@ TEST_CASE("UKF: covariance stays symmetric after update") {
     CHECK(P(0, 1) == doctest::Approx(P(1, 0)).epsilon(1e-12));
 }
 
-// ---- WorldUKF on a 13-state free-body craft ----
+// ---- UKF on a 13-state free-body craft ----
 
 template <class Scalar>
 class FreeBodyCraftU : public manta::CraftT<Scalar> {
@@ -110,8 +110,8 @@ struct PositionMeas3D_U {
 };
 }  // namespace
 
-TEST_CASE("WorldUKF: free-body propagation matches kinematic prediction") {
-    using Ukf = manta::estimation::WorldUKF</*NumCrafts=*/1, /*MeasDim=*/3>;
+TEST_CASE("UKF: free-body propagation matches kinematic prediction") {
+    using Ukf = manta::estimation::UKF</*NumCrafts=*/1, /*MeasDim=*/3>;
     Ukf ukf;
 
     manta::WorldT<double> w_real;
@@ -140,8 +140,8 @@ TEST_CASE("WorldUKF: free-body propagation matches kinematic prediction") {
     CHECK(std::abs(x(7) - 1.0) < 1e-3);
 }
 
-TEST_CASE("WorldUKF: position measurement pulls state toward observation") {
-    using Ukf = manta::estimation::WorldUKF</*NumCrafts=*/1, /*MeasDim=*/3>;
+TEST_CASE("UKF: position measurement pulls state toward observation") {
+    using Ukf = manta::estimation::UKF</*NumCrafts=*/1, /*MeasDim=*/3>;
     Ukf ukf;
 
     manta::WorldT<double> w_real;
@@ -168,7 +168,7 @@ TEST_CASE("WorldUKF: position measurement pulls state toward observation") {
     CHECK(std::abs(x(0)) < 0.5);
 }
 
-// Note: the historical "non-templated craft via WorldUKFOf" test has been
+// Note: the historical "non-templated craft via UKF" test has been
 // removed. With the new architecture, every filter-target craft must be
 // scalar_templated (instantiated as <double> for both EKF and UKF Real
 // worlds). The Scene/World templating ripples through to require this.

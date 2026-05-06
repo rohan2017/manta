@@ -151,7 +151,7 @@ TEST_CASE("Orbital: circular orbit holds altitude over one period") {
     scene.add_craft(c);
 
     int steps = static_cast<int>(T / 0.001f);
-    for (int i = 0; i < steps; ++i) w.update();
+    for (int i = 0; i < steps; ++i) w.step();
 
     auto p = c.scene_to_craft().position();
     float r_now = std::sqrt(p.x()*p.x() + p.y()*p.y() + p.z()*p.z());
@@ -177,7 +177,7 @@ TEST_CASE("Orbital: surface gravity recovers Earth-like 9.81 m/s^2") {
     c.set_position(Vec3<SceneFrame>{r, 0, 0});
     scene.add_craft(c);
 
-    w.update();
+    w.step();
     auto a = c.scene_to_craft().acc_linear();
     float a_mag = std::sqrt(a.x()*a.x() + a.y()*a.y() + a.z()*a.z());
     CHECK(a_mag == doctest::Approx(9.82f).epsilon(0.01f));

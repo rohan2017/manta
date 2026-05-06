@@ -1,7 +1,9 @@
 #pragma once
 
-// Extended Kalman Filter — header-only template using Ceres Jets for forward-
-// mode autodiff Jacobians.
+// Pure-math Extended Kalman Filter — header-only template using Ceres Jets
+// for forward-mode autodiff Jacobians. This is the kernel; the
+// manta-aware filter wrapper that knows about Crafts/Worlds is
+// `manta::estimation::EKF` (declared in `world_ekf.hpp`).
 //
 // Usage sketch:
 //
@@ -23,7 +25,7 @@
 //     }
 //   };
 //
-//   manta::estimation::EKF<2, 1> ekf;
+//   manta::estimation::EKFKernel<2, 1> ekf;
 //   ekf.set_state(...);
 //   ekf.set_covariance(...);
 //   ekf.predict(ConstVelProcess{}, dt, Q);
@@ -45,7 +47,7 @@
 namespace manta::estimation {
 
 template <int StateDim, int MeasDim>
-class EKF {
+class EKFKernel {
 public:
     using StateVec       = Eigen::Matrix<double, StateDim, 1>;
     using StateCov       = Eigen::Matrix<double, StateDim, StateDim>;
@@ -53,7 +55,7 @@ public:
     using MeasCov        = Eigen::Matrix<double, MeasDim,  MeasDim>;
     using MeasJacobian   = Eigen::Matrix<double, MeasDim,  StateDim>;
 
-    EKF() : x_(StateVec::Zero()), P_(StateCov::Identity()) {}
+    EKFKernel() : x_(StateVec::Zero()), P_(StateCov::Identity()) {}
 
     void set_state(const StateVec& x)    noexcept { x_ = x; }
     void set_covariance(const StateCov& P) noexcept { P_ = P; }

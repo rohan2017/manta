@@ -70,12 +70,12 @@ void print_gravity(std::uint16_t tag, const std::uint8_t* p) {
                         pp.ax, pp.ay, pp.az);
             break;
         }
-        case gravity_tags::USER:
+        case manta::fields::USER_TAG:
             std::printf("USER (untagged, should not appear on wire)");
             break;
         default:
             std::printf("tag=%u (unknown — user-registered? expect >= %u)",
-                        unsigned(tag), unsigned(gravity_tags::USER_BASE));
+                        unsigned(tag), unsigned(manta::fields::USER_BASE));
             break;
     }
 }
@@ -94,12 +94,12 @@ void print_mag(std::uint16_t tag, const std::uint8_t* p) {
                         dp.ox, dp.oy, dp.oz, dp.mx, dp.my, dp.mz);
             break;
         }
-        case mag_tags::USER:
+        case manta::fields::USER_TAG:
             std::printf("USER (untagged, should not appear on wire)");
             break;
         default:
             std::printf("tag=%u (unknown — user-registered? expect >= %u)",
-                        unsigned(tag), unsigned(mag_tags::USER_BASE));
+                        unsigned(tag), unsigned(manta::fields::USER_BASE));
             break;
     }
 }
@@ -119,12 +119,12 @@ void print_fluid(std::uint16_t tag, const std::uint8_t* p) {
                         up.R, up.temperature, up.pressure, up.vx, up.vy, up.vz);
             break;
         }
-        case fluid_tags::USER:
+        case manta::fields::USER_TAG:
             std::printf("USER (untagged, should not appear on wire)");
             break;
         default:
             std::printf("tag=%u (unknown — user-registered? expect >= %u)",
-                        unsigned(tag), unsigned(fluid_tags::USER_BASE));
+                        unsigned(tag), unsigned(manta::fields::USER_BASE));
             break;
     }
 }
@@ -157,13 +157,13 @@ int main(int argc, char** argv) {
     std::size_t expected_size = 0;
     if (field_type == "gravity") {
         decode = print_gravity;
-        expected_size = 8 + GravityField::kParamsBytes;
+        expected_size = 8 + manta::fields::kParamsBytes;
     } else if (field_type == "mag") {
         decode = print_mag;
-        expected_size = 8 + MagField::kParamsBytes;
+        expected_size = 8 + manta::fields::kParamsBytes;
     } else if (field_type == "fluid") {
         decode = print_fluid;
-        expected_size = 8 + FluidField::kParamsBytes;
+        expected_size = 8 + manta::fields::kParamsBytes;
     } else {
         std::fprintf(stderr, "wire_debug: unknown field_type %.*s\n",
                      int(field_type.size()), field_type.data());

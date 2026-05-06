@@ -25,7 +25,7 @@ using namespace manta::fields;
 template <class FieldT>
 static void wire_one_way(FieldT& tx, FieldT& rx) {
     tx.set_tx_hook([&rx](std::uint16_t tag,
-                         const typename FieldT::Params& params,
+                         const manta::fields::Params& params,
                          int lifetime) {
         rx.receive(tag, params, lifetime);
     });
@@ -92,11 +92,11 @@ TEST_CASE("Sync GravityField: recursion guard prevents echo on receive") {
     // ensures the receiving side's add() does NOT re-emit.
     GravityField a, b;
     int a_tx_count = 0, b_tx_count = 0;
-    a.set_tx_hook([&](std::uint16_t tag, const GravityField::Params& p, int lt) {
+    a.set_tx_hook([&](std::uint16_t tag, const manta::fields::Params& p, int lt) {
         ++a_tx_count;
         b.receive(tag, p, lt);
     });
-    b.set_tx_hook([&](std::uint16_t tag, const GravityField::Params& p, int lt) {
+    b.set_tx_hook([&](std::uint16_t tag, const manta::fields::Params& p, int lt) {
         ++b_tx_count;
         a.receive(tag, p, lt);
     });
@@ -146,7 +146,7 @@ TEST_CASE("Sync FluidField: uniform_incompressible + uniform_gas replicate") {
 
 TEST_CASE("Sync GravityField: unknown tag drops silently on receive") {
     GravityField b;
-    GravityField::Params p{};
+    manta::fields::Params p{};
     bool ok = b.receive(/*tag=*/9999, p, /*lifetime=*/PERSISTENT);
     CHECK(ok == false);
     CHECK(b.disturbance_count() == 0u);
@@ -173,7 +173,7 @@ TEST_CASE("Sync GravityField: lifetime is preserved across the wire") {
 namespace {
 
 struct CutoffParams { Real ox, oy, oz, mu, cutoff; };
-constexpr std::uint16_t kCutoffTag = gravity_tags::USER_BASE + 7;
+constexpr std::uint16_t kCutoffTag = manta::fields::USER_BASE + 7;
 
 GravityField::Disturbance make_cutoff(Vec3<SceneFrame> origin,
                                       Real mu, Real cutoff) {
@@ -181,7 +181,7 @@ GravityField::Disturbance make_cutoff(Vec3<SceneFrame> origin,
     d.origin = origin;
     d.tag    = kCutoffTag;
     CutoffParams cp{Real(origin.x()), Real(origin.y()), Real(origin.z()), mu, cutoff};
-    static_assert(sizeof(cp) <= GravityField::kParamsBytes);
+    static_assert(sizeof(cp) <= manta::fields::kParamsBytes);
     std::memcpy(d.params.data(), &cp, sizeof(cp));
     d.delta_g = [mu](const Vec3<SceneFrame>& off) noexcept {
         Real r2 = off.raw().squaredNorm();
@@ -197,7 +197,7 @@ GravityField::Disturbance make_cutoff(Vec3<SceneFrame> origin,
 }
 
 bool register_cutoff_factory_once = []() {
-    GravityField::register_factory(kCutoffTag, [](const GravityField::Params& p) {
+    GravityField::register_factory(kCutoffTag, [](const manta::fields::Params& p) {
         CutoffParams cp;
         std::memcpy(&cp, p.data(), sizeof(cp));
         return make_cutoff(Vec3<SceneFrame>{cp.ox, cp.oy, cp.oz}, cp.mu, cp.cutoff);

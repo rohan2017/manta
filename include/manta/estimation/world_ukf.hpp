@@ -1,16 +1,17 @@
 #pragma once
 
-// WorldUKF — a UKF wired against a user's `manta::WorldT<double>` (the
-// sim/Real World). Estimates the joint state of every Craft in the World
-// via sigma-point propagation. State layout matches WorldEKF:
+// `manta::estimation::UKF` — a UKF wired against a user's
+// `manta::WorldT<double>` (the sim/Real World). Estimates the joint state
+// of every Craft in the World via sigma-point propagation. State layout
+// matches the manta-aware EKF:
 //
 //   [c0.p (3) | c0.q (4) | c0.v (3) | c0.ω (3) |
 //    c1.p (3) | c1.q (4) | c1.v (3) | c1.ω (3) | ... ]
 //
 //   StateDim = 13 * NumCrafts
 //
-// Compared to WorldEKF, WorldUKF has a notable structural advantage: it
-// does NOT need a Jet-shadow World. Every sigma point is a vector of
+// Compared to the manta-aware EKF, UKF has a notable structural advantage:
+// it does NOT need a Jet-shadow World. Every sigma point is a vector of
 // `double`s, propagated through the same Real `WorldT<double>`. The
 // craft scalar can be either `double` (templated craft) or a non-
 // templated `manta::Craft` — both work as long as `evaluate(state, dt)`
@@ -25,8 +26,9 @@
 //     well to roughly 10 crafts.
 //   * Captures nonlinearity to second order; EKF only to first order.
 //
-// State layout, quaternion handling, and the bind-based API mirror
-// WorldEKF — see world_ekf.hpp for the design notes that apply to both.
+// State layout, quaternion handling, and the bind-based API mirror the
+// manta-aware EKF — see world_ekf.hpp for the design notes that apply to
+// both.
 
 #include <array>
 #include <cmath>
@@ -41,8 +43,8 @@
 namespace manta::estimation {
 
 template <int NumCrafts, int MeasDim>
-class WorldUKF {
-    static_assert(NumCrafts >= 1, "WorldUKF needs at least one craft");
+class UKF {
+    static_assert(NumCrafts >= 1, "manta::estimation::UKF needs at least one craft");
 
 public:
     static constexpr int kCrafts        = NumCrafts;
@@ -57,11 +59,11 @@ public:
     using MeasVec  = Eigen::Matrix<double, MeasDim,   1>;
     using MeasCov  = Eigen::Matrix<double, MeasDim,   MeasDim>;
 
-    explicit WorldUKF(double alpha = 1e-3, double beta = 2.0, double kappa = 0.0)
+    explicit UKF(double alpha = 1e-3, double beta = 2.0, double kappa = 0.0)
         : ukf_(alpha, beta, kappa) {}
 
     // Bind to the Real World + craft pointers in slot order matching the
-    // state vector. Unlike WorldEKF, no Jet shadow is needed — sigma
+    // state vector. Unlike the EKF, no Jet shadow is needed — sigma
     // propagation runs through the same Real world.
     void bind(WorldR& w_real,
               std::array<CraftR*, NumCrafts> real_crafts) noexcept {
@@ -100,7 +102,7 @@ public:
                     x_in.template segment<kRigidStateDim>(kRigidStateDim * k);
                 crafts_real_[k]->set_rigid_state(xk);
             }
-            w_real_->update();
+            w_real_->step();
             StateVec y;
             for (int k = 0; k < NumCrafts; ++k) {
                 y.template segment<kRigidStateDim>(kRigidStateDim * k) =
@@ -139,7 +141,7 @@ public:
         update_n<MeasDim>(h, z, R);
     }
 
-    // ---- Per-craft slice accessors (mirror WorldEKF) ----
+    // ---- Per-craft slice accessors (mirror EKF) ----
     Eigen::Matrix<double, 3, 1> position(int craft_idx = 0) const noexcept {
         return ukf_.state().template segment<3>(craft_idx * kRigidStateDim + 0);
     }
@@ -184,7 +186,7 @@ private:
 
     WorldR*                          w_real_      = nullptr;
     std::array<CraftR*, NumCrafts>   crafts_real_{};
-    UKF<kStateDim, MeasDim>          ukf_;
+    UKFKernel<kStateDim, MeasDim>    ukf_;
 };
 
 } // namespace manta::estimation

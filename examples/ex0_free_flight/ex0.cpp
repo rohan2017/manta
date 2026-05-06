@@ -122,7 +122,7 @@ int main() {
             thr_clean.set_throttle(0.0f);
             thr_drag .set_throttle(0.0f);
         }
-        w.update();
+        w.step();
         t += DT;
 
         const float z_clean = clean.scene_to_craft().position().z();

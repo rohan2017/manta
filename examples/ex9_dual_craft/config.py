@@ -3,7 +3,7 @@
 Validates the multi-craft architecture end-to-end:
 
   * Two free-flying drones in the SAME World, each with Mass + IMU + DVL.
-  * One `WorldEKF<NumCrafts=2, MeasDim=18>` estimates the joint 26-DOF
+  * One `EKF<NumCrafts=2, MeasDim=18>` estimates the joint 26-DOF
     state — concat of both crafts' [p (3) | q (4) | v (3) | ω (3)].
   * Per-craft slice accessors (`ekf.position(0)`, `ekf.position(1)`)
     expose each craft's belief without flattening through the wrapper.

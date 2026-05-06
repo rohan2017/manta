@@ -1,6 +1,8 @@
 #pragma once
 
-// WorldEKF — an EKF wired directly against a user's templated WorldT/CraftT.
+// `manta::estimation::EKF` — an EKF wired directly against a user's
+// templated WorldT/CraftT. The pure-math kernel it delegates to lives in
+// `ekf.hpp` as `EKFKernel`.
 //
 // The filter estimates the joint state of every Craft in a single World
 // simultaneously. State layout is the concatenation of each craft's 13-DOF
@@ -29,8 +31,8 @@
 // choice when crafts physically couple (tethers, contact, fluid coupling)
 // — the autodiff captures every cross-craft Jacobian for free. For
 // decoupled-craft swarms where F is block-diagonal, see
-// `WorldEKFBlockDecomposed` (world_ekf_block.hpp): per-craft Jet passes
-// with width 13, NumCrafts passes per tick, linear scaling.
+// `BlockDecomposedEKF` (world_ekf_block.hpp): per-craft Jet passes with
+// width 13, NumCrafts passes per tick, linear scaling.
 //
 // Usage sketch:
 //
@@ -43,7 +45,7 @@
 //     s_real.add_craft(craft_real);
 //
 //     // Build the Jet shadow World identically.
-//     using EkfT = manta::estimation::WorldEKF</*NumCrafts=*/1, /*MeasDim=*/3>;
+//     using EkfT = manta::estimation::EKF</*NumCrafts=*/1, /*MeasDim=*/3>;
 //     manta::WorldT<EkfT::Jet> w_jet;
 //     w_jet.clock().set_dt(0.01f);
 //     auto& s_jet = w_jet.create_scene();
@@ -52,6 +54,7 @@
 //     s_jet.add_craft(craft_jet);
 //
 //     // Construct the EKF and bind to both sides.
+//     using EkfT = manta::estimation::EKF</*NumCrafts=*/1, /*MeasDim=*/3>;
 //     EkfT ekf;
 //     ekf.bind(w_jet, {&craft_real}, {&craft_jet});
 //
@@ -83,8 +86,8 @@
 namespace manta::estimation {
 
 template <int NumCrafts, int MeasDim>
-class WorldEKF {
-    static_assert(NumCrafts >= 1, "WorldEKF needs at least one craft");
+class EKF {
+    static_assert(NumCrafts >= 1, "manta::estimation::EKF needs at least one craft");
 
 public:
     static constexpr int kCrafts        = NumCrafts;
@@ -102,7 +105,7 @@ public:
     using MeasVec  = Eigen::Matrix<double, MeasDim,   1>;
     using MeasCov  = Eigen::Matrix<double, MeasDim,   MeasDim>;
 
-    WorldEKF() = default;
+    EKF() = default;
 
     // Bind the filter to its Jet shadow World + the matching craft pointers.
     // Crafts must appear in the same slot order on both sides — that order
@@ -137,39 +140,22 @@ public:
         if (!w_jet_) return;
         w_jet_->clock().set_dt(static_cast<float>(dt));
 
-        auto f = [this, dt](const auto& x_arg, double /*dt_*/) {
+        // Jet-only process functor. EKFKernel::predict always invokes f
+        // with Jet input — there's no value-path branch.
+        auto f = [this](const auto& x_arg, double /*dt_*/) {
             using S = typename std::decay_t<decltype(x_arg)>::Scalar;
-            // EKF::predict always invokes f with Jet input; the inline cast
-            // covers Real inputs in case a unit test or future call site
-            // wants the value path standalone.
-            if constexpr (std::is_same_v<S, double>) {
-                Eigen::Matrix<double, kStateDim, 1> y;
-                // Manual evaluation against per-craft real instances when
-                // available — but predict always goes through Jet. This
-                // branch isn't normally exercised.
-                for (int k = 0; k < NumCrafts; ++k) {
-                    typename CraftR::RigidState xk;
-                    for (int i = 0; i < 13; ++i) xk(i) = x_arg(13*k + i);
-                    auto y_k = crafts_real_[k]->evaluate(xk, S(dt));
-                    for (int i = 0; i < 13; ++i) y(13*k + i) = y_k(i);
-                }
-                return y;
-            } else {
-                // Jet path — write each craft's state slice, advance the
-                // entire Jet world, read each craft's new state slice.
-                for (int k = 0; k < NumCrafts; ++k) {
-                    typename CraftJ::RigidState xk;
-                    for (int i = 0; i < 13; ++i) xk(i) = x_arg(13*k + i);
-                    crafts_jet_[k]->set_rigid_state(xk);
-                }
-                w_jet_->update();
-                Eigen::Matrix<S, kStateDim, 1> y;
-                for (int k = 0; k < NumCrafts; ++k) {
-                    auto xk_out = crafts_jet_[k]->get_rigid_state();
-                    for (int i = 0; i < 13; ++i) y(13*k + i) = xk_out(i);
-                }
-                return y;
+            for (int k = 0; k < NumCrafts; ++k) {
+                typename CraftJ::RigidState xk;
+                for (int i = 0; i < 13; ++i) xk(i) = x_arg(13*k + i);
+                crafts_jet_[k]->set_rigid_state(xk);
             }
+            w_jet_->step();
+            Eigen::Matrix<S, kStateDim, 1> y;
+            for (int k = 0; k < NumCrafts; ++k) {
+                auto xk_out = crafts_jet_[k]->get_rigid_state();
+                for (int i = 0; i < 13; ++i) y(13*k + i) = xk_out(i);
+            }
+            return y;
         };
         ekf_.predict(f, dt, Q);
 
@@ -265,7 +251,7 @@ public:
     //
     //   ekf.begin_step(dt, Q);                 // seeds Jets at x_pre
     //                                          // with identity, runs
-    //                                          // w_jet.evaluate()
+    //                                          // w_jet.kinematic_and_aggregate()
     //                                          // (kinematic + agg).
     //                                          // Cache is now at x_pre
     //                                          // with derivs w.r.t.
@@ -321,7 +307,7 @@ public:
         // One Jet pass: kin + agg at x_pre. Caches the Jet sensors'
         // last_* values and the scene_to_part acc_linear field; both
         // carry derivs w.r.t. x_pre suitable for measurement functors.
-        w_jet_->evaluate();
+        w_jet_->kinematic_and_aggregate();
     }
 
     // Read a measurement functor's h(x_pre) + Jacobian and queue the
@@ -365,7 +351,7 @@ public:
         // Advance Jet world from x_pre to x_post via integrate-only
         // (no re-aggregate; the next begin_step re-seeds + re-evaluates
         // anyway, so refreshing the cache here would be wasted work).
-        w_jet_->advance_only(static_cast<Jet>(dt_pending_));
+        w_jet_->integrate(static_cast<Jet>(dt_pending_));
 
         // Extract x_post + F from the Jet craft state.
         StateVec x_post;
@@ -445,7 +431,7 @@ private:
     WorldJ*                          w_jet_       = nullptr;
     std::array<CraftR*, NumCrafts>   crafts_real_{};
     std::array<CraftJ*, NumCrafts>   crafts_jet_ {};
-    EKF<kStateDim, MeasDim>          ekf_;
+    EKFKernel<kStateDim, MeasDim>    ekf_;
 
     // Fused step state: held between begin_step() and end_step().
     double                                                       dt_pending_ = 0.0;

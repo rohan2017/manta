@@ -42,25 +42,20 @@ public:
     bool apply_gravity() const noexcept       { return apply_gravity_; }
     void set_apply_gravity(bool b) noexcept   { apply_gravity_ = b; }
 
-    // GravityField is OPTIONAL augmentation. TUs whose worlds never
-    // register a GravityField compile this update() down to a single
-    // early return — Mass becomes pure inertia with zero field-registry
-    // traffic. When the macro IS set, an inner null-check via
-    // `Part::field_ptr` covers the multi-world TU case (e.g. an EKF
-    // target where the sim world has gravity but the est world doesn't,
-    // both sharing the same macro state).
+    // GravityField is OPTIONAL augmentation: the macro gates compilation,
+    // and `field_or_null` gives a graceful no-op at runtime when the
+    // craft's world hasn't registered one (or this craft is unattached).
     void update() override {
         if constexpr (MANTA_PART_AUGMENTS_FIELD(MANTA_HAS_GRAVITY_FIELD)) {
             if (!apply_gravity_) return;
-            const auto* gf_base = this->field_ptr(typeid(fields::GravityField));
-            if (!gf_base) return;
-            const auto& gf = *static_cast<const fields::GravityField*>(gf_base);
+            const auto* gf = this->template field_or_null<fields::GravityField>();
+            if (!gf) return;
 
             // CoM in scene frame, then a Scalar-templated field query so
             // Jet crafts pick up ∂g/∂pos. Real crafts get a no-op fast path.
-            auto com_part   = this->get_com();
-            auto com_scene  = this->scene_to_part().apply_position(com_part);
-            auto g_scene_v  = fields::state_at_templated<Scalar>(gf, com_scene);
+            auto com_part  = this->get_com();
+            auto com_scene = this->scene_to_part().apply_position(com_part);
+            auto g_scene_v = fields::state_at_templated<Scalar>(*gf, com_scene);
 
             auto q_part_from_scene =
                 this->template orientation<SceneFrame>().raw().conjugate();

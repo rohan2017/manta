@@ -42,34 +42,17 @@ public:
     // wrench), so we subtract `R(q)^T · g_scene` to recover specific
     // force.
     //
-    // Whether to subtract gravity is a COMPILE-TIME decision: the codegen
-    // force-includes <world>_config.h into every TU and that header
-    // `#define`s `MANTA_HAS_GRAVITY_FIELD` exactly when a GravityField
-    // was registered with the world. Worlds without one compile out the
-    // gravity branch entirely — no runtime field-registry lookup, no
-    // typeid dispatch.
-    // GravityField is OPTIONAL augmentation. If present we subtract
-    // body-frame gravity to report specific force (the convention real
-    // accelerometers follow); otherwise we hand back the raw kinematic
-    // body acceleration.
+    // GravityField is OPTIONAL augmentation. The macro gates compilation;
+    // at runtime, an unattached test craft or a world without gravity
+    // gracefully returns the raw kinematic body acceleration.
     geom::Vec3<PartFrame, Scalar> specific_force_body() const {
         auto a_body = this->acceleration_body();
         if constexpr (MANTA_PART_AUGMENTS_FIELD(MANTA_HAS_GRAVITY_FIELD)) {
-            // Inner null-check covers multi-world TUs where one world has
-            // a GravityField and another in the same TU doesn't. The
-            // null-safe `Part::field_ptr` traverses craft → world without
-            // tripping the world() assertion on unattached test crafts.
-            if (!this->craft_) return a_body;
-            const auto* gf_base = this->field_ptr(typeid(fields::GravityField));
-            if (!gf_base) return a_body;
-            const auto& g_field = *static_cast<const fields::GravityField*>(gf_base);
-            // Query gravity at the part's scene position;
-            // `state_at_templated` handles Real/Jet automatically
-            // (finite-diff for position gradient when Scalar=Jet).
+            const auto* g_field = this->template field_or_null<fields::GravityField>();
+            if (!g_field) return a_body;
             auto pos_scene = this->scene_to_part().position();
-            auto g_scene   = fields::state_at_templated<Scalar>(g_field, pos_scene);
-            // Rotate scene-frame gravity into body frame and subtract.
-            auto g_body = this->scene_to_part().rotate_inverse(g_scene);
+            auto g_scene   = fields::state_at_templated<Scalar>(*g_field, pos_scene);
+            auto g_body    = this->scene_to_part().rotate_inverse(g_scene);
             return geom::Vec3<PartFrame, Scalar>::from_raw(
                 a_body.raw() - g_body.raw());
         } else {

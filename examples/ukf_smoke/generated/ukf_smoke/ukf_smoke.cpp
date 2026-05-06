@@ -48,7 +48,7 @@ namespace manta_gen::ukf_smoke {
 manta::WorldT<double>  w{};
 manta::SceneT<double>* scene = nullptr;
 UkfSmokeCraftT<double> craft{};
-manta::estimation::WorldUKF<1, 9> ukf_0(0.001f, 2.0f, 0.0f);
+manta::estimation::UKF<1, 9> ukf_0(0.001f, 2.0f, 0.0f);
 
 }  // namespace manta_gen::ukf_smoke
 

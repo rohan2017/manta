@@ -1,7 +1,7 @@
 """Emit <name>_main.cpp for an EKF Target.
 
 Shape mirrors emit_main_cpp() but the tick loop is driven by a
-`manta::estimation::WorldEKF<EstCraftT, MeasDim>` instance:
+`manta::estimation::EKF<EstCraftT, MeasDim>` instance:
 
     ekf.predict(dt, Q);
     if (ekf.craft().dvl().consume_fresh()) {
@@ -95,7 +95,7 @@ class _MeasFunctor:
         # "file": functor is purely a pure function of x (DVL, Mag) and
         # gets emitted at file scope above the public namespace.
         # "anon": functor reaches into the Jet shadow world (e.g. IMU,
-        # which calls `w_jet.evaluate()`) and must live inside the
+        # which calls `w_jet.kinematic_and_aggregate()`) and must live inside the
         # anonymous namespace alongside `w_jet` / `craft_jet`.
         self.scope = scope
         # Which filter API method `emit_update_block` should call:
@@ -147,7 +147,7 @@ class _MeasFunctor:
                 # `velocity_body()` gives both h(x_pre) and ∂h/∂x_pre in
                 # one read — no separate state-vector parsing. Reaches
                 # into the anon-namespace Jet craft global by name (the
-                # WorldEKF::craft_jet() accessor returns the base type
+                # EKF::craft_jet() accessor returns the base type
                 # which doesn't expose the templated part accessors).
                 if craft_jet_vars is None:
                     raise RuntimeError(
@@ -218,7 +218,7 @@ class _MeasFunctor:
             # EKF path: read specific_force_body + body angular velocity
             # straight from the Jet sensor. begin_step has already seeded
             # the Jet craft at x_pre with identity derivatives and run
-            # w_jet.evaluate(), so the cached acc_linear (which feeds
+            # w_jet.kinematic_and_aggregate(), so the cached acc_linear (which feeds
             # specific_force_body) and scene_to_part vel_angular both
             # carry the right Jet derivatives — one read gives both h
             # and H.
@@ -407,19 +407,19 @@ def _filter_construction(kind: str, filter_obj, num_crafts: int,
         if getattr(filter_obj, "block_decomposed", False):
             return (
                 "#include \"manta/estimation/world_ekf_block.hpp\"",
-                f"manta::estimation::WorldEKFBlockDecomposed<"
+                f"manta::estimation::BlockDecomposedEKF<"
                 f"{num_crafts}, {meas_dim}> {filter_var};",
             )
         return (
             "#include \"manta/estimation/world_ekf.hpp\"",
-            f"manta::estimation::WorldEKF<{num_crafts}, {meas_dim}> "
+            f"manta::estimation::EKF<{num_crafts}, {meas_dim}> "
             f"{filter_var};",
         )
     if kind == "ukf":
         a, b, k = filter_obj.alpha, filter_obj.beta, filter_obj.kappa
         return (
             "#include \"manta/estimation/world_ukf.hpp\"",
-            f"manta::estimation::WorldUKF<{num_crafts}, {meas_dim}> "
+            f"manta::estimation::UKF<{num_crafts}, {meas_dim}> "
             f"{filter_var}({_f(a)}, {_f(b)}, {_f(k)});",
         )
     raise ValueError(f"unknown filter kind {kind!r}")
@@ -662,8 +662,8 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
         - manta::SceneT<double>* scene = nullptr;
         - <Field> field_<i> instances
         - <Craft>T<double>       craft;
-        - filter wrapper instance (WorldEKF<NumCrafts, MeasDim> or
-          WorldUKF<NumCrafts, MeasDim>)
+        - filter wrapper instance (EKF<NumCrafts, MeasDim> or
+          UKF<NumCrafts, MeasDim>)
 
       anonymous namespace:
         - parse_float_array
@@ -780,10 +780,10 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
     ]
 
     if needs_jet:
-        # Jet shadow World — required by WorldEKF for the Jacobian step.
+        # Jet shadow World — required by EKF for the Jacobian step.
         lines += [
             f"// Jet shadow world. Built identically to the Real side in",
-            f"// setup(); WorldEKF::predict drives this through autodiff to",
+            f"// setup(); EKF::predict drives this through autodiff to",
             f"// extract the state-transition Jacobian.",
             f"using JetType = EkfT::Jet;",
             f"manta::WorldT<JetType>   w_jet{{}};",
@@ -1044,14 +1044,14 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
 
     # Mirror per-tick actuator command state from each Real-side craft to
     # its Jet shadow before predict(). Without this, predict()'s Jacobian
-    # step (which runs `w_jet.update()` with Jet-typed scalars) would see
+    # step (which runs `w_jet.step()` with Jet-typed scalars) would see
     # default-valued actuators — zero throttle, zero motor torque, etc. —
     # regardless of what the user just commanded on the Real craft via
     # cross-world `connect()` or external Zenoh inputs. The Real craft
     # holds the user-facing command state; the Jet shadow gets it copied
     # one-way each tick. Sensor measurement state (last_accel etc.) is
     # NOT mirrored: the Jet sensors recompute from the Jet kinematic
-    # state inside `w_jet.update()` and we never read from them.
+    # state inside `w_jet.step()` and we never read from them.
     if needs_jet:
         mirror_lines: list[str] = []
         for c_idx, c in enumerate(unique_crafts):
@@ -1072,7 +1072,7 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
             lines += mirror_lines
 
     # Fused single-pass predict + update (PyPose-style). begin_step seeds
-    # Jets at x_pre with identity, runs `w_jet.evaluate()` to populate
+    # Jets at x_pre with identity, runs `w_jet.kinematic_and_aggregate()` to populate
     # the Jet sensor caches; each `add_update` reads h(x_pre) + H from
     # those caches and queues a sequential update; end_step advances
     # the Jet world to x_post (no re-aggregate), reads F, computes
@@ -1319,7 +1319,7 @@ def _emit_field_sync_setup(lines: list[str], i: int, topic: str, cpp_class: str)
         f"    pub_field_{i}.emplace(g_session->declare_publisher("
         f"zenoh::KeyExpr({_quote(topic)})));",
         f"    field_{i}.set_tx_hook(",
-        f"        [](std::uint16_t tag, const {cpp_class}::Params& params, int lifetime) {{",
+        f"        [](std::uint16_t tag, const manta::fields::Params& params, int lifetime) {{",
         f"            std::vector<std::uint8_t> buf;",
         f"            buf.resize(2 + 2 + 4 + params.size());",
         f"            std::uint16_t ver = 1;",
@@ -1333,14 +1333,14 @@ def _emit_field_sync_setup(lines: list[str], i: int, topic: str, cpp_class: str)
         f"        zenoh::KeyExpr({_quote(topic)}),",
         f"        [](const zenoh::Sample& s) {{",
         f"            auto payload = s.get_payload().as_vector();",
-        f"            if (payload.size() < 8 + {cpp_class}::kParamsBytes) return;",
+        f"            if (payload.size() < 8 + manta::fields::kParamsBytes) return;",
         f"            std::uint16_t ver = 0, tag = 0;",
         f"            std::int32_t  lifetime = 0;",
         f"            std::memcpy(&ver,      payload.data() + 0, 2);",
         f"            std::memcpy(&tag,      payload.data() + 2, 2);",
         f"            std::memcpy(&lifetime, payload.data() + 4, 4);",
         f"            if (ver != 1) return;",
-        f"            {cpp_class}::Params p{{}};",
+        f"            manta::fields::Params p{{}};",
         f"            std::memcpy(p.data(), payload.data() + 8, p.size());",
         f"            field_{i}.receive(tag, p, lifetime);",
         f"        }}, zenoh::closures::none));",

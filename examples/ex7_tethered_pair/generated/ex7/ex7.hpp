@@ -35,7 +35,7 @@ extern manta::coupling::Tether tether_0;
 void setup();
 
 // One simulation step: applies pending in-bindings, runs
-// w.update() to advance physics, executes in-process connect()
+// w.step() to advance physics, executes in-process connect()
 // links, and (every ~50 Hz) publishes out-bindings.
 void tick();
 

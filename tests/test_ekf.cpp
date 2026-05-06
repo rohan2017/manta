@@ -40,7 +40,7 @@ TEST_CASE("EKF: 1-D constant-velocity tracker converges to truth") {
     std::mt19937 rng(42);
     std::normal_distribution<double> noise(0.0, meas_sigma);
 
-    EKF<2, 1> ekf;
+    EKFKernel<2, 1> ekf;
     // Initialize with a wrong guess: position 0, velocity 0 (truth: 0, 1.5).
     Eigen::Vector2d x0(0.0, 0.0);
     Eigen::Matrix2d P0;
@@ -114,7 +114,7 @@ TEST_CASE("EKF: nonlinear pendulum estimator tracks true state via Jets") {
     std::mt19937 rng(123);
     std::normal_distribution<double> noise(0.0, meas_sigma);
 
-    EKF<2, 1> ekf;
+    EKFKernel<2, 1> ekf;
     Eigen::Vector2d x0(0.1, 0.0);    // small initial guess
     Eigen::Matrix2d P0;
     P0 << 1.0, 0.0,

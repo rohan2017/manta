@@ -29,7 +29,7 @@ extern Ex8EstCraftT<double> craft;
 // EKF wrapper. State dim = 13 * 1 = 13.
 // Bound inside setup() to the Real world + (for EKF) Jet shadow +
 // per-craft pointer arrays.
-extern manta::estimation::WorldEKF<1, 12> ekf_0;
+extern manta::estimation::EKF<1, 12> ekf_0;
 
 // One-time initialization. Builds both worlds (Real + Jet shadow),
 // registers fields, instantiates the filter wrapper + binds it to

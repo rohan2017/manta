@@ -43,10 +43,14 @@ void Motor::resolve(const Wrench<PartFrame>& child_total,
     // actuator + damping. The joint integrator advances using this.
     Real tau_net_axial = tau_axial + tau_actuator + tau_damping;
 
-    // Axial moment of inertia about the JOINT ORIGIN (not COM) about the
-    // joint axis. ArticulatedPart::compute_params has populated this in the
-    // joint-output frame.
-    Real I_axial = axis.dot(moi_about_origin_jo().raw() * axis);
+    // Axial moment of inertia about the JOINT ORIGIN, projected on the
+    // joint axis. Built from the standard COM-based MOI via parallel axis;
+    // the axial component is rotation-invariant about the axis, so the
+    // mount-frame stored MOI yields the same result as the joint-output
+    // frame.
+    EigenV com       = get_com().raw();
+    Real   d_perp_sq = com.squaredNorm() - (com.dot(axis)) * (com.dot(axis));
+    Real   I_axial   = axis.dot(get_moi().raw() * axis) + get_mass() * d_perp_sq;
     if (I_axial < Real(1e-18)) {
         // Subtree has no axial inertia (or compute_params not called).
         // Treat joint as locked: no acceleration, full torque to parent.

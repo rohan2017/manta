@@ -134,7 +134,7 @@ add_executable(wire_debug wire_debug/wire_debug.cpp)
 target_link_libraries(wire_debug PRIVATE manta_examples_shared)
 
 # ex9 — dual-craft EKF: validates the multi-craft architecture (one
-# WorldEKF<2, 18> estimating two drones jointly with per-sensor
+# EKF<2, 18> estimating two drones jointly with per-sensor
 # craft_idx routing).
 include(${CMAKE_CURRENT_SOURCE_DIR}/ex9_dual_craft/generated/ex9/ex9.cmake)
 target_link_libraries(ex9 PRIVATE manta_examples_shared)

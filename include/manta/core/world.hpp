@@ -19,7 +19,7 @@ namespace manta {
 //
 // `WorldT<Real>` (the alias `World`) drives the sim: real-time tick loop,
 // real-valued state. `WorldT<Jet>` is the Jacobian-step shadow used by
-// `WorldEKF` — same scenes/crafts/fields registered, but every per-tick
+// `EKF` — same scenes/crafts/fields registered, but every per-tick
 // computation runs through Ceres Jets so `predict()` extracts the exact
 // state-transition Jacobian via autodiff.
 //
@@ -74,13 +74,6 @@ public:
         return ref;
     }
 
-    // For the Jet-world case where the user wants to reuse an existing
-    // (Real-side) Planet without owning a duplicate: register the pointer
-    // for shared use. The Jet World doesn't own the planet's lifetime.
-    void share_planet(Planet* p) {
-        shared_planets_.push_back(p);
-    }
-
     const std::vector<std::unique_ptr<Planet>>& planets() const noexcept { return planets_; }
     std::vector<std::unique_ptr<Planet>>&       planets()       noexcept { return planets_; }
 
@@ -108,70 +101,52 @@ public:
     SimClock&       clock()       noexcept { return clock_; }
     const SimClock& clock() const noexcept { return clock_; }
 
-    // Evaluate every scene at its current state — runs kinematic pass +
-    // force aggregation but does NOT integrate, advance planets, update
-    // fields, or tick the clock. Used by EKF measurement functors that
-    // need h(x) to query post-aggregation sensor values (e.g. an IMU's
-    // body-frame inertial acceleration) without changing the world's
-    // canonical state. The Jet world's planet pose is re-cast from the
-    // Real-side planet inside SceneT::evaluate, so calling this on a Jet
-    // world after a Real-side planet advance is safe.
-    void evaluate() {
-        for (auto& scene : scenes_) {
-            scene->evaluate();
-        }
+    // Run kinematic + aggregate for every scene without integrating,
+    // advancing planets, updating fields, or ticking the clock. Used by
+    // EKF measurement functors that need h(x) to query post-aggregation
+    // sensor values (e.g. an IMU's body-frame inertial acceleration)
+    // without changing the world's canonical state.
+    void kinematic_and_aggregate() {
+        for (auto& scene : scenes_) scene->kinematic_and_aggregate();
     }
 
     // Advance every scene's crafts using their currently-cached
-    // accelerations, no re-aggregate, no clock tick, no field/planet
-    // advance. Used by `WorldEKF::end_step()` to push the Jet world from
-    // x_pre to x_post for the F = ∂x_post/∂x_pre Jacobian extraction
-    // after `evaluate()` has already given us H from the pre-integrate
-    // cache.
-    void advance_only(Scalar dt) {
-        for (auto& scene : scenes_) {
-            scene->advance_only(dt);
-        }
+    // accelerations — no re-aggregate, no clock tick, no field/planet
+    // advance. Used by the EKF's `end_step()` to push the Jet world
+    // from x_pre to x_post.
+    void integrate(Scalar dt) {
+        for (auto& scene : scenes_) scene->integrate(dt);
     }
 
-    // --- Main update ---
+    // --- Main step ---
     // One full simulation tick using clock_.dt():
     //   1. Planets advance (Real world only — Jet world reuses the
     //      Real-side planet state via Scene's casting).
-    //   2. All scenes update their crafts.
+    //   2. All scenes step their crafts.
     //   3. All registered fields update (Real world only — fields are
     //      shared, updated once).
     //   4. Clock advances.
-    void update() {
+    void step() {
         const Real t    = Real(clock_.time());
         const Real dt_r = Real(clock_.dt());
 
         if constexpr (std::is_same_v<Scalar, Real>) {
             for (auto& p : planets_) p->update(t, dt_r);
         }
-        // Note: a Jet World does NOT advance planet state. The Real-side
-        // Planet (shared via share_planet, or via the codegen path that
-        // owns the planet only on the Real side) carries the canonical
-        // pose; the Jet Scene casts it.
 
         const Scalar dt_s = Scalar(clock_.dt());
-        for (auto& scene : scenes_) {
-            scene->update(dt_s);
-        }
+        for (auto& scene : scenes_) scene->step(dt_s);
 
         if constexpr (std::is_same_v<Scalar, Real>) {
             for (auto& [ti, f] : fields_) f->update();
-        }
-
-        if constexpr (std::is_same_v<Scalar, Real>) {
             clock_.advance();
         }
     }
 
+
 private:
     std::vector<std::unique_ptr<SceneT<Scalar>>> scenes_;
     std::vector<std::unique_ptr<Planet>>         planets_;
-    std::vector<Planet*>                         shared_planets_;
     std::unordered_map<std::type_index, fields::Field*> fields_;
     SimClock                                     clock_;
 };

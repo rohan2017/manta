@@ -29,10 +29,19 @@ public:
         else      tether.set_endpoint_b(this);
     }
 
+    // Unlink from the tether on destruction so the surviving side observes
+    // a nullable endpoint rather than a dangling pointer.
+    ~TetherEndpointT() override {
+        if (!tether_) return;
+        if (tether_->endpoint_a() == this) tether_->set_endpoint_a(nullptr);
+        if (tether_->endpoint_b() == this) tether_->set_endpoint_b(nullptr);
+    }
+
     coupling::TetherT<Scalar>& tether() noexcept { return *tether_; }
     const coupling::TetherT<Scalar>& tether() const noexcept { return *tether_; }
 
     void update() override {
+        if (!tether_) return;
         auto* sib = (tether_->endpoint_a() == this) ? tether_->endpoint_b()
                                                     : tether_->endpoint_a();
         if (!sib) return;
@@ -52,9 +61,22 @@ public:
     }
 
 private:
+    template <class S> friend class manta::coupling::TetherT;
+
     coupling::TetherT<Scalar>* tether_;
 };
 
 using TetherEndpoint = TetherEndpointT<Real>;
 
 } // namespace manta::parts
+
+// TetherT dtor needs TetherEndpointT's tether_ field accessible. Defined
+// here once both classes are complete.
+namespace manta::coupling {
+template <class Scalar>
+inline TetherT<Scalar>::~TetherT() {
+    if (a_) a_->tether_ = nullptr;
+    if (b_) b_->tether_ = nullptr;
+}
+} // namespace manta::coupling
+
