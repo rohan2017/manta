@@ -133,20 +133,24 @@ inline void walk_register_noise(PartT<Scalar>& part, NoiseRegistry& reg) {
 
 namespace manta::estimation {
 
-template <int NumCrafts, int MeasDim, int NumNoiseSlots = 0>
+template <int NumCrafts, int MeasDim, int NumNoiseSlots = 0, int BiasDim = 0>
 class EKF {
     static_assert(NumCrafts >= 1, "manta::estimation::EKF needs at least one craft");
     static_assert(NumNoiseSlots >= 0, "NumNoiseSlots must be non-negative");
+    static_assert(BiasDim       >= 0, "BiasDim must be non-negative");
 
 public:
     static constexpr int kCrafts         = NumCrafts;
-    static constexpr int kRigidStateDim  = 13;        // ambient per craft
-    static constexpr int kRigidTangent   = 12;        // tangent per craft
+    static constexpr int kRigidStateDim  = 13;                  // ambient per craft
+    static constexpr int kRigidTangent   = 12;                  // tangent per craft
     static constexpr int kStateDim       = NumCrafts * kRigidStateDim;
-    static constexpr int kTangentDim     = NumCrafts * kRigidTangent;
+    static constexpr int kRigidTangentDim = NumCrafts * kRigidTangent;
+    static constexpr int kBiasDim        = BiasDim;             // augmented bias states
+    static constexpr int kTangentDim     = kRigidTangentDim + BiasDim;
+    static constexpr int kBiasColStart   = kRigidTangentDim;    // bias rows/cols start here
     static constexpr int kNoiseSlots     = NumNoiseSlots;
+    static constexpr int kNoiseColStart  = kTangentDim;          // noise inputs in Jet width
     static constexpr int kJetWidth       = kTangentDim + NumNoiseSlots;
-    static constexpr int kNoiseColStart  = kTangentDim;
 
     // Jet width covers state-tangent partials AND noise-input partials.
     // The first kTangentDim columns are F; the last NumNoiseSlots columns
@@ -188,14 +192,18 @@ public:
         for (int k = 0; k < NumCrafts; ++k) {
             walk_register_noise(crafts_jet_[k]->root(), noise_registry_);
         }
-        // Promote registry-local slot indices (0..n) to global Jet-
-        // column indices (kNoiseColStart..kNoiseColStart+n) so the
-        // `Vec3 + Noise` operator's autodiff branch writes into the
-        // correct Jet `.v` columns.
-        noise_registry_.apply_slot_offset(kNoiseColStart);
+        // Promote registry-local slot indices to global Jet-column /
+        // tangent-row indices:
+        //   noise inputs go into [kNoiseColStart .. kJetWidth)
+        //   bias states  go into [kBiasColStart  .. kTangentDim)
+        noise_registry_.apply_slot_offsets(
+            /*noise_input_offset=*/kNoiseColStart,
+            /*bias_state_offset =*/kBiasColStart);
 
         assert(noise_registry_.num_slots() <= NumNoiseSlots
                && "EKF: registered noise slots exceed NumNoiseSlots template arg");
+        assert(noise_registry_.num_bias_slots() <= BiasDim
+               && "EKF: registered RW bias slots exceed BiasDim template arg");
     }
 
     void set_state(const StateVec& x) noexcept {
@@ -263,7 +271,7 @@ public:
         StateVec  x_ref_post;
         StateCov  F;
         NoiseGain L;
-        extract_F_L_and_ref(x_ref_post, F, L);
+        extract_F_L_and_ref(x_ref_post, F, L, dt);
 
         x_ref_ = x_ref_post;
         renormalize_quats(x_ref_);
@@ -384,7 +392,7 @@ public:
         StateVec  x_ref_post;
         StateCov  F;
         NoiseGain L;
-        extract_F_L_and_ref(x_ref_post, F, L);
+        extract_F_L_and_ref(x_ref_post, F, L, dt_pending_);
 
         x_ref_ = x_ref_post;
         renormalize_quats(x_ref_);
@@ -454,15 +462,22 @@ private:
         }
     }
 
-    // Extract (x_ref_post, F, L) from Jet craft state. F = ∂x_post/∂x_pre
-    // (12·N × 12·N) is read from Jet `.v` columns [0..kTangentDim). L =
-    // ∂x_post/∂noise_input (12·N × NumNoiseSlots) is read from columns
-    // [kNoiseColStart..kJetWidth). Position / vel / angular vel rows are
-    // pure additive (copy `.v`); orientation rows use 2·imag(q_ref⁻¹ ⊗ q_jet).
-    void extract_F_L_and_ref(StateVec& x_ref_post, StateCov& F, NoiseGain& L) {
+    // Extract (x_ref_post, F, L) from Jet craft state. F's rigid rows
+    // (rows [0..kRigidTangentDim)) come from Jet `.v` columns
+    // [0..kTangentDim) — including any bias-state cols, in case rigid
+    // dynamics depend on bias (e.g. RW noise on a thruster's force).
+    // L's rigid rows come from Jet `.v` columns [kNoiseColStart..kJetWidth).
+    //
+    // F's bias rows (rows [kBiasColStart..kTangentDim)) are set
+    // analytically: bias_post = bias_pre · I + driver · σ_rw·√dt. So
+    // F[bias_rows, bias_cols] = I and L[bias_rows, driver_cols] =
+    // σ_rw·√dt at the relevant entries.
+    void extract_F_L_and_ref(StateVec& x_ref_post, StateCov& F, NoiseGain& L,
+                             double dt) {
         F.setZero();
         if constexpr (NumNoiseSlots > 0) L.setZero();
 
+        // ---- Rigid rows: from Jet world output ----
         for (int k = 0; k < NumCrafts; ++k) {
             auto rk = crafts_jet_[k]->get_rigid_state();
             const int ref_off = 13 * k;
@@ -521,6 +536,35 @@ private:
             fill_row(tan_off + 10, rk(11));
             fill_row(tan_off + 11, rk(12));
         }
+
+        // ---- Bias rows: analytical (constant + driver) ----
+        if constexpr (BiasDim > 0) {
+            // F[bias, bias] = identity. Bias state evolves as
+            //   bias_post = bias_pre + driver · σ_rw · √dt
+            // so ∂bias_post/∂bias_pre = 1 (no coupling to other states).
+            for (int b = 0; b < BiasDim; ++b) {
+                F(kBiasColStart + b, kBiasColStart + b) = 1.0;
+            }
+
+            // L[bias_row, driver_col] = σ_rw · √dt at the matching axis.
+            // Use the registry's RW source list to find each (bias, driver)
+            // slot pair.
+            if constexpr (NumNoiseSlots > 0) {
+                const double sqrt_dt = std::sqrt(dt);
+                for (const auto& rw : noise_registry_.rw_sources()) {
+                    const double s_sqrt_dt =
+                        static_cast<double>(rw.source->sigma()) * sqrt_dt;
+                    // bias_slot is global tangent index;
+                    // driver_slot is global Jet column index. L's column is
+                    // (driver_slot - kNoiseColStart) in the noise-input range.
+                    const int row_base = rw.source->state_slot();
+                    const int col_base = rw.source->driver_slot() - kNoiseColStart;
+                    for (int i = 0; i < rw.dim; ++i) {
+                        L(row_base + i, col_base + i) = s_sqrt_dt;
+                    }
+                }
+            }
+        }
     }
 
     // Add the noise-driven contribution L·Σ·Lᵀ to Q_out. The σ scaling
@@ -550,7 +594,8 @@ private:
         }
     }
 
-    // x_ref ← x_ref ⊞ δ (per-craft).
+    // x_ref ← x_ref ⊞ δ (per-craft) plus bias state updates on
+    // Noise<RandomWalk> sources via δ's bias-state slots.
     void inject_delta(const TangentVec& delta) {
         for (int k = 0; k < NumCrafts; ++k) {
             const int ref_off = 13 * k;
@@ -577,6 +622,28 @@ private:
             for (int i = 0; i < 3; ++i) {
                 x_ref_(ref_off + 7  + i) += delta(tan_off + 6 + i);
                 x_ref_(ref_off + 10 + i) += delta(tan_off + 9 + i);
+            }
+        }
+
+        // Bias state injections: for each registered RW source, add the
+        // δ slice to the Jet-side Noise's stored bias estimate. The
+        // Jet-side Noise's state3() is the EKF's running bias estimate;
+        // the operator+ Jet path reads it on the next predict so the
+        // measurement Jacobian carries the latest bias dependency.
+        if constexpr (BiasDim > 0) {
+            for (const auto& rw : noise_registry_.rw_sources()) {
+                const int row_base = rw.source->state_slot();
+                if (rw.dim == 3) {
+                    Eigen::Matrix<float, 3, 1> bias = rw.source->state3();
+                    for (int i = 0; i < 3; ++i) {
+                        bias(i) += static_cast<float>(delta(row_base + i));
+                    }
+                    rw.source->set_state3(bias);
+                } else {
+                    float bias = rw.source->state1()
+                               + static_cast<float>(delta(row_base));
+                    rw.source->set_state1(bias);
+                }
             }
         }
     }

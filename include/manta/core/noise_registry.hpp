@@ -50,23 +50,67 @@ public:
         return start;
     }
 
-    int num_slots() const noexcept { return next_slot_; }
-    std::size_t source_count() const noexcept { return entries_.size(); }
+    // Register a 3-axis random-walk bias source. Allocates 3 contiguous
+    // bias-state slots AND 3 contiguous driver slots in the white-noise
+    // input range. Updates the source's state_slot/driver_slot.
+    int register_random_walk_3d(Noise<RandomWalk>& source) {
+        const int driver_start = next_slot_;
+        const int bias_start   = next_bias_slot_;
+        source.set_driver_slot(driver_start);
+        source.set_state_slot (bias_start);
+        rw_entries_.push_back(RWEntry{&source, /*dim=*/3, driver_start, bias_start});
+        next_slot_      += 3;
+        next_bias_slot_ += 3;
+        return driver_start;
+    }
 
-    // Shift every registered source's external slot by `offset`. Used by
-    // the EKF wrapper after bind to convert registry-local slots (0..n)
-    // — which the Noise objects originally held — into global Jet-column
-    // indices (kNoiseColStart..kNoiseColStart+n) that the `Vec3 + Noise`
-    // operator writes into.
-    //
-    // The registry's *internal* slot_start bookkeeping stays unshifted
-    // (the registry's tables are 0-indexed from registry-local zero), so
-    // sigma_squared_diag's output is sized to num_slots() and indexable
-    // via local slot indices.
-    void apply_slot_offset(int offset) {
-        for (auto& e : entries_) {
-            e.source->set_slot(e.source->slot() + offset);
+    int num_slots()      const noexcept { return next_slot_; }
+    int num_bias_slots() const noexcept { return next_bias_slot_; }
+    std::size_t source_count()    const noexcept { return entries_.size(); }
+    std::size_t rw_source_count() const noexcept { return rw_entries_.size(); }
+
+    // RW noise inspection — used by the EKF for bias evolution
+    // (F's identity bias rows + L's σ_rw·√dt driver gain) and δ injection.
+    struct RWAccess {
+        Noise<RandomWalk>* source;
+        int                dim;
+        int                driver_slot;
+        int                bias_slot;
+    };
+    std::vector<RWAccess> rw_sources() const {
+        std::vector<RWAccess> out;
+        out.reserve(rw_entries_.size());
+        for (const auto& e : rw_entries_) {
+            out.push_back({e.source, e.dim, e.driver_slot, e.bias_slot});
         }
+        return out;
+    }
+
+    // Shift every registered source's external slots by the EKF's
+    // global offsets. Called once at bind time:
+    //
+    //   noise_input_offset: where the noise-input range starts in the
+    //                       Jet width (= 12·N + BiasDim).
+    //   bias_state_offset:  where the bias-state range starts in the
+    //                       augmented tangent (= 12·N).
+    //
+    // The registry's internal indexing (driver_start, bias_start in
+    // entries) stays registry-local so sigma_squared_diag and friends
+    // remain indexable.
+    void apply_slot_offsets(int noise_input_offset, int bias_state_offset) {
+        for (auto& e : entries_) {
+            e.source->set_slot(e.source->slot() + noise_input_offset);
+        }
+        for (auto& e : rw_entries_) {
+            e.source->set_driver_slot(e.source->driver_slot() + noise_input_offset);
+            e.source->set_state_slot (e.source->state_slot()  + bias_state_offset);
+        }
+    }
+
+    // Backward-compat shim used during early migration. Prefer
+    // `apply_slot_offsets(noise_offset, bias_offset)` going forward.
+    void apply_slot_offset(int offset) {
+        apply_slot_offsets(offset, /*bias_state_offset=*/0);
     }
 
     // Per-tick variance of the unit noise inputs at each slot, into
@@ -92,9 +136,12 @@ public:
     // Clear all slots — flips every registered source back to "no slot."
     // Lets a filter rebind cleanly.
     void clear() {
-        for (auto& e : entries_) e.source->clear_slot();
+        for (auto& e : entries_)    e.source->clear_slot();
+        for (auto& e : rw_entries_) e.source->clear_slots();
         entries_.clear();
-        next_slot_ = 0;
+        rw_entries_.clear();
+        next_slot_      = 0;
+        next_bias_slot_ = 0;
     }
 
 private:
@@ -103,9 +150,17 @@ private:
         int                   dim;
         int                   slot_start;
     };
+    struct RWEntry {
+        Noise<RandomWalk>* source;
+        int                dim;
+        int                driver_slot;   // local index in noise-input range
+        int                bias_slot;     // local index in bias-state range
+    };
 
-    std::vector<Entry> entries_;
-    int                next_slot_ = 0;
+    std::vector<Entry>   entries_;
+    std::vector<RWEntry> rw_entries_;
+    int                  next_slot_      = 0;
+    int                  next_bias_slot_ = 0;
 };
 
 } // namespace manta

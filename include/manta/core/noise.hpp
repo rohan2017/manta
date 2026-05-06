@@ -101,12 +101,29 @@ private:
 
 // ---- Noise<RandomWalk> ---
 //
-// A bias state that drifts under a white-noise driver of strength σ_rw.
-// On the value path advance(dt) integrates the bias. The current bias
-// value is added to the input by operator+ (the "+ noise" sums in the
-// current bias drift). On the autodiff path, when bound to an EKF as a
-// filter state (Phase E — not yet implemented), the bias becomes a real
-// estimated quantity rather than a sampled disturbance.
+// A bias that drifts under a white-noise driver of strength σ_rw (units:
+// per-second PSD). On the value/sim path `advance(dt)` integrates the
+// bias forward via σ·√dt scaled draws. The current bias value is added
+// to the input by operator+ (the "+ noise" sums in the current bias).
+//
+// On the autodiff/EKF path, when registered with an EKF that has
+// BiasDim > 0, the bias becomes an estimated filter state:
+//
+//   * `state_slot()` is the bias's slot in the EKF's augmented tangent
+//     state (rows [12·N + state_slot] in F and P).
+//   * `driver_slot()` is the bias's white-noise driver slot in the Jet
+//     noise-input range, used for the bias evolution
+//     `bias_post = bias_pre + driver · σ_rw · √dt`.
+//   * `state3()` (or `state1()`) holds the EKF's *current bias estimate*
+//     on the Jet-side. The operator+ Jet path injects this value with
+//     an identity Jet in the bias state slot.
+//   * Each Kalman update applies its bias delta into state3() via the
+//     EKF's inject_delta path.
+//
+// On the value-side, state3()/state1() hold the *simulated* true bias
+// (which the user's sim drifts via `advance`). The two sides have
+// independent Noise<RandomWalk> instances; the EKF estimates the truth
+// from measurements.
 
 template <>
 class Noise<RandomWalk> {
@@ -120,6 +137,22 @@ public:
 
     const Eigen::Matrix<float, 3, 1>& state3() const noexcept { return state3_; }
     float state1() const noexcept { return state1_; }
+    void set_state3(const Eigen::Matrix<float, 3, 1>& s) noexcept { state3_ = s; }
+    void set_state1(float s) noexcept { state1_ = s; }
+
+    // EKF-side slot bookkeeping. set_state_slot is the global tangent
+    // slot for the bias (post bias-tangent offset). set_driver_slot is
+    // the global Jet noise-input slot for the bias's white-noise driver.
+    int  state_slot()  const noexcept { return state_slot_;  }
+    int  driver_slot() const noexcept { return driver_slot_; }
+    bool state_slot_assigned()  const noexcept { return state_slot_  >= 0; }
+    bool driver_slot_assigned() const noexcept { return driver_slot_ >= 0; }
+    void set_state_slot(int s)  noexcept { state_slot_  = s; }
+    void set_driver_slot(int s) noexcept { driver_slot_ = s; }
+    void clear_slots() noexcept {
+        state_slot_  = kNoNoiseSlot;
+        driver_slot_ = kNoNoiseSlot;
+    }
 
     // Advance the random walk by dt seconds: state += N(0, σ² · dt).
     void advance(float dt) noexcept {
@@ -133,6 +166,8 @@ private:
     RandomWalk policy_;
     Eigen::Matrix<float, 3, 1> state3_ = Eigen::Matrix<float, 3, 1>::Zero();
     float                      state1_ = 0.0f;
+    int                        state_slot_  = kNoNoiseSlot;
+    int                        driver_slot_ = kNoNoiseSlot;
 };
 
 // ---- operator+(Vec3<F, Scalar>, Noise) and operator+(Scalar, Noise) ---
@@ -178,6 +213,21 @@ geom::Vec3<F, Scalar> operator+(const geom::Vec3<F, Scalar>& v,
     if constexpr (std::is_floating_point_v<Scalar>) {
         return geom::Vec3<F, Scalar>::from_raw(
             v.raw() + n.state3().template cast<Scalar>());
+    } else if constexpr (is_ceres_jet_v<Scalar>) {
+        // Inject the EKF's current bias estimate as a Jet:
+        //   value channel: + state3()[i]
+        //   tangent channel: identity in the bias state slot
+        // so any measurement that reads this picks up dependence on the
+        // estimated bias state, and the EKF's H matrix's bias column
+        // entries are populated automatically.
+        if (!n.state_slot_assigned()) return v;
+        const int s = n.state_slot();
+        const Eigen::Matrix<float, 3, 1> b = n.state3();
+        Eigen::Matrix<Scalar, 3, 1> r = v.raw();
+        Scalar j0(static_cast<double>(b(0))); j0.v[s + 0] = 1.0; r(0) += j0;
+        Scalar j1(static_cast<double>(b(1))); j1.v[s + 1] = 1.0; r(1) += j1;
+        Scalar j2(static_cast<double>(b(2))); j2.v[s + 2] = 1.0; r(2) += j2;
+        return geom::Vec3<F, Scalar>::from_raw(r);
     } else {
         (void)n;
         return v;

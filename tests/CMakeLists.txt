@@ -36,6 +36,7 @@ add_executable(manta_tests
     test_craft.cpp
     test_craft_state.cpp
     test_noise_registry.cpp
+    test_random_walk_bias.cpp
     test_noise.cpp
     test_parts.cpp
     test_world.cpp
