@@ -13,7 +13,7 @@
 #include "../include/manta/core/craft.hpp"
 #include "../include/manta/core/scene.hpp"
 #include "../include/manta/core/world.hpp"
-#include "../include/manta/estimation/ekf.hpp"
+#include "../include/manta/estimation/ekf_kernel.hpp"
 #include "../include/manta/fields/gravity_field.hpp"
 #include "../include/manta/parts/structure/mass.hpp"
 #include "../include/manta/parts/actuator/thruster.hpp"
@@ -475,7 +475,7 @@ TEST_CASE("CraftT<Jet>: autodiff yields process Jacobian from evaluate()") {
 // twice internally (double for value step, Jet for Jacobian step) and runs
 // predict + update without any hand-written process functor.
 
-#include "../include/manta/estimation/world_ekf.hpp"
+#include "../include/manta/estimation/ekf.hpp"
 
 template <class Scalar>
 class FreeBodyCraft : public manta::CraftT<Scalar> {

@@ -406,19 +406,19 @@ def _filter_construction(kind: str, filter_obj, num_crafts: int,
         # don't physically couple (no tether/contact/fluid coupling).
         if getattr(filter_obj, "block_decomposed", False):
             return (
-                "#include \"manta/estimation/world_ekf_block.hpp\"",
+                "#include \"manta/estimation/block_decomposed_ekf.hpp\"",
                 f"manta::estimation::BlockDecomposedEKF<"
                 f"{num_crafts}, {meas_dim}> {filter_var};",
             )
         return (
-            "#include \"manta/estimation/world_ekf.hpp\"",
+            "#include \"manta/estimation/ekf.hpp\"",
             f"manta::estimation::EKF<{num_crafts}, {meas_dim}> "
             f"{filter_var};",
         )
     if kind == "ukf":
         a, b, k = filter_obj.alpha, filter_obj.beta, filter_obj.kappa
         return (
-            "#include \"manta/estimation/world_ukf.hpp\"",
+            "#include \"manta/estimation/ukf.hpp\"",
             f"manta::estimation::UKF<{num_crafts}, {meas_dim}> "
             f"{filter_var}({_f(a)}, {_f(b)}, {_f(k)});",
         )

@@ -7,7 +7,7 @@
 #include "manta/core/harness.hpp"
 #include "manta/core/scene.hpp"
 #include "manta/core/world.hpp"
-#include "manta/estimation/world_ekf_block.hpp"
+#include "manta/estimation/block_decomposed_ekf.hpp"
 #include "drone_0_craft.hpp"
 #include "drone_1_craft.hpp"
 

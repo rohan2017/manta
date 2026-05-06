@@ -7,7 +7,7 @@
 #include "manta/core/harness.hpp"
 #include "manta/core/scene.hpp"
 #include "manta/core/world.hpp"
-#include "manta/estimation/world_ukf.hpp"
+#include "manta/estimation/ukf.hpp"
 #include "ukf_smoke_craft.hpp"
 
 namespace manta_gen::ukf_smoke {

@@ -7,8 +7,8 @@
 #include <cmath>
 #include <doctest/doctest.h>
 
+#include "../include/manta/estimation/ukf_kernel.hpp"
 #include "../include/manta/estimation/ukf.hpp"
-#include "../include/manta/estimation/world_ukf.hpp"
 #include "../include/manta/core/craft.hpp"
 #include "../include/manta/parts/structure/mass.hpp"
 

@@ -62,7 +62,7 @@
 #include "../core/craft.hpp"
 #include "../core/scene.hpp"
 #include "../core/world.hpp"
-#include "ekf.hpp"
+#include "ekf_kernel.hpp"
 
 namespace manta::estimation {
 

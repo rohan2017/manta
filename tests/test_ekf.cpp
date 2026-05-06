@@ -1,6 +1,6 @@
 #include <doctest/doctest.h>
 
-#include "../include/manta/estimation/ekf.hpp"
+#include "../include/manta/estimation/ekf_kernel.hpp"
 #include <cmath>
 #include <random>
 

@@ -7,7 +7,7 @@
 #include "manta/core/harness.hpp"
 #include "manta/core/scene.hpp"
 #include "manta/core/world.hpp"
-#include "manta/estimation/world_ekf.hpp"
+#include "manta/estimation/ekf.hpp"
 #include "ex8_est_craft.hpp"
 #include "manta/fields/mag_field.hpp"
 
