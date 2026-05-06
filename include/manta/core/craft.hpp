@@ -19,14 +19,14 @@ template <class Scalar> class WorldT;
 
 // A craft is a self-contained vehicle: a root part tree plus its own rigid-
 // body state. Templated on Scalar so the same authoring artifact serves
-// the sim path (Scalar = Real, driven by a Scene/World) and the estimator
+// the sim path (Scalar = MFloat, driven by a Scene/World) and the estimator
 // path (Scalar = ceres::Jet<...>, driven by a Jet-instantiated SceneT/WorldT
 // from inside EKF::predict()).
 //
-// `using Craft = CraftT<Real>` below is what existing code uses. A Jet-
+// `using Craft = CraftT<MFloat>` below is what existing code uses. A Jet-
 // instantiated WorldT<Jet> holds Jet-typed crafts via the same Scene API
 // — there is no separate path for the estimator.
-template <class Scalar = Real>
+template <class Scalar = MFloat>
 class CraftT {
 public:
     using State = CraftStateT<Scalar>;
@@ -386,8 +386,8 @@ private:
     WorldT<Scalar>*  world_ = nullptr;
 };
 
-// Backwards-compat alias. The existing RootPart is used by Scalar=Real instances.
-using Craft = CraftT<Real>;
+// Backwards-compat alias. The existing RootPart is used by Scalar=MFloat instances.
+using Craft = CraftT<MFloat>;
 
 } // namespace manta
 

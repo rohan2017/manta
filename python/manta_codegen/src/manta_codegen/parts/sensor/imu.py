@@ -74,11 +74,11 @@ class IMU(PartDescriptor):
         # with code from before the rate-cap landing.
         self.rate_hz     = float(rate_hz)
 
-    def emit_constructor_args(self, scalar: str = "manta::Real") -> str:
+    def emit_constructor_args(self, scalar: str = "manta::MFloat") -> str:
         return (f'"{self.name}", '
                 f'{_f(self.accel_sigma)}, '
                 f'{_f(self.gyro_sigma)}, '
-                f'manta::Real({_f(self.rate_hz)})')
+                f'manta::MFloat({_f(self.rate_hz)})')
 
     # Vec3 telemetry types are not yet handled by the scalar-only JSON encoder.
     # Declaring the fields anyway so the struct shape is right; values won't

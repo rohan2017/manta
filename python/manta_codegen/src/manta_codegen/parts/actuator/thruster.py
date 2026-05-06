@@ -24,8 +24,8 @@ class _ThrusterBase(PartDescriptor):
         scalar_in_signal ("set_throttle", "set_throttle"),
     ]
 
-    # Mirror the commanded throttle from Real to Jet before predict so
-    # the Jet world's force model matches what the Real-side craft was
+    # Mirror the commanded throttle from MFloat to Jet before predict so
+    # the Jet world's force model matches what the value-side craft was
     # told to apply (via cross-world `connect()` or external Zenoh).
     actuator_state = [("set_throttle", "throttle")]
 
@@ -56,7 +56,7 @@ class _ThrusterBase(PartDescriptor):
             for v in coefs)
         return f"std::array<{vec}, {self._order}>{{{elems}}}"
 
-    def emit_constructor_args(self, scalar: str = "manta::Real") -> str:
+    def emit_constructor_args(self, scalar: str = "manta::MFloat") -> str:
         return (f'"{self.name}", '
                 f'{self._vec_array_expr(self.force_coefs,  scalar)}, '
                 f'{self._vec_array_expr(self.torque_coefs, scalar)}')

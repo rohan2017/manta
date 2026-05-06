@@ -21,9 +21,9 @@ TEST_CASE("GravityField: superposition of two point masses") {
 
     // Two equal masses on +x and -x at distance 1; field at origin should
     // sum to zero (the contributions cancel).
-    g.add(GravityField::Disturbance::point_mass(V{Real(1), Real(0), Real(0)}, Real(1.0f)),
+    g.add(GravityField::Disturbance::point_mass(V{MFloat(1), MFloat(0), MFloat(0)}, MFloat(1.0f)),
           PERSISTENT);
-    g.add(GravityField::Disturbance::point_mass(V{Real(-1), Real(0), Real(0)}, Real(1.0f)),
+    g.add(GravityField::Disturbance::point_mass(V{MFloat(-1), MFloat(0), MFloat(0)}, MFloat(1.0f)),
           PERSISTENT);
 
     auto at_origin = g.state_at(V::zero());
@@ -33,18 +33,18 @@ TEST_CASE("GravityField: superposition of two point masses") {
 
     // Off-axis query: at (0, 1, 0), pull is purely toward x = 0 by symmetry,
     // so y component is negative (toward origin in y), x component is 0.
-    auto at_y1 = g.state_at(V{Real(0), Real(1), Real(0)});
+    auto at_y1 = g.state_at(V{MFloat(0), MFloat(1), MFloat(0)});
     CHECK(at_y1.x() == doctest::Approx(0.0).epsilon(1e-6));
-    CHECK(at_y1.y() < Real(0));
+    CHECK(at_y1.y() < MFloat(0));
 }
 
 TEST_CASE("GravityField: uniform disturbance is constant everywhere") {
     GravityField g;
     g.add(GravityField::Disturbance::uniform(
-              GravityField::Vec{Real(0), Real(0), Real(-9.81f)}),
+              GravityField::Vec{MFloat(0), MFloat(0), MFloat(-9.81f)}),
           PERSISTENT);
-    auto at_a = g.state_at(GravityField::Vec{Real(0),   Real(0),  Real(0)});
-    auto at_b = g.state_at(GravityField::Vec{Real(100), Real(50), Real(-3)});
+    auto at_a = g.state_at(GravityField::Vec{MFloat(0),   MFloat(0),  MFloat(0)});
+    auto at_b = g.state_at(GravityField::Vec{MFloat(100), MFloat(50), MFloat(-3)});
     CHECK(at_a.z() == doctest::Approx(-9.81).epsilon(1e-6));
     CHECK(at_b.z() == doctest::Approx(-9.81).epsilon(1e-6));
 }
@@ -52,7 +52,7 @@ TEST_CASE("GravityField: uniform disturbance is constant everywhere") {
 TEST_CASE("Lifetime: default 1-tick disturbance disappears after update()") {
     GravityField g;
     using V = GravityField::Vec;
-    g.add(GravityField::Disturbance::uniform(V{Real(0), Real(0), Real(-1)}));  // default lifetime=1
+    g.add(GravityField::Disturbance::uniform(V{MFloat(0), MFloat(0), MFloat(-1)}));  // default lifetime=1
 
     auto before = g.state_at(V::zero());
     CHECK(before.z() == doctest::Approx(-1.0));
@@ -67,7 +67,7 @@ TEST_CASE("Lifetime: default 1-tick disturbance disappears after update()") {
 TEST_CASE("Lifetime: PERSISTENT disturbance survives many updates") {
     GravityField g;
     using V = GravityField::Vec;
-    g.add(GravityField::Disturbance::uniform(V{Real(0), Real(0), Real(-9.81f)}),
+    g.add(GravityField::Disturbance::uniform(V{MFloat(0), MFloat(0), MFloat(-9.81f)}),
           PERSISTENT);
 
     for (int i = 0; i < 100; ++i) g.update();
@@ -79,7 +79,7 @@ TEST_CASE("Lifetime: PERSISTENT disturbance survives many updates") {
 TEST_CASE("Lifetime: finite N-tick disturbance counts down") {
     GravityField g;
     using V = GravityField::Vec;
-    g.add(GravityField::Disturbance::uniform(V{Real(0), Real(0), Real(-1)}), 3);
+    g.add(GravityField::Disturbance::uniform(V{MFloat(0), MFloat(0), MFloat(-1)}), 3);
 
     g.update();   // lifetime: 3 → 2
     CHECK(g.disturbance_count() == 1);
@@ -95,14 +95,14 @@ TEST_CASE("In-influence predicate skips out-of-range queries") {
 
     // Spherical influence: only contributes when |off| < 5.
     GravityField::Disturbance d = GravityField::Disturbance::uniform(
-        V{Real(0), Real(0), Real(-1)});
+        V{MFloat(0), MFloat(0), MFloat(-1)});
     d.in_influence = [](const V& off) {
-        return off.raw().squaredNorm() < Real(25);   // r < 5
+        return off.raw().squaredNorm() < MFloat(25);   // r < 5
     };
     g.add(d, PERSISTENT);
 
     CHECK(g.state_at(V::zero()).z()              == doctest::Approx(-1.0));
-    CHECK(g.state_at(V{Real(10), Real(0), Real(0)}).z() == doctest::Approx(0.0));
+    CHECK(g.state_at(V{MFloat(10), MFloat(0), MFloat(0)}).z() == doctest::Approx(0.0));
 }
 
 TEST_CASE("MagField: dipole vs uniform composition") {
@@ -112,12 +112,12 @@ TEST_CASE("MagField: dipole vs uniform composition") {
     // Aligned-dipole moment along -ẑ. On the equator (x axis), B should
     // point along -ẑ (same direction as moment) — opposite of the
     // off-axis (axial) field.
-    Real moment_mag = Real(7.94e22f);
+    MFloat moment_mag = MFloat(7.94e22f);
     m.add(MagField::Disturbance::dipole(
-              V::zero(), V{Real(0), Real(0), -moment_mag}),
+              V::zero(), V{MFloat(0), MFloat(0), -moment_mag}),
           PERSISTENT);
 
-    auto at_eq = m.state_at(V{Real(6.378e6f), Real(0), Real(0)});
+    auto at_eq = m.state_at(V{MFloat(6.378e6f), MFloat(0), MFloat(0)});
     // On equator with moment along -ẑ:
     //   B = (μ0/4π) · (3·(m·r̂)r̂ − m) / r³ = (μ0/4π) · (-m) / r³
     // since m·r̂ = 0 on equator. Thus B has only a -ẑ-direction non-zero
@@ -125,7 +125,7 @@ TEST_CASE("MagField: dipole vs uniform composition") {
     // negative in z.
     CHECK(at_eq.x() == doctest::Approx(0.0).epsilon(1e-6));
     CHECK(at_eq.y() == doctest::Approx(0.0).epsilon(1e-6));
-    CHECK(at_eq.z() > Real(0));   // -(-m_z) flips sign to +z
+    CHECK(at_eq.z() > MFloat(0));   // -(-m_z) flips sign to +z
 }
 
 TEST_CASE("FluidField: incompressible water summation") {
@@ -133,7 +133,7 @@ TEST_CASE("FluidField: incompressible water summation") {
     using V = FluidField::Vec;
 
     f.add(FluidField::Disturbance::uniform_incompressible(
-              Real(1000.0f), V{Real(0.5f), Real(0), Real(0)}),
+              MFloat(1000.0f), V{MFloat(0.5f), MFloat(0), MFloat(0)}),
           PERSISTENT);
     auto s = f.state_at(V::zero());
     CHECK(s.R == doctest::Approx(-1.0));
@@ -148,7 +148,7 @@ TEST_CASE("FluidField: gas state derives density from p, R, T") {
     // Air at sea level: R = 287 J/(kg·K), T = 288 K, p = 101325 Pa.
     // Expected density: 101325 / (287 · 288) ≈ 1.225 kg/m^3.
     f.add(FluidField::Disturbance::uniform_gas(
-              Real(287.0f), Real(288.0f), Real(101325.0f)),
+              MFloat(287.0f), MFloat(288.0f), MFloat(101325.0f)),
           PERSISTENT);
 
     auto s = f.state_at(V::zero());
@@ -163,21 +163,21 @@ TEST_CASE("FluidField: gas + water co-existing via in_influence selects pool") {
     using V = FluidField::Vec;
 
     // Water disturbance: only below z=0 (sea level).
-    auto water = FluidField::Disturbance::uniform_incompressible(Real(1000.0f));
-    water.in_influence = [](const V& off) { return off.z() < Real(0); };
+    auto water = FluidField::Disturbance::uniform_incompressible(MFloat(1000.0f));
+    water.in_influence = [](const V& off) { return off.z() < MFloat(0); };
     f.add(water, PERSISTENT);
 
     // Air disturbance: only at or above z=0.
     auto air = FluidField::Disturbance::uniform_gas(
-        Real(287.0f), Real(288.0f), Real(101325.0f));
-    air.in_influence = [](const V& off) { return off.z() >= Real(0); };
+        MFloat(287.0f), MFloat(288.0f), MFloat(101325.0f));
+    air.in_influence = [](const V& off) { return off.z() >= MFloat(0); };
     f.add(air, PERSISTENT);
 
-    auto in_water = f.state_at(V{Real(0), Real(0), Real(-10)});
+    auto in_water = f.state_at(V{MFloat(0), MFloat(0), MFloat(-10)});
     CHECK(in_water.R == doctest::Approx(-1.0));
     CHECK(in_water.density == doctest::Approx(1000.0));
 
-    auto in_air = f.state_at(V{Real(0), Real(0), Real(100)});
+    auto in_air = f.state_at(V{MFloat(0), MFloat(0), MFloat(100)});
     CHECK(in_air.R == doctest::Approx(287.0));
     CHECK(in_air.density == doctest::Approx(1.225).epsilon(1e-3));
 }
@@ -186,13 +186,13 @@ TEST_CASE("FluidField: vacuum default when no disturbance is in influence") {
     FluidField f;
     using V = FluidField::Vec;
 
-    auto bounded = FluidField::Disturbance::uniform_incompressible(Real(1000.0f));
+    auto bounded = FluidField::Disturbance::uniform_incompressible(MFloat(1000.0f));
     bounded.in_influence = [](const V& off) {
-        return off.raw().norm() < Real(1.0f);
+        return off.raw().norm() < MFloat(1.0f);
     };
     f.add(bounded, PERSISTENT);
 
-    auto far = f.state_at(V{Real(10), Real(0), Real(0)});
+    auto far = f.state_at(V{MFloat(10), MFloat(0), MFloat(0)});
     CHECK(far.density == doctest::Approx(0.0));
     CHECK(far.pressure == doctest::Approx(0.0));
     CHECK(far.temperature == doctest::Approx(0.0));

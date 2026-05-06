@@ -170,7 +170,7 @@ TEST_CASE("UKF: position measurement pulls state toward observation") {
 
 // Note: the historical "non-templated craft via UKF" test has been
 // removed. With the new architecture, every filter-target craft must be
-// scalar_templated (instantiated as <double> for both EKF and UKF Real
+// scalar_templated (instantiated as <double> for both EKF and UKF MFloat
 // worlds). The Scene/World templating ripples through to require this.
 // Existing non-templated user crafts can opt in by setting
 // `scalar_templated=True` on the descriptor.

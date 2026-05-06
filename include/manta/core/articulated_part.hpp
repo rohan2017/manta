@@ -9,8 +9,8 @@ namespace manta {
 // frame (where transform_ leaves us) and its own joint-output frame.
 //
 // Templated on Scalar — the non-templated `ArticulatedPart` alias below
-// (= ArticulatedPartT<Real>) is what existing user code uses.
-template <class Scalar = Real>
+// (= ArticulatedPartT<MFloat>) is what existing user code uses.
+template <class Scalar = MFloat>
 class ArticulatedPartT : public CompositePartT<Scalar> {
 public:
     explicit ArticulatedPartT(std::string name,
@@ -118,6 +118,6 @@ protected:
 };
 
 // Backwards-compat alias.
-using ArticulatedPart = ArticulatedPartT<Real>;
+using ArticulatedPart = ArticulatedPartT<MFloat>;
 
 } // namespace manta

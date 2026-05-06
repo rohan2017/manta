@@ -82,16 +82,16 @@ class StaticTransform:
     position: tuple[float, float, float] = (0.0, 0.0, 0.0)
     quaternion: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
 
-    def emit_cpp(self, scalar: str = "manta::Real") -> str:
+    def emit_cpp(self, scalar: str = "manta::MFloat") -> str:
         """C++ literal for `manta::geom::StaticLink<ParentFrame, PartFrame, Scalar>`."""
         x, y, z = self.position
         w, qx, qy, qz = self.quaternion
         quat_type = (
-            "Eigen::Quaternionf" if scalar == "manta::Real"
+            "Eigen::Quaternionf" if scalar == "manta::MFloat"
             else f"Eigen::Quaternion<{scalar}>"
         )
         # Cast quaternion components through `scalar(...)` so the call works
-        # for any Scalar (Real, double, ceres::Jet, ...).
+        # for any Scalar (MFloat, double, ceres::Jet, ...).
         qexpr = (f"{quat_type}{{{scalar}({_f(w)}), {scalar}({_f(qx)}), "
                  f"{scalar}({_f(qy)}), {scalar}({_f(qz)})}}")
         return (
@@ -196,7 +196,7 @@ class PartDescriptor:
     # separate descriptors backed by separate concrete C++ classes (e.g.
     # `Surface1T<Scalar>`, `Surface2T<Scalar>`), not as extra template args.
     # If empty, this part is not yet Scalar-templated and the codegen falls
-    # back to the bare cpp_class (which forces Real). When ALL parts in a
+    # back to the bare cpp_class (which forces MFloat). When ALL parts in a
     # craft have cpp_class_template set, the codegen emits the craft as a
     # class template; otherwise it emits the non-templated form.
     cpp_class_template: ClassVar[str] = ""
@@ -218,7 +218,7 @@ class PartDescriptor:
     # instance and feeds into the dynamics. For an EKF target, the codegen
     # emits a `craft_jet.<part>().<setter>(craft.<part>().<getter>())` line
     # in tick() before `predict()` so the Jet shadow's actuators see the
-    # same commanded values the Real-side craft was just told to apply via
+    # same commanded values the value-side craft was just told to apply via
     # `set_<x>()`. Without this, predict() would integrate with default
     # (zero) actuator state regardless of what the user / cross-world
     # connect just commanded.
@@ -258,16 +258,16 @@ class PartDescriptor:
     # ---- subclass override hooks ----
     #
     # The `scalar` argument is the C++ type name to substitute for the part's
-    # numeric scalar. Default `"manta::Real"` produces the original (Real-typed)
+    # numeric scalar. Default `"manta::MFloat"` produces the original (value-typed)
     # output; the templated codegen passes `"Scalar"` to generate code valid
     # inside a `template <class Scalar> class ...` body.
 
-    def emit_constructor_args(self, scalar: str = "manta::Real") -> str:
+    def emit_constructor_args(self, scalar: str = "manta::MFloat") -> str:
         """C++ argument list for `parent.add<CppClass>(...)`. Subclasses override.
         The emitter wraps the result so the user only writes the args."""
         return f'"{self.name}"'
 
-    def emit_post_construction(self, scalar: str = "manta::Real") -> list[str]:
+    def emit_post_construction(self, scalar: str = "manta::MFloat") -> list[str]:
         """C++ statements to run after the part is constructed and added.
         Variable `<name>_` (a pointer to the part) is in scope. Default: emit
         a `set_transform` call when the transform is not identity.
@@ -347,8 +347,8 @@ class Craft:
         self.topic_prefix = topic_prefix if topic_prefix is not None else f"manta/{name}"
         self.root: _RootProxy = _RootProxy(craft=self)
         # When True, codegen emits the craft as a class template
-        # (`template <class Scalar = manta::Real> class FooCraftT : public
-        # CraftT<Scalar>`) plus a `using FooCraft = FooCraftT<manta::Real>`
+        # (`template <class Scalar = manta::MFloat> class FooCraftT : public
+        # CraftT<Scalar>`) plus a `using FooCraft = FooCraftT<manta::MFloat>`
         # alias. Required for use with `manta::estimation::EKF`. All
         # parts in the craft must have `cpp_class_template` set; codegen
         # raises if any part lacks it.

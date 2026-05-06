@@ -30,13 +30,13 @@ struct MagDisturbance {
     std::uint16_t tag    = USER_TAG;
     Params        params{};
 
-    struct UniformParams { Real bx, by, bz; };
-    struct DipoleParams  { Real ox, oy, oz, mx, my, mz; };
+    struct UniformParams { MFloat bx, by, bz; };
+    struct DipoleParams  { MFloat ox, oy, oz, mx, my, mz; };
 
     static MagDisturbance uniform(Vec b) {
         MagDisturbance d;
         d.tag = mag_tags::UNIFORM;
-        UniformParams up{Real(b.x()), Real(b.y()), Real(b.z())};
+        UniformParams up{MFloat(b.x()), MFloat(b.y()), MFloat(b.z())};
         std::memcpy(d.params.data(), &up, sizeof(up));
         d.delta_b = [b](const Vec&) noexcept { return b; };
         return d;
@@ -47,21 +47,21 @@ struct MagDisturbance {
         d.origin = origin;
         d.tag    = mag_tags::DIPOLE;
         DipoleParams dp{
-            Real(origin.x()), Real(origin.y()), Real(origin.z()),
-            Real(moment.x()), Real(moment.y()), Real(moment.z()),
+            MFloat(origin.x()), MFloat(origin.y()), MFloat(origin.z()),
+            MFloat(moment.x()), MFloat(moment.y()), MFloat(moment.z()),
         };
         std::memcpy(d.params.data(), &dp, sizeof(dp));
-        constexpr Real kMu0Over4Pi = Real(1.0e-7f); // T·m/A
+        constexpr MFloat kMu0Over4Pi = MFloat(1.0e-7f); // T·m/A
         d.delta_b = [moment](const Vec& off) noexcept {
             const auto& r = off.raw();
-            Real r2 = r.squaredNorm();
-            if (r2 < Real(1e-12f)) return Vec::zero();
-            Real r_norm = std::sqrt(r2);
-            Real inv_r3 = Real(1) / (r2 * r_norm);
-            Real m_dot_r_over_r2 = moment.raw().dot(r) / r2;
-            Eigen::Matrix<Real, 3, 1> b =
+            MFloat r2 = r.squaredNorm();
+            if (r2 < MFloat(1e-12f)) return Vec::zero();
+            MFloat r_norm = std::sqrt(r2);
+            MFloat inv_r3 = MFloat(1) / (r2 * r_norm);
+            MFloat m_dot_r_over_r2 = moment.raw().dot(r) / r2;
+            Eigen::Matrix<MFloat, 3, 1> b =
                   kMu0Over4Pi * inv_r3
-                  * (Real(3) * m_dot_r_over_r2 * r - moment.raw());
+                  * (MFloat(3) * m_dot_r_over_r2 * r - moment.raw());
             return Vec::from_raw(b);
         };
         return d;
@@ -77,7 +77,7 @@ public:
     static_assert(sizeof(Disturbance::DipoleParams)  <= kParamsBytes);
 
     Vec state_at(const Vec& pos) const noexcept {
-        Eigen::Matrix<Real, 3, 1> sum = Eigen::Matrix<Real, 3, 1>::Zero();
+        Eigen::Matrix<MFloat, 3, 1> sum = Eigen::Matrix<MFloat, 3, 1>::Zero();
         for (const auto& e : entries_) {
             Vec off = Vec::from_raw(pos.raw() - e.d.origin.raw());
             if (e.d.in_influence && !e.d.in_influence(off)) continue;

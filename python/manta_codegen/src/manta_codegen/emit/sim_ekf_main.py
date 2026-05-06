@@ -57,7 +57,7 @@ def _emit_composed_connect_step(
             # ekf_<id> / ukf_<id> sentinel — name reaches in via the filter ns.
             return f"{filter_ns}::{filter_obj.cpp_var_name()}", False
         if in_filter_world:
-            # The filter's Real-side craft is exposed at namespace scope
+            # The filter's value-side craft is exposed at namespace scope
             # (`manta_gen::<filter_world>::craft`). Reach in directly —
             # `<filter_var>.craft()` is the same instance but the namespace-
             # direct path keeps the templated CraftT<double>'s part accessors

@@ -63,7 +63,7 @@ TEST_CASE("Motor: passive joint with axial child torque accelerates") {
     // Mass at 0.5 m radius + the pusher (mass 0) → total joint subtree mass
     // is still 1, total Izz = 1 * 0.25 = 0.25.
     // Net axial torque on joint = 1.0 N·m. θ̈ = 1.0 / 0.25 = 4 rad/s².
-    Real dt = 0.01f;
+    MFloat dt = 0.01f;
     c.update(dt);
     CHECK(motor.accel() == doctest::Approx(4.0f).epsilon(1e-3f));
     CHECK(motor.rate()  == doctest::Approx(4.0f * dt).epsilon(1e-3f));

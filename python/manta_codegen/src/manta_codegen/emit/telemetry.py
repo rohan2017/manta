@@ -88,7 +88,7 @@ def emit_telemetry_hpp(craft: Craft) -> str:
         for i, (member, ctype) in enumerate(fields):
             sep = "" if i == 0 else ","
             t = ctype.strip()
-            if t in ("float", "double", "manta::Real") or t.startswith("int"):
+            if t in ("float", "double", "manta::MFloat") or t.startswith("int"):
                 lines.append(
                     f'    {{ char b[64]; std::snprintf(b, sizeof(b), '
                     f'"{sep}\\"{member}\\":%.6f", (double){p.name}.{member}); s += b; }}'

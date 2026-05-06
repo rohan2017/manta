@@ -11,7 +11,7 @@ namespace manta::geom {
 // Frame-tagged 3x3 matrix. Two-frame because matrices typically act as
 // linear maps between frames (rotation, inertia mapping). When From == To,
 // represents a within-frame tensor (inertia, covariance).
-template <typename From, typename To = From, typename Scalar = Real>
+template <typename From, typename To = From, typename Scalar = MFloat>
 class Mat3 {
 public:
     using EigenT = Eigen::Matrix<Scalar, 3, 3>;

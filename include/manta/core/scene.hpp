@@ -21,25 +21,25 @@ template <class Scalar> class WorldT;
 // The full rigid-body state of a craft expressed in its scene's frame.
 // One canonical struct shared by Scene::add_craft (boundary), Craft state
 // setters (runtime mutation), and the EKF (filter belief).
-template <class Scalar = Real>
+template <class Scalar = MFloat>
 struct CraftStateT {
     geom::Vec3<SceneFrame, Scalar> position    = geom::Vec3<SceneFrame, Scalar>::zero();
     geom::Ori<SceneFrame, Scalar>  orientation = geom::Ori<SceneFrame, Scalar>::identity();
     geom::Vec3<SceneFrame, Scalar> vel_linear  = geom::Vec3<SceneFrame, Scalar>::zero();
     geom::Vec3<CraftFrame, Scalar> vel_angular = geom::Vec3<CraftFrame, Scalar>::zero();
 };
-using CraftState = CraftStateT<Real>;
+using CraftState = CraftStateT<MFloat>;
 
-// Boundary alias: `InitialState` is the Real-typed CraftState used by
+// Boundary alias: `InitialState` is the value-typed CraftState used by
 // Scene::add_craft. Defining it as an alias keeps a single canonical
-// state shape; the per-Scalar Scene path lifts the Real fields into
+// state shape; the per-Scalar Scene path lifts the value fields into
 // Scalar at add time.
-using InitialState = CraftStateT<Real>;
+using InitialState = CraftStateT<MFloat>;
 
 // A floating-origin reference frame shared by a set of nearby crafts. Each
 // craft's scene_to_craft_ transform is relative to this scene's origin.
 //
-// SceneT is templated on the same Scalar as the crafts it holds. The Real
+// SceneT is templated on the same Scalar as the crafts it holds. The MFloat
 // instantiation drives the sim; a Jet instantiation drives the EKF's
 // Jacobian step, with planets' world_to_planet link cast into Jet (their
 // motion is a non-estimated input, so the cast carries zero gradient — i.e.
@@ -135,12 +135,12 @@ public:
 
 private:
     // Refresh world_to_scene_ from the planet anchor (if any). Planets
-    // are Real-typed; we cast their KinematicLink into Scalar component-
+    // are value-typed; we cast their KinematicLink into Scalar component-
     // wise. For Scalar=Jet, the cast carries zero gradients — the EKF
     // treats planet pose as a non-estimated input.
     void refresh_world_to_scene() {
         if (planet_) {
-            // Compose Real→Scene moving link with the static Planet→Scene
+            // Compose value→Scene moving link with the static Planet→Scene
             // link (just a translation; same at either Scalar).
             auto wp_s = geom::cast_kinematic_link<Scalar>(planet_->world_to_planet());
             world_to_scene_ = wp_s * geom::cast_static_link<Scalar>(planet_to_scene_real_);
@@ -181,7 +181,7 @@ public:
     }
     bool has_world() const noexcept { return world_ != nullptr; }
 
-    // Planet anchor (optional). Planets are Real-typed and shared between
+    // Planet anchor (optional). Planets are value-typed and shared between
     // value and Jet Worlds — they aren't part of the EKF state.
     void          set_planet(Planet* p) noexcept { planet_ = p; }
     Planet*       planet()       noexcept { return planet_; }
@@ -204,7 +204,7 @@ private:
     geom::KinematicLink<WorldFrame, SceneFrame, Scalar>   world_to_scene_;
 };
 
-// Real instantiation alias.
-using Scene = SceneT<Real>;
+// value instantiation alias.
+using Scene = SceneT<MFloat>;
 
 } // namespace manta

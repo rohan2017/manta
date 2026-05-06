@@ -119,7 +119,7 @@ class UKF:
         # runs the full World.update for every sigma vector; the per-
         # craft slice lives at state[craft_idx*13 : (craft_idx+1)*13].
 
-        # Filter targets need scalar_templated crafts (the Real-side
+        # Filter targets need scalar_templated crafts (the value-side
         # WorldT<double> requires every craft as `<double>`). Templating
         # is a codegen detail — set it automatically rather than making
         # users write boilerplate.

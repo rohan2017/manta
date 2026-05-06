@@ -18,14 +18,14 @@ namespace manta::parts {
 // future IGRF model). The field is queried via the abstract base typeid.
 //
 // Like IMU/DVL, the field itself is NOT scalar-templated — values are
-// queried at Real precision, cast to Scalar at the boundary, and treated as
+// queried at MFloat precision, cast to Scalar at the boundary, and treated as
 // constants for autodiff (zero derivative w.r.t. craft state). Acceptable
 // for short-horizon estimator predict steps where ∂B/∂x is negligible.
 //
 // External-measurement seam (`set_measurement`) lets an estimator-side
 // craft be driven from real sensor data over Zenoh, mirroring the IMU/DVL
 // convention.
-template <class Scalar = Real>
+template <class Scalar = MFloat>
 class MagnetometerT : public PartT<Scalar> {
 public:
     // Hard-required field. The Python codegen also validates this at
@@ -38,14 +38,14 @@ public:
 
     explicit MagnetometerT(std::string name,
                            float sigma   = 0.0f,    // Tesla
-                           Real  rate_hz = Real(0))
+                           MFloat  rate_hz = MFloat(0))
         : PartT<Scalar>(std::move(name))
         , noise_{WhiteGaussian{sigma}}
         , gate_{rate_hz} {}
 
     void update() override {
-        Real dt = (this->craft_ && this->craft_->has_world())
-                  ? this->craft().world().clock().dt() : Real(0);
+        MFloat dt = (this->craft_ && this->craft_->has_world())
+                  ? this->craft().world().clock().dt() : MFloat(0);
         if (!gate_.tick(dt)) return;
         // MagField is REQUIRED at build time. Use field_or_null at runtime
         // so an unattached test craft, or a craft whose world (in a
@@ -91,6 +91,6 @@ private:
     geom::Vec3<PartFrame, Scalar>  last_b_;
 };
 
-using Magnetometer = MagnetometerT<Real>;
+using Magnetometer = MagnetometerT<MFloat>;
 
 } // namespace manta::parts

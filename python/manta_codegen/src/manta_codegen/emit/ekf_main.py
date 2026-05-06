@@ -193,7 +193,7 @@ class _MeasFunctor:
             if kind != "ekf":
                 # UKF path keeps the analytic free-fall placeholder for
                 # now — the UKF doesn't autodiff h, so a dynamics-driven
-                # h(x) would mutate the (single, user-facing) Real world's
+                # h(x) would mutate the (single, user-facing) value world's
                 # crafts inside each sigma-point evaluation. Wiring a
                 # save/restore is out of scope for this fix.
                 body = (
@@ -267,7 +267,7 @@ class _MeasFunctor:
                 f"{part_var}.last_b().raw()(2)",
             ]
             if kind == "ekf":
-                # Locally-constant-B: capture B at the Real-side position
+                # Locally-constant-B: capture B at the value-side position
                 # before each update, then h(x_pre) = R(q_pre)^T · B. q
                 # comes from the Jet craft post-evaluate. ∂h/∂q is exact
                 # through autodiff; ∂h/∂p ≈ 0 from the const-B approx.
@@ -426,9 +426,9 @@ def _filter_construction(kind: str, filter_obj, num_crafts: int,
 
 
 def _filter_real_craft_type(craft) -> str:
-    """C++ type for the Real-side craft instance owned by the filter
+    """C++ type for the value-side craft instance owned by the filter
     harness. Filter targets always require scalar_templated crafts; the
-    Real instance is `<name>T<double>` (not the Real=float alias)."""
+    MFloat instance is `<name>T<double>` (not the value=float alias)."""
     if not getattr(craft, "scalar_templated", False):
         raise ValueError(
             f"Filter targets require scalar_templated=True on craft "
@@ -599,7 +599,7 @@ def emit_filter_hpp(target, filter_obj, kind: str = "ekf") -> str:
         f"inline constexpr float DT             = {_f(target.dt)};",
         f"inline constexpr float SIM_RATE_MULT  = {_f(target.sim_rate_mult)};",
         "",
-        f"// Real-side simulation infrastructure. The filter holds its own",
+        f"// value-side simulation infrastructure. The filter holds its own",
         f"// `manta::WorldT<double>` (estimator state lives in double for",
         f"// filter conditioning). The Jet shadow `WorldT<Jet>` for the",
         f"// Jacobian step lives file-private in the .cpp.",
@@ -619,11 +619,11 @@ def emit_filter_hpp(target, filter_obj, kind: str = "ekf") -> str:
     lines += [
         "",
         f"// {kind.upper()} wrapper. State dim = 13 * {num_crafts} = {13*num_crafts}.",
-        f"// Bound inside setup() to the Real world + (for EKF) Jet shadow +",
+        f"// Bound inside setup() to the value world + (for EKF) Jet shadow +",
         f"// per-craft pointer arrays.",
         f"extern {filter_type} {filter_var};",
         "",
-        "// One-time initialization. Builds both worlds (Real + Jet shadow),",
+        "// One-time initialization. Builds both worlds (MFloat + Jet shadow),",
         "// registers fields, instantiates the filter wrapper + binds it to",
         "// the worlds, opens Zenoh + declares pubs/subs.",
         "void setup();",
@@ -675,7 +675,7 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
         - g_session, g_pub_decim/kPubEvery
 
       namespace manta_gen::<name>:
-        - setup()  builds both worlds (Real always, Jet only for EKF),
+        - setup()  builds both worlds (MFloat always, Jet only for EKF),
                    registers fields on each, adds crafts to scenes,
                    binds the filter wrapper, declares Zenoh subs/pubs
         - tick()   applies in-bindings, runs predict() + per-sensor
@@ -731,7 +731,7 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
             lines.append(ln)
         lines.append("")
 
-    # Public namespace: Real-side storage + filter wrapper.
+    # Public namespace: value-side storage + filter wrapper.
     lines += [
         f"namespace manta_gen::{name} {{",
         "",
@@ -782,7 +782,7 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
     if needs_jet:
         # Jet shadow World — required by EKF for the Jacobian step.
         lines += [
-            f"// Jet shadow world. Built identically to the Real side in",
+            f"// Jet shadow world. Built identically to the value side in",
             f"// setup(); EKF::predict drives this through autodiff to",
             f"// extract the state-transition Jacobian.",
             f"using JetType = EkfT::Jet;",
@@ -844,7 +844,7 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
         f"namespace manta_gen::{name} {{",
         "",
         "void setup() {",
-        "    // ---- Real world ----",
+        "    // ---- value world ----",
         "    w.clock().set_dt(DT);",
         "    scene = &w.create_scene();",
     ]
@@ -867,7 +867,7 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
         ]
         for i, f in enumerate(world.fields):
             # Register the SAME field instance on the Jet world. Field state
-            # is shared between Real + Jet; the Real side adds disturbances
+            # is shared between MFloat + Jet; the value side adds disturbances
             # in setup, the Jet side just reads them via state_at_templated.
             var = f"field_{i}"
             lines.append(f"    w_jet.register_field({var});")
@@ -1042,12 +1042,12 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
                 lines, bid, b, _craft_var_for_binding(b), filter_var,
                 templated_craft=True, indent="    ")
 
-    # Mirror per-tick actuator command state from each Real-side craft to
+    # Mirror per-tick actuator command state from each value-side craft to
     # its Jet shadow before predict(). Without this, predict()'s Jacobian
     # step (which runs `w_jet.step()` with Jet-typed scalars) would see
     # default-valued actuators — zero throttle, zero motor torque, etc. —
-    # regardless of what the user just commanded on the Real craft via
-    # cross-world `connect()` or external Zenoh inputs. The Real craft
+    # regardless of what the user just commanded on the value craft via
+    # cross-world `connect()` or external Zenoh inputs. The value craft
     # holds the user-facing command state; the Jet shadow gets it copied
     # one-way each tick. Sensor measurement state (last_accel etc.) is
     # NOT mirrored: the Jet sensors recompute from the Jet kinematic
@@ -1076,7 +1076,7 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
     # the Jet sensor caches; each `add_update` reads h(x_pre) + H from
     # those caches and queues a sequential update; end_step advances
     # the Jet world to x_post (no re-aggregate), reads F, computes
-    # P_pre, applies queued updates, and mirrors posterior to Real.
+    # P_pre, applies queued updates, and mirrors posterior to value.
     #
     # Block-decomposed variant runs NumCrafts smaller Jet passes
     # bracketed by begin_craft/end_craft. Each pass seeds one craft
@@ -1361,7 +1361,7 @@ def _emit_input_binding_apply(lines: list[str], i: int, b: Binding,
     Vec3<PartFrame, double>` rewriting is applied. EKF always wraps a
     scalar-templated craft (instantiated with double), so the patch
     runs. UKF can wrap either a templated craft (also instantiated with
-    double — patch runs) or a plain non-templated craft (Scalar=Real,
+    double — patch runs) or a plain non-templated craft (Scalar=MFloat,
     no patch needed)."""
     lines += [
         f"        {{ std::lock_guard<std::mutex> lk(bind_{i}_mtx);",
@@ -1388,7 +1388,7 @@ def _double_qualify_partframe(stmt: str) -> str:
     """Replace `Vec3<manta::PartFrame>` with `Vec3<manta::PartFrame, double>`
     so that sensor `set_measurement(...)` calls resolve against the
     double-instantiated estimator craft. Sensor signal cpp_write_stmts
-    were authored for Real-scalared crafts; the EKF path needs the
+    were authored for MFloat-scalared crafts; the EKF path needs the
     explicit scalar."""
     return stmt.replace(
         "manta::geom::Vec3<manta::PartFrame>",

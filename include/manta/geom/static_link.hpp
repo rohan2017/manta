@@ -12,7 +12,7 @@ namespace manta::geom {
 //
 // Use this for parent-to-child part transforms that never move (most static
 // part attachments).
-template <typename From, typename To, typename Scalar = Real>
+template <typename From, typename To, typename Scalar = MFloat>
 class StaticLink {
 public:
     using Pos = Vec3<From, Scalar>;

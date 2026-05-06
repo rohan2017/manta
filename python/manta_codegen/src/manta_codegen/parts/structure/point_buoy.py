@@ -24,5 +24,5 @@ class PointBuoy(PartDescriptor):
         super().__init__(name=name, **kwargs)
         self.volume = float(volume)
 
-    def emit_constructor_args(self, scalar: str = "manta::Real") -> str:
+    def emit_constructor_args(self, scalar: str = "manta::MFloat") -> str:
         return f'"{self.name}", {scalar}({_f(self.volume)})'

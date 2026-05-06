@@ -99,10 +99,10 @@ TEST_CASE("Noise: operator+(Vec3, RandomWalk) — adds bias state") {
     CHECK(result.z() == doctest::Approx(0.0f));
 }
 
-TEST_CASE("Noise: Real + WhiteGaussian scalar operator") {
+TEST_CASE("Noise: MFloat + WhiteGaussian scalar operator") {
     noise_seed(5);
     Noise<WhiteGaussian> n{0.0f};  // zero sigma
-    Real v = Real(3.14f);
-    Real result = v + n;
+    MFloat v = MFloat(3.14f);
+    MFloat result = v + n;
     CHECK(result == doctest::Approx(3.14f));
 }

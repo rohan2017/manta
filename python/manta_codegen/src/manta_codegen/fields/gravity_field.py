@@ -71,15 +71,15 @@ class GravityField(FieldDescriptor):
                 ox, oy, oz = d["origin"]
                 expr = (f"{self.cpp_class}::Disturbance::point_mass("
                         f"{scene}{{{_f(ox)}, {_f(oy)}, {_f(oz)}}}, "
-                        f"manta::Real({_f(d['mu'])}))")
+                        f"manta::MFloat({_f(d['mu'])}))")
             elif d["kind"] == "point_mass_j2":
                 ox, oy, oz = d["origin"]
                 ax, ay, az = d["polar_axis"]
                 expr = (f"{self.cpp_class}::Disturbance::point_mass_j2("
                         f"{scene}{{{_f(ox)}, {_f(oy)}, {_f(oz)}}}, "
-                        f"manta::Real({_f(d['mu'])}), "
-                        f"manta::Real({_f(d['j2'])}), "
-                        f"manta::Real({_f(d['eq_radius'])}), "
+                        f"manta::MFloat({_f(d['mu'])}), "
+                        f"manta::MFloat({_f(d['j2'])}), "
+                        f"manta::MFloat({_f(d['eq_radius'])}), "
                         f"{scene}{{{_f(ax)}, {_f(ay)}, {_f(az)}}})")
             else:
                 raise RuntimeError(f"unknown disturbance kind {d['kind']!r}")

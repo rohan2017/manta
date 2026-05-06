@@ -191,7 +191,7 @@ TEST_CASE("Mass + Thruster: craft hovers at constant velocity") {
     for (int i = 0; i < 100; ++i) w.step();
 
     auto vel = c.scene_to_craft().vel_linear();
-    CHECK(test::approx_equal(vel, Vec3<SceneFrame>::zero(), Real(0.01f)));
+    CHECK(test::approx_equal(vel, Vec3<SceneFrame>::zero(), MFloat(0.01f)));
 }
 
 TEST_CASE("World: multiple crafts in same scene all update under gravity") {

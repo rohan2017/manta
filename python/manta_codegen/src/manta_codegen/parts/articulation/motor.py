@@ -11,7 +11,7 @@ def _emit_axis(axis: tuple[float, float, float]) -> str:
     if len(axis) != 3:
         raise ValueError("axis must be a 3-tuple")
     return (f"manta::geom::Vec3<manta::PartFrame>::from_raw("
-            f"Eigen::Matrix<manta::Real, 3, 1>("
+            f"Eigen::Matrix<manta::MFloat, 3, 1>("
             f"{_f(axis[0])}, {_f(axis[1])}, {_f(axis[2])}))")
 
 
@@ -54,9 +54,9 @@ class Motor(PartDescriptor):
                 f'{_f(self.damping)}')
 
     def telemetry_fields(self) -> list[tuple[str, str]]:
-        return [("angle", "manta::Real"),
-                ("rate",  "manta::Real"),
-                ("accel", "manta::Real")]
+        return [("angle", "manta::MFloat"),
+                ("rate",  "manta::MFloat"),
+                ("accel", "manta::MFloat")]
 
     def emit_telemetry_reads(self) -> list[tuple[str, str]]:
         return [("angle", f"craft.{self.name}().angle()"),

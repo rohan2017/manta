@@ -19,7 +19,7 @@ using namespace manta::fields;
 TEST_CASE("GravityField/point_mass: g points toward center, inverse-square magnitude") {
     GravityField gf;
     gf.add(GravityField::Disturbance::point_mass(
-               Vec3<SceneFrame>::zero(), Real(4.0e14f)),  // ~Earth μ
+               Vec3<SceneFrame>::zero(), MFloat(4.0e14f)),  // ~Earth μ
            PERSISTENT);
     Vec3<SceneFrame> p{1.0e7f, 0, 0};
     auto g = gf.state_at(p);
@@ -31,7 +31,7 @@ TEST_CASE("GravityField/point_mass: g points toward center, inverse-square magni
 TEST_CASE("GravityField/point_mass: at center returns zero (no NaN)") {
     GravityField gf;
     gf.add(GravityField::Disturbance::point_mass(
-               Vec3<SceneFrame>::zero(), Real(1.0e14f)),
+               Vec3<SceneFrame>::zero(), MFloat(1.0e14f)),
            PERSISTENT);
     auto g = gf.state_at(Vec3<SceneFrame>::zero());
     CHECK(test::approx_equal(g, Vec3<SceneFrame>::zero()));
@@ -40,7 +40,7 @@ TEST_CASE("GravityField/point_mass: at center returns zero (no NaN)") {
 TEST_CASE("GravityField/point_mass: respects center offset") {
     GravityField gf;
     gf.add(GravityField::Disturbance::point_mass(
-               Vec3<SceneFrame>{1.0e7f, 0, 0}, Real(4.0e14f)),
+               Vec3<SceneFrame>{1.0e7f, 0, 0}, MFloat(4.0e14f)),
            PERSISTENT);
     auto g = gf.state_at(Vec3<SceneFrame>{2.0e7f, 0, 0});
     CHECK(g.x() == doctest::Approx(-4.0f).epsilon(1e-4f));
@@ -49,9 +49,9 @@ TEST_CASE("GravityField/point_mass: respects center offset") {
 // ---- J2 perturbation ----
 
 TEST_CASE("GravityField/J2: reduces effective gravity at the equator") {
-    constexpr Real MU   = Real(3.986004418e14f);
-    constexpr Real R_EQ = Real(6.378137e6f);
-    constexpr Real J2   = Real(1.0826267e-3f);
+    constexpr MFloat MU   = MFloat(3.986004418e14f);
+    constexpr MFloat R_EQ = MFloat(6.378137e6f);
+    constexpr MFloat J2   = MFloat(1.0826267e-3f);
 
     GravityField pure;
     pure.add(GravityField::Disturbance::point_mass(
@@ -63,7 +63,7 @@ TEST_CASE("GravityField/J2: reduces effective gravity at the equator") {
                 PERSISTENT);
 
     Vec3<SceneFrame> equator{R_EQ, 0, 0};
-    Real dg = with_j2.state_at(equator).x() - pure.state_at(equator).x();
+    MFloat dg = with_j2.state_at(equator).x() - pure.state_at(equator).x();
     CHECK(dg == doctest::Approx(0.0162f).epsilon(1e-3f));
     auto g = with_j2.state_at(equator);
     CHECK(std::abs(g.y()) < 1e-5f);
@@ -71,9 +71,9 @@ TEST_CASE("GravityField/J2: reduces effective gravity at the equator") {
 }
 
 TEST_CASE("GravityField/J2: increases effective gravity at the pole") {
-    constexpr Real MU   = Real(3.986004418e14f);
-    constexpr Real R_EQ = Real(6.378137e6f);
-    constexpr Real J2   = Real(1.0826267e-3f);
+    constexpr MFloat MU   = MFloat(3.986004418e14f);
+    constexpr MFloat R_EQ = MFloat(6.378137e6f);
+    constexpr MFloat J2   = MFloat(1.0826267e-3f);
 
     GravityField pure;
     pure.add(GravityField::Disturbance::point_mass(
@@ -85,7 +85,7 @@ TEST_CASE("GravityField/J2: increases effective gravity at the pole") {
                 PERSISTENT);
 
     Vec3<SceneFrame> pole{0, 0, R_EQ};
-    Real dg = with_j2.state_at(pole).z() - pure.state_at(pole).z();
+    MFloat dg = with_j2.state_at(pole).z() - pure.state_at(pole).z();
     CHECK(dg == doctest::Approx(-0.0324f).epsilon(1e-3f));
     auto g = with_j2.state_at(pole);
     CHECK(std::abs(g.x()) < 1e-5f);
@@ -135,7 +135,7 @@ TEST_CASE("Orbital: circular orbit holds altitude over one period") {
     const float T      = 2.0f * 3.14159265358979f * std::sqrt(r * r * r / mu);
 
     GravityField gf;
-    gf.add(GravityField::Disturbance::point_mass(Vec3<SceneFrame>::zero(), Real(mu)),
+    gf.add(GravityField::Disturbance::point_mass(Vec3<SceneFrame>::zero(), MFloat(mu)),
            PERSISTENT);
 
     World w;
@@ -163,7 +163,7 @@ TEST_CASE("Orbital: surface gravity recovers Earth-like 9.81 m/s^2") {
     constexpr float r  = 6.371e6f;
 
     GravityField gf;
-    gf.add(GravityField::Disturbance::point_mass(Vec3<SceneFrame>::zero(), Real(mu)),
+    gf.add(GravityField::Disturbance::point_mass(Vec3<SceneFrame>::zero(), MFloat(mu)),
            PERSISTENT);
 
     World w;

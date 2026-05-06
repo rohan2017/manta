@@ -29,8 +29,8 @@ using namespace manta::fields;
 
 namespace {
 
-bool nearly_equal(Real a, Real b, Real eps = Real(1e-4)) {
-    Real d = a - b;
+bool nearly_equal(MFloat a, MFloat b, MFloat eps = MFloat(1e-4)) {
+    MFloat d = a - b;
     return (d < eps) && (-d < eps);
 }
 
@@ -97,8 +97,8 @@ int main() {
     // it; B's subscriber decodes and calls receive(); B's factory rebuilds
     // the lambda.
     field_a.add(GravityField::Disturbance::point_mass(
-                    Vec3<SceneFrame>{Real(1e7f), Real(0), Real(0)},
-                    Real(4.0e14f)),
+                    Vec3<SceneFrame>{MFloat(1e7f), MFloat(0), MFloat(0)},
+                    MFloat(4.0e14f)),
                 PERSISTENT);
 
     REQUIRE(field_a.disturbance_count() == 1);
@@ -110,7 +110,7 @@ int main() {
     REQUIRE(field_b.disturbance_count() == 1);
 
     // The rebuilt disturbance should produce the same field at every query.
-    Vec3<SceneFrame> q{Real(2e7f), Real(0), Real(0)};
+    Vec3<SceneFrame> q{MFloat(2e7f), MFloat(0), MFloat(0)};
     auto ga = field_a.state_at(q);
     auto gb = field_b.state_at(q);
     REQUIRE(nearly_equal(ga.x(), gb.x()));
@@ -123,7 +123,7 @@ int main() {
     // has just its point_mass.
     field_b.set_tx_hook(nullptr);
     field_b.add(GravityField::Disturbance::uniform(
-                    Vec3<SceneFrame>{Real(0), Real(0), Real(-1.5f)}),
+                    Vec3<SceneFrame>{MFloat(0), MFloat(0), MFloat(-1.5f)}),
                 PERSISTENT);
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     REQUIRE(field_a.disturbance_count() == 1);    // unchanged

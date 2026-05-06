@@ -38,7 +38,7 @@ def make_config() -> MantaConfig:
     ekf = EKF(w, measurements=[imu, dvl], process_noise=1e-6,
               initial_covariance=1.0)
 
-    # Real-time sensor feeds — each set_measurement call also flips the
+    # MFloat-time sensor feeds — each set_measurement call also flips the
     # part's freshness bit, so the EKF's per-sensor `consume_fresh()` gate
     # picks up the new reading on the next predict tick.
     subscribe(imu.set_measurement, "manta/ex6/imu")

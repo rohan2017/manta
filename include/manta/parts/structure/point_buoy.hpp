@@ -10,11 +10,11 @@ namespace manta::parts {
 
 // Single-point buoyancy. F = -ρ(p_scene) · V · g_part at the part origin,
 // where ρ is the local fluid density and g is the local gravitational
-// acceleration. Both fields are queried via the Real-bridge (treating their
+// acceleration. Both fields are queried via the value-bridge (treating their
 // outputs as constant inputs from the autodiff perspective).
 //
 // Required fields: FluidField, GravityField.
-template <class Scalar = Real>
+template <class Scalar = MFloat>
 class PointBuoyT : public PartT<Scalar> {
 public:
     PointBuoyT(std::string name, Scalar volume)
@@ -57,6 +57,6 @@ private:
     Scalar volume_;
 };
 
-using PointBuoy = PointBuoyT<Real>;
+using PointBuoy = PointBuoyT<MFloat>;
 
 } // namespace manta::parts

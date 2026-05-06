@@ -13,7 +13,7 @@
 //
 //   StateDim = 13 * NumCrafts
 //
-// ---- Why two Worlds: a Real-typed one AND a Jet-typed one ----
+// ---- Why two Worlds: a value-typed one AND a Jet-typed one ----
 //
 // An EKF needs two things from its process model on every predict step:
 //
@@ -38,13 +38,13 @@
 //     `WorldT<double>` to "run a tick in Jets" — its parts and craft state
 //     ARE doubles. The Jet world is built once at setup with Jet-templated
 //     copies of the same craft definitions (same parts, same coefficients,
-//     same registered fields/planets) and lives alongside its Real twin.
+//     same registered fields/planets) and lives alongside its value twin.
 //
-//   * The Real world is the canonical state owner. Its crafts hold the
+//   * The value world is the canonical state owner. Its crafts hold the
 //     filter's posterior belief between predicts (mirrored back from the
 //     EKF kernel after every step), feed user-facing telemetry, and absorb
 //     `set_measurement` writes from sensor parts. In a sim+EKF setup the
-//     Real world also drives the in-process simulation; in a deploy-time
+//     value world also drives the in-process simulation; in a deploy-time
 //     pure-EKF setup it's the only world the user sees.
 //
 //   * The Jet world is internal scratch for the Jacobian. `predict()` seeds
@@ -53,13 +53,13 @@
 //     to extract `x_post + F` in a single autodiff pass. Cross-craft physics
 //     (tethers, contact, fluid coupling) appears in F for free because the
 //     Jet world tracks all `13·NumCrafts` partials simultaneously — anything
-//     that's correct in the Real world's physics is automatically correct in
+//     that's correct in the value world's physics is automatically correct in
 //     the Jet world's Jacobian.
 //
-// Selective Jet propagation: planets and field instances are Real-typed and
+// Selective Jet propagation: planets and field instances are value-typed and
 // shared. Inside SceneT<Jet>::refresh_world_to_scene the planet's
-// KinematicLink is cast Real→Jet with zero `.v`; field queries on the Jet
-// side go through `state_at_templated<Jet>` which wraps the Real field's
+// KinematicLink is cast value→Jet with zero `.v`; field queries on the Jet
+// side go through `state_at_templated<Jet>` which wraps the value field's
 // state_at and finite-diffs only the position dependency. So the EKF treats
 // planet pose and field structure as non-estimated inputs — the Jet world
 // only carries live partials for the rigid-body state it's actually
@@ -75,7 +75,7 @@
 //
 // Usage sketch:
 //
-//     // Build the Real world (same shape as a sim World).
+//     // Build the value world (same shape as a sim World).
 //     manta::World w_real;
 //     w_real.clock().set_dt(0.01f);
 //     auto& s_real = w_real.create_scene();
@@ -151,9 +151,9 @@ public:
     // is the one the state vector encodes (craft 0 = state[0..12], craft 1
     // = state[13..25], ...).
     //
-    // The Real World itself isn't needed by the EKF — `predict()` only ever
-    // advances the Jet world. The Real-craft pointers are kept so each
-    // post-predict state can be mirrored back into the user's Real-side
+    // The value World itself isn't needed by the EKF — `predict()` only ever
+    // advances the Jet world. The value craft pointers are kept so each
+    // post-predict state can be mirrored back into the user's value-side
     // crafts, keeping their `set_measurement`-fed sensor parts in sync
     // with the filter's belief.
     void bind(WorldJ& w_jet,
@@ -172,7 +172,7 @@ public:
 
     // Predict step — drives a full Jet-typed `WorldT::step()` with seeded
     // Jet state. Extracts the value + the kStateDim×kStateDim Jacobian. After
-    // the EKF state has advanced, mirrors back into the Real-side crafts.
+    // the EKF state has advanced, mirrors back into the value-side crafts.
     //
     // `dt` is the timestep in seconds. `Q` is the process-noise covariance.
     void predict(double dt, const StateCov& Q) {
@@ -198,7 +198,7 @@ public:
         };
         ekf_.predict(f, dt, Q);
 
-        // Mirror the new state back into the Real-side crafts so the user's
+        // Mirror the new state back into the value-side crafts so the user's
         // sensor part `last_*` values, telemetry reads, and any subsequent
         // `set_measurement` calls operate on the post-predict state.
         for (int k = 0; k < NumCrafts; ++k) {
@@ -218,9 +218,9 @@ public:
                   const Eigen::Matrix<double, N, N>& R) {
         ekf_.template update_n<N>(h, z, R);
 
-        // Mirror updated state into Real crafts (consistent with predict's
+        // Mirror updated state into value crafts (consistent with predict's
         // post-step mirror). Strictly only necessary when downstream code
-        // reads from the Real crafts before the next predict; cheap enough
+        // reads from the value crafts before the next predict; cheap enough
         // to do unconditionally.
         for (int k = 0; k < NumCrafts; ++k) {
             if (!crafts_real_[k]) continue;
@@ -267,7 +267,7 @@ public:
     }
 
     // Per-craft handle. Useful in measurement functors that read sensor
-    // last_* values from a specific Real craft.
+    // last_* values from a specific value craft.
     CraftR&       craft(int idx = 0)       noexcept { return *crafts_real_[idx]; }
     const CraftR& craft(int idx = 0) const noexcept { return *crafts_real_[idx]; }
 
@@ -312,7 +312,7 @@ public:
     //                                          // P_pre = F P F^T + Q;
     //                                          // applies queued updates
     //                                          // sequentially; mirrors
-    //                                          // posterior to Real
+    //                                          // posterior to value
     //                                          // crafts.
     //
     // Cost: one Jet world pass (kin + agg + integrate) per tick — h
@@ -444,7 +444,7 @@ public:
         ekf_.set_state(x);
         ekf_.set_covariance(P);
 
-        // Mirror posterior to Real-side crafts so user-facing handles
+        // Mirror posterior to value-side crafts so user-facing handles
         // (sensor `set_measurement` writes, telemetry reads) reflect
         // the filter's current belief.
         for (int k = 0; k < NumCrafts; ++k) {

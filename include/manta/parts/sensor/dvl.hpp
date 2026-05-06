@@ -10,18 +10,18 @@ namespace manta::parts {
 //
 // `rate_hz` caps the effective sample rate; default 0 = every tick.
 // `consume_fresh()` is the EKF-side one-shot probe (see imu.hpp).
-template <class Scalar = Real>
+template <class Scalar = MFloat>
 class DVLT : public PartT<Scalar> {
 public:
     explicit DVLT(std::string name,
                   float velocity_sigma = 0.0f,
-                  Real  rate_hz        = Real(0))
+                  MFloat  rate_hz        = MFloat(0))
         : PartT<Scalar>(std::move(name))
         , noise_{velocity_sigma}
         , gate_{rate_hz} {}
 
     void update() override {
-        Real dt = (this->craft_ && this->craft_->has_world()) ? this->craft().world().clock().dt() : Real(0);
+        MFloat dt = (this->craft_ && this->craft_->has_world()) ? this->craft().world().clock().dt() : MFloat(0);
         if (!gate_.tick(dt)) return;
         last_vel_ = this->velocity_body() + noise_;
         fresh_ = true;
@@ -45,6 +45,6 @@ private:
     geom::Vec3<PartFrame, Scalar>  last_vel_;
 };
 
-using DVL = DVLT<Real>;
+using DVL = DVLT<MFloat>;
 
 } // namespace manta::parts

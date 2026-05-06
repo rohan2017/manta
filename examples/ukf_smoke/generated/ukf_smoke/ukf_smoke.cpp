@@ -96,7 +96,7 @@ constexpr int kPubEvery = 20;  // ~50 Hz publish
 namespace manta_gen::ukf_smoke {
 
 void setup() {
-    // ---- Real world ----
+    // ---- MFloat world ----
     w.clock().set_dt(DT);
     scene = &w.create_scene();
     scene->add_craft(craft);

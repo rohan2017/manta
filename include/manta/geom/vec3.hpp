@@ -13,7 +13,7 @@ namespace manta::geom {
 //
 // Inside a part's update() users may freely operate on raw Eigen vectors via
 // .raw() and rewrap with from_raw() at framework boundaries.
-template <typename Frame, typename Scalar = Real>
+template <typename Frame, typename Scalar = MFloat>
 class Vec3 {
 public:
     using EigenT = Eigen::Matrix<Scalar, 3, 1>;

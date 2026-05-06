@@ -123,11 +123,11 @@ TEST_CASE("System ID: fit mass from a recorded thruster-driven trajectory") {
 // toward the wind speed with time constant τ = m/k. Recovering k from the
 // observed velocity trajectory exercises:
 //   * The Surface1T<Scalar> instantiation under Jet<double, 1>.
-//   * The Real-bridge inside Surface's update() that queries the (non-
+//   * The value-bridge inside Surface's update() that queries the (non-
 //     templated) FluidField. This is the integration test for
 //     "autodiff-through-non-templated-field-queries" — proves we don't
 //     accidentally lose the parameter's derivative when the field's value
-//     gets cast to Real in the bridge.
+//     gets cast to MFloat in the bridge.
 
 namespace {
 template <class Scalar>
@@ -160,11 +160,11 @@ std::vector<Scalar> simulate_drag_trajectory(Scalar drag_k,
     c.root().template add<DSurf>("drag", A, B);
 
     // Register a uniform incompressible fluid moving in +x as a single
-    // PERSISTENT disturbance. Field is Real-only; the part bridges through it.
+    // PERSISTENT disturbance. Field is value-only; the part bridges through it.
     fields::FluidField wind;
     wind.add(fields::FluidField::Disturbance::uniform_incompressible(
-                 Real(1.0),
-                 geom::Vec3<SceneFrame>{Real(wind_x), Real(0), Real(0)}),
+                 MFloat(1.0),
+                 geom::Vec3<SceneFrame>{MFloat(wind_x), MFloat(0), MFloat(0)}),
              fields::PERSISTENT);
     c.template register_field<fields::FluidField>(wind);
 

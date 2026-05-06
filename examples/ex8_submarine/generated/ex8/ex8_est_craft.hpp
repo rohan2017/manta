@@ -11,16 +11,16 @@
 #include "manta/parts/sensor/dvl.hpp"
 #include "manta/parts/sensor/magnetometer.hpp"
 
-template <class Scalar = manta::Real>
+template <class Scalar = manta::MFloat>
 class Ex8EstCraftT : public manta::CraftT<Scalar> {
 public:
     Ex8EstCraftT() : manta::CraftT<Scalar>("ex8_est") {
         body_ = &this->root().template add<manta::parts::MassT<Scalar>>("body", Scalar(10.0f), []{ manta::geom::Mat3<manta::PartFrame, manta::PartFrame, Scalar> m = manta::geom::Mat3<manta::PartFrame, manta::PartFrame, Scalar>::identity(); m.raw()(0,0)=Scalar(0.05f); m.raw()(1,1)=Scalar(1.0f); m.raw()(2,2)=Scalar(1.0f); return m; }(), false);
         thrust_x_ = &this->root().template add<manta::parts::Thruster1T<Scalar>>("thrust_x", std::array<manta::geom::Vec3<manta::PartFrame, Scalar>, 1>{manta::geom::Vec3<manta::PartFrame, Scalar>{Scalar(50.0f), Scalar(0.0f), Scalar(0.0f)}}, std::array<manta::geom::Vec3<manta::PartFrame, Scalar>, 1>{manta::geom::Vec3<manta::PartFrame, Scalar>{Scalar(0.0f), Scalar(0.0f), Scalar(0.0f)}});
         thrust_z_ = &this->root().template add<manta::parts::Thruster1T<Scalar>>("thrust_z", std::array<manta::geom::Vec3<manta::PartFrame, Scalar>, 1>{manta::geom::Vec3<manta::PartFrame, Scalar>{Scalar(0.0f), Scalar(0.0f), Scalar(50.0f)}}, std::array<manta::geom::Vec3<manta::PartFrame, Scalar>, 1>{manta::geom::Vec3<manta::PartFrame, Scalar>{Scalar(0.0f), Scalar(0.0f), Scalar(0.0f)}});
-        imu_ = &this->root().template add<manta::parts::IMUT<Scalar>>("imu", 0.05f, 0.005f, manta::Real(100.0f));
-        dvl_ = &this->root().template add<manta::parts::DVLT<Scalar>>("dvl", 0.02f, manta::Real(10.0f));
-        mag_ = &this->root().template add<manta::parts::MagnetometerT<Scalar>>("mag", 2e-07f, manta::Real(50.0f));
+        imu_ = &this->root().template add<manta::parts::IMUT<Scalar>>("imu", 0.05f, 0.005f, manta::MFloat(100.0f));
+        dvl_ = &this->root().template add<manta::parts::DVLT<Scalar>>("dvl", 0.02f, manta::MFloat(10.0f));
+        mag_ = &this->root().template add<manta::parts::MagnetometerT<Scalar>>("mag", 2e-07f, manta::MFloat(50.0f));
         this->root().compute_params();
     }
 
@@ -46,4 +46,4 @@ private:
     manta::parts::MagnetometerT<Scalar>* mag_ = nullptr;
 };
 
-using Ex8EstCraft = Ex8EstCraftT<manta::Real>;
+using Ex8EstCraft = Ex8EstCraftT<manta::MFloat>;

@@ -1,7 +1,7 @@
 #pragma once
 
 // `manta::estimation::UKF` — a UKF wired against a user's
-// `manta::WorldT<double>` (the sim/Real World). Estimates the joint state
+// `manta::WorldT<double>` (the sim/value World). Estimates the joint state
 // of every Craft in the World via sigma-point propagation. State layout
 // matches the manta-aware EKF:
 //
@@ -12,7 +12,7 @@
 //
 // Compared to the manta-aware EKF, UKF has a notable structural advantage:
 // it does NOT need a Jet-shadow World. Every sigma point is a vector of
-// `double`s, propagated through the same Real `WorldT<double>`. The
+// `double`s, propagated through the same `WorldT<double>`. The
 // craft scalar can be either `double` (templated craft) or a non-
 // templated `manta::Craft` — both work as long as `evaluate(state, dt)`
 // is available.
@@ -62,9 +62,9 @@ public:
     explicit UKF(double alpha = 1e-3, double beta = 2.0, double kappa = 0.0)
         : ukf_(alpha, beta, kappa) {}
 
-    // Bind to the Real World + craft pointers in slot order matching the
+    // Bind to the value World + craft pointers in slot order matching the
     // state vector. Unlike the EKF, no Jet shadow is needed — sigma
-    // propagation runs through the same Real world.
+    // propagation runs through the same value world.
     void bind(WorldR& w_real,
               std::array<CraftR*, NumCrafts> real_crafts) noexcept {
         w_real_      = &w_real;
@@ -77,7 +77,7 @@ public:
     const StateVec& state()      const noexcept { return ukf_.state(); }
     const StateCov& covariance() const noexcept { return ukf_.covariance(); }
 
-    // Propagate each sigma point through the entire Real World's update.
+    // Propagate each sigma point through the entire value World's update.
     // Saves/restores craft state around each propagation so the World
     // ends in the post-mean-state configuration after predict returns.
     void predict(double dt, const StateCov& Q) {
@@ -112,7 +112,7 @@ public:
         };
         ukf_.predict(f, dt, Q);
 
-        // Mirror the post-predict mean state back into the Real crafts so
+        // Mirror the post-predict mean state back into the value crafts so
         // downstream sensor reads, telemetry, and `set_measurement` calls
         // see the latest belief.
         for (int k = 0; k < NumCrafts; ++k) {

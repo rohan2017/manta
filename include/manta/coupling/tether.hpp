@@ -34,7 +34,7 @@ namespace coupling {
 //     v_along   = (v_other - v_self) · rhat       // separation rate
 //     |F|       = k * extension + c * v_along
 //     F_on_self points from self → other (pulls toward other when extended)
-template <class Scalar = Real>
+template <class Scalar = MFloat>
 class TetherT {
 public:
     TetherT(Scalar rest_length, Scalar stiffness, Scalar damping = Scalar(0)) noexcept
@@ -85,7 +85,7 @@ private:
     parts::TetherEndpointT<Scalar>* b_ = nullptr;
 };
 
-using Tether = TetherT<Real>;
+using Tether = TetherT<MFloat>;
 
 } // namespace coupling
 } // namespace manta

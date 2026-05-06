@@ -36,13 +36,13 @@ TEST_CASE("Sync GravityField: point_mass replicates and queries match") {
     wire_one_way(a, b);
 
     a.add(GravityField::Disturbance::point_mass(
-              Vec3<SceneFrame>{Real(1e7f), Real(0), Real(0)}, Real(4.0e14f)),
+              Vec3<SceneFrame>{MFloat(1e7f), MFloat(0), MFloat(0)}, MFloat(4.0e14f)),
           PERSISTENT);
 
     CHECK(a.disturbance_count() == 1u);
     CHECK(b.disturbance_count() == 1u);
 
-    Vec3<SceneFrame> q{Real(2e7f), Real(0), Real(0)};
+    Vec3<SceneFrame> q{MFloat(2e7f), MFloat(0), MFloat(0)};
     auto ga = a.state_at(q);
     auto gb = b.state_at(q);
     CHECK(ga.x() == doctest::Approx(gb.x()).epsilon(1e-5));
@@ -55,16 +55,16 @@ TEST_CASE("Sync GravityField: uniform + point_mass_j2 replicate and superpose") 
     wire_one_way(a, b);
 
     a.add(GravityField::Disturbance::uniform(
-              Vec3<SceneFrame>{Real(0), Real(0), Real(-1)}),
+              Vec3<SceneFrame>{MFloat(0), MFloat(0), MFloat(-1)}),
           PERSISTENT);
     a.add(GravityField::Disturbance::point_mass_j2(
               Vec3<SceneFrame>::zero(),
-              Real(3.986e14f), Real(1.0826e-3f), Real(6.378e6f)),
+              MFloat(3.986e14f), MFloat(1.0826e-3f), MFloat(6.378e6f)),
           PERSISTENT);
 
     CHECK(b.disturbance_count() == 2u);
 
-    Vec3<SceneFrame> q{Real(6.378e6f), Real(0), Real(0)};
+    Vec3<SceneFrame> q{MFloat(6.378e6f), MFloat(0), MFloat(0)};
     auto ga = a.state_at(q);
     auto gb = b.state_at(q);
     CHECK(ga.x() == doctest::Approx(gb.x()).epsilon(1e-3));
@@ -78,7 +78,7 @@ TEST_CASE("Sync GravityField: USER-tagged (custom lambda) is NOT replicated") {
     GravityField::Disturbance custom;
     // tag stays at USER (0) because we didn't go through a stock factory.
     custom.delta_g = [](const Vec3<SceneFrame>&) noexcept {
-        return Vec3<SceneFrame>{Real(0), Real(0), Real(-3.7f)};
+        return Vec3<SceneFrame>{MFloat(0), MFloat(0), MFloat(-3.7f)};
     };
     a.add(custom, PERSISTENT);
 
@@ -102,7 +102,7 @@ TEST_CASE("Sync GravityField: recursion guard prevents echo on receive") {
     });
 
     a.add(GravityField::Disturbance::point_mass(
-              Vec3<SceneFrame>::zero(), Real(1e6f)),
+              Vec3<SceneFrame>::zero(), MFloat(1e6f)),
           PERSISTENT);
 
     CHECK(a_tx_count == 1);   // fired once by user-side add
@@ -117,10 +117,10 @@ TEST_CASE("Sync MagField: dipole replicates") {
 
     a.add(MagField::Disturbance::dipole(
               Vec3<SceneFrame>::zero(),
-              Vec3<SceneFrame>{Real(0), Real(0), Real(-7.94e22f)}),
+              Vec3<SceneFrame>{MFloat(0), MFloat(0), MFloat(-7.94e22f)}),
           PERSISTENT);
 
-    Vec3<SceneFrame> q{Real(0), Real(0), Real(1.0e7f)};
+    Vec3<SceneFrame> q{MFloat(0), MFloat(0), MFloat(1.0e7f)};
     auto ba = a.state_at(q);
     auto bb = b.state_at(q);
     CHECK(ba.z() == doctest::Approx(bb.z()).epsilon(1e-5));
@@ -131,10 +131,10 @@ TEST_CASE("Sync FluidField: uniform_incompressible + uniform_gas replicate") {
     wire_one_way(a, b);
 
     a.add(FluidField::Disturbance::uniform_incompressible(
-              Real(1000.0f), Vec3<SceneFrame>{Real(0.5f), Real(0), Real(0)}),
+              MFloat(1000.0f), Vec3<SceneFrame>{MFloat(0.5f), MFloat(0), MFloat(0)}),
           PERSISTENT);
     a.add(FluidField::Disturbance::uniform_gas(
-              Real(287.0f), Real(288.15f), Real(101325.0f)),
+              MFloat(287.0f), MFloat(288.15f), MFloat(101325.0f)),
           PERSISTENT);
 
     CHECK(b.disturbance_count() == 2u);
@@ -158,7 +158,7 @@ TEST_CASE("Sync GravityField: lifetime is preserved across the wire") {
 
     // Finite-lifetime disturbance: 3 ticks.
     a.add(GravityField::Disturbance::uniform(
-              Vec3<SceneFrame>{Real(0), Real(0), Real(-1)}),
+              Vec3<SceneFrame>{MFloat(0), MFloat(0), MFloat(-1)}),
           /*lifetime=*/3);
 
     CHECK(b.disturbance_count() == 1u);
@@ -172,24 +172,24 @@ TEST_CASE("Sync GravityField: lifetime is preserved across the wire") {
 // path.
 namespace {
 
-struct CutoffParams { Real ox, oy, oz, mu, cutoff; };
+struct CutoffParams { MFloat ox, oy, oz, mu, cutoff; };
 constexpr std::uint16_t kCutoffTag = manta::fields::USER_BASE + 7;
 
 GravityField::Disturbance make_cutoff(Vec3<SceneFrame> origin,
-                                      Real mu, Real cutoff) {
+                                      MFloat mu, MFloat cutoff) {
     GravityField::Disturbance d;
     d.origin = origin;
     d.tag    = kCutoffTag;
-    CutoffParams cp{Real(origin.x()), Real(origin.y()), Real(origin.z()), mu, cutoff};
+    CutoffParams cp{MFloat(origin.x()), MFloat(origin.y()), MFloat(origin.z()), mu, cutoff};
     static_assert(sizeof(cp) <= manta::fields::kParamsBytes);
     std::memcpy(d.params.data(), &cp, sizeof(cp));
     d.delta_g = [mu](const Vec3<SceneFrame>& off) noexcept {
-        Real r2 = off.raw().squaredNorm();
-        if (r2 < Real(1e-12f)) return Vec3<SceneFrame>::zero();
-        Real r = std::sqrt(r2);
+        MFloat r2 = off.raw().squaredNorm();
+        if (r2 < MFloat(1e-12f)) return Vec3<SceneFrame>::zero();
+        MFloat r = std::sqrt(r2);
         return Vec3<SceneFrame>::from_raw(off.raw() * (-mu / (r2 * r)));
     };
-    Real cut2 = cutoff * cutoff;
+    MFloat cut2 = cutoff * cutoff;
     d.in_influence = [cut2](const Vec3<SceneFrame>& off) noexcept {
         return off.raw().squaredNorm() < cut2;
     };
@@ -211,18 +211,18 @@ TEST_CASE("Sync GravityField: user-registered factory replicates end-to-end") {
     GravityField a, b;
     wire_one_way(a, b);
 
-    a.add(make_cutoff(Vec3<SceneFrame>::zero(), Real(1e6f), Real(100.0f)),
+    a.add(make_cutoff(Vec3<SceneFrame>::zero(), MFloat(1e6f), MFloat(100.0f)),
           PERSISTENT);
 
     // Inside the cutoff: nonzero force on both sides.
-    Vec3<SceneFrame> near{Real(50.0f), Real(0), Real(0)};
+    Vec3<SceneFrame> near{MFloat(50.0f), MFloat(0), MFloat(0)};
     auto ga = a.state_at(near);
     auto gb = b.state_at(near);
     CHECK(ga.x() == doctest::Approx(gb.x()).epsilon(1e-3));
-    CHECK(ga.x() < Real(0));   // attractive
+    CHECK(ga.x() < MFloat(0));   // attractive
 
     // Outside the cutoff: in_influence is false → zero on both sides.
-    Vec3<SceneFrame> far{Real(500.0f), Real(0), Real(0)};
+    Vec3<SceneFrame> far{MFloat(500.0f), MFloat(0), MFloat(0)};
     CHECK(a.state_at(far).raw().norm() == doctest::Approx(0.0).epsilon(1e-9));
     CHECK(b.state_at(far).raw().norm() == doctest::Approx(0.0).epsilon(1e-9));
 }

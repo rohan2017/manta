@@ -79,7 +79,7 @@ class _SurfaceBase(PartDescriptor):
         self.force_tensors  = [_normalize(t) for t in force_tensors]
         self.torque_tensors = [_normalize(t) for t in torque_tensors]
 
-    def emit_constructor_args(self, scalar: str = "manta::Real") -> str:
+    def emit_constructor_args(self, scalar: str = "manta::MFloat") -> str:
         n = self.N
         mat3 = f"manta::geom::Mat3<manta::PartFrame, manta::PartFrame, {scalar}>"
         ftype = f"std::array<{mat3}, {n}>"

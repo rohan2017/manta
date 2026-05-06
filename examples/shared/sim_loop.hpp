@@ -5,7 +5,7 @@
 
 namespace manta::examples {
 
-// Real-time sim loop pacer. Call wait_for_next_tick() at the bottom of each
+// MFloat-time sim loop pacer. Call wait_for_next_tick() at the bottom of each
 // loop iteration; it sleeps so iterations occur at `period_seconds` intervals.
 // Drift accumulates to next tick (no catch-up bursts).
 class RealTimePacer {

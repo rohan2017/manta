@@ -17,7 +17,7 @@ using namespace manta::fields;
 TEST_CASE("FluidField: uniform incompressible disturbance returns constant density and velocity") {
     FluidField f;
     f.add(FluidField::Disturbance::uniform_incompressible(
-              Real(1000.0f), Vec3<SceneFrame>{1, 2, 3}),
+              MFloat(1000.0f), Vec3<SceneFrame>{1, 2, 3}),
           PERSISTENT);
 
     auto s1 = f.state_at(Vec3<SceneFrame>::zero());
@@ -33,10 +33,10 @@ TEST_CASE("FluidField: uniform incompressible disturbance returns constant densi
 
 TEST_CASE("FluidField: ocean below sea level, atmosphere above, selected by in_influence") {
     FluidField f;
-    Real sea = Real(0);
+    MFloat sea = MFloat(0);
 
     // Water below z=0.
-    auto water = FluidField::Disturbance::uniform_incompressible(Real(1000.0f));
+    auto water = FluidField::Disturbance::uniform_incompressible(MFloat(1000.0f));
     water.in_influence = [sea](const Vec3<SceneFrame>& off) noexcept {
         return off.z() < sea;
     };
@@ -44,7 +44,7 @@ TEST_CASE("FluidField: ocean below sea level, atmosphere above, selected by in_i
 
     // Air above z=0 (gas with R=287).
     auto air = FluidField::Disturbance::uniform_gas(
-        Real(287.0f), Real(288.15f), Real(101325.0f));
+        MFloat(287.0f), MFloat(288.15f), MFloat(101325.0f));
     air.in_influence = [sea](const Vec3<SceneFrame>& off) noexcept {
         return off.z() >= sea;
     };
@@ -65,7 +65,7 @@ TEST_CASE("FluidField: ocean below sea level, atmosphere above, selected by in_i
 TEST_CASE("FluidField: gas pool derives density from p, T, R via p = ρRT") {
     FluidField f;
     f.add(FluidField::Disturbance::uniform_gas(
-              Real(287.0f), Real(288.15f), Real(101325.0f)),
+              MFloat(287.0f), MFloat(288.15f), MFloat(101325.0f)),
           PERSISTENT);
     auto s = f.state_at(Vec3<SceneFrame>{1, 2, 3});
     CHECK(s.density == doctest::Approx(101325.0 / (287.0 * 288.15)).epsilon(1e-3f));
@@ -76,17 +76,17 @@ TEST_CASE("FluidField: gas pool derives density from p, T, R via p = ρRT") {
 TEST_CASE("FluidField: currents apply only below surface, wind only above") {
     FluidField f;
     auto current = FluidField::Disturbance::uniform_incompressible(
-        Real(1000.0f), Vec3<SceneFrame>{0.5f, 0, 0});
+        MFloat(1000.0f), Vec3<SceneFrame>{0.5f, 0, 0});
     current.in_influence = [](const Vec3<SceneFrame>& off) noexcept {
-        return off.z() < Real(0);
+        return off.z() < MFloat(0);
     };
     f.add(current, PERSISTENT);
 
     auto wind_dist = FluidField::Disturbance::uniform_gas(
-        Real(287.0f), Real(288.15f), Real(101325.0f),
+        MFloat(287.0f), MFloat(288.15f), MFloat(101325.0f),
         Vec3<SceneFrame>{0, 10.0f, 0});
     wind_dist.in_influence = [](const Vec3<SceneFrame>& off) noexcept {
-        return off.z() >= Real(0);
+        return off.z() >= MFloat(0);
     };
     f.add(wind_dist, PERSISTENT);
 

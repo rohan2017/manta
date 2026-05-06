@@ -18,7 +18,7 @@ using namespace manta::fields;
 TEST_CASE("state_at_templated<double>: matches state_at exactly") {
     GravityField gf;
     gf.add(GravityField::Disturbance::point_mass(
-               Vec3<SceneFrame>::zero(), Real(4.0e14f)),
+               Vec3<SceneFrame>::zero(), MFloat(4.0e14f)),
            PERSISTENT);
 
     Vec3<SceneFrame, double> p_d{1.0e7, 0.0, 0.0};
@@ -57,7 +57,7 @@ TEST_CASE("state_at_templated<Jet>: point-mass gravity gradient matches analytic
     constexpr double MU = 4.0e14;
     GravityField gf;
     gf.add(GravityField::Disturbance::point_mass(
-               Vec3<SceneFrame>::zero(), Real(MU)),
+               Vec3<SceneFrame>::zero(), MFloat(MU)),
            PERSISTENT);
 
     using Jet = ceres::Jet<double, 3>;
@@ -99,7 +99,7 @@ TEST_CASE("state_at_templated<Jet>: chains through a Jet input with non-trivial 
     constexpr double MU = 4.0e14;
     GravityField gf;
     gf.add(GravityField::Disturbance::point_mass(
-               Vec3<SceneFrame>::zero(), Real(MU)),
+               Vec3<SceneFrame>::zero(), MFloat(MU)),
            PERSISTENT);
 
     using Jet = ceres::Jet<double, 1>;

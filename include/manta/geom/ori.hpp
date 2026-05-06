@@ -12,7 +12,7 @@ namespace manta::geom {
 // implicit child frame relative to Frame F, with quaternion components stored
 // in F's basis. Ori is data — it does not rotate vectors by itself. To
 // transform between frames, use a StaticLink or KinematicLink.
-template <typename Frame, typename Scalar = Real>
+template <typename Frame, typename Scalar = MFloat>
 class Ori {
 public:
     using QuatT = Eigen::Quaternion<Scalar>;

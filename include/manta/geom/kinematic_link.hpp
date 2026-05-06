@@ -20,7 +20,7 @@ namespace manta::geom {
 //   vel_angular : angular velocity of To relative to From, in To frame
 //   acc_linear  : in From frame
 //   acc_angular : in To frame
-template <typename From, typename To, typename Scalar = Real>
+template <typename From, typename To, typename Scalar = MFloat>
 class KinematicLink {
 public:
     using PosF = Vec3<From, Scalar>;

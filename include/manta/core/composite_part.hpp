@@ -14,8 +14,8 @@ template <class Scalar> class CraftT;
 // collects child wrenches, transforms them into this frame, and sums them.
 //
 // Templated on Scalar to match PartT. The non-templated `CompositePart` alias
-// (= CompositePartT<Real>) is what existing user code uses.
-template <class Scalar = Real>
+// (= CompositePartT<MFloat>) is what existing user code uses.
+template <class Scalar = MFloat>
 class CompositePartT : public PartT<Scalar> {
 public:
     explicit CompositePartT(std::string name = "composite") noexcept
@@ -132,6 +132,6 @@ private:
 };
 
 // Backwards-compat alias.
-using CompositePart = CompositePartT<Real>;
+using CompositePart = CompositePartT<MFloat>;
 
 } // namespace manta

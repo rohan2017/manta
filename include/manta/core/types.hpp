@@ -1,41 +1,34 @@
 #pragma once
 
-// Numeric type machinery for manta.
+// Numeric types for manta.
 //
-// Real is the primary scalar used throughout the framework. It is chosen at
-// compile time per craft binary:
+// `MFloat` is the project's configurable floating-point type. Single
+// precision by default; opt into double via the CMake option
+// `MANTA_DOUBLE_PRECISION` (which defines `MANTA_DOUBLE_PRECISION=1` for
+// every TU). Use `MFloat` for sim arithmetic that should follow the
+// configured precision — craft state, planet pose, field parameters,
+// integrator timestep, sensor noise.
 //
-//   - Sim mode (default): Real = float
-//   - Estimation mode:    Real = ceres::Jet<double, MANTA_STATE_DIM>
+// Where the precision is not negotiable, use the C++ type directly:
 //
-// To build a craft binary in estimation mode, define both
-// MANTA_ESTIMATION_MODE and MANTA_STATE_DIM (the codegen-determined
-// state vector size) before including any manta header.
+//   * `float`  — explicit 32-bit storage (e.g. wire formats that must be
+//                bit-stable across processes regardless of build flags).
+//   * `double` — algorithms that need 64-bit conditioning (Kalman
+//                covariance, Ceres autodiff Jets, long-horizon clock
+//                accumulation).
 //
-// All physics-relevant math types in manta are templated on Scalar with a
-// default of Real, so a single binary can also mix scalars per-craft if
-// needed (e.g. one craft in float, another in Jet).
-
-#if defined(MANTA_ESTIMATION_MODE)
-    #if !defined(MANTA_STATE_DIM)
-        #error "MANTA_ESTIMATION_MODE requires MANTA_STATE_DIM to be defined."
-    #endif
-    #if !defined(MANTA_HAVE_CERES)
-        #error "MANTA_ESTIMATION_MODE requires Ceres Solver."
-    #endif
-    #include <ceres/jet.h>
-#endif
+// All physics-relevant math types in manta are templated on `Scalar`
+// with a default of `MFloat`, so the same class hierarchy can be
+// instantiated at multiple precisions in one binary — that's how the
+// EKF stands up a `WorldT<double>` and a `WorldT<ceres::Jet<double, N>>`
+// alongside a `WorldT<MFloat>` sim.
 
 namespace manta {
 
-#if defined(MANTA_ESTIMATION_MODE)
-    using Real = ceres::Jet<double, MANTA_STATE_DIM>;
-    inline constexpr bool kEstimationMode = true;
-    inline constexpr int  kStateDim       = MANTA_STATE_DIM;
+#if defined(MANTA_DOUBLE_PRECISION) && MANTA_DOUBLE_PRECISION
+    using MFloat = double;
 #else
-    using Real = float;
-    inline constexpr bool kEstimationMode = false;
-    inline constexpr int  kStateDim       = 0;
+    using MFloat = float;
 #endif
 
 } // namespace manta

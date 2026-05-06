@@ -44,14 +44,14 @@ public:
     // Called once at registration time by `World::add_planet`. Subclasses
     // attach disturbances to the world's fields here. Default: no-op (a
     // featureless planet doesn't affect any field).
-    virtual void register_disturbances(WorldT<Real>& /*world*/) {}
+    virtual void register_disturbances(WorldT<MFloat>& /*world*/) {}
 
     // Called each tick before any craft updates. Subclasses advance their
     // frame transform (rotation, ephemeris) and any time-varying disturbance
     // state here. Default: no-op (stationary planet).
     //
     // `t` is the world clock's current time; `dt` is the upcoming step.
-    virtual void update(Real /*t*/, Real /*dt*/) {}
+    virtual void update(MFloat /*t*/, MFloat /*dt*/) {}
 
 protected:
     // Subclasses set this in their constructor or `update()` to express the

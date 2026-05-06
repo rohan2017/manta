@@ -46,7 +46,7 @@ class Mass(PartDescriptor):
         )
         self.apply_gravity: bool = bool(apply_gravity)
 
-    def emit_constructor_args(self, scalar: str = "manta::Real") -> str:
+    def emit_constructor_args(self, scalar: str = "manta::MFloat") -> str:
         ag = "true" if self.apply_gravity else "false"
         if self.moi is None:
             return f'"{self.name}", {scalar}({_f(self.mass)}), {ag}'

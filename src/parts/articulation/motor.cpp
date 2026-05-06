@@ -7,41 +7,41 @@ namespace manta::parts {
 
 Motor::Motor(std::string name,
              geom::Vec3<PartFrame> axis,
-             Real stall_torque,
-             Real damping)
+             MFloat stall_torque,
+             MFloat damping)
     : ArticulatedPart(std::move(name), axis),
       stall_torque_(stall_torque),
       damping_(damping) {}
 
 void Motor::resolve(const Wrench<PartFrame>& child_total,
                     Wrench<PartFrame>&       parent_out,
-                    Real&                    joint_accel_out) {
+                    MFloat&                    joint_accel_out) {
     using V      = geom::Vec3<PartFrame>;
-    using EigenV = Eigen::Matrix<Real, 3, 1>;
+    using EigenV = Eigen::Matrix<MFloat, 3, 1>;
 
     // Decompose child torque into axial (along joint axis) and perpendicular
     // (transmitted as constraint reaction to the parent).
     EigenV axis = axis_.raw();           // unit
     EigenV tau  = child_total.torque().raw();
-    Real   tau_axial = tau.dot(axis);
+    MFloat   tau_axial = tau.dot(axis);
     EigenV tau_perp  = tau - tau_axial * axis;
 
     // Actuator torque about the axis. In Saturating mode the actuator pushes
     // the joint with τ_cmd (clamped to ±stall); in Passive mode there is no
     // actuator torque and the joint reacts only to tau_axial + damping.
-    Real tau_actuator = Real(0);
-    if (mode_ == Mode::Saturating && stall_torque_ > Real(0)) {
+    MFloat tau_actuator = MFloat(0);
+    if (mode_ == Mode::Saturating && stall_torque_ > MFloat(0)) {
         tau_actuator = std::clamp(torque_cmd_, -stall_torque_, stall_torque_);
     } else if (mode_ == Mode::Saturating) {
         tau_actuator = torque_cmd_;          // unbounded if stall not configured
     }
 
     // Optional viscous damping (resists rate; takes joint torque from joint).
-    Real tau_damping = -damping_ * rate_;
+    MFloat tau_damping = -damping_ * rate_;
 
     // Net axial torque on the joint output side: child's axial torque +
     // actuator + damping. The joint integrator advances using this.
-    Real tau_net_axial = tau_axial + tau_actuator + tau_damping;
+    MFloat tau_net_axial = tau_axial + tau_actuator + tau_damping;
 
     // Axial moment of inertia about the JOINT ORIGIN, projected on the
     // joint axis. Built from the standard COM-based MOI via parallel axis;
@@ -49,12 +49,12 @@ void Motor::resolve(const Wrench<PartFrame>& child_total,
     // mount-frame stored MOI yields the same result as the joint-output
     // frame.
     EigenV com       = get_com().raw();
-    Real   d_perp_sq = com.squaredNorm() - (com.dot(axis)) * (com.dot(axis));
-    Real   I_axial   = axis.dot(get_moi().raw() * axis) + get_mass() * d_perp_sq;
-    if (I_axial < Real(1e-18)) {
+    MFloat   d_perp_sq = com.squaredNorm() - (com.dot(axis)) * (com.dot(axis));
+    MFloat   I_axial   = axis.dot(get_moi().raw() * axis) + get_mass() * d_perp_sq;
+    if (I_axial < MFloat(1e-18)) {
         // Subtree has no axial inertia (or compute_params not called).
         // Treat joint as locked: no acceleration, full torque to parent.
-        joint_accel_out = Real(0);
+        joint_accel_out = MFloat(0);
         parent_out = Wrench<PartFrame>{
             child_total.force(),
             V::from_raw(tau)

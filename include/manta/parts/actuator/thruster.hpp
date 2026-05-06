@@ -79,7 +79,7 @@ private:
 
 } // namespace detail
 
-template <class Scalar = Real>
+template <class Scalar = MFloat>
 class Thruster1T : public detail::ThrusterImpl<1, Scalar> {
 public:
     using Base = detail::ThrusterImpl<1, Scalar>;
@@ -114,7 +114,7 @@ namespace detail {
     }
 } // namespace detail
 
-template <class Scalar = Real>
+template <class Scalar = MFloat>
 class Thruster2T : public detail::ThrusterImpl<2, Scalar> {
 public:
     using Base = detail::ThrusterImpl<2, Scalar>;
@@ -128,7 +128,7 @@ public:
                detail::zero_coefs<2, Scalar>()) {}
 };
 
-template <class Scalar = Real>
+template <class Scalar = MFloat>
 class Thruster3T : public detail::ThrusterImpl<3, Scalar> {
 public:
     using Base = detail::ThrusterImpl<3, Scalar>;
@@ -142,7 +142,7 @@ public:
                detail::zero_coefs<3, Scalar>()) {}
 };
 
-template <class Scalar = Real>
+template <class Scalar = MFloat>
 class Thruster4T : public detail::ThrusterImpl<4, Scalar> {
 public:
     using Base = detail::ThrusterImpl<4, Scalar>;
@@ -156,13 +156,13 @@ public:
                detail::zero_coefs<4, Scalar>()) {}
 };
 
-using Thruster1 = Thruster1T<Real>;
-using Thruster2 = Thruster2T<Real>;
-using Thruster3 = Thruster3T<Real>;
-using Thruster4 = Thruster4T<Real>;
+using Thruster1 = Thruster1T<MFloat>;
+using Thruster2 = Thruster2T<MFloat>;
+using Thruster3 = Thruster3T<MFloat>;
+using Thruster4 = Thruster4T<MFloat>;
 
 // Canonical name for the common 1st-order case.
-template <class Scalar = Real> using ThrusterT = Thruster1T<Scalar>;
+template <class Scalar = MFloat> using ThrusterT = Thruster1T<Scalar>;
 using Thruster = Thruster1;
 
 } // namespace manta::parts

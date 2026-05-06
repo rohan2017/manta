@@ -38,10 +38,10 @@ class PointGravitySrc(PartDescriptor):
         self.grav_mass  = float(grav_mass)
         self.persistent = bool(persistent)
 
-    def emit_constructor_args(self, scalar: str = "manta::Real") -> str:
+    def emit_constructor_args(self, scalar: str = "manta::MFloat") -> str:
         return f'"{self.name}", {scalar}({_f(self.grav_mass)})'
 
-    def emit_post_construction(self, scalar: str = "manta::Real") -> list[str]:
+    def emit_post_construction(self, scalar: str = "manta::MFloat") -> list[str]:
         out = list(super().emit_post_construction(scalar))
         if self.persistent:
             out.append(f"{self.name}_->set_persistent(true);")

@@ -29,7 +29,7 @@ using namespace manta::parts;
 using namespace manta::fields;
 
 namespace {
-FluidField uniform_water(Real density = Real(1000.0f),
+FluidField uniform_water(MFloat density = MFloat(1000.0f),
                          Vec3<SceneFrame> velocity = Vec3<SceneFrame>::zero()) {
     FluidField f;
     f.add(FluidField::Disturbance::uniform_incompressible(density, velocity),
@@ -109,7 +109,7 @@ TEST_CASE("PointBuoy composition: 4 buoys ~ neutral buoyancy at depth") {
     c.root().add<Mass>("body", 1.0f);   // auto-gravity on
     // Four PointBuoys evenly spaced — same-symmetry as the deleted Hull's
     // 4-sample column, but composed from atomic parts.
-    Real V_per = Real(0.001f / 4.0f);
+    MFloat V_per = MFloat(0.001f / 4.0f);
     auto& b1 = c.root().add<PointBuoy>("b1", V_per);
     auto& b2 = c.root().add<PointBuoy>("b2", V_per);
     auto& b3 = c.root().add<PointBuoy>("b3", V_per);
@@ -143,7 +143,7 @@ Mat3<PartFrame> diag_mat(float a, float b, float cc) {
 }
 
 TEST_CASE("Surface1: linear drag — F = -k * v_rel") {
-    auto fluid = uniform_water(Real(1.0f));
+    auto fluid = uniform_water(MFloat(1.0f));
     Craft c("test");
     c.register_field(fluid);
     auto A = std::array<Mat3<PartFrame>, 1>{ diag_mat(-2.0f, -2.0f, -2.0f) };
@@ -155,7 +155,7 @@ TEST_CASE("Surface1: linear drag — F = -k * v_rel") {
 }
 
 TEST_CASE("Surface1: fluid moving relative to body → force") {
-    auto wind = uniform_water(Real(1.0f), Vec3<SceneFrame>{5.0f, 0, 0});
+    auto wind = uniform_water(MFloat(1.0f), Vec3<SceneFrame>{5.0f, 0, 0});
     Craft c("test");
     c.register_field(wind);
     auto A = std::array<Mat3<PartFrame>, 1>{ diag_mat(-2.0f, -2.0f, -2.0f) };
@@ -170,7 +170,7 @@ TEST_CASE("Surface1: fluid moving relative to body → force") {
 }
 
 TEST_CASE("Surface2: linear + quadratic — A*v + B*v² accumulate") {
-    auto wind = uniform_water(Real(1.0f), Vec3<SceneFrame>{3.0f, 0, 0});
+    auto wind = uniform_water(MFloat(1.0f), Vec3<SceneFrame>{3.0f, 0, 0});
     Craft c("test");
     c.register_field(wind);
     std::array<Mat3<PartFrame>, 2> A{ diag_mat(-1.0f, -1.0f, -1.0f),
@@ -186,7 +186,7 @@ TEST_CASE("Surface2: linear + quadratic — A*v + B*v² accumulate") {
 TEST_CASE("Surface2: sign of v_rel is preserved by the quadratic term") {
     // A positive diagonal A_2 should produce force ALONG v_rel, regardless
     // of sign on each axis. Componentwise rule: F_i = A_2.ii · sign(v_i) · v_i².
-    auto fluid = uniform_water(Real(1.0f));
+    auto fluid = uniform_water(MFloat(1.0f));
     std::array<Mat3<PartFrame>, 2> A{ diag_mat(0.0f, 0.0f, 0.0f),
                                       diag_mat(1.0f, 1.0f, 1.0f) };   // pure quadratic
     std::array<Mat3<PartFrame>, 2> B{ diag_mat(0.0f, 0.0f, 0.0f),
@@ -219,7 +219,7 @@ TEST_CASE("Surface2: sign of v_rel is preserved by the quadratic term") {
 }
 
 TEST_CASE("Surface1: torque tensor produces torque from velocity") {
-    auto fluid = uniform_water(Real(1.0f));
+    auto fluid = uniform_water(MFloat(1.0f));
     Craft c("test");
     c.register_field(fluid);
     std::array<Mat3<PartFrame>, 1> A{ diag_mat(0.0f, 0.0f, 0.0f) };

@@ -20,18 +20,18 @@ namespace manta::sim {
 class RateGate {
 public:
     constexpr RateGate() noexcept = default;
-    explicit constexpr RateGate(Real rate_hz) noexcept
-        : period_(rate_hz > Real(0) ? Real(1) / rate_hz : Real(0)) {}
+    explicit constexpr RateGate(MFloat rate_hz) noexcept
+        : period_(rate_hz > MFloat(0) ? MFloat(1) / rate_hz : MFloat(0)) {}
 
-    bool tick(Real dt) noexcept {
-        if (period_ <= Real(0)) return true;
+    bool tick(MFloat dt) noexcept {
+        if (period_ <= MFloat(0)) return true;
         if (!started_) {
             started_ = true;
-            accum_   = Real(0);
+            accum_   = MFloat(0);
             return true;
         }
         accum_ += dt;
-        if (accum_ + Real(1e-9) >= period_) {
+        if (accum_ + MFloat(1e-9) >= period_) {
             accum_ -= period_;
             return true;
         }
@@ -39,13 +39,13 @@ public:
     }
 
     // Reset to the "first call fires" state. Useful for unit tests.
-    void reset() noexcept { started_ = false; accum_ = Real(0); }
+    void reset() noexcept { started_ = false; accum_ = MFloat(0); }
 
-    Real period() const noexcept { return period_; }
+    MFloat period() const noexcept { return period_; }
 
 private:
-    Real period_  = Real(0);   // 0 = ungated
-    Real accum_   = Real(0);
+    MFloat period_  = MFloat(0);   // 0 = ungated
+    MFloat accum_   = MFloat(0);
     bool started_ = false;
 };
 

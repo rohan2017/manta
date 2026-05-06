@@ -384,13 +384,13 @@ TEST_CASE("EKF: 3-D pose tracker against thrust+gravity sim") {
 
 // ---- Templated Craft POC ----
 //
-// Validates that the same Craft authoring API works with a non-Real scalar
+// Validates that the same Craft authoring API works with a non-MFloat scalar
 // (here, double — used for higher-precision filtering or as the value step
 // in an EKF). No codegen, just manual construction. When a future codegen
 // extension emits templated Craft subclasses, this is the typesystem path it
 // will go through.
 
-TEST_CASE("CraftT<double>: builds and ticks identically to CraftT<Real>") {
+TEST_CASE("CraftT<double>: builds and ticks identically to CraftT<MFloat>") {
     using DCraft     = manta::CraftT<double>;
     using DMass = manta::parts::MassT<double>;
 
@@ -499,7 +499,7 @@ TEST_CASE("EKF: free-body predict+update extracts Jacobians from CraftT") {
     using Ekf = manta::estimation::EKF</*NumCrafts=*/1, /*MeasDim=*/3>;
     using Jet = Ekf::Jet;
 
-    // Build the Real-side world with one craft.
+    // Build the value-side world with one craft.
     manta::WorldT<double> w_real;
     w_real.clock().set_dt(0.01f);
     auto& s_real = w_real.create_scene();

@@ -28,13 +28,13 @@ namespace fields { class Field; }
 // after populating the kinematic cache (craft_to_part_).
 //
 // Templated on Scalar so the same class hierarchy can host both the sim
-// path (Scalar = Real, typically float) and the estimator path
+// path (Scalar = MFloat, typically float) and the estimator path
 // (Scalar = ceres::Jet<double, N>) — the same Craft can be evaluated by a
 // Scene (sim) or by an EKF (estimator) depending on which scalar it's
 // instantiated with. Most user code uses the `Part` alias below, which is
-// `PartT<Real>` — existing non-templated Part subclasses bind to this
+// `PartT<MFloat>` — existing non-templated Part subclasses bind to this
 // instantiation and need no changes.
-template <class Scalar = Real>
+template <class Scalar = MFloat>
 class PartT {
 public:
     explicit PartT(std::string name) noexcept : name_(std::move(name)) {}
@@ -159,7 +159,7 @@ public:
     const PartT*       parent() const noexcept { return parent_; }
 
     // Craft accessors. For the sim path the craft pointer is set when the
-    // Part is added to a CraftT<Real>; for the estimator path (Jet), it
+    // Part is added to a CraftT<MFloat>; for the estimator path (Jet), it
     // points to the EKF's `CraftT<Jet>` instance.
     CraftT<Scalar>&       craft();
     const CraftT<Scalar>& craft() const;
@@ -206,10 +206,10 @@ private:
 };
 
 // Backwards-compat alias: existing user code writing `class Foo : public Part`
-// binds to PartT<Real> automatically. The Scalar=Real instantiation is the
+// binds to PartT<MFloat> automatically. The Scalar=value instantiation is the
 // only one used by the sim path; estimator-side uses (Scalar = Jet<...>)
 // activate when the Craft class is templated in a future step.
-using Part = PartT<Real>;
+using Part = PartT<MFloat>;
 
 // --- template implementations ---
 

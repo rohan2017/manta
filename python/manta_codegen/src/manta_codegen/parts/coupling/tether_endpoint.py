@@ -28,7 +28,7 @@ class TetherEndpoint(PartDescriptor):
 
     def __init__(self, name: str, tether_var: str, is_a: bool, **kwargs) -> None:
         """`tether_var` is the C++ variable name of the
-        `manta::coupling::TetherT<Scalar>` (or its `Tether` Real-alias) in scope
+        `manta::coupling::TetherT<Scalar>` (or its `Tether` MFloat-alias) in scope
         at the construction site. The caller's glue code is responsible for
         ensuring it exists with the matching Scalar. `is_a=True` registers as
         the first endpoint, `False` as the second."""
@@ -36,5 +36,5 @@ class TetherEndpoint(PartDescriptor):
         self.tether_var = tether_var
         self.is_a = bool(is_a)
 
-    def emit_constructor_args(self, scalar: str = "manta::Real") -> str:
+    def emit_constructor_args(self, scalar: str = "manta::MFloat") -> str:
         return f'"{self.name}", {self.tether_var}, {"true" if self.is_a else "false"}'

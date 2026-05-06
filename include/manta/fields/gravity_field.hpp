@@ -46,31 +46,31 @@ struct GravityDisturbance {
     // Layout-stable POD param structs (the wire format). Keep these in
     // sync with the factory builders in `gravity_field.cpp` (or the
     // inline helpers below); the static_asserts pin the size budget.
-    struct UniformParams     { Real gx, gy, gz; };
-    struct PointMassParams   { Real ox, oy, oz, mu; };
-    struct PointMassJ2Params { Real ox, oy, oz, mu, j2, eq_radius, ax, ay, az; };
+    struct UniformParams     { MFloat gx, gy, gz; };
+    struct PointMassParams   { MFloat ox, oy, oz, mu; };
+    struct PointMassJ2Params { MFloat ox, oy, oz, mu, j2, eq_radius, ax, ay, az; };
 
     // Uniform gravity everywhere (e.g. flat-earth -9.81 ẑ).
     static GravityDisturbance uniform(Vec g) {
         GravityDisturbance d;
         d.tag    = gravity_tags::UNIFORM;
-        UniformParams up{Real(g.x()), Real(g.y()), Real(g.z())};
+        UniformParams up{MFloat(g.x()), MFloat(g.y()), MFloat(g.z())};
         std::memcpy(d.params.data(), &up, sizeof(up));
         d.delta_g = [g](const Vec&) noexcept { return g; };
         return d;
     }
 
     // Inverse-square gravity from a point mass at `origin`. `mu` is GM.
-    static GravityDisturbance point_mass(Vec origin, Real mu) {
+    static GravityDisturbance point_mass(Vec origin, MFloat mu) {
         GravityDisturbance d;
         d.origin = origin;
         d.tag    = gravity_tags::POINT_MASS;
-        PointMassParams pm{Real(origin.x()), Real(origin.y()), Real(origin.z()), mu};
+        PointMassParams pm{MFloat(origin.x()), MFloat(origin.y()), MFloat(origin.z()), mu};
         std::memcpy(d.params.data(), &pm, sizeof(pm));
         d.delta_g = [mu](const Vec& off) noexcept {
-            Real r2 = off.raw().squaredNorm();
-            if (r2 < Real(1e-12f)) return Vec::zero();
-            Real r  = std::sqrt(r2);
+            MFloat r2 = off.raw().squaredNorm();
+            if (r2 < MFloat(1e-12f)) return Vec::zero();
+            MFloat r  = std::sqrt(r2);
             return Vec::from_raw(off.raw() * (-mu / (r2 * r)));
         };
         return d;
@@ -78,36 +78,36 @@ struct GravityDisturbance {
 
     // Point mass with J2 oblateness perturbation.
     static GravityDisturbance point_mass_j2(Vec  origin,
-                                            Real mu,
-                                            Real j2_coeff,
-                                            Real equatorial_radius,
-                                            Vec  polar_axis = Vec{Real(0), Real(0), Real(1)}) {
+                                            MFloat mu,
+                                            MFloat j2_coeff,
+                                            MFloat equatorial_radius,
+                                            Vec  polar_axis = Vec{MFloat(0), MFloat(0), MFloat(1)}) {
         GravityDisturbance d;
         d.origin = origin;
         d.tag    = gravity_tags::POINT_MASS_J2;
         PointMassJ2Params pp{
-            Real(origin.x()), Real(origin.y()), Real(origin.z()),
+            MFloat(origin.x()), MFloat(origin.y()), MFloat(origin.z()),
             mu, j2_coeff, equatorial_radius,
-            Real(polar_axis.x()), Real(polar_axis.y()), Real(polar_axis.z()),
+            MFloat(polar_axis.x()), MFloat(polar_axis.y()), MFloat(polar_axis.z()),
         };
         std::memcpy(d.params.data(), &pp, sizeof(pp));
         d.delta_g = [mu, j2_coeff, equatorial_radius, polar_axis](const Vec& off) noexcept {
             const auto& r = off.raw();
-            Real r2 = r.squaredNorm();
-            if (r2 < Real(1e-12f)) return Vec::zero();
-            Real r_norm = std::sqrt(r2);
-            Real inv_r3 = Real(1) / (r2 * r_norm);
-            Eigen::Matrix<Real, 3, 1> g = r * (-mu * inv_r3);
-            Real inv_r2 = Real(1) / r2;
-            Real z_p    = r.dot(polar_axis.raw());
-            Real z_p2   = z_p * z_p;
-            Real factor = Real(1.5) * j2_coeff
+            MFloat r2 = r.squaredNorm();
+            if (r2 < MFloat(1e-12f)) return Vec::zero();
+            MFloat r_norm = std::sqrt(r2);
+            MFloat inv_r3 = MFloat(1) / (r2 * r_norm);
+            Eigen::Matrix<MFloat, 3, 1> g = r * (-mu * inv_r3);
+            MFloat inv_r2 = MFloat(1) / r2;
+            MFloat z_p    = r.dot(polar_axis.raw());
+            MFloat z_p2   = z_p * z_p;
+            MFloat factor = MFloat(1.5) * j2_coeff
                         * (equatorial_radius * equatorial_radius) * inv_r2;
-            Real five_z2_over_r2 = Real(5) * z_p2 * inv_r2;
-            Eigen::Matrix<Real, 3, 1> r_eq = r - polar_axis.raw() * z_p;
-            g += r_eq * (-mu * inv_r3 * factor * (five_z2_over_r2 - Real(1)))
+            MFloat five_z2_over_r2 = MFloat(5) * z_p2 * inv_r2;
+            Eigen::Matrix<MFloat, 3, 1> r_eq = r - polar_axis.raw() * z_p;
+            g += r_eq * (-mu * inv_r3 * factor * (five_z2_over_r2 - MFloat(1)))
                + polar_axis.raw() * (-mu * inv_r3 * factor * z_p
-                                     * (five_z2_over_r2 - Real(3)));
+                                     * (five_z2_over_r2 - MFloat(3)));
             return Vec::from_raw(g);
         };
         return d;
@@ -129,7 +129,7 @@ public:
     }
 
     Vec state_at(const Vec& pos) const noexcept {
-        Eigen::Matrix<Real, 3, 1> sum = Eigen::Matrix<Real, 3, 1>::Zero();
+        Eigen::Matrix<MFloat, 3, 1> sum = Eigen::Matrix<MFloat, 3, 1>::Zero();
         for (const auto& e : entries_) {
             Vec off = Vec::from_raw(pos.raw() - e.d.origin.raw());
             if (e.d.in_influence && !e.d.in_influence(off)) continue;

@@ -17,14 +17,14 @@ struct Ex3CraftTelemetry {
     float v[3] = {0,0,0};
     float w[3] = {0,0,0};
     struct Yaw_motorT {
-        manta::Real angle{};
-        manta::Real rate{};
-        manta::Real accel{};
+        manta::MFloat angle{};
+        manta::MFloat rate{};
+        manta::MFloat accel{};
     } yaw_motor;
     struct Pitch_motorT {
-        manta::Real angle{};
-        manta::Real rate{};
-        manta::Real accel{};
+        manta::MFloat angle{};
+        manta::MFloat rate{};
+        manta::MFloat accel{};
     } pitch_motor;
     struct EngineT {
         float throttle{};

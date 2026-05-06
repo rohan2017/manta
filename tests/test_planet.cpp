@@ -16,16 +16,16 @@ namespace {
 class TestPlanet : public Planet {
 public:
     explicit TestPlanet(std::string name = "test_planet",
-                        Real omega_z = Real(0))
+                        MFloat omega_z = MFloat(0))
         : Planet(std::move(name)), omega_z_(omega_z) {
         world_to_planet_.set_vel_angular(
-            geom::Vec3<PlanetFrame>{Real(0), Real(0), omega_z_});
+            geom::Vec3<PlanetFrame>{MFloat(0), MFloat(0), omega_z_});
     }
 
     int update_count() const noexcept { return update_count_; }
-    Real elapsed_t() const noexcept { return last_t_; }
+    MFloat elapsed_t() const noexcept { return last_t_; }
 
-    void update(Real t, Real /*dt*/) override {
+    void update(MFloat t, MFloat /*dt*/) override {
         ++update_count_;
         last_t_ = t;
     }
@@ -33,15 +33,15 @@ public:
     bool registered = false;
     void register_disturbances(World& /*w*/) override { registered = true; }
 
-    void set_acc_angular_z(Real alpha_z) noexcept {
+    void set_acc_angular_z(MFloat alpha_z) noexcept {
         world_to_planet_.set_acc_angular(
-            geom::Vec3<PlanetFrame>{Real(0), Real(0), alpha_z});
+            geom::Vec3<PlanetFrame>{MFloat(0), MFloat(0), alpha_z});
     }
 
 private:
-    Real omega_z_;
+    MFloat omega_z_;
     int  update_count_ = 0;
-    Real last_t_ = Real(0);
+    MFloat last_t_ = MFloat(0);
 };
 
 } // namespace
@@ -67,7 +67,7 @@ TEST_CASE("Planet: World::update advances each planet via update()") {
 }
 
 TEST_CASE("Planet: world_to_planet defaults to identity, can carry rotation") {
-    TestPlanet p("rotor", /*omega_z=*/Real(0.5));
+    TestPlanet p("rotor", /*omega_z=*/MFloat(0.5));
     const auto& wtp = p.world_to_planet();
     CHECK(wtp.position().raw().norm() == doctest::Approx(0.0));
     CHECK(wtp.orientation().raw().w() == doctest::Approx(1.0));
@@ -100,7 +100,7 @@ TEST_CASE("Scene: world_to_scene with no planet — static, zero motion") {
 TEST_CASE("Scene: world_to_scene picks up planet's rotation rate") {
     World w;
     w.clock().set_dt(0.01f);
-    auto& p = w.add_planet<TestPlanet>("rotor", /*omega_z=*/Real(0.5));
+    auto& p = w.add_planet<TestPlanet>("rotor", /*omega_z=*/MFloat(0.5));
     auto& s = w.create_scene();
     s.set_planet(&p);
 
@@ -115,7 +115,7 @@ TEST_CASE("Scene: world_to_scene picks up planet's rotation rate") {
 TEST_CASE("Planet: centrifugal acceleration on a craft at rest in a rotating scene") {
     World w;
     w.clock().set_dt(0.001f);
-    auto& p = w.add_planet<TestPlanet>("rotor", /*omega_z=*/Real(1.0));
+    auto& p = w.add_planet<TestPlanet>("rotor", /*omega_z=*/MFloat(1.0));
     auto& s = w.create_scene();
     s.set_planet(&p);
 
@@ -139,7 +139,7 @@ TEST_CASE("Planet: centrifugal acceleration on a craft at rest in a rotating sce
 TEST_CASE("Planet: Coriolis acceleration on a radially-moving craft") {
     World w;
     w.clock().set_dt(0.001f);
-    auto& p = w.add_planet<TestPlanet>("rotor", /*omega_z=*/Real(1.0));
+    auto& p = w.add_planet<TestPlanet>("rotor", /*omega_z=*/MFloat(1.0));
     auto& s = w.create_scene();
     s.set_planet(&p);
 
@@ -169,11 +169,11 @@ TEST_CASE("Planet: Coriolis acceleration on a radially-moving craft") {
 TEST_CASE("Planet: translational pseudo-force from non-inertial scene origin") {
     World w;
     w.clock().set_dt(0.001f);
-    auto& p = w.add_planet<TestPlanet>("rotor", /*omega_z=*/Real(1.0));
+    auto& p = w.add_planet<TestPlanet>("rotor", /*omega_z=*/MFloat(1.0));
     auto& s = w.create_scene();
     s.set_planet(&p);
     s.set_planet_to_scene(geom::StaticLink<PlanetFrame, SceneFrame>{
-        Vec3<PlanetFrame>{Real(2.0), Real(0), Real(0)},
+        Vec3<PlanetFrame>{MFloat(2.0), MFloat(0), MFloat(0)},
         geom::Ori<PlanetFrame>::identity()});
 
     Craft c("centered_craft");
@@ -195,8 +195,8 @@ TEST_CASE("Planet: translational pseudo-force from non-inertial scene origin") {
 TEST_CASE("Planet: Euler pseudo-force from angular acceleration") {
     World w;
     w.clock().set_dt(0.001f);
-    auto& p = w.add_planet<TestPlanet>("spinner", /*omega_z=*/Real(0));
-    p.set_acc_angular_z(Real(1.0));
+    auto& p = w.add_planet<TestPlanet>("spinner", /*omega_z=*/MFloat(0));
+    p.set_acc_angular_z(MFloat(1.0));
 
     auto& s = w.create_scene();
     s.set_planet(&p);
@@ -221,11 +221,11 @@ TEST_CASE("Planet: Euler pseudo-force from angular acceleration") {
 TEST_CASE("Planet: translational + centrifugal compose to expected total") {
     World w;
     w.clock().set_dt(0.001f);
-    auto& p = w.add_planet<TestPlanet>("rotor", /*omega_z=*/Real(1.0));
+    auto& p = w.add_planet<TestPlanet>("rotor", /*omega_z=*/MFloat(1.0));
     auto& s = w.create_scene();
     s.set_planet(&p);
     s.set_planet_to_scene(geom::StaticLink<PlanetFrame, SceneFrame>{
-        Vec3<PlanetFrame>{Real(3.0), Real(0), Real(0)},
+        Vec3<PlanetFrame>{MFloat(3.0), MFloat(0), MFloat(0)},
         geom::Ori<PlanetFrame>::identity()});
 
     Craft c("co_rotating_craft");

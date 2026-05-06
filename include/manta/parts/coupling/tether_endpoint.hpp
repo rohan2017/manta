@@ -17,7 +17,7 @@ namespace manta::parts {
 // kinematic cache, computes the spring-damper force, and applies it. Both
 // endpoints compute symmetrically; the equal-and-opposite forces fall out of
 // the geometry.
-template <class Scalar = Real>
+template <class Scalar = MFloat>
 class TetherEndpointT : public PartT<Scalar> {
 public:
     // is_a: which slot to register in. Use true for the first endpoint of a
@@ -66,7 +66,7 @@ private:
     coupling::TetherT<Scalar>* tether_;
 };
 
-using TetherEndpoint = TetherEndpointT<Real>;
+using TetherEndpoint = TetherEndpointT<MFloat>;
 
 } // namespace manta::parts
 

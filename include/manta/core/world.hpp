@@ -17,14 +17,14 @@ namespace manta {
 
 // Top-level simulation container, templated on Scalar.
 //
-// `WorldT<Real>` (the alias `World`) drives the sim: real-time tick loop,
+// `WorldT<MFloat>` (the alias `World`) drives the sim: real-time tick loop,
 // real-valued state. `WorldT<Jet>` is the Jacobian-step shadow used by
 // `EKF` — same scenes/crafts/fields registered, but every per-tick
 // computation runs through Ceres Jets so `predict()` extracts the exact
 // state-transition Jacobian via autodiff.
 //
 // Planets are NOT templated. They're treated as a non-estimated input to
-// the filter: their pose/rotation come from a Real-valued `Planet`
+// the filter: their pose/rotation come from a value-valued `Planet`
 // instance; the Jet-world casts the planet's KinematicLink into Jet with
 // zero gradient. That's a deliberate "selective Jet propagation" choice —
 // the EKF doesn't estimate planet motion.
@@ -53,9 +53,9 @@ public:
     }
 
     // --- Planet management ---
-    // Planets are constructed Real-typed (they're shared between value and
+    // Planets are constructed value-typed (they're shared between value and
     // Jet worlds). add_planet<P>(...) constructs P, calls
-    // register_disturbances on this World (which Real-side gives the
+    // register_disturbances on this World (which value-side gives the
     // planet a chance to add its standing field disturbances), and
     // returns a reference. For a Jet World, planets aren't reconstructed
     // — the user (or codegen) shares a single Planet instance across
@@ -64,10 +64,10 @@ public:
     P& add_planet(Args&&... args) {
         auto ptr = std::make_unique<P>(std::forward<Args>(args)...);
         P& ref = *ptr;
-        // Only the Real World invokes register_disturbances — a planet's
+        // Only the value World invokes register_disturbances — a planet's
         // disturbances on shared fields shouldn't be added twice when the
         // codegen also constructs a Jet World on the same planet.
-        if constexpr (std::is_same_v<Scalar, Real>) {
+        if constexpr (std::is_same_v<Scalar, MFloat>) {
             ref.register_disturbances(*this);
         }
         planets_.push_back(std::move(ptr));
@@ -120,24 +120,24 @@ public:
 
     // --- Main step ---
     // One full simulation tick using clock_.dt():
-    //   1. Planets advance (Real world only — Jet world reuses the
-    //      Real-side planet state via Scene's casting).
+    //   1. Planets advance (value world only — Jet world reuses the
+    //      value-side planet state via Scene's casting).
     //   2. All scenes step their crafts.
-    //   3. All registered fields update (Real world only — fields are
+    //   3. All registered fields update (value world only — fields are
     //      shared, updated once).
     //   4. Clock advances.
     void step() {
-        const Real t    = Real(clock_.time());
-        const Real dt_r = Real(clock_.dt());
+        const MFloat t    = MFloat(clock_.time());
+        const MFloat dt_r = MFloat(clock_.dt());
 
-        if constexpr (std::is_same_v<Scalar, Real>) {
+        if constexpr (std::is_same_v<Scalar, MFloat>) {
             for (auto& p : planets_) p->update(t, dt_r);
         }
 
         const Scalar dt_s = Scalar(clock_.dt());
         for (auto& scene : scenes_) scene->step(dt_s);
 
-        if constexpr (std::is_same_v<Scalar, Real>) {
+        if constexpr (std::is_same_v<Scalar, MFloat>) {
             for (auto& [ti, f] : fields_) f->update();
             clock_.advance();
         }
@@ -151,7 +151,7 @@ private:
     SimClock                                     clock_;
 };
 
-// Real instantiation alias — the sim's primary World type.
-using World = WorldT<Real>;
+// value instantiation alias — the sim's primary World type.
+using World = WorldT<MFloat>;
 
 } // namespace manta

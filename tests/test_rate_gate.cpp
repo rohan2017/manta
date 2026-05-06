@@ -23,29 +23,29 @@ TEST_CASE("RateGate: unrated (rate_hz=0) fires every tick") {
 }
 
 TEST_CASE("RateGate: tick 0 always fires regardless of rate") {
-    sim::RateGate g{Real(50)};   // 20 ms period
+    sim::RateGate g{MFloat(50)};   // 20 ms period
     CHECK(g.tick(0.001f) == true);    // tick 0
     CHECK(g.tick(0.001f) == false);   // tick 1
 }
 
 TEST_CASE("RateGate: 100 Hz on a 1 kHz sim fires every 10 ticks") {
-    sim::RateGate g{Real(100)};   // 10 ms period
+    sim::RateGate g{MFloat(100)};   // 10 ms period
     int fires = 0;
     for (int i = 0; i < 50; ++i) {
-        if (g.tick(Real(0.001f))) ++fires;
+        if (g.tick(MFloat(0.001f))) ++fires;
     }
     // 50 ticks at 1 kHz = 50 ms. Expected: tick 0 + tick 10 + 20 + 30 + 40 = 5.
     CHECK(fires == 5);
 }
 
 TEST_CASE("RateGate: variable dt still hits target rate") {
-    sim::RateGate g{Real(20)};   // 50 ms period
+    sim::RateGate g{MFloat(20)};   // 50 ms period
     int fires = 0;
     // 200 ms total in 4 chunks of varying sizes. Should fire at t=0,
     // 50, 100, 150 — i.e. 4 times.
-    Real dts[] = {Real(0.030f), Real(0.025f), Real(0.060f), Real(0.030f),
-                  Real(0.020f), Real(0.020f), Real(0.015f)};
-    for (Real dt : dts) {
+    MFloat dts[] = {MFloat(0.030f), MFloat(0.025f), MFloat(0.060f), MFloat(0.030f),
+                  MFloat(0.020f), MFloat(0.020f), MFloat(0.015f)};
+    for (MFloat dt : dts) {
         if (g.tick(dt)) ++fires;
     }
     CHECK(fires == 4);
@@ -75,7 +75,7 @@ TEST_CASE("IMU: rate_hz=100 on 1kHz sim fires every 10 ticks") {
     auto& s = w.create_scene();
     Craft c("imu_rated");
     auto& imu = c.root().add<parts::IMU>("imu",
-        /*accel_sigma=*/0.0f, /*gyro_sigma=*/0.0f, /*rate_hz=*/Real(100));
+        /*accel_sigma=*/0.0f, /*gyro_sigma=*/0.0f, /*rate_hz=*/MFloat(100));
     c.root().compute_params();
     s.add_craft(c);
 
@@ -93,7 +93,7 @@ TEST_CASE("DVL: rate_hz=50 on 1kHz sim fires every 20 ticks") {
     auto& s = w.create_scene();
     Craft c("dvl_rated");
     auto& dvl = c.root().add<parts::DVL>("dvl",
-        /*velocity_sigma=*/0.0f, /*rate_hz=*/Real(50));
+        /*velocity_sigma=*/0.0f, /*rate_hz=*/MFloat(50));
     c.root().compute_params();
     s.add_craft(c);
 
@@ -111,7 +111,7 @@ TEST_CASE("set_measurement bypasses the gate (always fresh)") {
     auto& s = w.create_scene();
     Craft c("imu_external");
     auto& imu = c.root().add<parts::IMU>("imu",
-        /*accel_sigma=*/0.0f, /*gyro_sigma=*/0.0f, /*rate_hz=*/Real(10));   // very slow native rate
+        /*accel_sigma=*/0.0f, /*gyro_sigma=*/0.0f, /*rate_hz=*/MFloat(10));   // very slow native rate
     c.root().compute_params();
     s.add_craft(c);
 
@@ -121,8 +121,8 @@ TEST_CASE("set_measurement bypasses the gate (always fresh)") {
     CHECK(imu.fresh() == false);
 
     // External feed: should mark fresh regardless of rate cap.
-    imu.set_measurement(geom::Vec3<PartFrame>{Real(0.1f), Real(0), Real(0)},
-                        geom::Vec3<PartFrame>{Real(0), Real(0), Real(0.5f)});
+    imu.set_measurement(geom::Vec3<PartFrame>{MFloat(0.1f), MFloat(0), MFloat(0)},
+                        geom::Vec3<PartFrame>{MFloat(0), MFloat(0), MFloat(0.5f)});
     CHECK(imu.fresh() == true);
     CHECK(imu.consume_fresh() == true);
 }

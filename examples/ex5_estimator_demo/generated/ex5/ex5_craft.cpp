@@ -5,9 +5,9 @@
 
 Ex5Craft::Ex5Craft()
     : manta::Craft("ex5") {
-    body_ = &this->root().add<manta::parts::Mass>("body", manta::Real(1.0f), []{ manta::geom::Mat3<manta::PartFrame, manta::PartFrame, manta::Real> m = manta::geom::Mat3<manta::PartFrame, manta::PartFrame, manta::Real>::identity(); m.raw()(0,0)=manta::Real(0.05f); m.raw()(1,1)=manta::Real(0.05f); m.raw()(2,2)=manta::Real(0.05f); return m; }(), true);
-    imu_ = &this->root().add<manta::parts::IMU>("imu", 0.05f, 0.005f, manta::Real(0.0f));
-    dvl_ = &this->root().add<manta::parts::DVL>("dvl", 0.02f, manta::Real(0.0f));
-    thrust_ = &this->root().add<manta::parts::Thruster1>("thrust", std::array<manta::geom::Vec3<manta::PartFrame, manta::Real>, 1>{manta::geom::Vec3<manta::PartFrame, manta::Real>{manta::Real(15.0f), manta::Real(0.0f), manta::Real(0.0f)}}, std::array<manta::geom::Vec3<manta::PartFrame, manta::Real>, 1>{manta::geom::Vec3<manta::PartFrame, manta::Real>{manta::Real(0.0f), manta::Real(0.0f), manta::Real(0.0f)}});
+    body_ = &this->root().add<manta::parts::Mass>("body", manta::MFloat(1.0f), []{ manta::geom::Mat3<manta::PartFrame, manta::PartFrame, manta::MFloat> m = manta::geom::Mat3<manta::PartFrame, manta::PartFrame, manta::MFloat>::identity(); m.raw()(0,0)=manta::MFloat(0.05f); m.raw()(1,1)=manta::MFloat(0.05f); m.raw()(2,2)=manta::MFloat(0.05f); return m; }(), true);
+    imu_ = &this->root().add<manta::parts::IMU>("imu", 0.05f, 0.005f, manta::MFloat(0.0f));
+    dvl_ = &this->root().add<manta::parts::DVL>("dvl", 0.02f, manta::MFloat(0.0f));
+    thrust_ = &this->root().add<manta::parts::Thruster1>("thrust", std::array<manta::geom::Vec3<manta::PartFrame, manta::MFloat>, 1>{manta::geom::Vec3<manta::PartFrame, manta::MFloat>{manta::MFloat(15.0f), manta::MFloat(0.0f), manta::MFloat(0.0f)}}, std::array<manta::geom::Vec3<manta::PartFrame, manta::MFloat>, 1>{manta::geom::Vec3<manta::PartFrame, manta::MFloat>{manta::MFloat(0.0f), manta::MFloat(0.0f), manta::MFloat(0.0f)}});
     this->root().compute_params();
 }

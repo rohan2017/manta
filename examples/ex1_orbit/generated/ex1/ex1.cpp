@@ -80,7 +80,7 @@ namespace manta_gen::ex1 {
 void setup() {
     w.clock().set_dt(DT);
     scene = &w.create_scene();
-    field_0.add(manta::fields::GravityField::Disturbance::point_mass(manta::geom::Vec3<manta::SceneFrame>{0.0f, 0.0f, 0.0f}, manta::Real(3.986004e+14f)), manta::fields::PERSISTENT);
+    field_0.add(manta::fields::GravityField::Disturbance::point_mass(manta::geom::Vec3<manta::SceneFrame>{0.0f, 0.0f, 0.0f}, manta::MFloat(3.986004e+14f)), manta::fields::PERSISTENT);
     w.register_field(field_0);
     scene->add_craft(craft, manta::InitialState{manta::geom::Vec3<manta::SceneFrame>{6372000.0f, 0.0f, 0.0f}, manta::geom::Ori<manta::SceneFrame>{Eigen::Quaternionf{1.0f, 0.0f, 0.0f, 0.0f}}, manta::geom::Vec3<manta::SceneFrame>{0.0f, 7909.172f, 0.0f}, manta::geom::Vec3<manta::CraftFrame>{0.0f, 0.0f, 0.0f}});
 

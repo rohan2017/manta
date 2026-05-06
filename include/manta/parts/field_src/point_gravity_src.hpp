@@ -23,10 +23,10 @@ namespace manta::parts {
 // PERSISTENT to avoid the per-tick churn (set via `set_persistent(true)`).
 //
 // Required fields: GravityField.
-template <class Scalar = Real>
+template <class Scalar = MFloat>
 class PointGravitySrcT : public PartT<Scalar> {
 public:
-    static constexpr Real kBigG = Real(6.67430e-11f);   // m^3·kg^-1·s^-2
+    static constexpr MFloat kBigG = MFloat(6.67430e-11f);   // m^3·kg^-1·s^-2
 
     explicit PointGravitySrcT(std::string name, Scalar grav_mass)
         : PartT<Scalar>(std::move(name)), grav_mass_(grav_mass) {}
@@ -57,7 +57,7 @@ public:
         auto p_scaled = this->template position<SceneFrame>();
         auto origin   = geom::cast_to_real(p_scaled);
 
-        Real mu = kBigG * geom::strip_to_real(grav_mass_);
+        MFloat mu = kBigG * geom::strip_to_real(grav_mass_);
 
         // For non-persistent sources we let the previous tick's disturbance
         // expire on its own (lifetime=1), keeping update() symmetric across
@@ -82,6 +82,6 @@ private:
     fields::GravityField::Handle handle_{};
 };
 
-using PointGravitySrc = PointGravitySrcT<Real>;
+using PointGravitySrc = PointGravitySrcT<MFloat>;
 
 } // namespace manta::parts

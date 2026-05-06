@@ -53,7 +53,7 @@ std::optional<zenoh::Session> g_session;
 using EkfT = decltype(manta_gen::ex9::ekf_0);
 EkfT::StateCov g_Q = EkfT::StateCov::Identity() * 1e-06f;
 
-// Jet shadow world. Built identically to the Real side in
+// Jet shadow world. Built identically to the MFloat side in
 // setup(); EKF::predict drives this through autodiff to
 // extract the state-transition Jacobian.
 using JetType = EkfT::Jet;
@@ -139,7 +139,7 @@ constexpr int kPubEvery = 20;  // ~50 Hz publish
 namespace manta_gen::ex9 {
 
 void setup() {
-    // ---- Real world ----
+    // ---- MFloat world ----
     w.clock().set_dt(DT);
     scene = &w.create_scene();
     scene->add_craft(craft_0);

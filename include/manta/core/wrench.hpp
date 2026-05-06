@@ -8,7 +8,7 @@ namespace manta {
 
 // A wrench is a (force, torque) pair expressed in a single frame. The torque
 // is taken about the frame's origin. Wrenches in the same frame add.
-template <typename Frame, typename Scalar = Real>
+template <typename Frame, typename Scalar = MFloat>
 class Wrench {
 public:
     using Vec = geom::Vec3<Frame, Scalar>;

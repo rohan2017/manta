@@ -20,7 +20,7 @@
 //      time. Use `MANTA_PART_REQUIRES_FIELD` inside the part class
 //      body or `update()`:
 //
-//          template <class Scalar = Real>
+//          template <class Scalar = MFloat>
 //          class MagnetometerT : public PartT<Scalar> {
 //              MANTA_PART_REQUIRES_FIELD(MANTA_HAS_MAG_FIELD,
 //                  "Magnetometer requires a MagField on the world. "
@@ -50,7 +50,7 @@
 
 #include <type_traits>
 
-#include "types.hpp"   // pulls in Scalar/Real machinery for downstream parts
+#include "types.hpp"   // pulls in Scalar/MFloat machinery for downstream parts
 
 // ---- Default values for all known feature macros ----
 //

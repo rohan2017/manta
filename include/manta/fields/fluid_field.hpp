@@ -30,21 +30,21 @@ namespace fluid_tags {
 //   summed p and T as ρ = p/(RT). Any contribution from delta_density is
 //   ignored on gases. Velocity always sums.
 struct FluidState {
-    Real                   R           = Real(-1);
-    Real                   temperature = Real(0);
-    Real                   density     = Real(0);
-    Real                   pressure    = Real(0);
+    MFloat                   R           = MFloat(-1);
+    MFloat                   temperature = MFloat(0);
+    MFloat                   density     = MFloat(0);
+    MFloat                   pressure    = MFloat(0);
     geom::Vec3<SceneFrame> velocity    = geom::Vec3<SceneFrame>::zero();
 };
 
 struct FluidDisturbance {
     using Vec       = geom::Vec3<SceneFrame>;
-    using ScalarFn  = std::function<Real(const Vec& offset)>;
+    using ScalarFn  = std::function<MFloat(const Vec& offset)>;
     using VecFn     = std::function<Vec(const Vec& offset)>;
     using Influence = std::function<bool(const Vec& offset)>;
 
     Vec           origin           = Vec::zero();
-    Real          R                = Real(-1);
+    MFloat          R                = MFloat(-1);
     ScalarFn      delta_temperature;
     ScalarFn      delta_density;
     ScalarFn      delta_pressure;
@@ -53,17 +53,17 @@ struct FluidDisturbance {
     std::uint16_t tag              = USER_TAG;
     Params        params{};
 
-    struct UniformIncompressParams { Real density, vx, vy, vz; };
-    struct UniformGasParams        { Real R, temperature, pressure, vx, vy, vz; };
+    struct UniformIncompressParams { MFloat density, vx, vy, vz; };
+    struct UniformGasParams        { MFloat R, temperature, pressure, vx, vy, vz; };
 
     // Uniform incompressible fluid (R=-1).
-    static FluidDisturbance uniform_incompressible(Real density,
+    static FluidDisturbance uniform_incompressible(MFloat density,
                                                    Vec  velocity = Vec::zero()) {
         FluidDisturbance d;
-        d.R   = Real(-1);
+        d.R   = MFloat(-1);
         d.tag = fluid_tags::UNIFORM_INCOMPRESS;
         UniformIncompressParams up{
-            density, Real(velocity.x()), Real(velocity.y()), Real(velocity.z())};
+            density, MFloat(velocity.x()), MFloat(velocity.y()), MFloat(velocity.z())};
         std::memcpy(d.params.data(), &up, sizeof(up));
         d.delta_density  = [density] (const Vec&) noexcept { return density; };
         d.delta_velocity = [velocity](const Vec&) noexcept { return velocity; };
@@ -71,15 +71,15 @@ struct FluidDisturbance {
     }
 
     // Uniform gas (R, T, p, velocity all constant).
-    static FluidDisturbance uniform_gas(Real R_,
-                                        Real temperature,
-                                        Real pressure,
+    static FluidDisturbance uniform_gas(MFloat R_,
+                                        MFloat temperature,
+                                        MFloat pressure,
                                         Vec  velocity = Vec::zero()) {
         FluidDisturbance d;
         d.R   = R_;
         d.tag = fluid_tags::UNIFORM_GAS;
         UniformGasParams up{R_, temperature, pressure,
-            Real(velocity.x()), Real(velocity.y()), Real(velocity.z())};
+            MFloat(velocity.x()), MFloat(velocity.y()), MFloat(velocity.z())};
         std::memcpy(d.params.data(), &up, sizeof(up));
         d.delta_temperature = [temperature](const Vec&) noexcept { return temperature; };
         d.delta_pressure    = [pressure]   (const Vec&) noexcept { return pressure;    };
@@ -99,13 +99,13 @@ public:
     FluidState state_at(const Vec& pos) const noexcept {
         FluidState gas, liq;
         bool gas_active = false, liq_active = false;
-        Real gas_R = Real(0);
+        MFloat gas_R = MFloat(0);
 
         for (const auto& e : entries_) {
             Vec off = Vec::from_raw(pos.raw() - e.d.origin.raw());
             if (e.d.in_influence && !e.d.in_influence(off)) continue;
 
-            if (e.d.R == Real(-1)) {
+            if (e.d.R == MFloat(-1)) {
                 liq_active = true;
                 if (e.d.delta_density)
                     liq.density += e.d.delta_density(off);
@@ -127,12 +127,12 @@ public:
 
         if (gas_active) {
             gas.R = gas_R;
-            gas.density = (gas.temperature > Real(0))
+            gas.density = (gas.temperature > MFloat(0))
                         ? gas.pressure / (gas_R * gas.temperature)
-                        : Real(0);
+                        : MFloat(0);
             return gas;
         }
-        if (liq_active) { liq.R = Real(-1); return liq; }
+        if (liq_active) { liq.R = MFloat(-1); return liq; }
         return FluidState{};
     }
 

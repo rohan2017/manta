@@ -19,7 +19,7 @@ namespace manta::parts {
 // `Surface1` is plain linear drag/lift; `Surface2` adds a quadratic term;
 // higher orders are typically overkill (capped at 4).
 //
-// Required fields: FluidField (not Scalar-templated; queried via Real
+// Required fields: FluidField (not Scalar-templated; queried via MFloat
 // bridge — same pattern as Hull / PointBuoy / GravityPart).
 namespace detail {
 
@@ -48,7 +48,7 @@ public:
     void update() override {
         auto& fluid = this->template field<fields::FluidField>();
 
-        // Bridge templated position to Real for the FluidField query.
+        // Bridge templated position to MFloat for the FluidField query.
         auto p_scaled = this->template position<SceneFrame>();
         auto fs       = fluid.state_at(geom::cast_to_real(p_scaled));
 
@@ -96,22 +96,22 @@ private:
 } // namespace detail
 
 // Concrete user-facing classes — one template parameter (Scalar) each.
-template <class Scalar = Real> class Surface1T : public detail::SurfaceImpl<1, Scalar> {
+template <class Scalar = MFloat> class Surface1T : public detail::SurfaceImpl<1, Scalar> {
 public: using detail::SurfaceImpl<1, Scalar>::SurfaceImpl;
 };
-template <class Scalar = Real> class Surface2T : public detail::SurfaceImpl<2, Scalar> {
+template <class Scalar = MFloat> class Surface2T : public detail::SurfaceImpl<2, Scalar> {
 public: using detail::SurfaceImpl<2, Scalar>::SurfaceImpl;
 };
-template <class Scalar = Real> class Surface3T : public detail::SurfaceImpl<3, Scalar> {
+template <class Scalar = MFloat> class Surface3T : public detail::SurfaceImpl<3, Scalar> {
 public: using detail::SurfaceImpl<3, Scalar>::SurfaceImpl;
 };
-template <class Scalar = Real> class Surface4T : public detail::SurfaceImpl<4, Scalar> {
+template <class Scalar = MFloat> class Surface4T : public detail::SurfaceImpl<4, Scalar> {
 public: using detail::SurfaceImpl<4, Scalar>::SurfaceImpl;
 };
 
-using Surface1 = Surface1T<Real>;
-using Surface2 = Surface2T<Real>;
-using Surface3 = Surface3T<Real>;
-using Surface4 = Surface4T<Real>;
+using Surface1 = Surface1T<MFloat>;
+using Surface2 = Surface2T<MFloat>;
+using Surface3 = Surface3T<MFloat>;
+using Surface4 = Surface4T<MFloat>;
 
 } // namespace manta::parts

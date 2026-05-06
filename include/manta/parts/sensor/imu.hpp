@@ -19,13 +19,13 @@ namespace manta::parts {
 // on the tick a new reading was just produced and clears the freshness
 // bit. The plain `last_accel()` / `last_gyro()` getters continue to
 // return the most recent value regardless of staleness.
-template <class Scalar = Real>
+template <class Scalar = MFloat>
 class IMUT : public PartT<Scalar> {
 public:
     explicit IMUT(std::string name,
                   float accel_sigma = 0.0f,
                   float gyro_sigma  = 0.0f,
-                  Real  rate_hz     = Real(0))
+                  MFloat  rate_hz     = MFloat(0))
         : PartT<Scalar>(std::move(name))
         , accel_noise_{accel_sigma}
         , gyro_noise_{gyro_sigma}
@@ -61,7 +61,7 @@ public:
     }
 
     void update() override {
-        Real dt = (this->craft_ && this->craft_->has_world()) ? this->craft().world().clock().dt() : Real(0);
+        MFloat dt = (this->craft_ && this->craft_->has_world()) ? this->craft().world().clock().dt() : MFloat(0);
         if (!gate_.tick(dt)) return;
         last_accel_ = this->specific_force_body() + accel_noise_;
         last_gyro_  = this->angular_velocity_body() + gyro_noise_;
@@ -119,6 +119,6 @@ private:
     geom::Vec3<PartFrame, Scalar>  last_gyro_;
 };
 
-using IMU = IMUT<Real>;
+using IMU = IMUT<MFloat>;
 
 } // namespace manta::parts

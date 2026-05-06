@@ -17,7 +17,7 @@ namespace manta_gen::ex5_est {
 inline constexpr float DT             = 0.001f;
 inline constexpr float SIM_RATE_MULT  = 1.0f;
 
-// Real-side simulation infrastructure. The filter holds its own
+// MFloat-side simulation infrastructure. The filter holds its own
 // `manta::WorldT<double>` (estimator state lives in double for
 // filter conditioning). The Jet shadow `WorldT<Jet>` for the
 // Jacobian step lives file-private in the .cpp.
@@ -27,11 +27,11 @@ extern manta::fields::GravityField field_0;
 extern Ex5EstCraftT<double> craft;
 
 // EKF wrapper. State dim = 13 * 1 = 13.
-// Bound inside setup() to the Real world + (for EKF) Jet shadow +
+// Bound inside setup() to the MFloat world + (for EKF) Jet shadow +
 // per-craft pointer arrays.
 extern manta::estimation::EKF<1, 9> ekf_0;
 
-// One-time initialization. Builds both worlds (Real + Jet shadow),
+// One-time initialization. Builds both worlds (MFloat + Jet shadow),
 // registers fields, instantiates the filter wrapper + binds it to
 // the worlds, opens Zenoh + declares pubs/subs.
 void setup();

@@ -23,30 +23,30 @@ public:
 
     explicit Motor(std::string name,
                    geom::Vec3<PartFrame> axis,
-                   Real stall_torque = Real(0),
-                   Real damping      = Real(0));
+                   MFloat stall_torque = MFloat(0),
+                   MFloat damping      = MFloat(0));
 
-    void set_torque(Real tau_cmd) noexcept {
+    void set_torque(MFloat tau_cmd) noexcept {
         torque_cmd_ = tau_cmd;
         mode_ = Mode::Saturating;
     }
     void set_passive() noexcept { mode_ = Mode::Passive; }
 
     Mode mode()         const noexcept { return mode_;        }
-    Real torque_cmd()   const noexcept { return torque_cmd_;  }
-    Real stall_torque() const noexcept { return stall_torque_; }
-    Real damping()      const noexcept { return damping_;     }
+    MFloat torque_cmd()   const noexcept { return torque_cmd_;  }
+    MFloat stall_torque() const noexcept { return stall_torque_; }
+    MFloat damping()      const noexcept { return damping_;     }
 
     void resolve(const Wrench<PartFrame>& child_total,
                  Wrench<PartFrame>&       parent_out,
-                 Real&                    joint_accel_out) override;
+                 MFloat&                    joint_accel_out) override;
 
 private:
     // Cached during resolve — used only for reporting/tests.
     Mode mode_         = Mode::Passive;
-    Real torque_cmd_   = Real(0);
-    Real stall_torque_ = Real(0);
-    Real damping_      = Real(0);
+    MFloat torque_cmd_   = MFloat(0);
+    MFloat stall_torque_ = MFloat(0);
+    MFloat damping_      = MFloat(0);
 };
 
 } // namespace manta::parts

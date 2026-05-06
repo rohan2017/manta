@@ -18,7 +18,7 @@ namespace manta::parts {
 // Set `apply_gravity=false` at construction to opt out (e.g. for ballast
 // inside a sealed compartment whose buoyancy is already modeled, or for
 // estimator crafts that don't represent gravity).
-template <class Scalar = Real>
+template <class Scalar = MFloat>
 class MassT : public PartT<Scalar> {
 public:
     // Full constructor: explicit MOI tensor.
@@ -52,7 +52,7 @@ public:
             if (!gf) return;
 
             // CoM in scene frame, then a Scalar-templated field query so
-            // Jet crafts pick up ∂g/∂pos. Real crafts get a no-op fast path.
+            // Jet crafts pick up ∂g/∂pos. value crafts get a no-op fast path.
             auto com_part  = this->get_com();
             auto com_scene = this->scene_to_part().apply_position(com_part);
             auto g_scene_v = fields::state_at_templated<Scalar>(*gf, com_scene);
@@ -70,6 +70,6 @@ private:
     bool apply_gravity_;
 };
 
-using Mass = MassT<Real>;
+using Mass = MassT<MFloat>;
 
 } // namespace manta::parts

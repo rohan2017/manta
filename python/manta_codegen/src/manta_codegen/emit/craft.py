@@ -4,9 +4,9 @@ Two modes:
   * Non-templated (default): emits `class FooCraft : public manta::Craft`
     with a separate .cpp constructor body. Existing path.
   * Scalar-templated (when `craft.scalar_templated == True`): emits
-    `template <class Scalar = manta::Real> class FooCraftT : public
+    `template <class Scalar = manta::MFloat> class FooCraftT : public
     manta::CraftT<Scalar>` as a header-only class, plus a
-    `using FooCraft = FooCraftT<manta::Real>` alias. Required for use with
+    `using FooCraft = FooCraftT<manta::MFloat>` alias. Required for use with
     `manta::estimation::EKF`. All parts must have `cpp_class_template`
     set; codegen raises otherwise.
 """
@@ -139,7 +139,7 @@ def _emit_craft_hpp_templated(craft: Craft) -> str:
     lines += [f'#include "{h}"' for h in part_headers]
     lines += [
         "",
-        f"template <class Scalar = manta::Real>",
+        f"template <class Scalar = manta::MFloat>",
         f"class {cls_t} : public manta::CraftT<Scalar> {{",
         "public:",
         f"    {cls_t}() : manta::CraftT<Scalar>(\"{craft.name}\") {{",
@@ -176,5 +176,5 @@ def _emit_craft_hpp_templated(craft: Craft) -> str:
     for p in parts:
         ct = f"{p.cpp_class_template}<Scalar>"
         lines.append(f"    {ct}* {p.name}_ = nullptr;")
-    lines += ["};", "", f"using {cls} = {cls_t}<manta::Real>;", ""]
+    lines += ["};", "", f"using {cls} = {cls_t}<manta::MFloat>;", ""]
     return "\n".join(lines)

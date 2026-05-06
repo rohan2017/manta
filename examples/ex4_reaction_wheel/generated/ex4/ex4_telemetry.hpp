@@ -17,9 +17,9 @@ struct Ex4CraftTelemetry {
     float v[3] = {0,0,0};
     float w[3] = {0,0,0};
     struct WheelT {
-        manta::Real angle{};
-        manta::Real rate{};
-        manta::Real accel{};
+        manta::MFloat angle{};
+        manta::MFloat rate{};
+        manta::MFloat accel{};
     } wheel;
 
     std::string to_json() const;
