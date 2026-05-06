@@ -14,7 +14,7 @@ class Drone0CraftT : public manta::CraftT<Scalar> {
 public:
     Drone0CraftT() : manta::CraftT<Scalar>("drone_0") {
         body_ = &this->root().template add<manta::parts::MassT<Scalar>>("body", Scalar(1.0f), []{ manta::geom::Mat3<manta::PartFrame, manta::PartFrame, Scalar> m = manta::geom::Mat3<manta::PartFrame, manta::PartFrame, Scalar>::identity(); m.raw()(0,0)=Scalar(0.05f); m.raw()(1,1)=Scalar(0.05f); m.raw()(2,2)=Scalar(0.05f); return m; }(), true);
-        imu_ = &this->root().template add<manta::parts::IMUT<Scalar>>("imu", 0.05f, 0.005f, manta::MFloat(100.0f));
+        imu_ = &this->root().template add<manta::parts::IMUT<Scalar>>("imu", 0.05f, 0.005f, manta::MFloat(100.0f), -1.0f);
         dvl_ = &this->root().template add<manta::parts::DVLT<Scalar>>("dvl", 0.02f, manta::MFloat(10.0f));
         this->root().compute_params();
     }

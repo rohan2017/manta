@@ -33,12 +33,18 @@ public:
 
     using Vec = geom::Vec3<PartFrame, Scalar>;
 
+    // force_noise_sigma defaults to 0 (register, but contributes nothing
+    // to Q until the user mutates σ at runtime). Pass < 0 to suppress
+    // registration entirely. Codegen passes the descriptor's
+    // force_noise_sigma here.
     ThrusterImpl(std::string name,
                  const std::array<Vec, N>& force_coefs,
-                 const std::array<Vec, N>& torque_coefs)
+                 const std::array<Vec, N>& torque_coefs,
+                 float force_noise_sigma = 0.0f)
         : PartT<Scalar>(std::move(name))
         , F_(force_coefs)
-        , T_(torque_coefs) {}
+        , T_(torque_coefs)
+        , force_noise_(force_noise_sigma) {}
 
     void set_throttle(Scalar t) noexcept {
         throttle_ = t < Scalar(0) ? Scalar(0) : (t > Scalar(1) ? Scalar(1) : t);
@@ -67,7 +73,13 @@ public:
     const Noise<WhiteGaussian>& force_noise() const noexcept { return force_noise_; }
 
     void register_noise(NoiseRegistry& r) override {
-        r.register_white_3d(force_noise_);
+        // σ < 0 is the "skip registration" sentinel — codegen sets it
+        // when the user didn't enable force_noise on the descriptor.
+        // Hand-instantiated Thrusters use σ=0 by default, which still
+        // registers (preserves existing test behaviour).
+        if (force_noise_.sigma() >= 0.0f) {
+            r.register_white_3d(force_noise_);
+        }
     }
 
     void update() override {

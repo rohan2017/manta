@@ -6,7 +6,7 @@
 ConnectDemoCraft::ConnectDemoCraft()
     : manta::Craft("connect_demo") {
     body_ = &this->root().add<manta::parts::Mass>("body", manta::MFloat(1.0f), false);
-    leader_ = &this->root().add<manta::parts::Thruster1>("leader", std::array<manta::geom::Vec3<manta::PartFrame, manta::MFloat>, 1>{manta::geom::Vec3<manta::PartFrame, manta::MFloat>{manta::MFloat(1.0f), manta::MFloat(0.0f), manta::MFloat(0.0f)}}, std::array<manta::geom::Vec3<manta::PartFrame, manta::MFloat>, 1>{manta::geom::Vec3<manta::PartFrame, manta::MFloat>{manta::MFloat(0.0f), manta::MFloat(0.0f), manta::MFloat(0.0f)}});
-    follower_ = &this->root().add<manta::parts::Thruster1>("follower", std::array<manta::geom::Vec3<manta::PartFrame, manta::MFloat>, 1>{manta::geom::Vec3<manta::PartFrame, manta::MFloat>{manta::MFloat(0.0f), manta::MFloat(1.0f), manta::MFloat(0.0f)}}, std::array<manta::geom::Vec3<manta::PartFrame, manta::MFloat>, 1>{manta::geom::Vec3<manta::PartFrame, manta::MFloat>{manta::MFloat(0.0f), manta::MFloat(0.0f), manta::MFloat(0.0f)}});
+    leader_ = &this->root().add<manta::parts::Thruster1>("leader", std::array<manta::geom::Vec3<manta::PartFrame, manta::MFloat>, 1>{manta::geom::Vec3<manta::PartFrame, manta::MFloat>{manta::MFloat(1.0f), manta::MFloat(0.0f), manta::MFloat(0.0f)}}, std::array<manta::geom::Vec3<manta::PartFrame, manta::MFloat>, 1>{manta::geom::Vec3<manta::PartFrame, manta::MFloat>{manta::MFloat(0.0f), manta::MFloat(0.0f), manta::MFloat(0.0f)}}, -1.0f);
+    follower_ = &this->root().add<manta::parts::Thruster1>("follower", std::array<manta::geom::Vec3<manta::PartFrame, manta::MFloat>, 1>{manta::geom::Vec3<manta::PartFrame, manta::MFloat>{manta::MFloat(0.0f), manta::MFloat(1.0f), manta::MFloat(0.0f)}}, std::array<manta::geom::Vec3<manta::PartFrame, manta::MFloat>, 1>{manta::geom::Vec3<manta::PartFrame, manta::MFloat>{manta::MFloat(0.0f), manta::MFloat(0.0f), manta::MFloat(0.0f)}}, -1.0f);
     this->root().compute_params();
 }

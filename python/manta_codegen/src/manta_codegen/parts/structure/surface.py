@@ -15,7 +15,7 @@ Tensors are either 3-tuples (diagonal) or 9-tuples (full row-major).
 from __future__ import annotations
 
 from ..._format import cpp_float as _f
-from ...core import PartDescriptor
+from ...core import NoiseChannel, PartDescriptor
 from ...fields.fluid_field import FluidField
 
 
@@ -68,6 +68,7 @@ class _SurfaceBase(PartDescriptor):
                  name: str,
                  force_tensors:  list[tuple[float, ...]],
                  torque_tensors: list[tuple[float, ...]],
+                 force_noise_sigma: float = -1.0,
                  **kwargs) -> None:
         super().__init__(name=name, **kwargs)
         if len(force_tensors) != self.N or len(torque_tensors) != self.N:
@@ -76,8 +77,10 @@ class _SurfaceBase(PartDescriptor):
                 f"and {self.N} torque_tensors (got "
                 f"{len(force_tensors)}, {len(torque_tensors)})"
             )
-        self.force_tensors  = [_normalize(t) for t in force_tensors]
-        self.torque_tensors = [_normalize(t) for t in torque_tensors]
+        self.force_tensors     = [_normalize(t) for t in force_tensors]
+        self.torque_tensors    = [_normalize(t) for t in torque_tensors]
+        # σ < 0 (default) skips registration and disables sampling.
+        self.force_noise_sigma = float(force_noise_sigma)
 
     def emit_constructor_args(self, scalar: str = "manta::MFloat") -> str:
         n = self.N
@@ -87,7 +90,11 @@ class _SurfaceBase(PartDescriptor):
         t_arr = ", ".join(_emit_mat3(t, scalar) for t in self.torque_tensors)
         return (f'"{self.name}", '
                 f'{ftype}{{{f_arr}}}, '
-                f'{ftype}{{{t_arr}}}')
+                f'{ftype}{{{t_arr}}}, '
+                f'{_f(self.force_noise_sigma)}')
+
+    def noise_channels(self) -> list[NoiseChannel]:
+        return [NoiseChannel("force_noise", "white_3d", self.force_noise_sigma)]
 
 
 class Surface1(_SurfaceBase):

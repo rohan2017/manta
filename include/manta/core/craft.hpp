@@ -359,6 +359,9 @@ private:
 
     static void sense_force_recurse(PartT<Scalar>& part) {
         part.wrench_accum_ = Wrench<PartFrame, Scalar>::zero();
+        // Refresh state-dependent noise σ before the part runs its
+        // update — so any `Vec3 + Noise` inside picks up the latest σ.
+        part.update_noise_sigmas();
         part.update();
         auto* kids = part.children();
         if (!kids) return;

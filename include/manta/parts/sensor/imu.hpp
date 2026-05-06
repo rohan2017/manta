@@ -22,13 +22,26 @@ namespace manta::parts {
 template <class Scalar = MFloat>
 class IMUT : public PartT<Scalar> {
 public:
+    // σ values default to 0 (sample no noise on the value path; register
+    // with EKF as a zero-variance slot, which is wasteful but harmless).
+    // Pass σ < 0 to disable a channel entirely — neither sampled by sim
+    // nor registered with the EKF. The codegen uses σ < 0 as the "skip"
+    // sentinel so unspecified noise channels don't bloat NumNoiseSlots /
+    // BiasDim.
+    //
+    // gyro_bias_sigma is the random-walk diffusion coefficient for the
+    // gyro bias: at runtime the bias drifts via N(0, σ²·dt) per tick on
+    // the sim path, and the EKF estimates it as a 3-DOF augmented state
+    // when registered.
     explicit IMUT(std::string name,
-                  float accel_sigma = 0.0f,
-                  float gyro_sigma  = 0.0f,
-                  MFloat  rate_hz     = MFloat(0))
+                  float accel_sigma     = 0.0f,
+                  float gyro_sigma      = 0.0f,
+                  MFloat rate_hz        = MFloat(0),
+                  float gyro_bias_sigma = -1.0f)
         : PartT<Scalar>(std::move(name))
         , accel_noise_{accel_sigma}
         , gyro_noise_{gyro_sigma}
+        , gyro_bias_{gyro_bias_sigma}
         , gate_{rate_hz} {}
 
     // Body-frame specific force — what a real accelerometer reports.
@@ -63,9 +76,21 @@ public:
     void update() override {
         MFloat dt = (this->craft_ && this->craft_->has_world()) ? this->craft().world().clock().dt() : MFloat(0);
         if (!gate_.tick(dt)) return;
+        // gyro reading: ω + white noise + RW bias. The RW bias's `+`
+        // operator reads the EKF's current estimate (via state3()) on
+        // the Jet path and the sim's drifting truth on the value path.
         last_accel_ = this->specific_force_body() + accel_noise_;
-        last_gyro_  = this->angular_velocity_body() + gyro_noise_;
+        last_gyro_  = this->angular_velocity_body() + gyro_noise_ + gyro_bias_;
         fresh_ = true;
+    }
+
+    // Conditional registration: any channel with σ ≥ 0 is registered.
+    // Codegen passes σ < 0 to suppress channels the user didn't enable
+    // on the descriptor.
+    void register_noise(NoiseRegistry& r) override {
+        if (accel_noise_.sigma() >= 0.0f) r.register_white_3d(accel_noise_);
+        if (gyro_noise_.sigma()  >= 0.0f) r.register_white_3d(gyro_noise_);
+        if (gyro_bias_.sigma()   >= 0.0f) r.register_random_walk_3d(gyro_bias_);
     }
 
     // External-measurement seam (estimator path). Always marks the reading
@@ -109,10 +134,15 @@ public:
 
     Noise<WhiteGaussian>& accel_noise() noexcept { return accel_noise_; }
     Noise<WhiteGaussian>& gyro_noise()  noexcept { return gyro_noise_; }
+    Noise<RandomWalk>&    gyro_bias()   noexcept { return gyro_bias_; }
+    const Noise<WhiteGaussian>& accel_noise() const noexcept { return accel_noise_; }
+    const Noise<WhiteGaussian>& gyro_noise()  const noexcept { return gyro_noise_; }
+    const Noise<RandomWalk>&    gyro_bias()   const noexcept { return gyro_bias_; }
 
 private:
     Noise<WhiteGaussian>           accel_noise_;
     Noise<WhiteGaussian>           gyro_noise_;
+    Noise<RandomWalk>              gyro_bias_;
     sim::RateGate                  gate_;
     bool                           fresh_ = false;
     geom::Vec3<PartFrame, Scalar>  last_accel_;

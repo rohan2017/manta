@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from ..._format import cpp_float as _f
-from ...core import PartDescriptor
+from ...core import NoiseChannel, PartDescriptor
 from ...signal import Signal, vec3_out_signal
 
 
@@ -63,22 +63,38 @@ class IMU(PartDescriptor):
 
     def __init__(self,
                  name: str,
-                 accel_sigma: float = 0.0,
-                 gyro_sigma:  float = 0.0,
-                 rate_hz: float = 0.0,
+                 accel_sigma:     float = -1.0,
+                 gyro_sigma:      float = -1.0,
+                 gyro_bias_sigma: float = -1.0,
+                 rate_hz:         float = 0.0,
                  **kwargs) -> None:
         super().__init__(name=name, **kwargs)
-        self.accel_sigma = float(accel_sigma)
-        self.gyro_sigma  = float(gyro_sigma)
-        # rate_hz=0 (default) means "refresh every tick" — backward compat
-        # with code from before the rate-cap landing.
-        self.rate_hz     = float(rate_hz)
+        # σ default is -1 (the "skip registration" sentinel). User
+        # opts in by passing σ ≥ 0, which both samples noise on the
+        # sim path and registers a slot with the EKF/UKF.
+        # gyro_bias_sigma is a random-walk diffusion coefficient
+        # (per-second PSD); when ≥ 0 the bias becomes an estimated
+        # filter state (BiasDim grows by 3).
+        self.accel_sigma     = float(accel_sigma)
+        self.gyro_sigma      = float(gyro_sigma)
+        self.gyro_bias_sigma = float(gyro_bias_sigma)
+        # rate_hz=0 (default) means "refresh every tick" — backward
+        # compat with code from before the rate-cap landing.
+        self.rate_hz         = float(rate_hz)
 
     def emit_constructor_args(self, scalar: str = "manta::MFloat") -> str:
         return (f'"{self.name}", '
                 f'{_f(self.accel_sigma)}, '
                 f'{_f(self.gyro_sigma)}, '
-                f'manta::MFloat({_f(self.rate_hz)})')
+                f'manta::MFloat({_f(self.rate_hz)}), '
+                f'{_f(self.gyro_bias_sigma)}')
+
+    def noise_channels(self) -> list[NoiseChannel]:
+        return [
+            NoiseChannel("accel_noise", "white_3d", self.accel_sigma),
+            NoiseChannel("gyro_noise",  "white_3d", self.gyro_sigma),
+            NoiseChannel("gyro_bias",   "rw_3d",    self.gyro_bias_sigma),
+        ]
 
     # Vec3 telemetry types are not yet handled by the scalar-only JSON encoder.
     # Declaring the fields anyway so the struct shape is right; values won't

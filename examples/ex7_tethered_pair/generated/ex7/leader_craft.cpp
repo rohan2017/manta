@@ -6,6 +6,6 @@
 LeaderCraft::LeaderCraft()
     : manta::Craft("leader") {
     body_ = &this->root().add<manta::parts::Mass>("body", manta::MFloat(1.0f), true);
-    thrust_ = &this->root().add<manta::parts::Thruster1>("thrust", std::array<manta::geom::Vec3<manta::PartFrame, manta::MFloat>, 1>{manta::geom::Vec3<manta::PartFrame, manta::MFloat>{manta::MFloat(2.0f), manta::MFloat(0.0f), manta::MFloat(0.0f)}}, std::array<manta::geom::Vec3<manta::PartFrame, manta::MFloat>, 1>{manta::geom::Vec3<manta::PartFrame, manta::MFloat>{manta::MFloat(0.0f), manta::MFloat(0.0f), manta::MFloat(0.0f)}});
+    thrust_ = &this->root().add<manta::parts::Thruster1>("thrust", std::array<manta::geom::Vec3<manta::PartFrame, manta::MFloat>, 1>{manta::geom::Vec3<manta::PartFrame, manta::MFloat>{manta::MFloat(2.0f), manta::MFloat(0.0f), manta::MFloat(0.0f)}}, std::array<manta::geom::Vec3<manta::PartFrame, manta::MFloat>, 1>{manta::geom::Vec3<manta::PartFrame, manta::MFloat>{manta::MFloat(0.0f), manta::MFloat(0.0f), manta::MFloat(0.0f)}}, -1.0f);
     this->root().compute_params();
 }

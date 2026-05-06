@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../../core/noise.hpp"
+#include "../../core/noise_registry.hpp"
 #include "../../core/part.hpp"
 #include "../../sim/rate_gate.hpp"
 
@@ -30,6 +31,10 @@ public:
     void set_measurement(const geom::Vec3<PartFrame, Scalar>& velocity) noexcept {
         last_vel_ = velocity;
         fresh_ = true;
+    }
+
+    void register_noise(NoiseRegistry& r) override {
+        if (noise_.sigma() >= 0.0f) r.register_white_3d(noise_);
     }
 
     bool consume_fresh() noexcept { bool was = fresh_; fresh_ = false; return was; }

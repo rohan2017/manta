@@ -17,7 +17,7 @@ namespace manta_gen::ex9 {
 inline constexpr float DT             = 0.001f;
 inline constexpr float SIM_RATE_MULT  = 1.0f;
 
-// MFloat-side simulation infrastructure. The filter holds its own
+// value-side simulation infrastructure. The filter holds its own
 // `manta::WorldT<double>` (estimator state lives in double for
 // filter conditioning). The Jet shadow `WorldT<Jet>` for the
 // Jacobian step lives file-private in the .cpp.
@@ -29,7 +29,7 @@ extern Drone0CraftT<double> craft_0;
 extern Drone1CraftT<double> craft_1;
 
 // EKF wrapper. State dim = 13 * 2 = 26.
-// Bound inside setup() to the MFloat world + (for EKF) Jet shadow +
+// Bound inside setup() to the value world + (for EKF) Jet shadow +
 // per-craft pointer arrays.
 extern manta::estimation::BlockDecomposedEKF<2, 18> ekf_0;
 

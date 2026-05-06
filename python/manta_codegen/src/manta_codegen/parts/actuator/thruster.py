@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from ..._format import cpp_float as _f
-from ...core import PartDescriptor
+from ...core import NoiseChannel, PartDescriptor
 from ...signal import scalar_in_signal, scalar_out_signal
 
 
@@ -33,6 +33,7 @@ class _ThrusterBase(PartDescriptor):
                  name: str,
                  force_coefs:  list[tuple[float, float, float]],
                  torque_coefs: list[tuple[float, float, float]] | None = None,
+                 force_noise_sigma: float = -1.0,
                  **kwargs) -> None:
         super().__init__(name=name, **kwargs)
         if len(force_coefs) != self._order:
@@ -41,8 +42,14 @@ class _ThrusterBase(PartDescriptor):
             torque_coefs = [(0.0, 0.0, 0.0)] * self._order
         if len(torque_coefs) != self._order:
             raise ValueError(f"{type(self).__name__} requires {self._order} torque_coefs")
-        self.force_coefs  = [tuple(float(x) for x in v) for v in force_coefs]
-        self.torque_coefs = [tuple(float(x) for x in v) for v in torque_coefs]
+        self.force_coefs       = [tuple(float(x) for x in v) for v in force_coefs]
+        self.torque_coefs      = [tuple(float(x) for x in v) for v in torque_coefs]
+        # σ < 0 (default) = no noise sampling, no EKF slot.
+        # σ ≥ 0 = sample on sim path, register slot for auto-Q.
+        self.force_noise_sigma = float(force_noise_sigma)
+
+    def noise_channels(self) -> list[NoiseChannel]:
+        return [NoiseChannel("force_noise", "white_3d", self.force_noise_sigma)]
 
     @property
     def cpp_class(self) -> str: return self._cpp_class_concrete
@@ -59,7 +66,8 @@ class _ThrusterBase(PartDescriptor):
     def emit_constructor_args(self, scalar: str = "manta::MFloat") -> str:
         return (f'"{self.name}", '
                 f'{self._vec_array_expr(self.force_coefs,  scalar)}, '
-                f'{self._vec_array_expr(self.torque_coefs, scalar)}')
+                f'{self._vec_array_expr(self.torque_coefs, scalar)}, '
+                f'{_f(self.force_noise_sigma)}')
 
     def telemetry_fields(self) -> list[tuple[str, str]]:
         return [("throttle", "float")]

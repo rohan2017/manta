@@ -105,6 +105,21 @@ public:
     // operator's autodiff branch then writes into.
     virtual void register_noise(NoiseRegistry& /*r*/) {}
 
+    // State-dependent σ refresh. Called by the framework just before
+    // each `part.update()` (in `Craft::sense_force_recurse`), giving
+    // parts a hook to recompute their Noise<*> sigma values from their
+    // own state — e.g. an IMU whose accel σ scales with temperature, or
+    // a DVL whose σ degrades at high velocity.
+    //
+    // Default no-op. Parts override with code like:
+    //   void update_noise_sigmas() override {
+    //       accel_noise_.set_sigma(base_sigma_ + temp_factor_ * heat_);
+    //   }
+    // and the next `Vec3 + accel_noise_` invocation picks up the new σ.
+    // Called on both the sim path and the EKF predict path so sim
+    // behaviour and Q assembly stay consistent.
+    virtual void update_noise_sigmas() {}
+
     // Wrench application — accumulates within a single tick. Multiple calls add.
     void apply_force_at(const geom::Vec3<PartFrame, Scalar>& force,
                         const geom::Vec3<PartFrame, Scalar>& point =

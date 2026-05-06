@@ -24,7 +24,7 @@ manta::WorldT<double>  w{};
 manta::SceneT<double>* scene = nullptr;
 manta::fields::MagField field_0{};
 Ex8EstCraftT<double> craft{};
-manta::estimation::EKF<1, 12> ekf_0;
+manta::estimation::EKF<1, 12, 9, 0> ekf_0;
 
 }  // namespace manta_gen::ex8_est
 
@@ -53,7 +53,7 @@ std::optional<zenoh::Session> g_session;
 using EkfT = decltype(manta_gen::ex8_est::ekf_0);
 EkfT::StateCov g_Q = EkfT::StateCov::Identity() * 1e-05f;
 
-// Jet shadow world. Built identically to the MFloat side in
+// Jet shadow world. Built identically to the value side in
 // setup(); EKF::predict drives this through autodiff to
 // extract the state-transition Jacobian.
 using JetType = EkfT::Jet;
@@ -113,7 +113,7 @@ constexpr int kPubEvery = 20;  // ~50 Hz publish
 namespace manta_gen::ex8_est {
 
 void setup() {
-    // ---- MFloat world ----
+    // ---- value world ----
     w.clock().set_dt(DT);
     scene = &w.create_scene();
     field_0.add(manta::fields::MagField::Disturbance::uniform(manta::geom::Vec3<manta::SceneFrame>{2.5e-05f, 0.0f, -4.5e-05f}), manta::fields::PERSISTENT);

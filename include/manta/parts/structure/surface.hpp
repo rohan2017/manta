@@ -34,10 +34,12 @@ public:
 
     SurfaceImpl(std::string name,
                 const std::array<Tensor, N>& force_tensors,
-                const std::array<Tensor, N>& torque_tensors)
+                const std::array<Tensor, N>& torque_tensors,
+                float force_noise_sigma = 0.0f)
         : PartT<Scalar>(std::move(name))
         , A_(force_tensors)
-        , B_(torque_tensors) {}
+        , B_(torque_tensors)
+        , force_noise_(force_noise_sigma) {}
 
     const std::array<Tensor, N>& force_tensors()  const noexcept { return A_; }
     const std::array<Tensor, N>& torque_tensors() const noexcept { return B_; }
@@ -98,7 +100,10 @@ public:
     const Noise<WhiteGaussian>& force_noise() const noexcept { return force_noise_; }
 
     void register_noise(NoiseRegistry& r) override {
-        r.register_white_3d(force_noise_);
+        // σ < 0 sentinel skips registration — see Thruster for rationale.
+        if (force_noise_.sigma() >= 0.0f) {
+            r.register_white_3d(force_noise_);
+        }
     }
 
 private:

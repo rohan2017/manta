@@ -391,35 +391,70 @@ def _first_mag_field_var(world, var_for_id: dict[int, str] | None = None) -> str
     return None
 
 
+def _world_noise_counts(world) -> tuple[int, int]:
+    """Walk the world's parts and sum (NumNoiseSlots, BiasDim) from
+    enabled `noise_channels()` declarations. Channels with σ < 0 are
+    skipped (matches the C++ `register_noise()` convention).
+
+    NumNoiseSlots counts driver dims (white-input dims + RW driver dims).
+    BiasDim counts bias-state dims (RW state augmentation only).
+    """
+    noise_slots = 0
+    bias_dim    = 0
+
+    def walk(part):
+        nonlocal noise_slots, bias_dim
+        for ch in part.noise_channels():
+            if not ch.is_enabled():
+                continue
+            noise_slots += ch.driver_dim()
+            bias_dim    += ch.bias_dim()
+        for child in getattr(part, "_children", []):
+            walk(child)
+
+    for entry in world.crafts:
+        for part in entry.craft.root.children:
+            walk(part)
+    return noise_slots, bias_dim
+
+
 def _filter_construction(kind: str, filter_obj, num_crafts: int,
-                         filter_var: str, meas_dim: int) -> tuple[str, str]:
+                         filter_var: str, meas_dim: int,
+                         world=None) -> tuple[str, str]:
     """Return (header_include_line, ctor_line) for the filter wrapper.
 
-    Both EKF and UKF now take `<NumCrafts, MeasDim>` template args. The
-    crafts are bound at runtime via `ekf.bind(...)`, so the wrapper type
-    no longer mentions a specific craft class.
+    Template args:
+      EKF / BlockDecomposedEKF: <NumCrafts, MeasDim, NumNoiseSlots, BiasDim>
+      UKF:                      <NumCrafts, MeasDim, BiasDim>
+    where NumNoiseSlots / BiasDim are summed from each part's
+    `noise_channels()` declarations (only channels with σ ≥ 0 count).
     """
+    noise_slots, bias_dim = (0, 0) if world is None else _world_noise_counts(world)
+
     if kind == "ekf":
-        # Block-decomposed variant for decoupled-craft swarms: per-craft
-        # Jet width = 13, NumCrafts passes per tick. Cost scales linearly
-        # in NumCrafts instead of quadratically; only valid when crafts
-        # don't physically couple (no tether/contact/fluid coupling).
         if getattr(filter_obj, "block_decomposed", False):
             return (
                 "#include \"manta/estimation/block_decomposed_ekf.hpp\"",
                 f"manta::estimation::BlockDecomposedEKF<"
                 f"{num_crafts}, {meas_dim}> {filter_var};",
             )
+        # Only emit the noise/bias args if either is non-zero — keeps
+        # generated code readable for filters that don't use auto-Q.
+        targs = f"{num_crafts}, {meas_dim}"
+        if noise_slots > 0 or bias_dim > 0:
+            targs += f", {noise_slots}, {bias_dim}"
         return (
             "#include \"manta/estimation/ekf.hpp\"",
-            f"manta::estimation::EKF<{num_crafts}, {meas_dim}> "
-            f"{filter_var};",
+            f"manta::estimation::EKF<{targs}> {filter_var};",
         )
     if kind == "ukf":
         a, b, k = filter_obj.alpha, filter_obj.beta, filter_obj.kappa
+        targs = f"{num_crafts}, {meas_dim}"
+        if bias_dim > 0:
+            targs += f", {bias_dim}"
         return (
             "#include \"manta/estimation/ukf.hpp\"",
-            f"manta::estimation::UKF<{num_crafts}, {meas_dim}> "
+            f"manta::estimation::UKF<{targs}> "
             f"{filter_var}({_f(a)}, {_f(b)}, {_f(k)});",
         )
     raise ValueError(f"unknown filter kind {kind!r}")
@@ -533,7 +568,7 @@ def _filter_collect(target, filter_obj, kind):
     meas_dim = max(meas_dim, 1)
 
     filter_header_inc, filter_ctor = _filter_construction(
-        kind, filter_obj, num_crafts, filter_var, meas_dim)
+        kind, filter_obj, num_crafts, filter_var, meas_dim, world=world)
 
     bind_assignments = list(enumerate(world.bindings))
     sync_field_idxs = [i for i, f in enumerate(world.fields)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from ..._format import cpp_float as _f
-from ...core import PartDescriptor
+from ...core import NoiseChannel, PartDescriptor
 from ...fields.mag_field import MagField
 from ...signal import Signal, vec3_out_signal
 
@@ -48,7 +48,7 @@ class Magnetometer(PartDescriptor):
 
     def __init__(self,
                  name: str,
-                 sigma: float = 0.0,
+                 sigma: float = -1.0,
                  rate_hz: float = 0.0,
                  **kwargs) -> None:
         super().__init__(name=name, **kwargs)
@@ -59,3 +59,6 @@ class Magnetometer(PartDescriptor):
         return (f'"{self.name}", '
                 f'{_f(self.sigma)}, '
                 f'manta::MFloat({_f(self.rate_hz)})')
+
+    def noise_channels(self) -> list[NoiseChannel]:
+        return [NoiseChannel("noise", "white_3d", self.sigma)]

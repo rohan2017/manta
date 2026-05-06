@@ -14,6 +14,45 @@ from ._format import cpp_float as _f
 from .signal import Binding, BoundSignal, CRAFT_SENTINEL, Signal
 
 
+# ---- Noise channel descriptor ------------------------------------------
+#
+# Each noise-bearing part declares the channels it offers via
+# PartDescriptor.noise_channels(). The codegen walks the world's parts to
+# count slots for the EKF/UKF template instantiation:
+#
+#   NumNoiseSlots = Σ over enabled white_3d (3) + white_1d (1) +
+#                                 rw_3d_driver (3) + rw_1d_driver (1)
+#   BiasDim       = Σ over enabled rw_3d (3) + rw_1d (1)
+#
+# A channel is "enabled" when its `sigma` value is ≥ 0. The Python and
+# C++ sides use the same convention (σ < 0 = skip registration), so the
+# template arg counts and the runtime registration counts match.
+
+@dataclass(frozen=True)
+class NoiseChannel:
+    """Description of a single noise channel exposed by a part.
+
+    `name`     — identifier (e.g. "force_noise", "gyro_bias").
+    `kind`     — one of "white_3d", "white_1d", "rw_3d", "rw_1d".
+    `sigma`    — the σ value at codegen time. Negative ⇒ skip
+                 registration; ≥0 ⇒ register and seed the C++ Noise
+                 object's σ to this value.
+    """
+
+    name:  str
+    kind:  str    # "white_3d" | "white_1d" | "rw_3d" | "rw_1d"
+    sigma: float
+
+    def driver_dim(self) -> int:
+        return {"white_3d": 3, "white_1d": 1, "rw_3d": 3, "rw_1d": 1}[self.kind]
+
+    def bias_dim(self) -> int:
+        return {"white_3d": 0, "white_1d": 0, "rw_3d": 3, "rw_1d": 1}[self.kind]
+
+    def is_enabled(self) -> bool:
+        return self.sigma >= 0.0
+
+
 # Craft-level signals exposed on every Craft instance. These read off the
 # craft's scene_to_craft kinematic state — the emitter substitutes "craft"
 # (not "craft.<part>()") for `{accessor}` because part_name is the
@@ -282,6 +321,17 @@ class PartDescriptor:
     def telemetry_fields(self) -> list[tuple[str, str]]:
         """List of (member_name, cpp_type) the per-craft Telemetry struct should
         carry for this part. Default: empty (no telemetry)."""
+        return []
+
+    def noise_channels(self) -> list[NoiseChannel]:
+        """Noise channels this part offers for filter registration.
+
+        Default: empty (the part has no noise). Parts with noise (IMU,
+        Thruster, Surface, ...) override and return one entry per Noise<*>
+        member. Channels with σ < 0 are skipped from auto-Q / bias
+        augmentation; the codegen counts only enabled channels for the
+        EKF/UKF template args.
+        """
         return []
 
     def emit_telemetry_reads(self) -> list[tuple[str, str]]:
