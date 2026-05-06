@@ -22,6 +22,7 @@
 #include "../include/manta/core/scene.hpp"
 #include "../include/manta/core/world.hpp"
 #include "../include/manta/estimation/ekf.hpp"
+#include "../include/manta/estimation/ukf.hpp"
 #include "../include/manta/parts/structure/mass.hpp"
 
 using namespace manta;
@@ -227,4 +228,94 @@ TEST_CASE("RW bias: update_n pulls the bias estimate toward measured truth") {
     CHECK(bias_post(0) > 0.05f);   // moved a lot toward 0.2
     CHECK(bias_post(1) < -0.02f);  // moved toward -0.1
     CHECK(bias_post(2) > 0.01f);   // moved toward 0.05
+}
+
+// ---- UKF: same bias-state machinery but no Jet shadow ----
+
+TEST_CASE("UKF: RW bias predict grows bias-state covariance by σ²·dt") {
+    using Ukf = manta::estimation::UKF</*NumCrafts=*/1, /*MeasDim=*/3,
+                                       /*BiasDim=*/3>;
+
+    manta::WorldT<double> w_real;
+    w_real.clock().set_dt(0.01f);
+    auto& s_real = w_real.create_scene();
+    BiasObserverCraft<double> craft_real;
+    s_real.add_craft(craft_real);
+
+    Ukf ukf;
+    ukf.bind(w_real, {&craft_real});
+
+    const float sigma_rw = 0.05f;
+    craft_real.observer().bias().set_sigma(sigma_rw);
+
+    Ukf::StateVec x0 = Ukf::StateVec::Zero();
+    x0(3) = 1.0;
+    ukf.set_state(x0);
+
+    // Tiny non-zero initial P — UKFKernel's LLT cholesky needs the
+    // covariance to be strictly positive definite. The 1e-10 floor is
+    // small relative to σ²·dt over a single tick (2.5e-5) so doesn't
+    // perturb the variance growth measurement.
+    Ukf::StateCov P0 = Ukf::StateCov::Identity() * 1e-10;
+    ukf.set_covariance(P0);
+
+    Ukf::StateCov Q_user = Ukf::StateCov::Zero();
+    constexpr double dt = 0.01;
+    constexpr int    N  = 100;
+
+    for (int i = 0; i < N; ++i) ukf.predict(dt, Q_user);
+
+    const auto& P = ukf.covariance();
+    const int bias_row = Ukf::kBiasColStart;
+    const double bias_var_x = P(bias_row + 0, bias_row + 0);
+    const double expected   = N * sigma_rw * sigma_rw * dt;
+
+    INFO("UKF bias_var=", bias_var_x, " expected≈", expected);
+    CHECK(bias_var_x > 0.5 * expected);
+    CHECK(bias_var_x < 2.0 * expected);
+}
+
+TEST_CASE("UKF: RW bias measurement pulls estimate toward truth") {
+    using Ukf = manta::estimation::UKF</*NumCrafts=*/1, /*MeasDim=*/3,
+                                       /*BiasDim=*/3>;
+
+    manta::WorldT<double> w_real;
+    w_real.clock().set_dt(0.01f);
+    auto& s_real = w_real.create_scene();
+    BiasObserverCraft<double> craft_real;
+    s_real.add_craft(craft_real);
+
+    Ukf ukf;
+    ukf.bind(w_real, {&craft_real});
+
+    craft_real.observer().bias().set_sigma(0.05f);
+
+    Ukf::StateVec x0 = Ukf::StateVec::Zero();
+    x0(3) = 1.0;
+    ukf.set_state(x0);
+    ukf.set_covariance(Ukf::StateCov::Identity() * 0.1);
+
+    craft_real.observer().bias().set_state3(
+        Eigen::Matrix<float, 3, 1>{0.f, 0.f, 0.f});
+
+    // Measurement functor reads the BiasObserverPart's last_value via
+    // the bound craft. The functor takes a 13·N x_full vector but
+    // doesn't need to look at it — it walks straight to the part.
+    auto h = [&craft_real](const Ukf::StateVec& /*x_full*/) {
+        // The wrapper has just run kinematic_and_aggregate at this
+        // sigma's lift, so observer().last_value() is current.
+        const auto& v = craft_real.observer().last_value();
+        return v.raw();
+    };
+
+    Eigen::Matrix<double, 3, 1> z;
+    z << 0.2, -0.1, 0.05;
+    Eigen::Matrix<double, 3, 3> R = Eigen::Matrix<double, 3, 3>::Identity() * 1e-4;
+    ukf.update_n<3>(h, z, R);
+
+    const auto bias_post = craft_real.observer().bias().state3();
+    INFO("UKF bias_post=(", bias_post(0), ",", bias_post(1), ",", bias_post(2), ")");
+    CHECK(bias_post(0) > 0.05f);
+    CHECK(bias_post(1) < -0.02f);
+    CHECK(bias_post(2) > 0.01f);
 }

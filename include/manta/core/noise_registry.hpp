@@ -28,6 +28,8 @@
 
 namespace manta {
 
+template <class Scalar> class PartT;
+
 class NoiseRegistry {
 public:
     // Register a 3-axis white-noise source. Allocates 3 contiguous slots
@@ -162,5 +164,17 @@ private:
     int                  next_slot_      = 0;
     int                  next_bias_slot_ = 0;
 };
+
+// Recursively register noise sources from a part subtree into the
+// registry. Used at EKF / UKF bind time to walk the bound craft's root
+// part. Defined here so both estimator wrappers can use it without
+// including each other's headers.
+template <class Scalar>
+inline void walk_register_noise(PartT<Scalar>& part, NoiseRegistry& reg) {
+    part.register_noise(reg);
+    auto* kids = part.children();
+    if (!kids) return;
+    for (auto& child : *kids) walk_register_noise(*child, reg);
+}
 
 } // namespace manta

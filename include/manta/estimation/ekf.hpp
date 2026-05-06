@@ -117,20 +117,6 @@
 #include "../core/world.hpp"
 #include "../geom/kinematic_link.hpp"   // angle_axis_to_quat
 
-namespace manta {
-
-// Recursively register white-noise sources from a part subtree into the
-// registry. Used at EKF bind time on the Jet-side root of every craft.
-template <class Scalar>
-inline void walk_register_noise(PartT<Scalar>& part, NoiseRegistry& reg) {
-    part.register_noise(reg);
-    auto* kids = part.children();
-    if (!kids) return;
-    for (auto& child : *kids) walk_register_noise(*child, reg);
-}
-
-} // namespace manta
-
 namespace manta::estimation {
 
 template <int NumCrafts, int MeasDim, int NumNoiseSlots = 0, int BiasDim = 0>
