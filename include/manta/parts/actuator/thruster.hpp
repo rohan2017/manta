@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <array>
+#include "../../core/noise.hpp"
+#include "../../core/noise_registry.hpp"
 #include "../../core/part.hpp"
 
 namespace manta::parts {
@@ -51,6 +53,23 @@ public:
     const Vec& last_force()  const noexcept { return last_force_; }
     const Vec& last_torque() const noexcept { return last_torque_; }
 
+    // 3-axis Gaussian process noise on the emitted force, in part frame.
+    // Default σ = 0 (no behavior change unless the user opts in).
+    //
+    // Sim path (Scalar = MFloat / double): σ samples are drawn each tick and
+    // added to F before apply_force_at — gives the sim stochastic realism.
+    // EKF predict path (Scalar = Jet) with the EKF's NumNoiseSlots > 0:
+    // the Vec3+Noise operator's autodiff branch injects Jet inputs at the
+    // registered noise slots. The EKF reads back the noise-input gain L
+    // and assembles Q automatically. State-dependent σ: call set_sigma()
+    // from update() before the noise is added.
+    Noise<WhiteGaussian>& force_noise() noexcept { return force_noise_; }
+    const Noise<WhiteGaussian>& force_noise() const noexcept { return force_noise_; }
+
+    void register_noise(NoiseRegistry& r) override {
+        r.register_white_3d(force_noise_);
+    }
+
     void update() override {
         Eigen::Matrix<Scalar, 3, 1> F = Eigen::Matrix<Scalar, 3, 1>::Zero();
         Eigen::Matrix<Scalar, 3, 1> T = Eigen::Matrix<Scalar, 3, 1>::Zero();
@@ -60,21 +79,28 @@ public:
             T += T_[k].raw() * power;
             if (k + 1 < N) power *= throttle_;
         }
-        last_force_  = Vec::from_raw(F);
+        // Inject force noise via the canonical Vec + Noise operator —
+        // sim path samples and adds; EKF Jet path injects Jet inputs.
+        // Always applied (even at zero throttle) so the noise term is
+        // present in the predict Jacobian for auto-Q assembly. The
+        // value-side cost of an extra zero-Wrench accumulation is
+        // negligible.
+        Vec F_out = Vec::from_raw(F) + force_noise_;
+
+        last_force_  = F_out;
         last_torque_ = Vec::from_raw(T);
 
-        if (throttle_ > Scalar(0)) {
-            this->apply_force_at(last_force_);
-            this->apply_torque(last_torque_);
-        }
+        this->apply_force_at(last_force_);
+        this->apply_torque(last_torque_);
     }
 
 private:
-    std::array<Vec, N> F_;
-    std::array<Vec, N> T_;
-    Scalar             throttle_   = Scalar(0);
-    Vec                last_force_;
-    Vec                last_torque_;
+    std::array<Vec, N>   F_;
+    std::array<Vec, N>   T_;
+    Scalar               throttle_   = Scalar(0);
+    Vec                  last_force_;
+    Vec                  last_torque_;
+    Noise<WhiteGaussian> force_noise_;
 };
 
 } // namespace detail

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <type_traits>
 
 #include "../core/frame.hpp"
@@ -9,6 +10,38 @@
 #include "vec3.hpp"
 
 namespace manta::geom {
+
+// Map an axis-angle vector aa = θ·n̂ to its unit quaternion exp(aa/2),
+// stored in Hamilton (w, x, y, z) order matching Eigen::Quaternion's
+// constructor. Autodiff-safe at the origin via a Taylor-series fallback
+// (exact match for value and first derivatives at θ=0). The naive form
+// `axis = aa/|aa|` is undefined at zero; this form expresses the result
+// as `(cos(θ/2), sin(θ/2)/θ · aa)`, with the scalar `sin(θ/2)/θ → 1/2`
+// substituted at the singular point.
+//
+// Same algorithm as Ceres' `AngleAxisToQuaternion`; reimplemented here
+// to keep `<ceres/rotation.h>` out of the manta header chain (its DCHECK
+// usage clashes with doctest's `CHECK_NE` macro in test TUs).
+template <typename T>
+inline Eigen::Quaternion<T> angle_axis_to_quat(
+        const Eigen::Matrix<T, 3, 1>& aa) noexcept {
+    using std::cos;
+    using std::sin;
+    using std::sqrt;
+    const T a0 = aa(0), a1 = aa(1), a2 = aa(2);
+    const T theta_sq = a0 * a0 + a1 * a1 + a2 * a2;
+    // The branch is value-conditional, but the two arms agree on value AND
+    // first derivative at θ = 0, so autodiff is correct on either side.
+    if (theta_sq > T(0)) {
+        const T theta      = sqrt(theta_sq);
+        const T half_theta = theta * T(0.5);
+        const T k          = sin(half_theta) / theta;       // → 0.5 as θ → 0
+        return Eigen::Quaternion<T>(cos(half_theta), a0 * k, a1 * k, a2 * k);
+    }
+    // Taylor at the origin: cos(θ/2)→1, sin(θ/2)/θ→0.5.
+    const T half(0.5);
+    return Eigen::Quaternion<T>(T(1), a0 * half, a1 * half, a2 * half);
+}
 
 // A transform between two MOVING frames. Carries position, orientation,
 // linear and angular velocity, and linear and angular acceleration.
@@ -225,8 +258,18 @@ private:
 // Upgrade path if/when long-horizon orbital accuracy is needed: Velocity
 // Verlet (2 dynamics evals per tick) — true symplectic 2nd-order. Drop in
 // here behind a compile-time switch.
+//
+// Quaternion exp at ω=0: the (angle, axis = ω/|ω|) form has a 0/0 axis at
+// zero, so the previous implementation took a value-conditional branch to
+// identity — which silently zeroed out the q↔ω coupling in the predict
+// Jacobian whenever a craft was at rest. This version uses
+// `angle_axis_to_quat` (Taylor-safe at the origin) so first derivatives
+// match the analytical Lie generator dt/2·e_i at ω=0.
 template <typename From, typename To, typename Scalar>
 inline void KinematicLink<From, To, Scalar>::update(Scalar dt) noexcept {
+    using EigenV = Eigen::Matrix<Scalar, 3, 1>;
+    using QuatT  = typename Att::QuatT;
+
     auto v0 = vel_linear_.raw();
     auto a0 = acc_linear_.raw();
     auto w0 = vel_angular_.raw();
@@ -235,25 +278,17 @@ inline void KinematicLink<From, To, Scalar>::update(Scalar dt) noexcept {
     auto p_new = position_.raw() + v0 * dt + Scalar(0.5) * a0 * dt * dt;
     auto v_new = v0 + a0 * dt;
 
-    auto w_mid = w0 + Scalar(0.5) * al * dt;
-    auto angle = w_mid.norm() * dt;
-    typename Att::QuatT dq;
-    if (angle > Scalar(1e-9)) {
-        auto axis = w_mid.normalized();
-        dq = typename Att::QuatT{Eigen::AngleAxis<Scalar>{angle, axis}};
-    } else {
-        dq.setIdentity();
-    }
-    // Always renormalize (including for Jet types). Eigen's
-    // quaternion-vector product on a non-unit q evaluates to
-    // |q|² · R_unit · v, so dropping the normalize would propagate a
-    // |q|² scaling through autodiff and corrupt every Jacobian column
-    // the rotation feeds. The collapsed-qw derivative at unit q is
-    // the correct mathematical answer (rotation is 3-DOF); the EKF
-    // wrapper projects P's quaternion block onto the tangent space
-    // each tick to keep the redundant direction free of leaked
-    // measurement noise.
-    auto q_new = (orientation_.raw() * dq).normalized();
+    // Midpoint angular velocity → axis-angle delta over [t, t+dt].
+    EigenV  aa = (w0 + Scalar(0.5) * al * dt) * dt;
+    QuatT   dq = angle_axis_to_quat<Scalar>(aa);
+
+    // q ⊗ dq is unit by construction. Trailing renormalize is a guard
+    // against numerical drift across long sim runs; at unit q its
+    // Jacobian is the tangent projection (I − qq^T), which is the right
+    // thing when feeding back into a 4-DOF state vector.
+    QuatT q_new = orientation_.raw() * dq;
+    q_new.normalize();
+
     auto w_new = w0 + al * dt;
 
     position_    = PosF::from_raw(p_new, position_.id());

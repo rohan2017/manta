@@ -34,6 +34,8 @@ add_executable(manta_tests
     test_static_link.cpp
     test_kinematic_link.cpp
     test_craft.cpp
+    test_craft_state.cpp
+    test_noise_registry.cpp
     test_noise.cpp
     test_parts.cpp
     test_world.cpp

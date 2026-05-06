@@ -17,6 +17,7 @@
 
 namespace manta {
 
+class NoiseRegistry;
 template <class Scalar> class CompositePartT;
 template <class Scalar> class ArticulatedPartT;
 template <class Scalar> class CraftT;
@@ -94,6 +95,15 @@ public:
     // Integrate any per-part joint state (joint angle / rate). Default
     // no-op. ArticulatedPartT overrides.
     virtual void integrate_joint_state(Scalar /*dt*/) noexcept {}
+
+    // Register the part's white-noise sources with an EKF's noise
+    // registry. Default no-op. Parts that have noise (e.g. Thruster's
+    // force_noise_) override and call `r.register_white_3d(noise_)`.
+    //
+    // Called once at EKF bind time on every Jet-side part in the tree.
+    // The registry hands out Jet-input slots that the `Vec3 + Noise`
+    // operator's autodiff branch then writes into.
+    virtual void register_noise(NoiseRegistry& /*r*/) {}
 
     // Wrench application — accumulates within a single tick. Multiple calls add.
     void apply_force_at(const geom::Vec3<PartFrame, Scalar>& force,

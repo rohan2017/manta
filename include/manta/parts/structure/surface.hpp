@@ -3,6 +3,8 @@
 #include <array>
 
 #include "../../core/craft.hpp"
+#include "../../core/noise.hpp"
+#include "../../core/noise_registry.hpp"
 #include "../../fields/fluid_field.hpp"
 #include "../../geom/casts.hpp"
 
@@ -84,13 +86,25 @@ public:
             }
         }
 
-        this->apply_force_at(geom::Vec3<PartFrame, Scalar>::from_raw(F_part));
+        // Inject 3-axis Gaussian process noise on the emitted force.
+        // Default σ = 0; users opt in via `surface.force_noise().set_sigma(...)`.
+        // Sim path samples; EKF Jet path injects autodiff inputs for auto-Q.
+        auto F_out = geom::Vec3<PartFrame, Scalar>::from_raw(F_part) + force_noise_;
+        this->apply_force_at(F_out);
         this->apply_torque  (geom::Vec3<PartFrame, Scalar>::from_raw(T_part));
+    }
+
+    Noise<WhiteGaussian>& force_noise() noexcept { return force_noise_; }
+    const Noise<WhiteGaussian>& force_noise() const noexcept { return force_noise_; }
+
+    void register_noise(NoiseRegistry& r) override {
+        r.register_white_3d(force_noise_);
     }
 
 private:
     std::array<Tensor, N> A_;
     std::array<Tensor, N> B_;
+    Noise<WhiteGaussian>  force_noise_;
 };
 
 } // namespace detail

@@ -19,8 +19,9 @@ template <class Scalar> class CraftT;
 template <class Scalar> class WorldT;
 
 // The full rigid-body state of a craft expressed in its scene's frame.
+// 13-DOF ambient representation (4-component unit quaternion).
 // One canonical struct shared by Scene::add_craft (boundary), Craft state
-// setters (runtime mutation), and the EKF (filter belief).
+// setters (runtime mutation), and the EKF (reference state — see below).
 template <class Scalar = MFloat>
 struct CraftStateT {
     geom::Vec3<SceneFrame, Scalar> position    = geom::Vec3<SceneFrame, Scalar>::zero();
@@ -30,11 +31,108 @@ struct CraftStateT {
 };
 using CraftState = CraftStateT<MFloat>;
 
-// Boundary alias: `InitialState` is the value-typed CraftState used by
-// Scene::add_craft. Defining it as an alias keeps a single canonical
-// state shape; the per-Scalar Scene path lifts the value fields into
-// Scalar at add time.
 using InitialState = CraftStateT<MFloat>;
+
+// Tangent-space representation of CraftState — the *error* state used by the
+// ESKF.  12-DOF: position, orientation (axis-angle so(3)), linear velocity,
+// angular velocity. The orientation block is 3-DOF instead of 4 because the
+// rotation manifold is 3-dimensional; the unit-quaternion ambient
+// representation has a redundant radial direction that the tangent omits.
+//
+// Layout matches the canonical EKF tangent index layout:
+//   [δp (3) | δθ (3) | δv (3) | δω (3)]
+template <class Scalar = MFloat>
+struct CraftTangentT {
+    static constexpr int kDim = 12;
+    using Vec = Eigen::Matrix<Scalar, kDim, 1>;
+
+    geom::Vec3<SceneFrame, Scalar> position    = geom::Vec3<SceneFrame, Scalar>::zero();
+    geom::Vec3<SceneFrame, Scalar> orientation = geom::Vec3<SceneFrame, Scalar>::zero();
+    geom::Vec3<SceneFrame, Scalar> vel_linear  = geom::Vec3<SceneFrame, Scalar>::zero();
+    geom::Vec3<CraftFrame, Scalar> vel_angular = geom::Vec3<CraftFrame, Scalar>::zero();
+
+    static CraftTangentT zero() noexcept { return CraftTangentT{}; }
+
+    // Pack into a flat 12-vector in the canonical [δp | δθ | δv | δω] order.
+    Vec to_vec() const noexcept {
+        Vec v;
+        v.template segment<3>(0) = position.raw();
+        v.template segment<3>(3) = orientation.raw();
+        v.template segment<3>(6) = vel_linear.raw();
+        v.template segment<3>(9) = vel_angular.raw();
+        return v;
+    }
+    static CraftTangentT from_vec(const Vec& v) noexcept {
+        CraftTangentT t;
+        t.position    = geom::Vec3<SceneFrame, Scalar>::from_raw(v.template segment<3>(0));
+        t.orientation = geom::Vec3<SceneFrame, Scalar>::from_raw(v.template segment<3>(3));
+        t.vel_linear  = geom::Vec3<SceneFrame, Scalar>::from_raw(v.template segment<3>(6));
+        t.vel_angular = geom::Vec3<CraftFrame, Scalar>::from_raw(v.template segment<3>(9));
+        return t;
+    }
+};
+using CraftTangent = CraftTangentT<MFloat>;
+
+// Boxplus retraction:  x_full = x_ref ⊞ δ.
+//
+// Euclidean components add linearly. Orientation uses the so(3) exp map:
+//   q_full = q_ref ⊗ exp(δ_θ / 2)
+//
+// where exp is the unit-quaternion exponential of an axis-angle rotation
+// vector. δ_θ is small for typical filter corrections; far from origin the
+// retraction still preserves the manifold (always returns a unit quaternion).
+template <class Scalar>
+inline CraftStateT<Scalar> boxplus(const CraftStateT<Scalar>&    x,
+                                   const CraftTangentT<Scalar>&  d) noexcept {
+    CraftStateT<Scalar> out;
+    out.position    = geom::Vec3<SceneFrame, Scalar>::from_raw(
+                          x.position.raw() + d.position.raw());
+    auto dq = geom::angle_axis_to_quat<Scalar>(d.orientation.raw());
+    out.orientation = geom::Ori<SceneFrame, Scalar>{x.orientation.raw() * dq};
+    out.vel_linear  = geom::Vec3<SceneFrame, Scalar>::from_raw(
+                          x.vel_linear.raw() + d.vel_linear.raw());
+    out.vel_angular = geom::Vec3<CraftFrame, Scalar>::from_raw(
+                          x.vel_angular.raw() + d.vel_angular.raw());
+    return out;
+}
+
+// Boxminus:  δ = a ⊟ b   so that   b ⊞ (a ⊟ b) == a.
+//
+// For orientation:  q_a = q_b ⊗ exp(δ_θ/2)  ⇒  δ_θ = 2·log(q_b⁻¹ ⊗ q_a).
+// We compute log via the imaginary part: for a unit quaternion (w, v),
+// log = atan2(|v|, w) · v/|v|; multiplying by 2 cancels the half-angle.
+// Taylor-safe at q ≈ identity.
+template <class Scalar>
+inline CraftTangentT<Scalar> boxminus(const CraftStateT<Scalar>& a,
+                                      const CraftStateT<Scalar>& b) noexcept {
+    using std::atan2;
+    using std::sqrt;
+    CraftTangentT<Scalar> d;
+    d.position    = geom::Vec3<SceneFrame, Scalar>::from_raw(
+                        a.position.raw() - b.position.raw());
+
+    auto dq = b.orientation.raw().conjugate() * a.orientation.raw();
+    Eigen::Matrix<Scalar, 3, 1> v(dq.x(), dq.y(), dq.z());
+    Scalar w = dq.w();
+    Scalar v_norm_sq = v.squaredNorm();
+    Eigen::Matrix<Scalar, 3, 1> theta;
+    if (v_norm_sq > Scalar(0)) {
+        Scalar v_norm = sqrt(v_norm_sq);
+        // 2 * atan2(|v|, w) gives the rotation angle; v / |v| is the axis.
+        Scalar k = Scalar(2) * atan2(v_norm, w) / v_norm;
+        theta = k * v;
+    } else {
+        // Identity rotation: log = 0. First derivatives match (Taylor: 2v).
+        theta = Scalar(2) * v;
+    }
+    d.orientation = geom::Vec3<SceneFrame, Scalar>::from_raw(theta);
+
+    d.vel_linear  = geom::Vec3<SceneFrame, Scalar>::from_raw(
+                        a.vel_linear.raw() - b.vel_linear.raw());
+    d.vel_angular = geom::Vec3<CraftFrame, Scalar>::from_raw(
+                        a.vel_angular.raw() - b.vel_angular.raw());
+    return d;
+}
 
 // A floating-origin reference frame shared by a set of nearby crafts. Each
 // craft's scene_to_craft_ transform is relative to this scene's origin.
