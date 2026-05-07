@@ -27,7 +27,7 @@ def make_config() -> MantaConfig:
     w = World("ukf_smoke").add_craft(c)
 
     ukf = UKF(w, measurements=[imu, dvl],
-              process_noise=1e-6, initial_covariance=1.0,
+              q_jitter=1e-6, initial_covariance=1.0,
               alpha=1e-3, beta=2.0, kappa=0.0)
 
     subscribe(imu.set_measurement, "manta/ukf_smoke/imu")

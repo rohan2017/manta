@@ -59,7 +59,7 @@ def make_config() -> MantaConfig:
     # dynamics generates torque, so q should stay near identity for
     # the whole run.
     ekf = EKF(est_w, measurements=[est_imu, est_dvl],
-              process_noise=1e-6, initial_covariance=1.0,
+              initial_covariance=1.0,
               initial_position_var=1e-4,
               initial_attitude_var=1e-4,
               initial_velocity_var=1e-2,

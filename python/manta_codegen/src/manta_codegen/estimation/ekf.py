@@ -91,10 +91,20 @@ class EKF:
         measurements: list of sensor-part descriptors the EKF observes.
                Each part contributes its own `consume_fresh()` gate +
                R block read from the part's sigma fields.
-        process_noise: scalar — Q is `process_noise * I`.
         initial_covariance: scalar — P_0 is `initial_covariance * I`,
                then any of the per-block overrides below replace
                specific diagonal entries.
+
+        Process noise (Q) is now built entirely from the noise channels
+        registered on the parts (see PartDescriptor.noise_channels —
+        IMU's accel_sigma / gyro_sigma / gyro_bias_sigma, Thruster's
+        force_noise_sigma, etc.). Set σ ≥ 0 on the relevant part to
+        contribute to Q automatically; the EKF wrapper assembles
+        L · Σ · Lᵀ from autodiff-extracted noise-input gains every
+        predict step. To inject noise on a DOF that has no obvious
+        physical noise source, declare a `force_noise` on whatever part
+        affects that DOF — that's the architectural answer to "model-
+        error fudge factor."
 
         Per-craft init knobs accept any of these shapes — same contract
         for state vectors AND variances. The codegen resolves them to a
@@ -162,7 +172,6 @@ class EKF:
     """
     world: "World"
     measurements: list = field(default_factory=list)
-    process_noise: float = 1e-6
     initial_covariance: float = 1.0
 
     initial_position:         "tuple | list | None" = None

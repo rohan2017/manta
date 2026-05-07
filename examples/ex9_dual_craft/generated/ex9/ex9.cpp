@@ -51,7 +51,7 @@ bool parse_float_array(std::string_view s, std::vector<float>& out) {
 std::optional<zenoh::Session> g_session;
 
 using EkfT = decltype(manta_gen::ex9::ekf_0);
-EkfT::StateCov g_Q = EkfT::StateCov::Identity() * 1e-06f;
+EkfT::StateCov g_Q = EkfT::StateCov::Zero();
 
 // Jet shadow world. Built identically to the value side in
 // setup(); EKF::predict drives this through autodiff to

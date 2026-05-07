@@ -35,7 +35,7 @@ def make_config() -> MantaConfig:
 
     w = World("ex6_est").add_craft(c)
 
-    ekf = EKF(w, measurements=[imu, dvl], process_noise=1e-6,
+    ekf = EKF(w, measurements=[imu, dvl],
               initial_covariance=1.0)
 
     # MFloat-time sensor feeds — each set_measurement call also flips the

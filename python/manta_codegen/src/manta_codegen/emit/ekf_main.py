@@ -391,6 +391,21 @@ def _first_mag_field_var(world, var_for_id: dict[int, str] | None = None) -> str
     return None
 
 
+# Emits the initial-Q literal. EKF: Q starts at zero (auto-Q populates
+# everything inside begin_step). UKF: Q starts at q_jitter · I to keep
+# the kernel's LLT cholesky on PD covariances.
+def _emit_q_initial(kind: str, filter_obj) -> list[str]:
+    if kind == "ekf":
+        return ["EkfT::StateCov g_Q = EkfT::StateCov::Zero();"]
+    if kind == "ukf":
+        jitter = getattr(filter_obj, "q_jitter", 1e-9)
+        return [
+            "EkfT::StateCov g_Q = EkfT::StateCov::Identity() * "
+            f"{_f(jitter)};",
+        ]
+    raise ValueError(f"unknown filter kind {kind!r}")
+
+
 def _world_noise_counts(world) -> tuple[int, int]:
     """Walk the world's parts and sum (NumNoiseSlots, BiasDim) from
     enabled `noise_channels()` declarations. Channels with σ < 0 are
@@ -809,8 +824,11 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
         "std::optional<zenoh::Session> g_session;",
         "",
         f"using EkfT = decltype(manta_gen::{name}::{filter_var});",
-        f"EkfT::StateCov g_Q = EkfT::StateCov::Identity() * "
-        f"{_f(filter_obj.process_noise)};",
+        # Q is now built entirely from registered noise channels (auto-Q).
+        # UKFs additionally need a tiny diagonal jitter for LLT cholesky
+        # stability; the EKF's Jacobian-based covariance update is
+        # numerically robust without it.
+        *(_emit_q_initial(kind, filter_obj)),
         "",
     ]
 

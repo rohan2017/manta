@@ -114,7 +114,7 @@ def make_config() -> MantaConfig:
     # vehicle started"; velocity prior moderate; magnetometer plus tight
     # initial attitude lock keeps q observable through the dive.
     ekf = EKF(est_w, measurements=[est_imu, est_dvl, est_mag],
-              process_noise=1e-5, initial_covariance=1.0,
+              initial_covariance=1.0,
               initial_position_var=1e-4,
               initial_attitude_var=1e-4,
               initial_velocity_var=1e-2,

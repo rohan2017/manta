@@ -77,7 +77,7 @@ def make_config() -> MantaConfig:
     # than the monolithic predict; for two crafts it's ~2× — already
     # a measurable win.
     ekf = EKF(w, measurements=[imu_0, dvl_0, imu_1, dvl_1],
-              process_noise=1e-6, initial_covariance=1.0,
+              initial_covariance=1.0,
               initial_position_var=1e-4,
               initial_attitude_var={"drone_0": 1e-4},
               initial_velocity_var=[1e-2, 1e-3],

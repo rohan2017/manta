@@ -74,14 +74,20 @@ class UKF:
                planets that the craft's parts need to access during
                predict.
         measurements: list of sensor-part descriptors the UKF observes.
-        process_noise: scalar — Q is `process_noise * I`.
+        q_jitter: numerical diagonal floor on Q each tick — keeps the
+               covariance strictly positive-definite for the kernel's
+               LLT cholesky. NOT a model-noise knob; declare
+               `Noise<*>` on parts (per-part σ on the descriptor) to
+               capture physical process noise via auto-Q assembly. The
+               default 1e-9 is safe for typical state magnitudes; raise
+               it if LLT begins to fail in long-horizon runs.
         initial_covariance: scalar — P_0 is `initial_covariance * I`.
         alpha, beta, kappa: sigma-point tuning knobs (see UKF<...>
                docstring). Defaults to the standard van-der-Merwe form.
     """
     world: "World"
     measurements: list = field(default_factory=list)
-    process_noise: float = 1e-6
+    q_jitter: float = 1e-9
     initial_covariance: float = 1.0
 
     # Per-craft initial-state overrides — see EKF for the contract.
