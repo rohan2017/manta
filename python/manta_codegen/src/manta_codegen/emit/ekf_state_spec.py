@@ -2,7 +2,7 @@
 
 Emits the new `EKFGeneric<StateSpec, MeasDim, NoiseSlots>` shape — see
 `include/manta/estimation/generic_ekf.hpp` and the reference
-implementation at `examples/generic_estimator_demo/main.cpp`. Replaces
+implementation at `examples/ex10_cpp_ekf/main.cpp`. Replaces
 the legacy `EKF<NumCrafts, MeasDim, ...>` + per-sensor functor + R-init
 + `add_update` block flow with:
 

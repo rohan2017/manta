@@ -1,5 +1,5 @@
-// generic_estimator_demo — hand-written reference implementation of
-// the StateSpec + EKFGeneric + Measurement + Reading API.
+// ex10_cpp_ekf — hand-written reference implementation of the
+// StateSpec + EKFGeneric + Measurement + Reading API.
 //
 // Pure C++, no codegen, no Zenoh. One binary running:
 //
@@ -10,15 +10,14 @@
 // Logs the truth-vs-estimate trajectory to stdout each second and
 // exits cleanly after a fixed run.
 //
-// This is the reference for the codegen migration: the codegen will
-// emit code shaped like this main, with the boilerplate (world setup,
+// This is the reference shape for the codegen migration: the codegen
+// emits code shaped like this main, with the boilerplate (world setup,
 // craft construction, ekf.measure() calls, tick body) generated from
 // the user's Python config.
 
 #include <cstdio>
-#include <cmath>
 
-#include "manta/core/craft.hpp"
+#include "craft.hpp"
 #include "manta/core/scene.hpp"
 #include "manta/core/world.hpp"
 #include "manta/estimation/craft_view.hpp"
@@ -27,53 +26,15 @@
 #include "manta/estimation/reading.hpp"
 #include "manta/estimation/state_spec.hpp"
 #include "manta/fields/gravity_field.hpp"
-#include "manta/parts/actuator/thruster.hpp"
-#include "manta/parts/sensor/dvl.hpp"
-#include "manta/parts/sensor/imu.hpp"
-#include "manta/parts/structure/mass.hpp"
 
 using namespace manta;
 using namespace manta::estimation;
-
-// --------------------------------------------------------------------
-// One craft definition, instantiated three times: sim (synthetic
-// readings + truth state), est value-side (EKF's tracked craft), est
-// Jet-side (Jet shadow for autodiff).
-// --------------------------------------------------------------------
-template <class Scalar>
-class DemoCraftT : public CraftT<Scalar> {
-public:
-    explicit DemoCraftT(std::string name)
-        : CraftT<Scalar>(std::move(name)) {
-        body_ = &this->root().template add<parts::MassT<Scalar>>("body", Scalar(1.0));
-        thrust_ = &this->root().template add<parts::Thruster1T<Scalar>>(
-            "thrust",
-            std::array<geom::Vec3<PartFrame, Scalar>, 1>{
-                geom::Vec3<PartFrame, Scalar>{Scalar(15), Scalar(0), Scalar(0)}},
-            std::array<geom::Vec3<PartFrame, Scalar>, 1>{
-                geom::Vec3<PartFrame, Scalar>::zero()});
-        imu_ = &this->root().template add<parts::IMUT<Scalar>>(
-            "imu", /*accel_sigma=*/0.05f, /*gyro_sigma=*/0.005f);
-        dvl_ = &this->root().template add<parts::DVLT<Scalar>>(
-            "dvl", /*velocity_sigma=*/0.02f);
-        this->root().compute_params();
-    }
-
-    parts::IMUT<Scalar>&       imu()    noexcept { return *imu_; }
-    parts::DVLT<Scalar>&       dvl()    noexcept { return *dvl_; }
-    parts::Thruster1T<Scalar>& thrust() noexcept { return *thrust_; }
-
-private:
-    parts::MassT<Scalar>*       body_   = nullptr;
-    parts::Thruster1T<Scalar>*  thrust_ = nullptr;
-    parts::IMUT<Scalar>*        imu_    = nullptr;
-    parts::DVLT<Scalar>*        dvl_    = nullptr;
-};
+using ex10::DemoCraftT;
 
 int main() {
     constexpr double DT       = 0.001;     // 1 kHz
     constexpr int    N_STEPS  = 5000;      // 5 s of sim
-    constexpr int    LOG_EVERY = 1000;      // 1 Hz log
+    constexpr int    LOG_EVERY = 1000;     // 1 Hz log
 
     // ---- Sim world (the truth): produces noisy synthetic readings. ----
     WorldT<double> sim_world;
