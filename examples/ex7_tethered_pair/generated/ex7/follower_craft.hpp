@@ -11,9 +11,9 @@ class FollowerCraft : public manta::Craft {
 public:
     FollowerCraft();
 
-    manta::parts::Mass& body() { return *body_; }
-    const manta::parts::Mass& body() const { return *body_; }
+    manta::parts::MassT<manta::MFloat>& body() { return *body_; }
+    const manta::parts::MassT<manta::MFloat>& body() const { return *body_; }
 
 private:
-    manta::parts::Mass* body_ = nullptr;
+    manta::parts::MassT<manta::MFloat>* body_ = nullptr;
 };

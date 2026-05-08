@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <stdexcept>
 #include <typeindex>
 #include <typeinfo>
 #include <unordered_map>
@@ -78,10 +79,29 @@ public:
     std::vector<std::unique_ptr<Planet>>&       planets()       noexcept { return planets_; }
 
     // --- Global field registry (shared between Worlds at different Scalars) ---
+    //
+    // IMPORTANT: register every field BEFORE adding any craft. Crafts'
+    // parts capture field references during compute_params, which runs
+    // soon after `Scene::add_craft`. Registering a field after that point
+    // means parts already added never see it — silently broken behavior
+    // (e.g. an IMU's gravity subtraction is skipped). This trap surfaces
+    // the mistake at the offending register_field call instead.
     template<typename FieldT>
     void register_field(FieldT& f) {
+        if (crafts_added_) {
+            throw std::runtime_error(
+                "WorldT::register_field: a craft was already added to this "
+                "world. Register all fields BEFORE adding any craft so the "
+                "crafts' parts can resolve field references during "
+                "compute_params.");
+        }
         fields_[std::type_index(typeid(FieldT))] = &f;
     }
+
+    // Internal hook called by SceneT::add_craft so the World can lock its
+    // field registry. Not part of the public API; users should not call
+    // this directly.
+    void mark_crafts_added() noexcept { crafts_added_ = true; }
 
     template<typename FieldT>
     FieldT& field() {
@@ -149,6 +169,7 @@ private:
     std::vector<std::unique_ptr<Planet>>         planets_;
     std::unordered_map<std::type_index, fields::Field*> fields_;
     SimClock                                     clock_;
+    bool                                         crafts_added_ = false;
 };
 
 // value instantiation alias — the sim's primary World type.

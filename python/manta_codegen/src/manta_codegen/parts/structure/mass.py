@@ -27,7 +27,6 @@ class Mass(PartDescriptor):
     Telemetry: none.
     """
 
-    cpp_class          = "manta::parts::Mass"
     cpp_class_template = "manta::parts::MassT"
     cpp_header         = "manta/parts/structure/mass.hpp"
 

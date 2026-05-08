@@ -138,3 +138,12 @@ target_link_libraries(wire_debug PRIVATE manta_examples_shared)
 # craft_idx routing).
 include(${CMAKE_CURRENT_SOURCE_DIR}/ex9_dual_craft/generated/ex9/ex9.cmake)
 target_link_libraries(ex9 PRIVATE manta_examples_shared)
+
+# generic_estimator_demo — hand-written reference implementation of the
+# StateSpec + EKFGeneric + Measurement + Reading API. No codegen, no
+# Zenoh; sim+est in one binary with stdout logging. Serves as the
+# target shape for Phase 5d's codegen migration.
+add_executable(generic_estimator_demo generic_estimator_demo/main.cpp)
+target_link_libraries(generic_estimator_demo PRIVATE manta::manta)
+target_compile_definitions(generic_estimator_demo PRIVATE
+    MANTA_HAS_GRAVITY_FIELD=1)

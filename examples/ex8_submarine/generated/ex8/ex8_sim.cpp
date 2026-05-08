@@ -69,7 +69,7 @@ void setup() {
     scene = &w.create_scene();
     field_0.add(manta::fields::GravityField::Disturbance::uniform(manta::geom::Vec3<manta::SceneFrame>{0.0f, 0.0f, -9.81f}), manta::fields::PERSISTENT);
     w.register_field(field_0);
-    field_1.add(manta::fields::FluidField::Disturbance::uniform_incompressible(manta::MFloat(1025.0f), manta::geom::Vec3<manta::SceneFrame>{0.0f, 0.0f, 0.0f}), manta::fields::PERSISTENT);
+    field_1.add(manta::fields::FluidField::Disturbance::uniform_incompressible(manta::MFloat(1025.0), manta::geom::Vec3<manta::SceneFrame>{0.0f, 0.0f, 0.0f}), manta::fields::PERSISTENT);
     w.register_field(field_1);
     field_2.add(manta::fields::MagField::Disturbance::uniform(manta::geom::Vec3<manta::SceneFrame>{2.5e-05f, 0.0f, -4.5e-05f}), manta::fields::PERSISTENT);
     w.register_field(field_2);

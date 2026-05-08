@@ -1,6 +1,6 @@
-// Phase E: Noise<RandomWalk> as an EKF-estimated bias state.
+// Phase E: Noise<RandomWalk<3>> as an EKF-estimated bias state.
 //
-// The setup: a custom test part has a Noise<RandomWalk> bias that adds
+// The setup: a custom test part has a Noise<RandomWalk<3>> bias that adds
 // to its reported "measurement" output. The EKF augments its tangent
 // state by the bias DOFs, propagates `bias_post = bias_pre + driver·
 // σ_rw·√dt`, and corrects the bias from a measurement that depends on
@@ -48,16 +48,16 @@ public:
     }
 
     void register_noise(NoiseRegistry& r) override {
-        r.register_random_walk_3d(bias_);
+        r.register_random_walk(bias_);
     }
 
-    Noise<RandomWalk>& bias() noexcept { return bias_; }
-    const Noise<RandomWalk>& bias() const noexcept { return bias_; }
+    Noise<RandomWalk<3>>& bias() noexcept { return bias_; }
+    const Noise<RandomWalk<3>>& bias() const noexcept { return bias_; }
 
     const Vec3<PartFrame, Scalar>& last_value() const noexcept { return last_value_; }
 
 private:
-    Noise<RandomWalk>           bias_;
+    Noise<RandomWalk<3>>           bias_;
     Vec3<PartFrame, Scalar>     last_value_;
 };
 
@@ -184,7 +184,7 @@ TEST_CASE("RW bias: update_n pulls the bias estimate toward measured truth") {
     ekf.set_covariance(P0);
 
     // Start with a wrong bias estimate.
-    craft_jet.observer().bias().set_state3(
+    craft_jet.observer().bias().set_state(
         Eigen::Matrix<float, 3, 1>{0.f, 0.f, 0.f});
 
     // Measurement functor: reads the observer's last_value, which equals
@@ -223,7 +223,7 @@ TEST_CASE("RW bias: update_n pulls the bias estimate toward measured truth") {
     ekf.end_step();
 
     // After the update, the Jet-side bias should have moved toward z.
-    const auto bias_post = craft_jet.observer().bias().state3();
+    const auto bias_post = craft_jet.observer().bias().state();
     INFO("bias_post=(", bias_post(0), ",", bias_post(1), ",", bias_post(2), ")");
     CHECK(bias_post(0) > 0.05f);   // moved a lot toward 0.2
     CHECK(bias_post(1) < -0.02f);  // moved toward -0.1
@@ -295,7 +295,7 @@ TEST_CASE("UKF: RW bias measurement pulls estimate toward truth") {
     ukf.set_state(x0);
     ukf.set_covariance(Ukf::StateCov::Identity() * 0.1);
 
-    craft_real.observer().bias().set_state3(
+    craft_real.observer().bias().set_state(
         Eigen::Matrix<float, 3, 1>{0.f, 0.f, 0.f});
 
     // Measurement functor reads the BiasObserverPart's last_value via
@@ -313,7 +313,7 @@ TEST_CASE("UKF: RW bias measurement pulls estimate toward truth") {
     Eigen::Matrix<double, 3, 3> R = Eigen::Matrix<double, 3, 3>::Identity() * 1e-4;
     ukf.update_n<3>(h, z, R);
 
-    const auto bias_post = craft_real.observer().bias().state3();
+    const auto bias_post = craft_real.observer().bias().state();
     INFO("UKF bias_post=(", bias_post(0), ",", bias_post(1), ",", bias_post(2), ")");
     CHECK(bias_post(0) > 0.05f);
     CHECK(bias_post(1) < -0.02f);

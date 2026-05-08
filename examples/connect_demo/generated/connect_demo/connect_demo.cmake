@@ -5,7 +5,6 @@ set(manta_connect_demo_DIR ${CMAKE_CURRENT_LIST_DIR})
 set(manta_connect_demo_SOURCES
     ${manta_connect_demo_DIR}/connect_demo_craft.cpp
     ${manta_connect_demo_DIR}/connect_demo.cpp
-    ${manta_connect_demo_DIR}/connect_demo_main.cpp
 )
 
 set(manta_connect_demo_HEADERS
@@ -53,6 +52,3 @@ function(manta_connect_demo_apply target)
     target_compile_options(${target} PRIVATE "SHELL:-include ${manta_connect_demo_DIR}/connect_demo_config.h")
     target_link_libraries(${target} PRIVATE manta::manta zenohcxx::zenohc)
 endfunction()
-
-add_executable(connect_demo ${manta_connect_demo_SOURCES})
-manta_connect_demo_apply(connect_demo)

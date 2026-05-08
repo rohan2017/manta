@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .._format import cpp_float as _f
+from .._format import cpp_float as _f, cpp_mfloat as _mf
 from ..core import FieldDescriptor
 
 
@@ -64,12 +64,12 @@ class FluidField(FieldDescriptor):
             v_expr = f"{scene}{{{_f(vx)}, {_f(vy)}, {_f(vz)}}}"
             if d["kind"] == "incompressible":
                 expr = (f"{self.cpp_class}::Disturbance::uniform_incompressible("
-                        f"manta::MFloat({_f(d['density'])}), {v_expr})")
+                        f"{_mf(d['density'])}, {v_expr})")
             elif d["kind"] == "gas":
                 expr = (f"{self.cpp_class}::Disturbance::uniform_gas("
-                        f"manta::MFloat({_f(d['R'])}), "
-                        f"manta::MFloat({_f(d['temperature'])}), "
-                        f"manta::MFloat({_f(d['pressure'])}), {v_expr})")
+                        f"{_mf(d['R'])},"
+                        f"{_mf(d['temperature'])},"
+                        f"{_mf(d['pressure'])}, {v_expr})")
             else:
                 raise RuntimeError(f"unknown disturbance kind {d['kind']!r}")
             out.append(f"{var_name}.add({expr}, manta::fields::PERSISTENT);")

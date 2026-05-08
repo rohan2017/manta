@@ -75,7 +75,9 @@ TEST_CASE("IMU: rate_hz=100 on 1kHz sim fires every 10 ticks") {
     auto& s = w.create_scene();
     Craft c("imu_rated");
     auto& imu = c.root().add<parts::IMU>("imu",
-        /*accel_sigma=*/0.0f, /*gyro_sigma=*/0.0f, /*rate_hz=*/MFloat(100));
+        /*accel_sigma=*/0.0f, /*gyro_sigma=*/0.0f,
+        /*accel_bias_sigma=*/-1.0f, /*gyro_bias_sigma=*/-1.0f,
+        /*rate_hz=*/MFloat(100));
     c.root().compute_params();
     s.add_craft(c);
 
@@ -111,7 +113,9 @@ TEST_CASE("set_measurement bypasses the gate (always fresh)") {
     auto& s = w.create_scene();
     Craft c("imu_external");
     auto& imu = c.root().add<parts::IMU>("imu",
-        /*accel_sigma=*/0.0f, /*gyro_sigma=*/0.0f, /*rate_hz=*/MFloat(10));   // very slow native rate
+        /*accel_sigma=*/0.0f, /*gyro_sigma=*/0.0f,
+        /*accel_bias_sigma=*/-1.0f, /*gyro_bias_sigma=*/-1.0f,
+        /*rate_hz=*/MFloat(10));   // very slow native rate
     c.root().compute_params();
     s.add_craft(c);
 

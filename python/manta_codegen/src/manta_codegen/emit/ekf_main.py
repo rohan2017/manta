@@ -416,20 +416,13 @@ def _world_noise_counts(world) -> tuple[int, int]:
     """
     noise_slots = 0
     bias_dim    = 0
-
-    def walk(part):
-        nonlocal noise_slots, bias_dim
-        for ch in part.noise_channels():
-            if not ch.is_enabled():
-                continue
-            noise_slots += ch.driver_dim()
-            bias_dim    += ch.bias_dim()
-        for child in getattr(part, "_children", []):
-            walk(child)
-
     for entry in world.crafts:
-        for part in entry.craft.root.children:
-            walk(part)
+        for part in entry.craft.all_parts():
+            for ch in part.noise_channels():
+                if not ch.is_enabled():
+                    continue
+                noise_slots += ch.driver_dim()
+                bias_dim    += ch.bias_dim()
     return noise_slots, bias_dim
 
 
@@ -1018,11 +1011,15 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
     # craft by name). _resolve_var returns a length-num_crafts list of
     # (float | None); we emit a P0 override line only for crafts where
     # it's set.
+    # P0 lives in tangent space (12 dims per craft; attitude is a 3-d
+    # rotation tangent, NOT a 4-d quaternion). Per-block offsets are
+    # tangent-relative, and per-craft base is k*12 (not k*13 — that's
+    # the ambient state-vector layout used by x0).
     var_blocks = [
         ("initial_position_var",         0, 3),
-        ("initial_attitude_var",         3, 4),
-        ("initial_velocity_var",         7, 3),
-        ("initial_angular_velocity_var", 10, 3),
+        ("initial_attitude_var",         3, 3),
+        ("initial_velocity_var",         6, 3),
+        ("initial_angular_velocity_var", 9, 3),
     ]
     for attr, off, n in var_blocks:
         per_craft = _resolve_var(attr)
@@ -1030,7 +1027,7 @@ def emit_filter_cpp(target, filter_obj, kind: str = "ekf") -> str:
             v = per_craft[k]
             if v is None:
                 continue
-            base = k * 13 + off
+            base = k * 12 + off
             for j in range(n):
                 lines.append(f"    P0({base+j}, {base+j}) = {_f(v)};")
 

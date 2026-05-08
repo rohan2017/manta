@@ -47,16 +47,16 @@ TEST_CASE("Noise: WhiteGaussian sample3 — per-component independence and sigma
 
 TEST_CASE("Noise: RandomWalk advance — bias drifts from zero") {
     noise_seed(7);
-    Noise<RandomWalk> n{1.0f};
+    Noise<RandomWalk<1>> n{1.0f};
 
     // Initial state is zero.
-    CHECK(n.state1() == doctest::Approx(0.0f));
+    CHECK(n.state()(0) == doctest::Approx(0.0f));
 
     // After many advances the bias departs from zero.
     for (int i = 0; i < 1000; ++i) n.advance(0.01f);  // 10 s total
 
     // We can't assert direction, but magnitude should be non-trivial.
-    float bias = n.state1();
+    float bias = n.state()(0);
     (void)bias;  // Statistical test is non-deterministic without fixed seed advance.
     // Just verify it compiles and runs without crashing.
 }
@@ -71,9 +71,9 @@ TEST_CASE("Noise: RandomWalk advance — RMS grows as sigma*sqrt(t)") {
     noise_seed(99);
     double sum2 = 0;
     for (int r = 0; r < runs; ++r) {
-        Noise<RandomWalk> n{sigma};
+        Noise<RandomWalk<1>> n{sigma};
         for (int s = 0; s < steps; ++s) n.advance(dt);
-        sum2 += double(n.state1()) * double(n.state1());
+        sum2 += double(n.state()(0)) * double(n.state()(0));
     }
     float rms = float(std::sqrt(sum2 / runs));
     // Should be within 5% of expected.
@@ -92,7 +92,7 @@ TEST_CASE("Noise: operator+(Vec3, WhiteGaussian) — returns Vec3 with noise") {
 
 TEST_CASE("Noise: operator+(Vec3, RandomWalk) — adds bias state") {
     Vec3<PartFrame> v{0, 0, 0};
-    Noise<RandomWalk> n{0.0f};  // zero sigma → zero bias
+    Noise<RandomWalk<3>> n{0.0f};  // zero sigma → zero bias
     auto result = v + n;
     CHECK(result.x() == doctest::Approx(0.0f));
     CHECK(result.y() == doctest::Approx(0.0f));

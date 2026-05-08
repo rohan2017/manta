@@ -15,8 +15,8 @@ class Ex5EstCraftT : public manta::CraftT<Scalar> {
 public:
     Ex5EstCraftT() : manta::CraftT<Scalar>("ex5_est") {
         body_ = &this->root().template add<manta::parts::MassT<Scalar>>("body", Scalar(1.0f), []{ manta::geom::Mat3<manta::PartFrame, manta::PartFrame, Scalar> m = manta::geom::Mat3<manta::PartFrame, manta::PartFrame, Scalar>::identity(); m.raw()(0,0)=Scalar(0.05f); m.raw()(1,1)=Scalar(0.05f); m.raw()(2,2)=Scalar(0.05f); return m; }(), true);
-        imu_ = &this->root().template add<manta::parts::IMUT<Scalar>>("imu", 0.05f, 0.005f, manta::MFloat(0.0f), -1.0f);
-        dvl_ = &this->root().template add<manta::parts::DVLT<Scalar>>("dvl", 0.02f, manta::MFloat(0.0f));
+        imu_ = &this->root().template add<manta::parts::IMUT<Scalar>>("imu", 0.05f, 0.005f, 0.001f, 0.0001f, manta::MFloat(0.0));
+        dvl_ = &this->root().template add<manta::parts::DVLT<Scalar>>("dvl", 0.02f, manta::MFloat(0.0));
         thrust_ = &this->root().template add<manta::parts::Thruster1T<Scalar>>("thrust", std::array<manta::geom::Vec3<manta::PartFrame, Scalar>, 1>{manta::geom::Vec3<manta::PartFrame, Scalar>{Scalar(15.0f), Scalar(0.0f), Scalar(0.0f)}}, std::array<manta::geom::Vec3<manta::PartFrame, Scalar>, 1>{manta::geom::Vec3<manta::PartFrame, Scalar>{Scalar(0.0f), Scalar(0.0f), Scalar(0.0f)}}, -1.0f);
         this->root().compute_params();
     }

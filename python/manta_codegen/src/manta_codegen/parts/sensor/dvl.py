@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from ..._format import cpp_float as _f
-from ...core import PartDescriptor
+from ..._format import cpp_float as _f, cpp_mfloat as _mf
+from ...core import NoiseChannel, PartDescriptor
 from ...signal import Signal, vec3_out_signal
 
 
@@ -19,7 +19,6 @@ class DVL(PartDescriptor):
     Required fields: none.
     """
 
-    cpp_class          = "manta::parts::DVL"
     cpp_class_template = "manta::parts::DVLT"
     cpp_header         = "manta/parts/sensor/dvl.hpp"
 
@@ -48,10 +47,13 @@ class DVL(PartDescriptor):
     def emit_constructor_args(self, scalar: str = "manta::MFloat") -> str:
         return (f'"{self.name}", '
                 f'{_f(self.velocity_sigma)}, '
-                f'manta::MFloat({_f(self.rate_hz)})')
+                f'{_mf(self.rate_hz)}')
 
-    def telemetry_fields(self) -> list[tuple[str, str]]:
-        return [("velocity", "manta::geom::Vec3<manta::PartFrame>")]
+    def noise_channels(self) -> list[NoiseChannel]:
+        # σ ≥ 0 ⇒ register a 3-axis white-Gaussian on the velocity reading.
+        # Mirrors `DVLT::register_noise()` exactly.
+        return [NoiseChannel("velocity_noise", "white_3d", self.velocity_sigma)]
 
-    def emit_telemetry_reads(self) -> list[tuple[str, str]]:
-        return [("velocity", f"craft.{self.name}().last_velocity()")]
+    def telemetry(self) -> list[tuple[str, str, str]]:
+        return [("velocity", "manta::geom::Vec3<manta::PartFrame>",
+                 f"craft.{self.name}().last_velocity()")]

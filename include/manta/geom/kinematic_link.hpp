@@ -228,7 +228,12 @@ public:
 
     // RK4 integration of the link's pose under its current velocities and
     // accelerations. Updates position, orientation, and velocities in place.
-    void update(Scalar dt) noexcept;
+    //
+    // `normalize_quat` defaults to true — the integrator renormalizes the
+    // orientation each step to prevent drift from accumulated multiplications.
+    // Set false to skip the sqrt for one step (the caller is then
+    // responsible for renormalizing every N steps for drift control).
+    void update(Scalar dt, bool normalize_quat = true) noexcept;
 
 private:
     PosF position_;
@@ -266,7 +271,7 @@ private:
 // `angle_axis_to_quat` (Taylor-safe at the origin) so first derivatives
 // match the analytical Lie generator dt/2·e_i at ω=0.
 template <typename From, typename To, typename Scalar>
-inline void KinematicLink<From, To, Scalar>::update(Scalar dt) noexcept {
+inline void KinematicLink<From, To, Scalar>::update(Scalar dt, bool normalize_quat) noexcept {
     using EigenV = Eigen::Matrix<Scalar, 3, 1>;
     using QuatT  = typename Att::QuatT;
 
@@ -282,12 +287,14 @@ inline void KinematicLink<From, To, Scalar>::update(Scalar dt) noexcept {
     EigenV  aa = (w0 + Scalar(0.5) * al * dt) * dt;
     QuatT   dq = angle_axis_to_quat<Scalar>(aa);
 
-    // q ⊗ dq is unit by construction. Trailing renormalize is a guard
-    // against numerical drift across long sim runs; at unit q its
+    // q ⊗ dq is unit by construction. The optional renormalize is a
+    // guard against numerical drift across long sim runs; at unit q its
     // Jacobian is the tangent projection (I − qq^T), which is the right
-    // thing when feeding back into a 4-DOF state vector.
+    // thing when feeding back into a 4-DOF state vector. Skip with
+    // `normalize_quat=false` when an outer scheduler is enforcing
+    // renormalization every N steps to save the sqrt cost.
     QuatT q_new = orientation_.raw() * dq;
-    q_new.normalize();
+    if (normalize_quat) q_new.normalize();
 
     auto w_new = w0 + al * dt;
 

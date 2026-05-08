@@ -1,11 +1,13 @@
 #pragma once
 
 #include <memory>
+#include <span>
 #include <string>
 #include <typeinfo>
 #include <type_traits>
 #include <vector>
 #include "features.hpp"   // MANTA_HAS_<FIELD> defaults + REQUIRES/AUGMENTS macros
+#include "../estimation/measurement.hpp"
 #include "frame.hpp"
 #include "types.hpp"
 #include "wrench.hpp"
@@ -120,6 +122,18 @@ public:
     // behaviour and Q assembly stay consistent.
     virtual void update_noise_sigmas() {}
 
+    // ---- Measurement registry ----
+    //
+    // Sensor parts publish typed Measurement handles (one per output
+    // field — e.g. IMU has `accel` and `gyro`) by adding pointers to
+    // their public Measurement members into `measurements_` during
+    // construction. The EKF binds these by name at bind time and reads
+    // h(x) + R from them at update time. Non-sensor parts leave
+    // `measurements_` empty and the EKF skips them.
+    std::span<Measurement* const> measurements() const noexcept {
+        return {measurements_.data(), measurements_.size()};
+    }
+
     // Wrench application — accumulates within a single tick. Multiple calls add.
     void apply_force_at(const geom::Vec3<PartFrame, Scalar>& force,
                         const geom::Vec3<PartFrame, Scalar>& point =
@@ -206,6 +220,11 @@ protected:
     Scalar                              mass_ = Scalar(0);
     geom::Mat3<PartFrame, PartFrame, Scalar>       moi_  = geom::Mat3<PartFrame, PartFrame, Scalar>::zero();
     geom::Vec3<PartFrame, Scalar>       com_;
+
+    // Sensor subclasses populate this in their constructors with
+    // pointers to their typed Measurement members. Stays empty for
+    // non-sensor parts.
+    std::vector<Measurement*>           measurements_;
 
 private:
     template <class S> friend class CompositePartT;

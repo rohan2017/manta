@@ -163,10 +163,17 @@ public:
 
     // Craft lifecycle. Craft ownership stays with the caller; the Scene holds
     // a non-owning pointer. add_craft wires the craft's world_/scene_ pointers.
+    //
+    // ORDERING NOTE: register all fields on the World *before* adding any
+    // craft. A craft's parts capture field references during compute_params
+    // (called downstream of add_craft); a field registered after that point
+    // is silently invisible to those parts. WorldT::register_field traps
+    // this with a runtime check.
     void add_craft(CraftT<Scalar>& c) {
         c.world_ = world_;
         c.scene_ = this;
         crafts_.push_back(&c);
+        if (world_) world_->mark_crafts_added();
     }
 
     void add_craft(CraftT<Scalar>& c, const InitialState& init) {

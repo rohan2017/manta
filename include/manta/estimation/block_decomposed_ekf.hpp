@@ -216,8 +216,9 @@ public:
     void end_step() {
         if (!w_jet_) return;
 
+        // x_ref_post_ came from the Jet world's integrator, which
+        // already normalized each craft's q.
         x_ref_ = x_ref_post_;
-        renormalize_quats(x_ref_);
 
         // Block-diagonal F → P_pre = F P F^T + Q.
         StateCov P = F_ * P_ * F_.transpose() + Q_pending_;

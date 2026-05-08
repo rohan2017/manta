@@ -52,17 +52,20 @@ public:
         return start;
     }
 
-    // Register a 3-axis random-walk bias source. Allocates 3 contiguous
-    // bias-state slots AND 3 contiguous driver slots in the white-noise
-    // input range. Updates the source's state_slot/driver_slot.
-    int register_random_walk_3d(Noise<RandomWalk>& source) {
+    // Register a random-walk bias source of any dimension. Allocates Dim
+    // contiguous bias-state slots AND Dim contiguous driver slots in the
+    // white-noise input range. Updates the source's state_slot/driver_slot.
+    // The dim is read from the source's runtime `dim()` (set by its
+    // RandomWalk<Dim> template argument).
+    int register_random_walk(NoiseRandomWalkBase& source) {
+        const int dim          = source.dim();
         const int driver_start = next_slot_;
         const int bias_start   = next_bias_slot_;
         source.set_driver_slot(driver_start);
         source.set_state_slot (bias_start);
-        rw_entries_.push_back(RWEntry{&source, /*dim=*/3, driver_start, bias_start});
-        next_slot_      += 3;
-        next_bias_slot_ += 3;
+        rw_entries_.push_back(RWEntry{&source, dim, driver_start, bias_start});
+        next_slot_      += dim;
+        next_bias_slot_ += dim;
         return driver_start;
     }
 
@@ -74,10 +77,10 @@ public:
     // RW noise inspection — used by the EKF for bias evolution
     // (F's identity bias rows + L's σ_rw·√dt driver gain) and δ injection.
     struct RWAccess {
-        Noise<RandomWalk>* source;
-        int                dim;
-        int                driver_slot;
-        int                bias_slot;
+        NoiseRandomWalkBase* source;
+        int                  dim;
+        int                  driver_slot;
+        int                  bias_slot;
     };
     std::vector<RWAccess> rw_sources() const {
         std::vector<RWAccess> out;
@@ -109,14 +112,11 @@ public:
         }
     }
 
-    // Backward-compat shim used during early migration. Prefer
-    // `apply_slot_offsets(noise_offset, bias_offset)` going forward.
-    void apply_slot_offset(int offset) {
-        apply_slot_offsets(offset, /*bias_state_offset=*/0);
-    }
-
-    // Per-tick variance of the unit noise inputs at each slot, into
-    // `out` (resized to num_slots()).
+    // Per-tick variance of the unit noise inputs at each slot. Returns a
+    // const reference into a member buffer so each predict tick avoids a
+    // per-call allocation. The buffer is invalidated by clear() and by
+    // any further register_*() call; callers must consume it before the
+    // next mutation.
     //
     // For Noise<WhiteGaussian>: the σ scaling is already inside the
     // noise-input gain L (the operator+ injects `Jet(0)·σ`), so the
@@ -125,14 +125,14 @@ public:
     // L_eff·diag(σ²)·L_effᵀ where L_eff = L/σ is the unit-input gain,
     // i.e. the standard Kalman discrete Q.
     //
-    // RandomWalk biases (Phase E) will return σ²·dt per slot instead;
-    // this method is the per-noise-policy hook for that.
-    //
     // dt is unused for WhiteGaussian (per-tick discrete noise has σ as
     // its per-tick stddev directly) but accepted for consistency with
     // future RandomWalk slots.
-    void input_variance_diag(double /*dt*/, std::vector<double>& out) const {
-        out.assign(static_cast<std::size_t>(next_slot_), 1.0);
+    const std::vector<double>& input_variance_diag(double /*dt*/) const {
+        if (input_var_buf_.size() != static_cast<std::size_t>(next_slot_)) {
+            input_var_buf_.assign(static_cast<std::size_t>(next_slot_), 1.0);
+        }
+        return input_var_buf_;
     }
 
     // Clear all slots — flips every registered source back to "no slot."
@@ -144,6 +144,7 @@ public:
         rw_entries_.clear();
         next_slot_      = 0;
         next_bias_slot_ = 0;
+        input_var_buf_.clear();
     }
 
 private:
@@ -153,16 +154,20 @@ private:
         int                   slot_start;
     };
     struct RWEntry {
-        Noise<RandomWalk>* source;
-        int                dim;
-        int                driver_slot;   // local index in noise-input range
-        int                bias_slot;     // local index in bias-state range
+        NoiseRandomWalkBase* source;
+        int                  dim;
+        int                  driver_slot;   // local index in noise-input range
+        int                  bias_slot;     // local index in bias-state range
     };
 
-    std::vector<Entry>   entries_;
-    std::vector<RWEntry> rw_entries_;
-    int                  next_slot_      = 0;
-    int                  next_bias_slot_ = 0;
+    std::vector<Entry>           entries_;
+    std::vector<RWEntry>         rw_entries_;
+    int                          next_slot_      = 0;
+    int                          next_bias_slot_ = 0;
+    // Lazily-built unit-variance buffer for input_variance_diag().
+    // mutable: input_variance_diag() is conceptually const (just reads
+    // slot count) but caches the result to avoid per-tick allocation.
+    mutable std::vector<double>  input_var_buf_;
 };
 
 // Recursively register noise sources from a part subtree into the

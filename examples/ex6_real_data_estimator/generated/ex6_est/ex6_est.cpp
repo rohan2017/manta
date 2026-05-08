@@ -23,7 +23,7 @@ namespace manta_gen::ex6_est {
 manta::WorldT<double>  w{};
 manta::SceneT<double>* scene = nullptr;
 Ex6EstCraftT<double> craft{};
-manta::estimation::EKF<1, 9, 6, 0> ekf_0;
+manta::estimation::EKF<1, 9, 9, 0> ekf_0;
 
 }  // namespace manta_gen::ex6_est
 

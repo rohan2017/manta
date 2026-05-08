@@ -50,6 +50,11 @@ add_executable(manta_tests
     test_articulation.cpp
     test_ekf.cpp
     test_ekf_against_sim.cpp
+    test_manifold.cpp
+    test_generic_ekf.cpp
+    test_generic_ukf.cpp
+    test_craft_view.cpp
+    test_measurement_e2e.cpp
     test_ukf.cpp
     test_planet.cpp
     test_system_id.cpp

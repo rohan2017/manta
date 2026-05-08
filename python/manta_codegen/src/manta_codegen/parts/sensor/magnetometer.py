@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ..._format import cpp_float as _f
+from ..._format import cpp_float as _f, cpp_mfloat as _mf
 from ...core import NoiseChannel, PartDescriptor
 from ...fields.mag_field import MagField
 from ...signal import Signal, vec3_out_signal
@@ -24,7 +24,6 @@ class Magnetometer(PartDescriptor):
     or any user-supplied magnetic-model field).
     """
 
-    cpp_class          = "manta::parts::Magnetometer"
     cpp_class_template = "manta::parts::MagnetometerT"
     cpp_header         = "manta/parts/sensor/magnetometer.hpp"
 
@@ -58,7 +57,7 @@ class Magnetometer(PartDescriptor):
     def emit_constructor_args(self, scalar: str = "manta::MFloat") -> str:
         return (f'"{self.name}", '
                 f'{_f(self.sigma)}, '
-                f'manta::MFloat({_f(self.rate_hz)})')
+                f'{_mf(self.rate_hz)}')
 
     def noise_channels(self) -> list[NoiseChannel]:
         return [NoiseChannel("noise", "white_3d", self.sigma)]

@@ -12,15 +12,15 @@ class ConnectDemoCraft : public manta::Craft {
 public:
     ConnectDemoCraft();
 
-    manta::parts::Mass& body() { return *body_; }
-    const manta::parts::Mass& body() const { return *body_; }
-    manta::parts::Thruster1& leader() { return *leader_; }
-    const manta::parts::Thruster1& leader() const { return *leader_; }
-    manta::parts::Thruster1& follower() { return *follower_; }
-    const manta::parts::Thruster1& follower() const { return *follower_; }
+    manta::parts::MassT<manta::MFloat>& body() { return *body_; }
+    const manta::parts::MassT<manta::MFloat>& body() const { return *body_; }
+    manta::parts::Thruster1T<manta::MFloat>& leader() { return *leader_; }
+    const manta::parts::Thruster1T<manta::MFloat>& leader() const { return *leader_; }
+    manta::parts::Thruster1T<manta::MFloat>& follower() { return *follower_; }
+    const manta::parts::Thruster1T<manta::MFloat>& follower() const { return *follower_; }
 
 private:
-    manta::parts::Mass* body_ = nullptr;
-    manta::parts::Thruster1* leader_ = nullptr;
-    manta::parts::Thruster1* follower_ = nullptr;
+    manta::parts::MassT<manta::MFloat>* body_ = nullptr;
+    manta::parts::Thruster1T<manta::MFloat>* leader_ = nullptr;
+    manta::parts::Thruster1T<manta::MFloat>* follower_ = nullptr;
 };

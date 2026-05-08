@@ -52,6 +52,9 @@
 
 #include <array>
 #include <cmath>
+#include <stdexcept>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #include <Eigen/Core>
@@ -99,8 +102,16 @@ public:
     // Bind to the value World + craft pointers in slot order matching
     // the state vector. Walks the part tree to register Noise<RandomWalk>
     // sources for bias-state augmentation.
+    //
+    // **Templated craft requirement**: every Craft must be a
+    // `<Scalar>`-templated class (the codegen sets this automatically;
+    // hand-written crafts must define `MyCraftT<Scalar> : CraftT<Scalar>`).
+    // The static_asserts below produce a friendly error if not.
     void bind(WorldR& w_real,
               std::array<CraftR*, NumCrafts> real_crafts) {
+        // std::array<CraftR*, …> already enforces convertibility to
+        // CraftT<double>*; non-templated user crafts fail to convert at
+        // the call site. See the doc-block above.
         w_real_      = &w_real;
         crafts_real_ = real_crafts;
 
@@ -116,8 +127,14 @@ public:
             /*noise_input_offset=*/0,
             /*bias_state_offset =*/kBiasColStart);
 
-        assert(noise_registry_.num_bias_slots() <= BiasDim
-               && "UKF: registered RW bias slots exceed BiasDim template arg");
+        if (noise_registry_.num_bias_slots() > BiasDim) {
+            throw std::runtime_error(
+                "UKF::bind: registered RW bias slots (" +
+                std::to_string(noise_registry_.num_bias_slots()) +
+                ") exceed BiasDim template arg (" +
+                std::to_string(BiasDim) +
+                "). Sum each part's noise_channels() and re-run codegen.");
+        }
     }
 
     void set_state(const StateVec& x) noexcept {
@@ -153,7 +170,7 @@ public:
         // sigmas reduce relative to that.
         bool have_chi0_post = false;
         StateVec x_ref_post;
-        std::array<Eigen::Matrix<float, 3, 1>, BiasMax> bias_chi0_post;
+        BiasSnapshot bias_chi0_post{};
 
         auto f = [&](const TangentVec& xi, double /*dt_*/) -> TangentVec {
             // Lift: x_full = x_ref ⊞ xi.
@@ -166,7 +183,7 @@ public:
                 x_full_post.template segment<13>(13 * k) =
                     crafts_real_[k]->get_rigid_state();
             }
-            std::array<Eigen::Matrix<float, 3, 1>, BiasMax> bias_post;
+            BiasSnapshot bias_post{};
             read_bias_estimates(bias_post);
 
             // Restore craft + bias state for the next sigma.
@@ -193,8 +210,9 @@ public:
         // chi_0's propagation IS x_ref_post; the kernel's mean (now in
         // kernel.state()) is the residual offset of the weighted mean.
         // Apply both: x_ref ← x_ref_post ⊞ residual_mean.
+        // chi_0 came from the integrator (sigma-point 0 path), which
+        // already normalized each craft's q. No double-renorm.
         x_ref_ = x_ref_post;
-        renormalize_quats(x_ref_);
         write_bias_estimates(bias_chi0_post);
 
         const TangentVec residual_mean = kernel_.state();
@@ -258,41 +276,84 @@ public:
     }
 
     // ---- Per-craft slice accessors ----
+    //
+    // Each method accepts either a positional index (slot order in
+    // bind()) or the craft's name. Name lookup is O(NumCrafts).
     Eigen::Matrix<double, 3, 1> position(int idx = 0) const noexcept {
         return x_ref_.template segment<3>(idx * kRigidStateDim + 0);
+    }
+    Eigen::Matrix<double, 3, 1> position(std::string_view name) const {
+        return position(idx_of(name));
     }
     Eigen::Matrix<double, 4, 1> orientation(int idx = 0) const noexcept {
         return x_ref_.template segment<4>(idx * kRigidStateDim + 3);
     }
+    Eigen::Matrix<double, 4, 1> orientation(std::string_view name) const {
+        return orientation(idx_of(name));
+    }
     Eigen::Matrix<double, 3, 1> vel_linear(int idx = 0) const noexcept {
         return x_ref_.template segment<3>(idx * kRigidStateDim + 7);
     }
+    Eigen::Matrix<double, 3, 1> vel_linear(std::string_view name) const {
+        return vel_linear(idx_of(name));
+    }
     Eigen::Matrix<double, 3, 1> vel_angular(int idx = 0) const noexcept {
         return x_ref_.template segment<3>(idx * kRigidStateDim + 10);
+    }
+    Eigen::Matrix<double, 3, 1> vel_angular(std::string_view name) const {
+        return vel_angular(idx_of(name));
     }
     const StateVec& full_state() const noexcept { return x_ref_; }
 
     Eigen::Matrix<double, 3, 1> position_stddev(int idx = 0) const noexcept {
         return diag_stddev_segment<3>(idx * kRigidTangent + 0);
     }
+    Eigen::Matrix<double, 3, 1> position_stddev(std::string_view name) const {
+        return position_stddev(idx_of(name));
+    }
     Eigen::Matrix<double, 3, 1> orientation_stddev(int idx = 0) const noexcept {
         return diag_stddev_segment<3>(idx * kRigidTangent + 3);
+    }
+    Eigen::Matrix<double, 3, 1> orientation_stddev(std::string_view name) const {
+        return orientation_stddev(idx_of(name));
     }
     Eigen::Matrix<double, 3, 1> vel_linear_stddev(int idx = 0) const noexcept {
         return diag_stddev_segment<3>(idx * kRigidTangent + 6);
     }
+    Eigen::Matrix<double, 3, 1> vel_linear_stddev(std::string_view name) const {
+        return vel_linear_stddev(idx_of(name));
+    }
     Eigen::Matrix<double, 3, 1> vel_angular_stddev(int idx = 0) const noexcept {
         return diag_stddev_segment<3>(idx * kRigidTangent + 9);
+    }
+    Eigen::Matrix<double, 3, 1> vel_angular_stddev(std::string_view name) const {
+        return vel_angular_stddev(idx_of(name));
     }
 
     CraftR&       craft(int idx = 0)       noexcept { return *crafts_real_[idx]; }
     const CraftR& craft(int idx = 0) const noexcept { return *crafts_real_[idx]; }
+    CraftR&       craft(std::string_view name)       { return craft(idx_of(name)); }
+    const CraftR& craft(std::string_view name) const { return craft(idx_of(name)); }
+
+    // Resolve a craft name to its slot index (the order it was passed
+    // to bind()). Throws if the name doesn't match any bound craft.
+    int idx_of(std::string_view name) const {
+        for (int i = 0; i < NumCrafts; ++i) {
+            if (crafts_real_[i] && crafts_real_[i]->name() == name) return i;
+        }
+        throw std::runtime_error(
+            std::string("UKF: no craft named '") + std::string(name) + "'");
+    }
 
 private:
-    // Compile-time storage cap for bias-snapshot arrays. Padded to a
-    // sensible upper bound so we can use a fixed-size std::array even
-    // when BiasDim is 0.
-    static constexpr int BiasMax = (BiasDim > 0) ? ((BiasDim + 2) / 3) : 1;
+    // Bias snapshot is a flat float buffer of length BiasDim, indexed by
+    // bias-local tangent slot (= global state_slot − kBiasColStart). One
+    // entry per scalar bias dimension across all registered RW sources,
+    // independent of each source's individual Dim.
+    using BiasSnapshot = std::conditional_t<
+        (BiasDim > 0),
+        std::array<float, (BiasDim > 0) ? BiasDim : 1>,
+        std::array<float, 1>>;
 
     // Save x_ref + biases as the per-sigma restoration target. Crafts
     // already hold x_ref (from set_state / mirror_to_real). We snapshot
@@ -303,10 +364,12 @@ private:
             ref_state_snapshot_[k] = crafts_real_[k]->get_rigid_state();
         }
         if constexpr (BiasDim > 0) {
-            int idx = 0;
             for (const auto& rw : noise_registry_.rw_sources()) {
-                if (idx >= BiasMax) break;
-                bias_ref_snapshot_[idx++] = rw.source->state3();
+                const int slot_local = rw.source->state_slot() - kBiasColStart;
+                const float* src = rw.source->state_data();
+                for (int i = 0; i < rw.dim; ++i) {
+                    bias_ref_snapshot_[slot_local + i] = src[i];
+                }
             }
         }
     }
@@ -316,17 +379,19 @@ private:
             crafts_real_[k]->set_rigid_state(ref_state_snapshot_[k]);
         }
         if constexpr (BiasDim > 0) {
-            int idx = 0;
             for (const auto& rw : noise_registry_.rw_sources()) {
-                if (idx >= BiasMax) break;
-                rw.source->set_state3(bias_ref_snapshot_[idx++]);
+                const int slot_local = rw.source->state_slot() - kBiasColStart;
+                float* dst = rw.source->state_data();
+                for (int i = 0; i < rw.dim; ++i) {
+                    dst[i] = bias_ref_snapshot_[slot_local + i];
+                }
             }
         }
     }
 
     // Apply a tangent perturbation to crafts (rigid via boxplus) and to
-    // bias estimates on Noise<RandomWalk>. Assumes crafts currently hold
-    // the reference state (call after restore_reference()).
+    // bias estimates on Noise<RandomWalk<Dim>>. Assumes crafts currently
+    // hold the reference state (call after restore_reference()).
     void apply_tangent_to_crafts(const TangentVec& xi) {
         for (int k = 0; k < NumCrafts; ++k) {
             const int tan_off = 12 * k;
@@ -341,30 +406,26 @@ private:
             crafts_real_[k]->set_state(s_full);
         }
         if constexpr (BiasDim > 0) {
-            int idx = 0;
             for (const auto& rw : noise_registry_.rw_sources()) {
-                if (idx >= BiasMax) break;
-                Eigen::Matrix<float, 3, 1> bias = bias_ref_snapshot_[idx++];
-                const int row = rw.source->state_slot();
-                if (rw.dim == 3) {
-                    for (int i = 0; i < 3; ++i) {
-                        bias(i) += static_cast<float>(xi(row + i));
-                    }
-                } else if (rw.dim == 1) {
-                    bias(0) += static_cast<float>(xi(row));
+                const int slot_local = rw.source->state_slot() - kBiasColStart;
+                const int row        = rw.source->state_slot();
+                float* dst = rw.source->state_data();
+                for (int i = 0; i < rw.dim; ++i) {
+                    dst[i] = bias_ref_snapshot_[slot_local + i]
+                           + static_cast<float>(xi(row + i));
                 }
-                rw.source->set_state3(bias);
             }
         }
     }
 
     // Compute post tangent: residuals of x_full (and bias) against
     // chi_0's propagated state (the reference at the post-step time).
+    // Both bias snapshots are flat float buffers indexed bias-locally.
     TangentVec reduce_to_tangent(
             const StateVec& x_full,
             const StateVec& x_ref_post,
-            const std::array<Eigen::Matrix<float, 3, 1>, BiasMax>& bias_full,
-            const std::array<Eigen::Matrix<float, 3, 1>, BiasMax>& bias_ref_post) {
+            const BiasSnapshot& bias_full,
+            const BiasSnapshot& bias_ref_post) {
         TangentVec out = TangentVec::Zero();
         for (int k = 0; k < NumCrafts; ++k) {
             CraftStateT<double> a = read_craft_state_from_vec(x_full,    k);
@@ -377,23 +438,16 @@ private:
             out.template segment<3>(tan_off + 9) = d.vel_angular.raw();
         }
         if constexpr (BiasDim > 0) {
-            int idx = 0;
-            for (const auto& rw : noise_registry_.rw_sources()) {
-                if (idx >= BiasMax) break;
-                Eigen::Matrix<float, 3, 1> diff = bias_full[idx] - bias_ref_post[idx];
-                const int row = rw.source->state_slot();
-                if (rw.dim == 3) {
-                    for (int i = 0; i < 3; ++i) out(row + i) = static_cast<double>(diff(i));
-                } else if (rw.dim == 1) {
-                    out(row) = static_cast<double>(diff(0));
-                }
-                ++idx;
+            // Bias residuals are pure subtraction (no manifold curvature).
+            for (int i = 0; i < BiasDim; ++i) {
+                out(kBiasColStart + i) =
+                    static_cast<double>(bias_full[i] - bias_ref_post[i]);
             }
         }
         return out;
     }
 
-    // x_ref ← x_ref ⊞ δ + push δ_bias to Noise<RandomWalk>::state3.
+    // x_ref ← x_ref ⊞ δ + push δ_bias to each Noise<RandomWalk<Dim>>::state.
     void inject_delta(const TangentVec& delta) {
         for (int k = 0; k < NumCrafts; ++k) {
             const int ref_off = 13 * k;
@@ -422,16 +476,11 @@ private:
 
         if constexpr (BiasDim > 0) {
             for (const auto& rw : noise_registry_.rw_sources()) {
-                Eigen::Matrix<float, 3, 1> bias = rw.source->state3();
                 const int row = rw.source->state_slot();
-                if (rw.dim == 3) {
-                    for (int i = 0; i < 3; ++i) {
-                        bias(i) += static_cast<float>(delta(row + i));
-                    }
-                } else if (rw.dim == 1) {
-                    bias(0) += static_cast<float>(delta(row));
+                float* bias   = rw.source->state_data();
+                for (int i = 0; i < rw.dim; ++i) {
+                    bias[i] += static_cast<float>(delta(row + i));
                 }
-                rw.source->set_state3(bias);
             }
         }
     }
@@ -456,26 +505,30 @@ private:
         }
     }
 
-    void read_bias_estimates(
-            std::array<Eigen::Matrix<float, 3, 1>, BiasMax>& out) const {
+    // Snapshot all RW bias estimates into a flat float buffer indexed
+    // bias-locally (= state_slot − kBiasColStart). BiasDim total floats.
+    void read_bias_estimates(BiasSnapshot& out) const {
         if constexpr (BiasDim > 0) {
-            int idx = 0;
             for (const auto& rw : noise_registry_.rw_sources()) {
-                if (idx >= BiasMax) break;
-                out[idx++] = rw.source->state3();
+                const int slot_local = rw.source->state_slot() - kBiasColStart;
+                const float* src = rw.source->state_data();
+                for (int i = 0; i < rw.dim; ++i) {
+                    out[slot_local + i] = src[i];
+                }
             }
         } else {
             (void)out;
         }
     }
 
-    void write_bias_estimates(
-            const std::array<Eigen::Matrix<float, 3, 1>, BiasMax>& in) {
+    void write_bias_estimates(const BiasSnapshot& in) {
         if constexpr (BiasDim > 0) {
-            int idx = 0;
             for (const auto& rw : noise_registry_.rw_sources()) {
-                if (idx >= BiasMax) break;
-                rw.source->set_state3(in[idx++]);
+                const int slot_local = rw.source->state_slot() - kBiasColStart;
+                float* dst = rw.source->state_data();
+                for (int i = 0; i < rw.dim; ++i) {
+                    dst[i] = in[slot_local + i];
+                }
             }
         } else {
             (void)in;
@@ -533,8 +586,8 @@ private:
     // Per-sigma snapshot storage. Stored as members rather than
     // function-local so the predict/update lambdas can read them
     // without heap traffic per sigma.
-    std::array<typename CraftR::RigidState,        NumCrafts> ref_state_snapshot_;
-    std::array<Eigen::Matrix<float, 3, 1>,         BiasMax>   bias_ref_snapshot_;
+    std::array<typename CraftR::RigidState, NumCrafts> ref_state_snapshot_;
+    BiasSnapshot                                       bias_ref_snapshot_{};
 };
 
 } // namespace manta::estimation

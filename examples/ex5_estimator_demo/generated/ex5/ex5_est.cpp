@@ -24,7 +24,7 @@ manta::WorldT<double>  w{};
 manta::SceneT<double>* scene = nullptr;
 manta::fields::GravityField field_0{};
 Ex5EstCraftT<double> craft{};
-manta::estimation::EKF<1, 9, 6, 0> ekf_0;
+manta::estimation::EKF<1, 9, 15, 6> ekf_0;
 
 }  // namespace manta_gen::ex5_est
 
@@ -125,13 +125,12 @@ void setup() {
     P0(3, 3) = 0.0001f;
     P0(4, 4) = 0.0001f;
     P0(5, 5) = 0.0001f;
-    P0(6, 6) = 0.0001f;
+    P0(6, 6) = 0.01f;
     P0(7, 7) = 0.01f;
     P0(8, 8) = 0.01f;
-    P0(9, 9) = 0.01f;
+    P0(9, 9) = 0.0001f;
     P0(10, 10) = 0.0001f;
     P0(11, 11) = 0.0001f;
-    P0(12, 12) = 0.0001f;
     ekf_0.set_state(x0);
     ekf_0.set_covariance(P0);
     ekf_0.bind(w_jet, {&craft}, {&craft_jet});

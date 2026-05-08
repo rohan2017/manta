@@ -5,9 +5,9 @@
 
 Ex5Craft::Ex5Craft()
     : manta::Craft("ex5") {
-    body_ = &this->root().add<manta::parts::Mass>("body", manta::MFloat(1.0f), []{ manta::geom::Mat3<manta::PartFrame, manta::PartFrame, manta::MFloat> m = manta::geom::Mat3<manta::PartFrame, manta::PartFrame, manta::MFloat>::identity(); m.raw()(0,0)=manta::MFloat(0.05f); m.raw()(1,1)=manta::MFloat(0.05f); m.raw()(2,2)=manta::MFloat(0.05f); return m; }(), true);
-    imu_ = &this->root().add<manta::parts::IMU>("imu", 0.05f, 0.005f, manta::MFloat(0.0f), -1.0f);
-    dvl_ = &this->root().add<manta::parts::DVL>("dvl", 0.02f, manta::MFloat(0.0f));
-    thrust_ = &this->root().add<manta::parts::Thruster1>("thrust", std::array<manta::geom::Vec3<manta::PartFrame, manta::MFloat>, 1>{manta::geom::Vec3<manta::PartFrame, manta::MFloat>{manta::MFloat(15.0f), manta::MFloat(0.0f), manta::MFloat(0.0f)}}, std::array<manta::geom::Vec3<manta::PartFrame, manta::MFloat>, 1>{manta::geom::Vec3<manta::PartFrame, manta::MFloat>{manta::MFloat(0.0f), manta::MFloat(0.0f), manta::MFloat(0.0f)}}, -1.0f);
+    body_ = &this->root().add<manta::parts::MassT<manta::MFloat>>("body", manta::MFloat(1.0f), []{ manta::geom::Mat3<manta::PartFrame, manta::PartFrame, manta::MFloat> m = manta::geom::Mat3<manta::PartFrame, manta::PartFrame, manta::MFloat>::identity(); m.raw()(0,0)=manta::MFloat(0.05f); m.raw()(1,1)=manta::MFloat(0.05f); m.raw()(2,2)=manta::MFloat(0.05f); return m; }(), true);
+    imu_ = &this->root().add<manta::parts::IMUT<manta::MFloat>>("imu", 0.05f, 0.005f, -1.0f, -1.0f, manta::MFloat(0.0));
+    dvl_ = &this->root().add<manta::parts::DVLT<manta::MFloat>>("dvl", 0.02f, manta::MFloat(0.0));
+    thrust_ = &this->root().add<manta::parts::Thruster1T<manta::MFloat>>("thrust", std::array<manta::geom::Vec3<manta::PartFrame, manta::MFloat>, 1>{manta::geom::Vec3<manta::PartFrame, manta::MFloat>{manta::MFloat(15.0f), manta::MFloat(0.0f), manta::MFloat(0.0f)}}, std::array<manta::geom::Vec3<manta::PartFrame, manta::MFloat>, 1>{manta::geom::Vec3<manta::PartFrame, manta::MFloat>{manta::MFloat(0.0f), manta::MFloat(0.0f), manta::MFloat(0.0f)}}, -1.0f);
     this->root().compute_params();
 }

@@ -217,28 +217,37 @@ class PlanetDescriptor:
 # Part descriptor base
 
 class PartDescriptor:
-    """Base for part descriptors. Subclass and set `cpp_class` + `cpp_header`,
-    optionally declare `requires_fields`, and override the emit hooks.
+    """Base for part descriptors. Subclass and set `cpp_class_template` +
+    `cpp_header`, optionally declare `requires_fields`, and override the
+    emit hooks.
 
-    Subclasses are real Python classes — they may have factory methods, typed
-    arguments, docstrings, computed properties. The codegen calls their methods
-    to produce C++ snippets and (eventually) viewer rendering.
+    Subclasses are real Python classes — they may have factory methods,
+    typed arguments, docstrings, computed properties. The codegen calls
+    their methods to produce C++ snippets and (eventually) viewer
+    rendering.
+
+    The C++ class template is the source of truth — `cpp_class` is
+    derived as `cpp_class_template<manta::MFloat>` for the value-only
+    (non-templated) emission path. Parts must define their C++ class as
+    a single-parameter `MyPartT<Scalar> : PartT<Scalar>` template.
     """
 
-    cpp_class:  ClassVar[str] = ""
     cpp_header: ClassVar[str] = ""
-    # If non-empty, this is the C++ class TEMPLATE (e.g. `manta::parts::PointMassT`)
-    # that the part should be instantiated through when generating a Scalar-
-    # templated craft. The codegen emits `cpp_class_template<Scalar>` so the
-    # template MUST take Scalar as its single parameter — parts that need
-    # multiple variants (e.g. force-tensor count) should expose them as
-    # separate descriptors backed by separate concrete C++ classes (e.g.
-    # `Surface1T<Scalar>`, `Surface2T<Scalar>`), not as extra template args.
-    # If empty, this part is not yet Scalar-templated and the codegen falls
-    # back to the bare cpp_class (which forces MFloat). When ALL parts in a
-    # craft have cpp_class_template set, the codegen emits the craft as a
-    # class template; otherwise it emits the non-templated form.
+    # The C++ class TEMPLATE (e.g. `manta::parts::PointMassT`) that the
+    # part is instantiated through. The codegen emits
+    # `cpp_class_template<Scalar>` so the template MUST take Scalar as
+    # its single parameter — parts that need multiple variants (e.g.
+    # force-tensor count) should expose them as separate descriptors
+    # backed by separate concrete C++ classes (e.g. `Surface1T<Scalar>`,
+    # `Surface2T<Scalar>`), not as extra template args.
     cpp_class_template: ClassVar[str] = ""
+
+    @property
+    def cpp_class(self) -> str:
+        """Concrete (non-templated) C++ type — `cpp_class_template<manta::MFloat>`.
+        Used by the value-only emit path; templated emit uses
+        `cpp_class_template<Scalar>` directly."""
+        return f"{self.cpp_class_template}<manta::MFloat>"
     # List of FieldDescriptor subclasses this part requires. Codegen verifies
     # all of these are registered with the craft and emits `static_assert`s on
     # the corresponding feature macros.
@@ -318,9 +327,15 @@ class PartDescriptor:
             out.append(f"{self.name}_->set_transform({self.transform.emit_cpp(scalar)});")
         return out
 
-    def telemetry_fields(self) -> list[tuple[str, str]]:
-        """List of (member_name, cpp_type) the per-craft Telemetry struct should
-        carry for this part. Default: empty (no telemetry)."""
+    def telemetry(self) -> list[tuple[str, str, str]]:
+        """List of (member_name, cpp_type, cpp_read_expr) entries this part
+        contributes to the per-craft Telemetry struct.
+
+        `cpp_read_expr` should reference the part via `craft.<name>()`,
+        e.g. `f"craft.{self.name}().throttle()"`.
+
+        Default: empty list (the part has no telemetry).
+        """
         return []
 
     def noise_channels(self) -> list[NoiseChannel]:
@@ -332,17 +347,6 @@ class PartDescriptor:
         augmentation; the codegen counts only enabled channels for the
         EKF/UKF template args.
         """
-        return []
-
-    def emit_telemetry_reads(self) -> list[tuple[str, str]]:
-        """Returns (member, cpp_expression) pairs that populate the telemetry
-        sub-struct. Expressions should reference the part via `craft.<name>()`.
-
-        Example for Thruster:
-            [("throttle", f"craft.{self.name}().throttle()")]
-
-        The codegen wraps each pair as `telem.<part>.<member> = <expr>;`.
-        Default: empty list (matches `telemetry_fields()` returning empty)."""
         return []
 
     def render(self, telemetry: dict, path: str) -> None:

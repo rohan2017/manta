@@ -5,27 +5,18 @@
 #include "../../core/noise.hpp"
 #include "../../core/noise_registry.hpp"
 #include "../../core/part.hpp"
+#include "../../estimation/measurement.hpp"
 #include "../../fields/mag_field.hpp"
 #include "../../fields/templated_query.hpp"
 #include "../../sim/rate_gate.hpp"
 
 namespace manta::parts {
 
-// A 3-axis magnetometer. Each tick, queries the registered MagField at the
-// part's scene-frame position, rotates the result into part frame, optionally
-// adds white-Gaussian noise, and stores the value.
-//
-// Required fields: MagField (any concrete subclass — DipoleMagField, or a
-// future IGRF model). The field is queried via the abstract base typeid.
-//
-// Like IMU/DVL, the field itself is NOT scalar-templated — values are
-// queried at MFloat precision, cast to Scalar at the boundary, and treated as
-// constants for autodiff (zero derivative w.r.t. craft state). Acceptable
-// for short-horizon estimator predict steps where ∂B/∂x is negligible.
-//
-// External-measurement seam (`set_measurement`) lets an estimator-side
-// craft be driven from real sensor data over Zenoh, mirroring the IMU/DVL
-// convention.
+// 3-axis magnetometer. Each tick (modulo the rate gate), queries the
+// registered MagField at the part's scene-frame position, rotates the
+// result into part frame, samples white-Gaussian noise, and stores the
+// value. Exposes the result as the public `b` Measurement member; pass
+// it to `ekf.measure(...)` along with a Reading source for z.
 template <class Scalar = MFloat>
 class MagnetometerT : public PartT<Scalar> {
 public:
@@ -42,12 +33,18 @@ public:
                            MFloat  rate_hz = MFloat(0))
         : PartT<Scalar>(std::move(name))
         , noise_{WhiteGaussian{sigma}}
-        , gate_{rate_hz} {}
+        , gate_{rate_hz}
+        , b{make_measurement<Scalar, 3>(
+            "b", &last_b_.raw(), noise_.sigma_ptr(), &fresh_)}
+    {
+        this->measurements_.push_back(&b);
+    }
 
     void update() override {
         MFloat dt = (this->craft_ && this->craft_->has_world())
                   ? this->craft().world().clock().dt() : MFloat(0);
-        if (!gate_.tick(dt)) return;
+        fresh_ = gate_.tick(dt);
+        if (!fresh_) return;
         // MagField is REQUIRED at build time. Use field_or_null at runtime
         // so an unattached test craft, or a craft whose world (in a
         // multi-world TU) deliberately omitted the field, reports zero
@@ -55,7 +52,6 @@ public:
         const auto* mf = this->template field_or_null<fields::MagField>();
         if (!mf) {
             last_b_ = geom::Vec3<PartFrame, Scalar>::zero();
-            fresh_ = true;
             return;
         }
 
@@ -68,26 +64,25 @@ public:
             q_part_from_scene * b_scene_v.raw());
 
         last_b_ = b_part + noise_;
-        fresh_ = true;
-    }
-
-    // External-measurement seam (estimator path). Always marks the reading
-    // as fresh — bypasses the rate gate.
-    void set_measurement(const geom::Vec3<PartFrame, Scalar>& b) noexcept {
-        last_b_ = b;
-        fresh_ = true;
     }
 
     void register_noise(NoiseRegistry& r) override {
         if (noise_.sigma() >= 0.0f) r.register_white_3d(noise_);
     }
 
-    bool consume_fresh() noexcept { bool was = fresh_; fresh_ = false; return was; }
     bool fresh() const noexcept { return fresh_; }
 
     const geom::Vec3<PartFrame, Scalar>& last_b() const noexcept { return last_b_; }
 
     Noise<WhiteGaussian>& noise() noexcept { return noise_; }
+
+    Measurement b;
+
+    // ---- Legacy bridges (will be removed in Phase 5c) ----
+    void set_measurement(const geom::Vec3<PartFrame, Scalar>& v) noexcept {
+        last_b_ = v; fresh_ = true;
+    }
+    bool consume_fresh() noexcept { bool was = fresh_; fresh_ = false; return was; }
 
 private:
     Noise<WhiteGaussian>           noise_;

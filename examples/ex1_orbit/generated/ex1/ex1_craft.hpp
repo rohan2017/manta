@@ -12,27 +12,27 @@ class Ex1Craft : public manta::Craft {
 public:
     Ex1Craft();
 
-    manta::parts::Mass& body() { return *body_; }
-    const manta::parts::Mass& body() const { return *body_; }
-    manta::parts::Thruster1& tx_p() { return *tx_p_; }
-    const manta::parts::Thruster1& tx_p() const { return *tx_p_; }
-    manta::parts::Thruster1& tx_n() { return *tx_n_; }
-    const manta::parts::Thruster1& tx_n() const { return *tx_n_; }
-    manta::parts::Thruster1& ty_p() { return *ty_p_; }
-    const manta::parts::Thruster1& ty_p() const { return *ty_p_; }
-    manta::parts::Thruster1& ty_n() { return *ty_n_; }
-    const manta::parts::Thruster1& ty_n() const { return *ty_n_; }
-    manta::parts::Thruster1& tz_p() { return *tz_p_; }
-    const manta::parts::Thruster1& tz_p() const { return *tz_p_; }
-    manta::parts::Thruster1& tz_n() { return *tz_n_; }
-    const manta::parts::Thruster1& tz_n() const { return *tz_n_; }
+    manta::parts::MassT<manta::MFloat>& body() { return *body_; }
+    const manta::parts::MassT<manta::MFloat>& body() const { return *body_; }
+    manta::parts::Thruster1T<manta::MFloat>& tx_p() { return *tx_p_; }
+    const manta::parts::Thruster1T<manta::MFloat>& tx_p() const { return *tx_p_; }
+    manta::parts::Thruster1T<manta::MFloat>& tx_n() { return *tx_n_; }
+    const manta::parts::Thruster1T<manta::MFloat>& tx_n() const { return *tx_n_; }
+    manta::parts::Thruster1T<manta::MFloat>& ty_p() { return *ty_p_; }
+    const manta::parts::Thruster1T<manta::MFloat>& ty_p() const { return *ty_p_; }
+    manta::parts::Thruster1T<manta::MFloat>& ty_n() { return *ty_n_; }
+    const manta::parts::Thruster1T<manta::MFloat>& ty_n() const { return *ty_n_; }
+    manta::parts::Thruster1T<manta::MFloat>& tz_p() { return *tz_p_; }
+    const manta::parts::Thruster1T<manta::MFloat>& tz_p() const { return *tz_p_; }
+    manta::parts::Thruster1T<manta::MFloat>& tz_n() { return *tz_n_; }
+    const manta::parts::Thruster1T<manta::MFloat>& tz_n() const { return *tz_n_; }
 
 private:
-    manta::parts::Mass* body_ = nullptr;
-    manta::parts::Thruster1* tx_p_ = nullptr;
-    manta::parts::Thruster1* tx_n_ = nullptr;
-    manta::parts::Thruster1* ty_p_ = nullptr;
-    manta::parts::Thruster1* ty_n_ = nullptr;
-    manta::parts::Thruster1* tz_p_ = nullptr;
-    manta::parts::Thruster1* tz_n_ = nullptr;
+    manta::parts::MassT<manta::MFloat>* body_ = nullptr;
+    manta::parts::Thruster1T<manta::MFloat>* tx_p_ = nullptr;
+    manta::parts::Thruster1T<manta::MFloat>* tx_n_ = nullptr;
+    manta::parts::Thruster1T<manta::MFloat>* ty_p_ = nullptr;
+    manta::parts::Thruster1T<manta::MFloat>* ty_n_ = nullptr;
+    manta::parts::Thruster1T<manta::MFloat>* tz_p_ = nullptr;
+    manta::parts::Thruster1T<manta::MFloat>* tz_n_ = nullptr;
 };

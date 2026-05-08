@@ -1,63 +1,80 @@
 #pragma once
 
 #include "../../core/noise.hpp"
+#include "../../core/noise_registry.hpp"
 #include "../../core/part.hpp"
+#include "../../estimation/measurement.hpp"
 #include "../../fields/gravity_field.hpp"
 #include "../../fields/templated_query.hpp"
 #include "../../sim/rate_gate.hpp"
 
 namespace manta::parts {
 
-// An inertial measurement unit. Reads the kinematic-pass acceleration and
-// angular velocity caches and records them each tick, with optional
-// white-noise injection.
+// ---------------------------------------------------------------------
+// IMU — full Kalibr 4-parameter noise model
+// ---------------------------------------------------------------------
 //
-// `rate_hz` (default 0 = unrated, refreshes every tick) caps the sensor's
-// effective sample rate. When set, the IMU's `update()` only refreshes
-// `last_accel_` / `last_gyro_` once per `1/rate_hz` of sim time. The
-// sensor exposes `consume_fresh()` for one-shot consumption: returns true
-// on the tick a new reading was just produced and clears the freshness
-// bit. The plain `last_accel()` / `last_gyro()` getters continue to
-// return the most recent value regardless of staleness.
+// References Kalibr's standard IMU noise model:
+//   https://github.com/ethz-asl/kalibr/wiki/IMU-Noise-Model
+//
+// Per-axis measurement model:
+//
+//     ω̃(t) = ω(t) + b_g(t) + n_g(t)
+//     ã(t) = a(t) + b_a(t) + n_a(t)
+//
+// where
+//
+//   * n_g ~ N(0, σ_g²)   gyro white noise.
+//   * n_a ~ N(0, σ_a²)   accel white noise.
+//   * ḃ_g, ḃ_a — bias random walks (RW driver σ_bg, σ_ba).
+//
+// EKF/UKF integration is via the published `accel` and `gyro`
+// `Measurement` members. They point at the IMU's internal h(x) cache
+// (populated by `update()` each tick), the relevant noise σ field
+// (used for R), and the part's freshness flag (set by the rate gate).
+//
+// Roles:
+//   * On a *sim* craft (value-typed instance), `update()` runs h(x)
+//     plus white-noise sampling plus bias offset — producing a
+//     synthetic noisy reading. Other parts of the system (sim
+//     telemetry, `connect()` plumbing) read `last_accel()` etc.
+//   * On a *Jet shadow* craft (Jet-typed instance bound to an EKF),
+//     `update()` runs h(x) too — but on the Jet path the operator+
+//     for Noise injects no value-side sample (so the .a channel is
+//     pure h(x)) and instead populates the .v channel with the
+//     noise-input gain L that the EKF reads back for auto-Q.
+//
+// `update()` does not accept external readings — z comes from a
+// separate `Reading<Dim>` source passed to `ekf.measure(...)`.
 template <class Scalar = MFloat>
 class IMUT : public PartT<Scalar> {
 public:
-    // σ values default to 0 (sample no noise on the value path; register
-    // with EKF as a zero-variance slot, which is wasteful but harmless).
-    // Pass σ < 0 to disable a channel entirely — neither sampled by sim
-    // nor registered with the EKF. The codegen uses σ < 0 as the "skip"
-    // sentinel so unspecified noise channels don't bloat NumNoiseSlots /
-    // BiasDim.
-    //
-    // gyro_bias_sigma is the random-walk diffusion coefficient for the
-    // gyro bias: at runtime the bias drifts via N(0, σ²·dt) per tick on
-    // the sim path, and the EKF estimates it as a 3-DOF augmented state
-    // when registered.
+    // σ < 0 ⇒ skip; σ = 0 ⇒ register zero-variance; σ > 0 ⇒ register.
     explicit IMUT(std::string name,
-                  float accel_sigma     = 0.0f,
-                  float gyro_sigma      = 0.0f,
-                  MFloat rate_hz        = MFloat(0),
-                  float gyro_bias_sigma = -1.0f)
+                  float accel_sigma      = -1.0f,
+                  float gyro_sigma       = -1.0f,
+                  float accel_bias_sigma = -1.0f,
+                  float gyro_bias_sigma  = -1.0f,
+                  MFloat rate_hz         = MFloat(0))
         : PartT<Scalar>(std::move(name))
         , accel_noise_{accel_sigma}
         , gyro_noise_{gyro_sigma}
+        , accel_bias_{accel_bias_sigma}
         , gyro_bias_{gyro_bias_sigma}
-        , gate_{rate_hz} {}
+        , gate_{rate_hz}
+        , accel{make_measurement<Scalar, 3>(
+            "accel", &last_accel_.raw(), accel_noise_.sigma_ptr(), &fresh_)}
+        , gyro {make_measurement<Scalar, 3>(
+            "gyro",  &last_gyro_.raw(),  gyro_noise_.sigma_ptr(),  &fresh_)}
+    {
+        this->measurements_.push_back(&accel);
+        this->measurements_.push_back(&gyro);
+    }
 
-    // Body-frame specific force — what a real accelerometer reports.
-    //
-    // Specific force = (housing_inertial_accel − gravity), so a craft in
-    // free fall reads zero (housing accelerates at exactly g, sensor mass
-    // doesn't deflect) and a stationary craft reads −g_body (≈ +9.81 ẑ
-    // in body frame at q=identity). The kinematic `acceleration_body()`
-    // accessor returns body-frame inertial accel including gravity's
-    // contribution (since `sense_and_aggregate` sums gravity into the
-    // wrench), so we subtract `R(q)^T · g_scene` to recover specific
-    // force.
-    //
-    // GravityField is OPTIONAL augmentation. The macro gates compilation;
-    // at runtime, an unattached test craft or a world without gravity
-    // gracefully returns the raw kinematic body acceleration.
+    // ---- h(x) helpers (also used by user code; not part of the EKF
+    //      interface — the EKF reads through the Measurement objects). ----
+
+    // Body-frame specific force (housing accel − gravity).
     geom::Vec3<PartFrame, Scalar> specific_force_body() const {
         auto a_body = this->acceleration_body();
         if constexpr (MANTA_PART_AUGMENTS_FIELD(MANTA_HAS_GRAVITY_FIELD)) {
@@ -74,75 +91,81 @@ public:
     }
 
     void update() override {
-        MFloat dt = (this->craft_ && this->craft_->has_world()) ? this->craft().world().clock().dt() : MFloat(0);
-        if (!gate_.tick(dt)) return;
-        // gyro reading: ω + white noise + RW bias. The RW bias's `+`
-        // operator reads the EKF's current estimate (via state3()) on
-        // the Jet path and the sim's drifting truth on the value path.
-        last_accel_ = this->specific_force_body() + accel_noise_;
+        MFloat dt = (this->craft_ && this->craft_->has_world())
+                  ? this->craft().world().clock().dt() : MFloat(0);
+        fresh_ = gate_.tick(dt);
+        if (!fresh_) return;
+        // Kalibr model: measurement = truth + white_noise + bias.
+        // On the sim (value-typed) instance: noise samples + bias state
+        // both flow through operator+ and produce a noisy reading.
+        // On the Jet-typed shadow: operator+ injects auto-Q L gain in
+        // place of the noise sample, leaving .a as pure h(x) and .v as
+        // the noise-input Jacobian.
+        last_accel_ = this->specific_force_body() + accel_noise_ + accel_bias_;
         last_gyro_  = this->angular_velocity_body() + gyro_noise_ + gyro_bias_;
-        fresh_ = true;
     }
 
-    // Conditional registration: any channel with σ ≥ 0 is registered.
-    // Codegen passes σ < 0 to suppress channels the user didn't enable
-    // on the descriptor.
+    // Drift simulated true biases. Sim role only — call from your tick
+    // loop if you want bias drift in the synthetic reading. The
+    // Jet-side instance's bias state is tracked separately by the EKF.
+    void advance_biases(float dt) noexcept {
+        accel_bias_.advance(dt);
+        gyro_bias_.advance(dt);
+    }
+
     void register_noise(NoiseRegistry& r) override {
         if (accel_noise_.sigma() >= 0.0f) r.register_white_3d(accel_noise_);
         if (gyro_noise_.sigma()  >= 0.0f) r.register_white_3d(gyro_noise_);
-        if (gyro_bias_.sigma()   >= 0.0f) r.register_random_walk_3d(gyro_bias_);
+        if (accel_bias_.sigma()  >= 0.0f) r.register_random_walk(accel_bias_);
+        if (gyro_bias_.sigma()   >= 0.0f) r.register_random_walk(gyro_bias_);
     }
 
-    // External-measurement seam (estimator path). Always marks the reading
-    // as fresh — bypasses the rate gate.
+    // Accessors for downstream non-EKF consumers (sim telemetry, viewer).
+    const geom::Vec3<PartFrame, Scalar>& last_accel() const noexcept { return last_accel_; }
+    const geom::Vec3<PartFrame, Scalar>& last_gyro()  const noexcept { return last_gyro_;  }
+
+    // Did this IMU produce a fresh reading on the last update()?
+    bool fresh() const noexcept { return fresh_; }
+
+    // ---- Legacy bridges (will be removed in Phase 5c) ----
     //
-    // Three forms:
-    //   * set_measurement(accel, gyro) — full 6-channel inject.
-    //   * set_measurement_accel(accel) — just the accelerometer half.
-    //   * set_measurement_gyro(gyro)   — just the gyro half.
-    //
-    // The split forms exist so single-channel `connect()` calls can wire
-    // sim → est cleanly without needing to bundle six floats into one
-    // signal: `w.connect(sim.imu.last_accel, est.imu.set_measurement_accel)`.
+    // These predate the Measurement+Reading API. Codegen still emits
+    // `set_measurement_*` signals and `consume_fresh` checks; until
+    // codegen is migrated, the bridges keep existing examples + tests
+    // building. Once codegen emits `ekf.measure(model, reading)`, all
+    // four go away.
     void set_measurement(const geom::Vec3<PartFrame, Scalar>& accel,
                          const geom::Vec3<PartFrame, Scalar>& gyro) noexcept {
         last_accel_ = accel;
         last_gyro_  = gyro;
-        fresh_ = true;
+        fresh_      = true;
     }
-
-    void set_measurement_accel(const geom::Vec3<PartFrame, Scalar>& accel) noexcept {
-        last_accel_ = accel;
-        fresh_ = true;
+    void set_measurement_accel(const geom::Vec3<PartFrame, Scalar>& a) noexcept {
+        last_accel_ = a; fresh_ = true;
     }
-
-    void set_measurement_gyro(const geom::Vec3<PartFrame, Scalar>& gyro) noexcept {
-        last_gyro_ = gyro;
-        fresh_ = true;
+    void set_measurement_gyro(const geom::Vec3<PartFrame, Scalar>& g) noexcept {
+        last_gyro_ = g; fresh_ = true;
     }
-
-    // One-shot freshness probe — returns true exactly once per refresh.
-    // Intended for the EKF/UKF wiring; everything else should use the plain
-    // last_accel() / last_gyro() getters.
-    bool consume_fresh() noexcept {
-        bool was = fresh_; fresh_ = false; return was;
-    }
-    bool fresh() const noexcept { return fresh_; }
-
-    const geom::Vec3<PartFrame, Scalar>& last_accel() const noexcept { return last_accel_; }
-    const geom::Vec3<PartFrame, Scalar>& last_gyro()  const noexcept { return last_gyro_; }
+    bool consume_fresh() noexcept { bool was = fresh_; fresh_ = false; return was; }
 
     Noise<WhiteGaussian>& accel_noise() noexcept { return accel_noise_; }
     Noise<WhiteGaussian>& gyro_noise()  noexcept { return gyro_noise_; }
-    Noise<RandomWalk>&    gyro_bias()   noexcept { return gyro_bias_; }
+    Noise<RandomWalk<3>>& accel_bias()  noexcept { return accel_bias_; }
+    Noise<RandomWalk<3>>& gyro_bias()   noexcept { return gyro_bias_; }
     const Noise<WhiteGaussian>& accel_noise() const noexcept { return accel_noise_; }
     const Noise<WhiteGaussian>& gyro_noise()  const noexcept { return gyro_noise_; }
-    const Noise<RandomWalk>&    gyro_bias()   const noexcept { return gyro_bias_; }
+    const Noise<RandomWalk<3>>& accel_bias()  const noexcept { return accel_bias_; }
+    const Noise<RandomWalk<3>>& gyro_bias()   const noexcept { return gyro_bias_; }
+
+    // Public Measurement handles — pass to ekf.measure(...).
+    Measurement accel;
+    Measurement gyro;
 
 private:
     Noise<WhiteGaussian>           accel_noise_;
     Noise<WhiteGaussian>           gyro_noise_;
-    Noise<RandomWalk>              gyro_bias_;
+    Noise<RandomWalk<3>>           accel_bias_;
+    Noise<RandomWalk<3>>           gyro_bias_;
     sim::RateGate                  gate_;
     bool                           fresh_ = false;
     geom::Vec3<PartFrame, Scalar>  last_accel_;

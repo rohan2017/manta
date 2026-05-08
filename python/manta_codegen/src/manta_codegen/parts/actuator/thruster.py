@@ -51,11 +51,6 @@ class _ThrusterBase(PartDescriptor):
     def noise_channels(self) -> list[NoiseChannel]:
         return [NoiseChannel("force_noise", "white_3d", self.force_noise_sigma)]
 
-    @property
-    def cpp_class(self) -> str: return self._cpp_class_concrete
-    @property
-    def cpp_class_template(self) -> str: return self._cpp_class_template_
-
     def _vec_array_expr(self, coefs, scalar: str) -> str:
         vec = f"manta::geom::Vec3<manta::PartFrame, {scalar}>"
         elems = ", ".join(
@@ -69,11 +64,8 @@ class _ThrusterBase(PartDescriptor):
                 f'{self._vec_array_expr(self.torque_coefs, scalar)}, '
                 f'{_f(self.force_noise_sigma)}')
 
-    def telemetry_fields(self) -> list[tuple[str, str]]:
-        return [("throttle", "float")]
-
-    def emit_telemetry_reads(self) -> list[tuple[str, str]]:
-        return [("throttle", f"craft.{self.name}().throttle()")]
+    def telemetry(self) -> list[tuple[str, str, str]]:
+        return [("throttle", "float", f"craft.{self.name}().throttle()")]
 
 
 class Thruster1(_ThrusterBase):
@@ -83,8 +75,7 @@ class Thruster1(_ThrusterBase):
     builds F_1 = direction · max_thrust, τ_1 = 0 — the common case.
     """
     _order = 1
-    _cpp_class_concrete = "manta::parts::Thruster1"
-    _cpp_class_template_ = "manta::parts::Thruster1T"
+    cpp_class_template = "manta::parts::Thruster1T"
 
     @classmethod
     def linear(cls,
@@ -99,26 +90,23 @@ class Thruster1(_ThrusterBase):
 
 class Thruster2(_ThrusterBase):
     _order = 2
-    _cpp_class_concrete = "manta::parts::Thruster2"
-    _cpp_class_template_ = "manta::parts::Thruster2T"
+    cpp_class_template = "manta::parts::Thruster2T"
 
 
 class Thruster3(_ThrusterBase):
     _order = 3
-    _cpp_class_concrete = "manta::parts::Thruster3"
-    _cpp_class_template_ = "manta::parts::Thruster3T"
+    cpp_class_template = "manta::parts::Thruster3T"
 
 
 class Thruster4(_ThrusterBase):
     _order = 4
-    _cpp_class_concrete = "manta::parts::Thruster4"
-    _cpp_class_template_ = "manta::parts::Thruster4T"
+    cpp_class_template = "manta::parts::Thruster4T"
 
 
 class Thruster(Thruster1):
-    """Backward-compat shim — `Thruster(name, max_thrust, direction)` is
-    equivalent to `Thruster1.linear(name, max_thrust, direction)`. Most
-    user code wants this one.
+    """Convenience constructor — `Thruster(name, max_thrust, direction)`
+    is equivalent to `Thruster1.linear(name, max_thrust, direction)`.
+    Most user code wants this one for the simple-direction case.
     """
 
     def __init__(self,

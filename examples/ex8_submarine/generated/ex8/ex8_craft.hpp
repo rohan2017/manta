@@ -17,30 +17,30 @@ class Ex8Craft : public manta::Craft {
 public:
     Ex8Craft();
 
-    manta::parts::Mass& body() { return *body_; }
-    const manta::parts::Mass& body() const { return *body_; }
-    manta::parts::PointBuoy& buoy() { return *buoy_; }
-    const manta::parts::PointBuoy& buoy() const { return *buoy_; }
-    manta::parts::Surface1& drag() { return *drag_; }
-    const manta::parts::Surface1& drag() const { return *drag_; }
-    manta::parts::Thruster1& thrust_x() { return *thrust_x_; }
-    const manta::parts::Thruster1& thrust_x() const { return *thrust_x_; }
-    manta::parts::Thruster1& thrust_z() { return *thrust_z_; }
-    const manta::parts::Thruster1& thrust_z() const { return *thrust_z_; }
-    manta::parts::IMU& imu() { return *imu_; }
-    const manta::parts::IMU& imu() const { return *imu_; }
-    manta::parts::DVL& dvl() { return *dvl_; }
-    const manta::parts::DVL& dvl() const { return *dvl_; }
-    manta::parts::Magnetometer& mag() { return *mag_; }
-    const manta::parts::Magnetometer& mag() const { return *mag_; }
+    manta::parts::MassT<manta::MFloat>& body() { return *body_; }
+    const manta::parts::MassT<manta::MFloat>& body() const { return *body_; }
+    manta::parts::PointBuoyT<manta::MFloat>& buoy() { return *buoy_; }
+    const manta::parts::PointBuoyT<manta::MFloat>& buoy() const { return *buoy_; }
+    manta::parts::Surface1T<manta::MFloat>& drag() { return *drag_; }
+    const manta::parts::Surface1T<manta::MFloat>& drag() const { return *drag_; }
+    manta::parts::Thruster1T<manta::MFloat>& thrust_x() { return *thrust_x_; }
+    const manta::parts::Thruster1T<manta::MFloat>& thrust_x() const { return *thrust_x_; }
+    manta::parts::Thruster1T<manta::MFloat>& thrust_z() { return *thrust_z_; }
+    const manta::parts::Thruster1T<manta::MFloat>& thrust_z() const { return *thrust_z_; }
+    manta::parts::IMUT<manta::MFloat>& imu() { return *imu_; }
+    const manta::parts::IMUT<manta::MFloat>& imu() const { return *imu_; }
+    manta::parts::DVLT<manta::MFloat>& dvl() { return *dvl_; }
+    const manta::parts::DVLT<manta::MFloat>& dvl() const { return *dvl_; }
+    manta::parts::MagnetometerT<manta::MFloat>& mag() { return *mag_; }
+    const manta::parts::MagnetometerT<manta::MFloat>& mag() const { return *mag_; }
 
 private:
-    manta::parts::Mass* body_ = nullptr;
-    manta::parts::PointBuoy* buoy_ = nullptr;
-    manta::parts::Surface1* drag_ = nullptr;
-    manta::parts::Thruster1* thrust_x_ = nullptr;
-    manta::parts::Thruster1* thrust_z_ = nullptr;
-    manta::parts::IMU* imu_ = nullptr;
-    manta::parts::DVL* dvl_ = nullptr;
-    manta::parts::Magnetometer* mag_ = nullptr;
+    manta::parts::MassT<manta::MFloat>* body_ = nullptr;
+    manta::parts::PointBuoyT<manta::MFloat>* buoy_ = nullptr;
+    manta::parts::Surface1T<manta::MFloat>* drag_ = nullptr;
+    manta::parts::Thruster1T<manta::MFloat>* thrust_x_ = nullptr;
+    manta::parts::Thruster1T<manta::MFloat>* thrust_z_ = nullptr;
+    manta::parts::IMUT<manta::MFloat>* imu_ = nullptr;
+    manta::parts::DVLT<manta::MFloat>* dvl_ = nullptr;
+    manta::parts::MagnetometerT<manta::MFloat>* mag_ = nullptr;
 };

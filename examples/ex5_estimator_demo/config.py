@@ -9,6 +9,20 @@ est's `set_measurement()` hooks each tick, mirrors the throttle so the
 EKF's predict step models the same input the sim is applying, and the
 codegen-emitted main runs both in lockstep.
 
+Demonstrates the full Kalibr 4-parameter IMU noise model:
+
+    accel_sigma      → white-Gaussian on accel  [m/s²/√Hz]
+    gyro_sigma       → white-Gaussian on gyro   [rad/s/√Hz]
+    accel_bias_sigma → accel-bias random walk   [m/s³/√Hz]
+    gyro_bias_sigma  → gyro-bias random walk    [rad/s²/√Hz]
+
+When `accel_bias_sigma` and `gyro_bias_sigma` are ≥ 0 the IMU registers
+RW driver channels with the EKF; codegen sizes BiasDim=6 (3 + 3) and the
+EKF's tangent state includes the two bias vectors. Auto-Q assembles the
+σ²·dt diagonal blocks for the bias evolution. The estimator publishes
+the augmented-state stddevs alongside position/velocity stddev so a
+viewer can show the bias uncertainty trajectory.
+
 Codegen:
 
     PYTHONPATH=python/manta_codegen/src \\
@@ -22,13 +36,23 @@ from manta_codegen.parts  import DVL, IMU, Mass, Thruster
 from manta_codegen.fields import GravityField
 
 
+# ---- Kalibr IMU noise budget (rough MEMS-grade values) ----
+ACCEL_SIGMA      = 0.05      # m/s²/√Hz
+GYRO_SIGMA       = 0.005     # rad/s/√Hz
+ACCEL_BIAS_SIGMA = 0.001     # m/s³/√Hz   (slow accel-bias drift)
+GYRO_BIAS_SIGMA  = 1e-4      # rad/s²/√Hz (slow gyro-bias drift)
+
+
 def make_config() -> MantaConfig:
     grav = GravityField()
 
     # ---- Sim craft ----
+    # The sim IMU sets only the white-noise σ values; bias channels are
+    # left at default (-1, skip registration) — no bias drift on the
+    # truth side. The est-side IMU's bias state is what gets exercised.
     sim_c = Craft("ex5")
     sim_c.add(Mass("body", mass=1.0, moi=(0.05, 0.05, 0.05)))
-    sim_imu = IMU("imu", accel_sigma=0.05, gyro_sigma=0.005)
+    sim_imu = IMU("imu", accel_sigma=ACCEL_SIGMA, gyro_sigma=GYRO_SIGMA)
     sim_dvl = DVL("dvl", velocity_sigma=0.02)
     sim_thrust = Thruster("thrust", max_thrust=15.0, direction=(1.0, 0.0, 0.0))
     sim_c.add(sim_imu)
@@ -38,9 +62,16 @@ def make_config() -> MantaConfig:
     sim_w = World("ex5_sim").add_field(grav).add_craft(sim_c)
 
     # ---- Est craft (templated) ----
+    # Full Kalibr IMU on the est side: white noise + RW biases. Codegen
+    # picks up the 4-channel noise spec and grows BiasDim by 6 (3 + 3)
+    # so the EKF estimates accel_bias and gyro_bias as augmented states.
     est_c = Craft("ex5_est")
     est_c.add(Mass("body", mass=1.0, moi=(0.05, 0.05, 0.05)))
-    est_imu = IMU("imu", accel_sigma=0.05, gyro_sigma=0.005)
+    est_imu = IMU("imu",
+                  accel_sigma=ACCEL_SIGMA,
+                  gyro_sigma=GYRO_SIGMA,
+                  accel_bias_sigma=ACCEL_BIAS_SIGMA,
+                  gyro_bias_sigma=GYRO_BIAS_SIGMA)
     est_dvl = DVL("dvl", velocity_sigma=0.02)
     est_thrust = Thruster("thrust", max_thrust=15.0, direction=(1.0, 0.0, 0.0))
     est_c.add(est_imu)

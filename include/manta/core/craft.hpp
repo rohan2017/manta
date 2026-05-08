@@ -79,6 +79,20 @@ public:
     void set_vel_linear(const geom::Vec3<SceneFrame, Scalar>& v) noexcept { scene_to_craft_.set_vel_linear(v); }
     void set_vel_angular(const geom::Vec3<CraftFrame, Scalar>& w) noexcept { scene_to_craft_.set_vel_angular(w); }
 
+    // Tune how often the integrator renormalizes the orientation quat to
+    // suppress drift. n = 1 (default) renormalizes every step (safest).
+    // Larger n saves a sqrt per skipped step at the cost of letting the
+    // quaternion drift slightly off the unit sphere between renormalizations.
+    // Reasonable values are 1–100; use the larger end only when this craft's
+    // dynamics are well-conditioned and you've measured a meaningful sqrt
+    // cost. The counter is per-craft so different crafts in the same world
+    // can pick different trade-offs.
+    void set_quat_renormalize_period(int n) noexcept {
+        renorm_period_  = (n < 1) ? 1 : n;
+        renorm_counter_ = 0;
+    }
+    int  quat_renormalize_period() const noexcept { return renorm_period_; }
+
     // Typed planet access via the craft's scene. Returns the scene's planet
     // dynamically-cast to `PlanetT*`, or `nullptr` if the scene has no
     // planet OR the planet isn't of the requested type. Mirrors how a Part
@@ -267,7 +281,14 @@ public:
         if (dt <= Scalar(0)) return;
         integrate_joints_recurse(root_, dt);
         if (root_.get_mass() <= Scalar(0)) return;
-        scene_to_craft_.update(dt);
+        // Per-craft renorm period: renormalize the orientation every
+        // `renorm_period_` integration steps. Default 1 = every step.
+        // Bumping this trades a tiny drift against sqrt cost; use
+        // `set_quat_renormalize_period(n)` to opt in.
+        const bool do_normalize =
+            (renorm_period_ <= 1) ||
+            ((++renorm_counter_ % renorm_period_) == 0);
+        scene_to_craft_.update(dt, do_normalize);
     }
 
     void integrate_post_aggregate(Scalar /*dt*/) {
@@ -387,6 +408,11 @@ private:
     std::unordered_map<std::type_index, fields::Field*> fields_;
     SceneT<Scalar>*  scene_ = nullptr;
     WorldT<Scalar>*  world_ = nullptr;
+    // Renormalize the craft's orientation quaternion every `renorm_period_`
+    // integration steps. Default 1 = every step (matches pre-tunable
+    // behavior). Tunable via `set_quat_renormalize_period`.
+    int renorm_period_  = 1;
+    int renorm_counter_ = 0;
 };
 
 // Backwards-compat alias. The existing RootPart is used by Scalar=MFloat instances.

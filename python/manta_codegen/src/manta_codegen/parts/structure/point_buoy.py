@@ -15,7 +15,6 @@ class PointBuoy(PartDescriptor):
     Required fields: FluidField, GravityField.
     """
 
-    cpp_class          = "manta::parts::PointBuoy"
     cpp_class_template = "manta::parts::PointBuoyT"
     cpp_header         = "manta/parts/structure/point_buoy.hpp"
     requires_fields    = [FluidField, GravityField]

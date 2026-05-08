@@ -5,7 +5,6 @@ set(manta_ex4_DIR ${CMAKE_CURRENT_LIST_DIR})
 set(manta_ex4_SOURCES
     ${manta_ex4_DIR}/ex4_craft.cpp
     ${manta_ex4_DIR}/ex4.cpp
-    ${manta_ex4_DIR}/ex4_main.cpp
 )
 
 set(manta_ex4_HEADERS
@@ -53,6 +52,3 @@ function(manta_ex4_apply target)
     target_compile_options(${target} PRIVATE "SHELL:-include ${manta_ex4_DIR}/ex4_config.h")
     target_link_libraries(${target} PRIVATE manta::manta zenohcxx::zenohc)
 endfunction()
-
-add_executable(ex4 ${manta_ex4_SOURCES})
-manta_ex4_apply(ex4)

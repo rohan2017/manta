@@ -12,12 +12,12 @@ class LeaderCraft : public manta::Craft {
 public:
     LeaderCraft();
 
-    manta::parts::Mass& body() { return *body_; }
-    const manta::parts::Mass& body() const { return *body_; }
-    manta::parts::Thruster1& thrust() { return *thrust_; }
-    const manta::parts::Thruster1& thrust() const { return *thrust_; }
+    manta::parts::MassT<manta::MFloat>& body() { return *body_; }
+    const manta::parts::MassT<manta::MFloat>& body() const { return *body_; }
+    manta::parts::Thruster1T<manta::MFloat>& thrust() { return *thrust_; }
+    const manta::parts::Thruster1T<manta::MFloat>& thrust() const { return *thrust_; }
 
 private:
-    manta::parts::Mass* body_ = nullptr;
-    manta::parts::Thruster1* thrust_ = nullptr;
+    manta::parts::MassT<manta::MFloat>* body_ = nullptr;
+    manta::parts::Thruster1T<manta::MFloat>* thrust_ = nullptr;
 };

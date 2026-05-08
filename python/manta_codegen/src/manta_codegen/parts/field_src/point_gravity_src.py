@@ -24,7 +24,6 @@ class PointGravitySrc(PartDescriptor):
     Telemetry: none.
     """
 
-    cpp_class          = "manta::parts::PointGravitySrc"
     cpp_class_template = "manta::parts::PointGravitySrcT"
     cpp_header         = "manta/parts/field_src/point_gravity_src.hpp"
     requires_fields    = [GravityField]

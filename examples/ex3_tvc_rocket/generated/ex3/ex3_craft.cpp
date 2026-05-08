@@ -5,11 +5,11 @@
 
 Ex3Craft::Ex3Craft()
     : manta::Craft("ex3") {
-    body_ = &this->root().add<manta::parts::Mass>("body", manta::MFloat(5.0f), []{ manta::geom::Mat3<manta::PartFrame, manta::PartFrame, manta::MFloat> m = manta::geom::Mat3<manta::PartFrame, manta::PartFrame, manta::MFloat>::identity(); m.raw()(0,0)=manta::MFloat(0.8f); m.raw()(1,1)=manta::MFloat(0.8f); m.raw()(2,2)=manta::MFloat(0.05f); return m; }(), true);
+    body_ = &this->root().add<manta::parts::MassT<manta::MFloat>>("body", manta::MFloat(5.0f), []{ manta::geom::Mat3<manta::PartFrame, manta::PartFrame, manta::MFloat> m = manta::geom::Mat3<manta::PartFrame, manta::PartFrame, manta::MFloat>::identity(); m.raw()(0,0)=manta::MFloat(0.8f); m.raw()(1,1)=manta::MFloat(0.8f); m.raw()(2,2)=manta::MFloat(0.05f); return m; }(), true);
     yaw_motor_ = &this->root().add<manta::parts::Motor>("yaw_motor", manta::geom::Vec3<manta::PartFrame>::from_raw(Eigen::Matrix<manta::MFloat, 3, 1>(1.0f, 0.0f, 0.0f)), 100.0f, 0.0f);
     yaw_motor_->set_transform(manta::geom::StaticLink<manta::ParentFrame, manta::PartFrame, manta::MFloat>{manta::geom::Vec3<manta::ParentFrame, manta::MFloat>{manta::MFloat(0.0f), manta::MFloat(0.0f), manta::MFloat(-1.0f)}, manta::geom::Ori<manta::ParentFrame, manta::MFloat>{Eigen::Quaternionf{manta::MFloat(1.0f), manta::MFloat(0.0f), manta::MFloat(0.0f), manta::MFloat(0.0f)}}});
     pitch_motor_ = &(*yaw_motor_).add<manta::parts::Motor>("pitch_motor", manta::geom::Vec3<manta::PartFrame>::from_raw(Eigen::Matrix<manta::MFloat, 3, 1>(0.0f, 1.0f, 0.0f)), 100.0f, 0.0f);
-    engine_ = &(*pitch_motor_).add<manta::parts::Thruster1>("engine", std::array<manta::geom::Vec3<manta::PartFrame, manta::MFloat>, 1>{manta::geom::Vec3<manta::PartFrame, manta::MFloat>{manta::MFloat(0.0f), manta::MFloat(0.0f), manta::MFloat(73.575f)}}, std::array<manta::geom::Vec3<manta::PartFrame, manta::MFloat>, 1>{manta::geom::Vec3<manta::PartFrame, manta::MFloat>{manta::MFloat(0.0f), manta::MFloat(0.0f), manta::MFloat(0.0f)}}, -1.0f);
-    imu_ = &this->root().add<manta::parts::IMU>("imu", -1.0f, -1.0f, manta::MFloat(0.0f), -1.0f);
+    engine_ = &(*pitch_motor_).add<manta::parts::Thruster1T<manta::MFloat>>("engine", std::array<manta::geom::Vec3<manta::PartFrame, manta::MFloat>, 1>{manta::geom::Vec3<manta::PartFrame, manta::MFloat>{manta::MFloat(0.0f), manta::MFloat(0.0f), manta::MFloat(73.575f)}}, std::array<manta::geom::Vec3<manta::PartFrame, manta::MFloat>, 1>{manta::geom::Vec3<manta::PartFrame, manta::MFloat>{manta::MFloat(0.0f), manta::MFloat(0.0f), manta::MFloat(0.0f)}}, -1.0f);
+    imu_ = &this->root().add<manta::parts::IMUT<manta::MFloat>>("imu", -1.0f, -1.0f, -1.0f, -1.0f, manta::MFloat(0.0));
     this->root().compute_params();
 }

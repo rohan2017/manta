@@ -1,27 +1,45 @@
-"""IMU — inertial measurement unit (angular rate + acceleration, with noise)."""
+"""IMU — inertial measurement unit (Kalibr 4-parameter noise model).
+
+Mirrors https://github.com/ethz-asl/kalibr/wiki/IMU-Noise-Model:
+
+    ω̃ = ω + b_g + n_g    ḃ_g = n_bg
+    ã = a + b_a + n_a    ḃ_a = n_ba
+
+with n_*, n_b* white-Gaussian. Pass any subset of the four σ values; any
+left at the default (-1.0) is skipped — both for sim-side noise sampling
+and for EKF/UKF noise registration. Setting only `accel_sigma` and
+`gyro_sigma` reproduces the old "simple" IMU; adding `accel_bias_sigma`
+and `gyro_bias_sigma` registers the biases as augmented filter states.
+"""
 
 from __future__ import annotations
 
-from ..._format import cpp_float as _f
+from ..._format import cpp_float as _f, cpp_mfloat as _mf
 from ...core import NoiseChannel, PartDescriptor
 from ...signal import Signal, vec3_out_signal
 
 
 class IMU(PartDescriptor):
-    """An IMU samples the kinematic-pass acceleration and angular velocity each
-    tick, with optional white-Gaussian noise on each.
+    """IMU with Kalibr's 4-parameter noise model.
+
+    Args (all σ default <0 → skip registration):
+        accel_sigma:      accel white-noise density [m/s²/√Hz]
+        gyro_sigma:       gyro white-noise density [rad/s/√Hz]
+        accel_bias_sigma: accel bias random-walk PSD [m/s³/√Hz]
+        gyro_bias_sigma:  gyro bias random-walk PSD [rad/s²/√Hz]
+        rate_hz:          sample-rate cap (0 = unrated)
+
+    Bias channels register as random walks; when σ ≥ 0 they become
+    augmented filter states (BiasDim grows by 3 per enabled bias).
 
     Bindable signals:
-      * `last_accel` (out, 3 floats) — most recent acceleration sample.
-      * `last_gyro`  (out, 3 floats) — most recent angular-rate sample.
-      * `set_measurement` (in, 6 floats) — feed external [ax, ay, az, gx, gy, gz]
-        into the part's `set_measurement(accel, gyro)`. Used by the real_data
-        workflow to drive an estimator off real sensor topics.
-
-    Required fields: none.
+      * `last_accel`           (out, 3 floats)
+      * `last_gyro`             (out, 3 floats)
+      * `set_measurement`       (in, 6 floats — both at once)
+      * `set_measurement_accel` (in, 3 floats — single channel)
+      * `set_measurement_gyro`  (in, 3 floats — single channel)
     """
 
-    cpp_class          = "manta::parts::IMU"
     cpp_class_template = "manta::parts::IMUT"
     cpp_header         = "manta/parts/sensor/imu.hpp"
 
@@ -38,9 +56,6 @@ class IMU(PartDescriptor):
                 "manta::geom::Vec3<manta::PartFrame>{{{v3}, {v4}, {v5}}});"
             ),
         ),
-        # Per-channel inputs — used when wiring sim→est via single-signal
-        # connect() calls (one for accel, one for gyro). Either form sets
-        # the IMU's freshness bit.
         Signal(
             name="set_measurement_accel",
             direction="in",
@@ -63,51 +78,39 @@ class IMU(PartDescriptor):
 
     def __init__(self,
                  name: str,
-                 accel_sigma:     float = -1.0,
-                 gyro_sigma:      float = -1.0,
-                 gyro_bias_sigma: float = -1.0,
-                 rate_hz:         float = 0.0,
+                 accel_sigma:      float = -1.0,
+                 gyro_sigma:       float = -1.0,
+                 accel_bias_sigma: float = -1.0,
+                 gyro_bias_sigma:  float = -1.0,
+                 rate_hz:          float = 0.0,
                  **kwargs) -> None:
         super().__init__(name=name, **kwargs)
-        # σ default is -1 (the "skip registration" sentinel). User
-        # opts in by passing σ ≥ 0, which both samples noise on the
-        # sim path and registers a slot with the EKF/UKF.
-        # gyro_bias_sigma is a random-walk diffusion coefficient
-        # (per-second PSD); when ≥ 0 the bias becomes an estimated
-        # filter state (BiasDim grows by 3).
-        self.accel_sigma     = float(accel_sigma)
-        self.gyro_sigma      = float(gyro_sigma)
-        self.gyro_bias_sigma = float(gyro_bias_sigma)
-        # rate_hz=0 (default) means "refresh every tick" — backward
-        # compat with code from before the rate-cap landing.
-        self.rate_hz         = float(rate_hz)
+        self.accel_sigma      = float(accel_sigma)
+        self.gyro_sigma       = float(gyro_sigma)
+        self.accel_bias_sigma = float(accel_bias_sigma)
+        self.gyro_bias_sigma  = float(gyro_bias_sigma)
+        self.rate_hz          = float(rate_hz)
 
     def emit_constructor_args(self, scalar: str = "manta::MFloat") -> str:
         return (f'"{self.name}", '
                 f'{_f(self.accel_sigma)}, '
                 f'{_f(self.gyro_sigma)}, '
-                f'manta::MFloat({_f(self.rate_hz)}), '
-                f'{_f(self.gyro_bias_sigma)}')
+                f'{_f(self.accel_bias_sigma)}, '
+                f'{_f(self.gyro_bias_sigma)}, '
+                f'{_mf(self.rate_hz)}')
 
     def noise_channels(self) -> list[NoiseChannel]:
         return [
             NoiseChannel("accel_noise", "white_3d", self.accel_sigma),
             NoiseChannel("gyro_noise",  "white_3d", self.gyro_sigma),
+            NoiseChannel("accel_bias",  "rw_3d",    self.accel_bias_sigma),
             NoiseChannel("gyro_bias",   "rw_3d",    self.gyro_bias_sigma),
         ]
 
-    # Vec3 telemetry types are not yet handled by the scalar-only JSON encoder.
-    # Declaring the fields anyway so the struct shape is right; values won't
-    # currently appear in the JSON. To be revisited when the encoder grows
-    # vector support.
-    def telemetry_fields(self) -> list[tuple[str, str]]:
+    def telemetry(self) -> list[tuple[str, str, str]]:
         return [
-            ("accel", "manta::geom::Vec3<manta::PartFrame>"),
-            ("gyro",  "manta::geom::Vec3<manta::PartFrame>"),
-        ]
-
-    def emit_telemetry_reads(self) -> list[tuple[str, str]]:
-        return [
-            ("accel", f"craft.{self.name}().last_accel()"),
-            ("gyro",  f"craft.{self.name}().last_gyro()"),
+            ("accel", "manta::geom::Vec3<manta::PartFrame>",
+             f"craft.{self.name}().last_accel()"),
+            ("gyro",  "manta::geom::Vec3<manta::PartFrame>",
+             f"craft.{self.name}().last_gyro()"),
         ]

@@ -12,15 +12,15 @@ class Ex4Craft : public manta::Craft {
 public:
     Ex4Craft();
 
-    manta::parts::Mass& body() { return *body_; }
-    const manta::parts::Mass& body() const { return *body_; }
+    manta::parts::MassT<manta::MFloat>& body() { return *body_; }
+    const manta::parts::MassT<manta::MFloat>& body() const { return *body_; }
     manta::parts::Motor& wheel() { return *wheel_; }
     const manta::parts::Motor& wheel() const { return *wheel_; }
-    manta::parts::Mass& flywheel() { return *flywheel_; }
-    const manta::parts::Mass& flywheel() const { return *flywheel_; }
+    manta::parts::MassT<manta::MFloat>& flywheel() { return *flywheel_; }
+    const manta::parts::MassT<manta::MFloat>& flywheel() const { return *flywheel_; }
 
 private:
-    manta::parts::Mass* body_ = nullptr;
+    manta::parts::MassT<manta::MFloat>* body_ = nullptr;
     manta::parts::Motor* wheel_ = nullptr;
-    manta::parts::Mass* flywheel_ = nullptr;
+    manta::parts::MassT<manta::MFloat>* flywheel_ = nullptr;
 };

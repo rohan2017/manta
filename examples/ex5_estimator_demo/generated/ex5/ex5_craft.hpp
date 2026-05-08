@@ -14,18 +14,18 @@ class Ex5Craft : public manta::Craft {
 public:
     Ex5Craft();
 
-    manta::parts::Mass& body() { return *body_; }
-    const manta::parts::Mass& body() const { return *body_; }
-    manta::parts::IMU& imu() { return *imu_; }
-    const manta::parts::IMU& imu() const { return *imu_; }
-    manta::parts::DVL& dvl() { return *dvl_; }
-    const manta::parts::DVL& dvl() const { return *dvl_; }
-    manta::parts::Thruster1& thrust() { return *thrust_; }
-    const manta::parts::Thruster1& thrust() const { return *thrust_; }
+    manta::parts::MassT<manta::MFloat>& body() { return *body_; }
+    const manta::parts::MassT<manta::MFloat>& body() const { return *body_; }
+    manta::parts::IMUT<manta::MFloat>& imu() { return *imu_; }
+    const manta::parts::IMUT<manta::MFloat>& imu() const { return *imu_; }
+    manta::parts::DVLT<manta::MFloat>& dvl() { return *dvl_; }
+    const manta::parts::DVLT<manta::MFloat>& dvl() const { return *dvl_; }
+    manta::parts::Thruster1T<manta::MFloat>& thrust() { return *thrust_; }
+    const manta::parts::Thruster1T<manta::MFloat>& thrust() const { return *thrust_; }
 
 private:
-    manta::parts::Mass* body_ = nullptr;
-    manta::parts::IMU* imu_ = nullptr;
-    manta::parts::DVL* dvl_ = nullptr;
-    manta::parts::Thruster1* thrust_ = nullptr;
+    manta::parts::MassT<manta::MFloat>* body_ = nullptr;
+    manta::parts::IMUT<manta::MFloat>* imu_ = nullptr;
+    manta::parts::DVLT<manta::MFloat>* dvl_ = nullptr;
+    manta::parts::Thruster1T<manta::MFloat>* thrust_ = nullptr;
 };

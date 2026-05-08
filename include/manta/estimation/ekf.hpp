@@ -102,9 +102,11 @@
 //     }
 
 #include <array>
-#include <cassert>
 #include <cmath>
 #include <functional>
+#include <stdexcept>
+#include <string>
+#include <string_view>
 #include <type_traits>
 #include <vector>
 
@@ -164,12 +166,27 @@ public:
     // Crafts must appear in the same slot order on both sides — the slot
     // order encodes the state vector layout.
     //
+    // **Templated craft requirement**: every Craft passed here must be a
+    // `<Scalar>`-templated class (e.g. `MyCraftT<Scalar> : CraftT<Scalar>`)
+    // so the Jet shadow world can be built from `MyCraftT<Jet>`. The
+    // codegen sets `scalar_templated=True` automatically when a craft is
+    // wrapped by an EKF/UKF; for hand-written crafts, write your craft as
+    // a single-parameter class template. A non-templated craft will fail
+    // to compile in the user's bind() callsite (the std::array<CraftJ*,
+    // …> conversion from MyCraft* to CraftT<Jet>* is what fails first).
+    //
     // Walks the Jet-side part tree to register white-noise sources for
     // auto-Q assembly. The number of registered slots must not exceed
-    // NumNoiseSlots; this is checked at bind time.
+    // NumNoiseSlots; this is checked at bind time and throws on overflow.
     void bind(WorldJ& w_jet,
               std::array<CraftR*, NumCrafts> real_crafts,
               std::array<CraftJ*, NumCrafts> jet_crafts) {
+        // The std::array<CraftR*, …> / <CraftJ*, …> parameter types
+        // already enforce that the user's craft is convertible to
+        // CraftT<double>*/CraftT<Jet>* — non-templated crafts fail to
+        // convert and the compiler reports the brace-init mismatch at
+        // the user's call site. See the doc-block above for the
+        // templated-craft requirement.
         w_jet_       = &w_jet;
         crafts_real_ = real_crafts;
         crafts_jet_  = jet_crafts;
@@ -186,10 +203,22 @@ public:
             /*noise_input_offset=*/kNoiseColStart,
             /*bias_state_offset =*/kBiasColStart);
 
-        assert(noise_registry_.num_slots() <= NumNoiseSlots
-               && "EKF: registered noise slots exceed NumNoiseSlots template arg");
-        assert(noise_registry_.num_bias_slots() <= BiasDim
-               && "EKF: registered RW bias slots exceed BiasDim template arg");
+        if (noise_registry_.num_slots() > NumNoiseSlots) {
+            throw std::runtime_error(
+                "EKF::bind: registered noise slots (" +
+                std::to_string(noise_registry_.num_slots()) +
+                ") exceed NumNoiseSlots template arg (" +
+                std::to_string(NumNoiseSlots) +
+                "). Sum each part's noise_channels() and re-run codegen.");
+        }
+        if (noise_registry_.num_bias_slots() > BiasDim) {
+            throw std::runtime_error(
+                "EKF::bind: registered RW bias slots (" +
+                std::to_string(noise_registry_.num_bias_slots()) +
+                ") exceed BiasDim template arg (" +
+                std::to_string(BiasDim) +
+                "). Sum each part's noise_channels() and re-run codegen.");
+        }
     }
 
     void set_state(const StateVec& x) noexcept {
@@ -202,18 +231,33 @@ public:
     const StateVec& state()      const noexcept { return x_ref_; }
     const StateCov& covariance() const noexcept { return P_; }
 
-    // Per-craft slice accessors over the reference state.
+    // Per-craft slice accessors over the reference state. Each method
+    // accepts either a positional index (slot order in bind()) or the
+    // craft's name. Name-based lookup is O(NumCrafts); for a hot loop
+    // resolve once via `idx_of(name)` and cache.
     Eigen::Matrix<double, 3, 1> position(int idx = 0) const noexcept {
         return x_ref_.template segment<3>(idx * kRigidStateDim + 0);
+    }
+    Eigen::Matrix<double, 3, 1> position(std::string_view name) const {
+        return position(idx_of(name));
     }
     Eigen::Matrix<double, 4, 1> orientation(int idx = 0) const noexcept {
         return x_ref_.template segment<4>(idx * kRigidStateDim + 3);
     }
+    Eigen::Matrix<double, 4, 1> orientation(std::string_view name) const {
+        return orientation(idx_of(name));
+    }
     Eigen::Matrix<double, 3, 1> vel_linear(int idx = 0) const noexcept {
         return x_ref_.template segment<3>(idx * kRigidStateDim + 7);
     }
+    Eigen::Matrix<double, 3, 1> vel_linear(std::string_view name) const {
+        return vel_linear(idx_of(name));
+    }
     Eigen::Matrix<double, 3, 1> vel_angular(int idx = 0) const noexcept {
         return x_ref_.template segment<3>(idx * kRigidStateDim + 10);
+    }
+    Eigen::Matrix<double, 3, 1> vel_angular(std::string_view name) const {
+        return vel_angular(idx_of(name));
     }
     const StateVec& full_state() const noexcept { return x_ref_; }
 
@@ -221,25 +265,51 @@ public:
     Eigen::Matrix<double, 3, 1> position_stddev(int idx = 0) const noexcept {
         return diag_stddev_segment<3>(idx * kRigidTangent + 0);
     }
+    Eigen::Matrix<double, 3, 1> position_stddev(std::string_view name) const {
+        return position_stddev(idx_of(name));
+    }
     // Orientation stddev is now 3-DOF (axis-angle), not 4-DOF — the
     // tangent layout omits the redundant radial direction. Returned as a
     // (δθx, δθy, δθz) standard-deviation triple.
     Eigen::Matrix<double, 3, 1> orientation_stddev(int idx = 0) const noexcept {
         return diag_stddev_segment<3>(idx * kRigidTangent + 3);
     }
+    Eigen::Matrix<double, 3, 1> orientation_stddev(std::string_view name) const {
+        return orientation_stddev(idx_of(name));
+    }
     Eigen::Matrix<double, 3, 1> vel_linear_stddev(int idx = 0) const noexcept {
         return diag_stddev_segment<3>(idx * kRigidTangent + 6);
     }
+    Eigen::Matrix<double, 3, 1> vel_linear_stddev(std::string_view name) const {
+        return vel_linear_stddev(idx_of(name));
+    }
     Eigen::Matrix<double, 3, 1> vel_angular_stddev(int idx = 0) const noexcept {
         return diag_stddev_segment<3>(idx * kRigidTangent + 9);
+    }
+    Eigen::Matrix<double, 3, 1> vel_angular_stddev(std::string_view name) const {
+        return vel_angular_stddev(idx_of(name));
     }
 
     // Per-craft handle. Useful in measurement functors that read sensor
     // last_* values from a specific value-side craft.
     CraftR&       craft(int idx = 0)       noexcept { return *crafts_real_[idx]; }
     const CraftR& craft(int idx = 0) const noexcept { return *crafts_real_[idx]; }
+    CraftR&       craft(std::string_view name)       { return craft(idx_of(name)); }
+    const CraftR& craft(std::string_view name) const { return craft(idx_of(name)); }
     CraftJ&       craft_jet(int idx = 0)       noexcept { return *crafts_jet_[idx]; }
     const CraftJ& craft_jet(int idx = 0) const noexcept { return *crafts_jet_[idx]; }
+    CraftJ&       craft_jet(std::string_view name)       { return craft_jet(idx_of(name)); }
+    const CraftJ& craft_jet(std::string_view name) const { return craft_jet(idx_of(name)); }
+
+    // Resolve a craft name to its slot index (the order it was passed
+    // to bind()). Throws if the name doesn't match any bound craft.
+    int idx_of(std::string_view name) const {
+        for (int i = 0; i < NumCrafts; ++i) {
+            if (crafts_real_[i] && crafts_real_[i]->name() == name) return i;
+        }
+        throw std::runtime_error(
+            std::string("EKF: no craft named '") + std::string(name) + "'");
+    }
 
     // ---- Predict ----
     //
@@ -259,8 +329,11 @@ public:
         NoiseGain L;
         extract_F_L_and_ref(x_ref_post, F, L, dt);
 
+        // x_ref_post comes from the integrated Jet world, whose
+        // kinematic_link::integrate already normalized each craft's
+        // quaternion (see kinematic_link.hpp). No explicit renormalize
+        // needed here — the integrator owns drift control.
         x_ref_ = x_ref_post;
-        renormalize_quats(x_ref_);
 
         StateCov Q_total = Q;
         if constexpr (NumNoiseSlots > 0) {
@@ -380,8 +453,9 @@ public:
         NoiseGain L;
         extract_F_L_and_ref(x_ref_post, F, L, dt_pending_);
 
+        // Integrator (Jet kinematic_link) already normalized — see
+        // predict() comment. No double-renorm.
         x_ref_ = x_ref_post;
-        renormalize_quats(x_ref_);
 
         StateCov Q_total = Q_pending_;
         if constexpr (NumNoiseSlots > 0) {
@@ -491,27 +565,18 @@ private:
             fill_row(tan_off + 1, rk(1));
             fill_row(tan_off + 2, rk(2));
 
-            // Orientation rows: 2·imag(q_ref_post.conj ⊗ q_jet_post).
-            // (a, b, c, d) = (qwr, -qxr, -qyr, -qzr).
-            //   x_dq = qwr·qxj - qxr·qwj - qyr·qzj + qzr·qyj
-            //   y_dq = qwr·qyj + qxr·qzj - qyr·qwj - qzr·qxj
-            //   z_dq = qwr·qzj - qxr·qyj + qyr·qxj - qzr·qwj
-            const double qwr = rk(3).a;
-            const double qxr = rk(4).a;
-            const double qyr = rk(5).a;
-            const double qzr = rk(6).a;
-            const Jet&   qwj = rk(3);
-            const Jet&   qxj = rk(4);
-            const Jet&   qyj = rk(5);
-            const Jet&   qzj = rk(6);
-
-            const Jet x_dq = qwr * qxj - qxr * qwj - qyr * qzj + qzr * qyj;
-            const Jet y_dq = qwr * qyj + qxr * qzj - qyr * qwj - qzr * qxj;
-            const Jet z_dq = qwr * qzj - qxr * qyj + qyr * qxj - qzr * qwj;
-
-            fill_row(tan_off + 3, x_dq, 2.0);
-            fill_row(tan_off + 4, y_dq, 2.0);
-            fill_row(tan_off + 5, z_dq, 2.0);
+            // Orientation rows: small-angle quat error δθ ≈ 2·imag(q).
+            //
+            // Long form is `δθ = 2·imag(q_ref_post.conj ⊗ q_jet_post)`,
+            // but `q_ref_post` is read from the same Jet's value channel
+            // (`rk(*).a`), so the conjugate-product evaluates to
+            // (1, 0, 0, 0) at evaluation. Its derivative wrt q_jet on
+            // the imag part is the identity, so 2·imag(q_jet) gives the
+            // exact same Jacobian rows at the same cost minus four
+            // multiplications per axis.
+            fill_row(tan_off + 3, rk(4), 2.0);
+            fill_row(tan_off + 4, rk(5), 2.0);
+            fill_row(tan_off + 5, rk(6), 2.0);
 
             // Velocity rows.
             fill_row(tan_off + 6, rk(7));
@@ -565,19 +630,17 @@ private:
     // are populated, so this works even when the template arg
     // generously oversizes the noise width.
     void add_auto_q(double dt, const NoiseGain& L, StateCov& Q_out) {
-        if (noise_registry_.num_slots() == 0) return;
-        std::vector<double> input_var;
-        noise_registry_.input_variance_diag(dt, input_var);
-        for (int i = 0; i < kTangentDim; ++i) {
-            for (int j = 0; j < kTangentDim; ++j) {
-                double sum = 0.0;
-                const int n = noise_registry_.num_slots();
-                for (int s = 0; s < n; ++s) {
-                    sum += L(i, s) * input_var[s] * L(j, s);
-                }
-                Q_out(i, j) += sum;
-            }
-        }
+        const int n = noise_registry_.num_slots();
+        if (n == 0) return;
+        const auto& input_var = noise_registry_.input_variance_diag(dt);
+        Eigen::Map<const Eigen::VectorXd> sigma_diag(input_var.data(), n);
+        // Only the first n columns of L are populated (the registry's
+        // active slot range); the trailing NumNoiseSlots-n cols are zero
+        // by setZero() at the top of extract_F_L_and_ref but skipping
+        // them keeps the matrix product tight.
+        Q_out.noalias() += L.leftCols(n)
+                         * sigma_diag.asDiagonal()
+                         * L.leftCols(n).transpose();
     }
 
     // x_ref ← x_ref ⊞ δ (per-craft) plus bias state updates on
@@ -613,22 +676,15 @@ private:
 
         // Bias state injections: for each registered RW source, add the
         // δ slice to the Jet-side Noise's stored bias estimate. The
-        // Jet-side Noise's state3() is the EKF's running bias estimate;
+        // Jet-side Noise's state is the EKF's running bias estimate;
         // the operator+ Jet path reads it on the next predict so the
         // measurement Jacobian carries the latest bias dependency.
         if constexpr (BiasDim > 0) {
             for (const auto& rw : noise_registry_.rw_sources()) {
                 const int row_base = rw.source->state_slot();
-                if (rw.dim == 3) {
-                    Eigen::Matrix<float, 3, 1> bias = rw.source->state3();
-                    for (int i = 0; i < 3; ++i) {
-                        bias(i) += static_cast<float>(delta(row_base + i));
-                    }
-                    rw.source->set_state3(bias);
-                } else {
-                    float bias = rw.source->state1()
-                               + static_cast<float>(delta(row_base));
-                    rw.source->set_state1(bias);
+                float* bias = rw.source->state_data();
+                for (int i = 0; i < rw.dim; ++i) {
+                    bias[i] += static_cast<float>(delta(row_base + i));
                 }
             }
         }

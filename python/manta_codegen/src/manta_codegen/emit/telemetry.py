@@ -1,8 +1,8 @@
 """Emit <name>_telemetry.hpp — per-craft telemetry struct + JSON encoder.
 
-Each part with non-empty `telemetry_fields()` contributes a sub-struct of
-named members. The codegen aggregates them into a single `<Cls>Telemetry`
-struct, used by hand-written user mains in the library workflow (ex2/ex3/ex6).
+Each part with non-empty `telemetry()` contributes a sub-struct of named
+members. The codegen aggregates them into a single `<Cls>Telemetry` struct,
+used by hand-written user mains in the library workflow (ex2/ex3/ex6).
 The binary-workflow main (emit/main.py) does not use this struct — that path
 publishes per-Binding payloads directly.
 
@@ -21,9 +21,9 @@ from ._util import GENERATED_BANNER, CPP_INCLUDE_GUARD, class_name_for_craft
 
 def emit_telemetry_hpp(craft: Craft) -> str:
     cls = class_name_for_craft(craft.name)
-    # A part contributes iff it declares non-empty `telemetry_fields()` — the
+    # A part contributes iff it declares non-empty `telemetry()` — the
     # only gate now that the publish_state flag is gone.
-    publishing_parts = [p for p in craft.all_parts() if p.telemetry_fields()]
+    publishing_parts = [p for p in craft.all_parts() if p.telemetry()]
 
     lines: list[str] = [
         GENERATED_BANNER,
@@ -44,11 +44,11 @@ def emit_telemetry_hpp(craft: Craft) -> str:
     ]
 
     for p in publishing_parts:
-        fields = p.telemetry_fields()
-        if not fields:
+        entries = p.telemetry()
+        if not entries:
             continue
         lines.append(f"    struct {p.name.capitalize()}T {{")
-        for member, ctype in fields:
+        for member, ctype, _read in entries:
             lines.append(f"        {ctype} {member}{{}};")
         lines.append(f"    }} {p.name};")
 
@@ -80,12 +80,12 @@ def emit_telemetry_hpp(craft: Craft) -> str:
 
     # Per-part nested object: ,"<part>":{"<member>":value, ...}
     for p in publishing_parts:
-        fields = p.telemetry_fields()
-        if not fields:
+        entries = p.telemetry()
+        if not entries:
             continue
         # Open the nested object.
         lines.append(f'    s += ",\\"{p.name}\\":{{";')
-        for i, (member, ctype) in enumerate(fields):
+        for i, (member, ctype, _read) in enumerate(entries):
             sep = "" if i == 0 else ","
             t = ctype.strip()
             if t in ("float", "double", "manta::MFloat") or t.startswith("int"):
@@ -121,7 +121,7 @@ def emit_telemetry_hpp(craft: Craft) -> str:
         "    telem.w[0]=w.x(); telem.w[1]=w.y(); telem.w[2]=w.z();",
     ]
     for p in publishing_parts:
-        for member, rhs in p.emit_telemetry_reads():
+        for member, _ctype, rhs in p.telemetry():
             lines.append(f"    telem.{p.name}.{member} = {rhs};")
     lines.append("}")
     lines.append("")

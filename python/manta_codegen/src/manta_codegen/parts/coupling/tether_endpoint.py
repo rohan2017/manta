@@ -22,7 +22,6 @@ class TetherEndpoint(PartDescriptor):
     Telemetry: none (yet).
     """
 
-    cpp_class          = "manta::parts::TetherEndpoint"
     cpp_class_template = "manta::parts::TetherEndpointT"
     cpp_header         = "manta/parts/coupling/tether_endpoint.hpp"
 

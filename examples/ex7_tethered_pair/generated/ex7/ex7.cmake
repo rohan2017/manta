@@ -6,7 +6,6 @@ set(manta_ex7_SOURCES
     ${manta_ex7_DIR}/leader_craft.cpp
     ${manta_ex7_DIR}/follower_craft.cpp
     ${manta_ex7_DIR}/ex7.cpp
-    ${manta_ex7_DIR}/ex7_main.cpp
 )
 
 set(manta_ex7_HEADERS
@@ -55,6 +54,3 @@ function(manta_ex7_apply target)
     target_compile_options(${target} PRIVATE "SHELL:-include ${manta_ex7_DIR}/ex7_config.h")
     target_link_libraries(${target} PRIVATE manta::manta zenohcxx::zenohc)
 endfunction()
-
-add_executable(ex7 ${manta_ex7_SOURCES})
-manta_ex7_apply(ex7)

@@ -14,21 +14,21 @@ class Ex3Craft : public manta::Craft {
 public:
     Ex3Craft();
 
-    manta::parts::Mass& body() { return *body_; }
-    const manta::parts::Mass& body() const { return *body_; }
+    manta::parts::MassT<manta::MFloat>& body() { return *body_; }
+    const manta::parts::MassT<manta::MFloat>& body() const { return *body_; }
     manta::parts::Motor& yaw_motor() { return *yaw_motor_; }
     const manta::parts::Motor& yaw_motor() const { return *yaw_motor_; }
     manta::parts::Motor& pitch_motor() { return *pitch_motor_; }
     const manta::parts::Motor& pitch_motor() const { return *pitch_motor_; }
-    manta::parts::Thruster1& engine() { return *engine_; }
-    const manta::parts::Thruster1& engine() const { return *engine_; }
-    manta::parts::IMU& imu() { return *imu_; }
-    const manta::parts::IMU& imu() const { return *imu_; }
+    manta::parts::Thruster1T<manta::MFloat>& engine() { return *engine_; }
+    const manta::parts::Thruster1T<manta::MFloat>& engine() const { return *engine_; }
+    manta::parts::IMUT<manta::MFloat>& imu() { return *imu_; }
+    const manta::parts::IMUT<manta::MFloat>& imu() const { return *imu_; }
 
 private:
-    manta::parts::Mass* body_ = nullptr;
+    manta::parts::MassT<manta::MFloat>* body_ = nullptr;
     manta::parts::Motor* yaw_motor_ = nullptr;
     manta::parts::Motor* pitch_motor_ = nullptr;
-    manta::parts::Thruster1* engine_ = nullptr;
-    manta::parts::IMU* imu_ = nullptr;
+    manta::parts::Thruster1T<manta::MFloat>* engine_ = nullptr;
+    manta::parts::IMUT<manta::MFloat>* imu_ = nullptr;
 };

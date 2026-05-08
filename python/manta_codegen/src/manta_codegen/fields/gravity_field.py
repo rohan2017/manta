@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .._format import cpp_float as _f
+from .._format import cpp_float as _f, cpp_mfloat as _mf
 from ..core import FieldDescriptor
 
 
@@ -71,15 +71,15 @@ class GravityField(FieldDescriptor):
                 ox, oy, oz = d["origin"]
                 expr = (f"{self.cpp_class}::Disturbance::point_mass("
                         f"{scene}{{{_f(ox)}, {_f(oy)}, {_f(oz)}}}, "
-                        f"manta::MFloat({_f(d['mu'])}))")
+                        f"{_mf(d['mu'])})")
             elif d["kind"] == "point_mass_j2":
                 ox, oy, oz = d["origin"]
                 ax, ay, az = d["polar_axis"]
                 expr = (f"{self.cpp_class}::Disturbance::point_mass_j2("
                         f"{scene}{{{_f(ox)}, {_f(oy)}, {_f(oz)}}}, "
-                        f"manta::MFloat({_f(d['mu'])}), "
-                        f"manta::MFloat({_f(d['j2'])}), "
-                        f"manta::MFloat({_f(d['eq_radius'])}), "
+                        f"{_mf(d['mu'])}, "
+                        f"{_mf(d['j2'])},"
+                        f"{_mf(d['eq_radius'])},"
                         f"{scene}{{{_f(ax)}, {_f(ay)}, {_f(az)}}})")
             else:
                 raise RuntimeError(f"unknown disturbance kind {d['kind']!r}")

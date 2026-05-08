@@ -100,26 +100,22 @@ class _SurfaceBase(PartDescriptor):
 class Surface1(_SurfaceBase):
     """Linear drag/lift: F = A_1 * v_rel, τ = B_1 * v_rel."""
     N = 1
-    cpp_class          = "manta::parts::Surface1"
     cpp_class_template = "manta::parts::Surface1T"
 
 
 class Surface2(_SurfaceBase):
     """Linear + quadratic: F = A_1*v + A_2*v², τ = B_1*v + B_2*v²."""
     N = 2
-    cpp_class          = "manta::parts::Surface2"
     cpp_class_template = "manta::parts::Surface2T"
 
 
 class Surface3(_SurfaceBase):
     """Up to cubic velocity-power terms."""
     N = 3
-    cpp_class          = "manta::parts::Surface3"
     cpp_class_template = "manta::parts::Surface3T"
 
 
 class Surface4(_SurfaceBase):
     """Up to quartic velocity-power terms."""
     N = 4
-    cpp_class          = "manta::parts::Surface4"
     cpp_class_template = "manta::parts::Surface4T"

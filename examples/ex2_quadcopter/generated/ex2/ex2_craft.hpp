@@ -13,24 +13,24 @@ class Ex2Craft : public manta::Craft {
 public:
     Ex2Craft();
 
-    manta::parts::Mass& body() { return *body_; }
-    const manta::parts::Mass& body() const { return *body_; }
-    manta::parts::Thruster1& fr() { return *fr_; }
-    const manta::parts::Thruster1& fr() const { return *fr_; }
-    manta::parts::Thruster1& fl() { return *fl_; }
-    const manta::parts::Thruster1& fl() const { return *fl_; }
-    manta::parts::Thruster1& bl() { return *bl_; }
-    const manta::parts::Thruster1& bl() const { return *bl_; }
-    manta::parts::Thruster1& br() { return *br_; }
-    const manta::parts::Thruster1& br() const { return *br_; }
-    manta::parts::IMU& imu() { return *imu_; }
-    const manta::parts::IMU& imu() const { return *imu_; }
+    manta::parts::MassT<manta::MFloat>& body() { return *body_; }
+    const manta::parts::MassT<manta::MFloat>& body() const { return *body_; }
+    manta::parts::Thruster1T<manta::MFloat>& fr() { return *fr_; }
+    const manta::parts::Thruster1T<manta::MFloat>& fr() const { return *fr_; }
+    manta::parts::Thruster1T<manta::MFloat>& fl() { return *fl_; }
+    const manta::parts::Thruster1T<manta::MFloat>& fl() const { return *fl_; }
+    manta::parts::Thruster1T<manta::MFloat>& bl() { return *bl_; }
+    const manta::parts::Thruster1T<manta::MFloat>& bl() const { return *bl_; }
+    manta::parts::Thruster1T<manta::MFloat>& br() { return *br_; }
+    const manta::parts::Thruster1T<manta::MFloat>& br() const { return *br_; }
+    manta::parts::IMUT<manta::MFloat>& imu() { return *imu_; }
+    const manta::parts::IMUT<manta::MFloat>& imu() const { return *imu_; }
 
 private:
-    manta::parts::Mass* body_ = nullptr;
-    manta::parts::Thruster1* fr_ = nullptr;
-    manta::parts::Thruster1* fl_ = nullptr;
-    manta::parts::Thruster1* bl_ = nullptr;
-    manta::parts::Thruster1* br_ = nullptr;
-    manta::parts::IMU* imu_ = nullptr;
+    manta::parts::MassT<manta::MFloat>* body_ = nullptr;
+    manta::parts::Thruster1T<manta::MFloat>* fr_ = nullptr;
+    manta::parts::Thruster1T<manta::MFloat>* fl_ = nullptr;
+    manta::parts::Thruster1T<manta::MFloat>* bl_ = nullptr;
+    manta::parts::Thruster1T<manta::MFloat>* br_ = nullptr;
+    manta::parts::IMUT<manta::MFloat>* imu_ = nullptr;
 };

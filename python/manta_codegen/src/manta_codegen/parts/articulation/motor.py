@@ -53,12 +53,7 @@ class Motor(PartDescriptor):
                 f'{_f(self.stall_torque)}, '
                 f'{_f(self.damping)}')
 
-    def telemetry_fields(self) -> list[tuple[str, str]]:
-        return [("angle", "manta::MFloat"),
-                ("rate",  "manta::MFloat"),
-                ("accel", "manta::MFloat")]
-
-    def emit_telemetry_reads(self) -> list[tuple[str, str]]:
-        return [("angle", f"craft.{self.name}().angle()"),
-                ("rate",  f"craft.{self.name}().rate()"),
-                ("accel", f"craft.{self.name}().accel()")]
+    def telemetry(self) -> list[tuple[str, str, str]]:
+        return [("angle", "manta::MFloat", f"craft.{self.name}().angle()"),
+                ("rate",  "manta::MFloat", f"craft.{self.name}().rate()"),
+                ("accel", "manta::MFloat", f"craft.{self.name}().accel()")]

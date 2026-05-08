@@ -5,8 +5,8 @@
 
 Ex4Craft::Ex4Craft()
     : manta::Craft("ex4") {
-    body_ = &this->root().add<manta::parts::Mass>("body", manta::MFloat(1.0f), []{ manta::geom::Mat3<manta::PartFrame, manta::PartFrame, manta::MFloat> m = manta::geom::Mat3<manta::PartFrame, manta::PartFrame, manta::MFloat>::identity(); m.raw()(0,0)=manta::MFloat(0.02f); m.raw()(1,1)=manta::MFloat(0.02f); m.raw()(2,2)=manta::MFloat(0.02f); return m; }(), true);
+    body_ = &this->root().add<manta::parts::MassT<manta::MFloat>>("body", manta::MFloat(1.0f), []{ manta::geom::Mat3<manta::PartFrame, manta::PartFrame, manta::MFloat> m = manta::geom::Mat3<manta::PartFrame, manta::PartFrame, manta::MFloat>::identity(); m.raw()(0,0)=manta::MFloat(0.02f); m.raw()(1,1)=manta::MFloat(0.02f); m.raw()(2,2)=manta::MFloat(0.02f); return m; }(), true);
     wheel_ = &this->root().add<manta::parts::Motor>("wheel", manta::geom::Vec3<manta::PartFrame>::from_raw(Eigen::Matrix<manta::MFloat, 3, 1>(0.0f, 0.0f, 1.0f)), 2.0f, 0.0f);
-    flywheel_ = &(*wheel_).add<manta::parts::Mass>("flywheel", manta::MFloat(0.5f), []{ manta::geom::Mat3<manta::PartFrame, manta::PartFrame, manta::MFloat> m = manta::geom::Mat3<manta::PartFrame, manta::PartFrame, manta::MFloat>::identity(); m.raw()(0,0)=manta::MFloat(0.0025f); m.raw()(1,1)=manta::MFloat(0.0025f); m.raw()(2,2)=manta::MFloat(0.005f); return m; }(), true);
+    flywheel_ = &(*wheel_).add<manta::parts::MassT<manta::MFloat>>("flywheel", manta::MFloat(0.5f), []{ manta::geom::Mat3<manta::PartFrame, manta::PartFrame, manta::MFloat> m = manta::geom::Mat3<manta::PartFrame, manta::PartFrame, manta::MFloat>::identity(); m.raw()(0,0)=manta::MFloat(0.0025f); m.raw()(1,1)=manta::MFloat(0.0025f); m.raw()(2,2)=manta::MFloat(0.005f); return m; }(), true);
     this->root().compute_params();
 }
