@@ -30,8 +30,8 @@ def make_config() -> MantaConfig:
               q_jitter=1e-6, initial_covariance=1.0,
               alpha=1e-3, beta=2.0, kappa=0.0)
 
-    subscribe(imu.set_measurement, "manta/ukf_smoke/imu")
-    subscribe(dvl.set_measurement, "manta/ukf_smoke/dvl")
+    ukf.read_topic(imu, "manta/ukf_smoke/imu")
+    ukf.read_topic(dvl, "manta/ukf_smoke/dvl")
     publish({
         "p": ukf.position,
         "v": ukf.vel_linear,

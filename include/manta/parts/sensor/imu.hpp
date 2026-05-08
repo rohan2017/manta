@@ -69,6 +69,8 @@ public:
     {
         this->measurements_.push_back(&accel);
         this->measurements_.push_back(&gyro);
+        this->random_walks_.push_back({"accel_bias", &accel_bias_});
+        this->random_walks_.push_back({"gyro_bias",  &gyro_bias_});
     }
 
     // ---- h(x) helpers (also used by user code; not part of the EKF
@@ -127,26 +129,6 @@ public:
     // Did this IMU produce a fresh reading on the last update()?
     bool fresh() const noexcept { return fresh_; }
 
-    // ---- Legacy bridges (will be removed in Phase 5c) ----
-    //
-    // These predate the Measurement+Reading API. Codegen still emits
-    // `set_measurement_*` signals and `consume_fresh` checks; until
-    // codegen is migrated, the bridges keep existing examples + tests
-    // building. Once codegen emits `ekf.measure(model, reading)`, all
-    // four go away.
-    void set_measurement(const geom::Vec3<PartFrame, Scalar>& accel,
-                         const geom::Vec3<PartFrame, Scalar>& gyro) noexcept {
-        last_accel_ = accel;
-        last_gyro_  = gyro;
-        fresh_      = true;
-    }
-    void set_measurement_accel(const geom::Vec3<PartFrame, Scalar>& a) noexcept {
-        last_accel_ = a; fresh_ = true;
-    }
-    void set_measurement_gyro(const geom::Vec3<PartFrame, Scalar>& g) noexcept {
-        last_gyro_ = g; fresh_ = true;
-    }
-    bool consume_fresh() noexcept { bool was = fresh_; fresh_ = false; return was; }
 
     Noise<WhiteGaussian>& accel_noise() noexcept { return accel_noise_; }
     Noise<WhiteGaussian>& gyro_noise()  noexcept { return gyro_noise_; }

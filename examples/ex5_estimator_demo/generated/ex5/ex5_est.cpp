@@ -3,12 +3,11 @@
 
 
 #include "ex5_est.hpp"
+#include "ex5_sim.hpp"
 
-#include <cstdint>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -16,7 +15,6 @@
 
 #include <Eigen/Core>
 #include <Eigen/Geometry>
-#include <zenoh.hxx>
 
 namespace manta_gen::ex5_est {
 
@@ -24,200 +22,62 @@ manta::WorldT<double>  w{};
 manta::SceneT<double>* scene = nullptr;
 manta::fields::GravityField field_0{};
 Ex5EstCraftT<double> craft{};
-manta::estimation::EKF<1, 9, 15, 6> ekf_0;
+
+EkfT ekf_0{ manta::estimation::make_state().track(craft).track(craft.imu().accel_bias()).track(craft.imu().gyro_bias()).build() };
+manta::estimation::CraftView<EkfT, 0> view_0{ekf_0};
 
 }  // namespace manta_gen::ex5_est
 
 namespace {
 
-bool parse_float_array(std::string_view s, std::vector<float>& out) {
-    out.clear();
-    auto lb = s.find('['); auto rb = s.rfind(']');
-    if (lb == std::string_view::npos || rb == std::string_view::npos || rb <= lb) return false;
-    std::string body(s.substr(lb + 1, rb - lb - 1));
-    char* p = body.data(); char* end = body.data() + body.size();
-    while (p < end) {
-        while (p < end && (*p == ' ' || *p == ',' || *p == '\t' || *p == '\n')) ++p;
-        if (p >= end) break;
-        char* next = nullptr;
-        float v = std::strtof(p, &next);
-        if (next == p) return false;
-        out.push_back(v);
-        p = next;
-    }
-    return true;
-}
+using JetType = manta_gen::ex5_est::JetType;
+using EkfT    = manta_gen::ex5_est::EkfT;
 
-std::optional<zenoh::Session> g_session;
-
-using EkfT = decltype(manta_gen::ex5_est::ekf_0);
-EkfT::StateCov g_Q = EkfT::StateCov::Zero();
-
-// Jet shadow world. Built identically to the value side in
-// setup(); EKF::predict drives this through autodiff to
-// extract the state-transition Jacobian.
-using JetType = EkfT::Jet;
-manta::WorldT<JetType>   w_jet{};
-manta::SceneT<JetType>*  scene_jet = nullptr;
+manta::WorldT<JetType>  w_jet{};
+manta::SceneT<JetType>* scene_jet = nullptr;
 Ex5EstCraftT<JetType> craft_jet{};
 
-// IMU (EKF): h(x) = [specific_force_body; ω_body].
-// Reads the Jet sensor directly; values + H come
-// from the begin_step evaluate at x_pre.
-struct _ekf_0_c0_imu_meas {
-    Eigen::Matrix<JetType, 6, 1> operator()(EkfT&) const {
-        Eigen::Matrix<JetType, 6, 1> z;
-        const auto _a = craft_jet.imu().specific_force_body();
-        const auto _w = craft_jet.imu().angular_velocity_body();
-        z(0) = _a.raw()(0);
-        z(1) = _a.raw()(1);
-        z(2) = _a.raw()(2);
-        z(3) = _w.raw()(0);
-        z(4) = _w.raw()(1);
-        z(5) = _w.raw()(2);
-        return z;
-    }
-};
+EkfT::StateCov g_Q = EkfT::StateCov::Zero();
 
-// DVL (EKF): h = R(q)^T * v_scene, read from Jet sensor.
-struct _ekf_0_c0_dvl_meas {
-    Eigen::Matrix<JetType, 3, 1> operator()(EkfT&) const {
-        return craft_jet.dvl().velocity_body().raw();
-    }
-};
-
-Eigen::Matrix<double, 6, 6> R_c0_imu = Eigen::Matrix<double, 6, 6>::Zero();
-Eigen::Matrix<double, 3, 3> R_c0_dvl = Eigen::Matrix<double, 3, 3>::Zero();
-
-std::optional<zenoh::Publisher> pub_0;
-
-int g_pub_decim = 0;
-constexpr int kPubEvery = 20;  // ~50 Hz publish
-
-}  // anonymous namespace
+}  // namespace
 
 namespace manta_gen::ex5_est {
 
 void setup() {
-    // ---- value world ----
     w.clock().set_dt(DT);
     scene = &w.create_scene();
     w.register_field(field_0);
     scene->add_craft(craft);
 
-    // ---- Jet shadow world (built identically) ----
     w_jet.clock().set_dt(DT);
     scene_jet = &w_jet.create_scene();
     w_jet.register_field(field_0);
     scene_jet->add_craft(craft_jet);
 
-    // ---- Filter init ----
-    EkfT::StateVec x0 = EkfT::StateVec::Zero();
-    // craft 0 initial state
-    x0(0) = 0.0f; x0(1) = 0.0f; x0(2) = 0.0f;
-    x0(3) = 1.0f; x0(4) = 0.0f; x0(5) = 0.0f; x0(6) = 0.0f;
-    x0(7) = 0.0f; x0(8) = 0.0f; x0(9) = 0.0f;
-    x0(10) = 0.0f; x0(11) = 0.0f; x0(12) = 0.0f;
-    EkfT::StateCov P0 = EkfT::StateCov::Identity() * 1.0f;
-    P0(0, 0) = 0.0001f;
-    P0(1, 1) = 0.0001f;
-    P0(2, 2) = 0.0001f;
-    P0(3, 3) = 0.0001f;
-    P0(4, 4) = 0.0001f;
-    P0(5, 5) = 0.0001f;
-    P0(6, 6) = 0.01f;
-    P0(7, 7) = 0.01f;
-    P0(8, 8) = 0.01f;
-    P0(9, 9) = 0.0001f;
-    P0(10, 10) = 0.0001f;
-    P0(11, 11) = 0.0001f;
-    ekf_0.set_state(x0);
-    ekf_0.set_covariance(P0);
-    ekf_0.bind(w_jet, {&craft}, {&craft_jet});
+    ekf_0.bind(w_jet, { static_cast<void*>(&craft_jet) });
 
-    R_c0_imu(0, 0) = 0.0025f;
-    R_c0_imu(1, 1) = 0.0025f;
-    R_c0_imu(2, 2) = 0.0025f;
-    R_c0_imu(3, 3) = 2.5e-05f;
-    R_c0_imu(4, 4) = 2.5e-05f;
-    R_c0_imu(5, 5) = 2.5e-05f;
-    R_c0_dvl(0, 0) = 0.0004f;
-    R_c0_dvl(1, 1) = 0.0004f;
-    R_c0_dvl(2, 2) = 0.0004f;
+    // Initial state.
+    view_0.reset_to_rest();
+    view_0.set_state_covariance(0.0001f, 0.0001f, 0.01f, 0.0001f);
 
-    // ---- Zenoh ----
-    g_session.emplace(zenoh::Session::open(zenoh::Config::create_default()));
-
-    pub_0.emplace(g_session->declare_publisher(zenoh::KeyExpr("manta/ex5/estimate")));
+    // Measurement registrations.
+    ekf_0.measure<3>(&craft.imu().accel, manta::reading_from<3>(manta_gen::ex5_sim::craft.imu().accel));
+    ekf_0.measure<3>(&craft.imu().gyro, manta::reading_from<3>(manta_gen::ex5_sim::craft.imu().gyro));
+    ekf_0.measure<3>(&craft.dvl().velocity, manta::reading_from<3>(manta_gen::ex5_sim::craft.dvl().velocity));
 }
 
 void tick() {
-
-    craft_jet.thrust().set_throttle(JetType(craft.thrust().throttle()));
-
-    ekf_0.begin_step(DT, g_Q);
-
-    if (craft.imu().consume_fresh()) {
-        Eigen::Matrix<double, 6, 1> z;
-        z(0) = craft.imu().last_accel().raw()(0);
-        z(1) = craft.imu().last_accel().raw()(1);
-        z(2) = craft.imu().last_accel().raw()(2);
-        z(3) = craft.imu().last_gyro().raw()(0);
-        z(4) = craft.imu().last_gyro().raw()(1);
-        z(5) = craft.imu().last_gyro().raw()(2);
-        ekf_0.template add_update<6>(_ekf_0_c0_imu_meas{}, z, R_c0_imu);
-    }
-    if (craft.dvl().consume_fresh()) {
-        Eigen::Matrix<double, 3, 1> z;
-        z(0) = craft.dvl().last_velocity().raw()(0);
-        z(1) = craft.dvl().last_velocity().raw()(1);
-        z(2) = craft.dvl().last_velocity().raw()(2);
-        ekf_0.template add_update<3>(_ekf_0_c0_dvl_meas{}, z, R_c0_dvl);
-    }
-
-    ekf_0.end_step();
-
-    if (++g_pub_decim >= kPubEvery) {
-        g_pub_decim = 0;
-        { std::string _json = "{";
-          _json += "\"p\":[";
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(ekf_0.position(0)(0))); _json += _b; }
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ekf_0.position(0)(1))); _json += _b; }
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ekf_0.position(0)(2))); _json += _b; }
-          _json += "]";
-          _json += ",";
-          _json += "\"v\":[";
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(ekf_0.vel_linear(0)(0))); _json += _b; }
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ekf_0.vel_linear(0)(1))); _json += _b; }
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ekf_0.vel_linear(0)(2))); _json += _b; }
-          _json += "]";
-          _json += ",";
-          _json += "\"p_stddev\":[";
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(ekf_0.position_stddev(0)(0))); _json += _b; }
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ekf_0.position_stddev(0)(1))); _json += _b; }
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ekf_0.position_stddev(0)(2))); _json += _b; }
-          _json += "]";
-          _json += ",";
-          _json += "\"v_stddev\":[";
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(ekf_0.vel_linear_stddev(0)(0))); _json += _b; }
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ekf_0.vel_linear_stddev(0)(1))); _json += _b; }
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ekf_0.vel_linear_stddev(0)(2))); _json += _b; }
-          _json += "]";
-          _json += "}";
-          pub_0->put(zenoh::Bytes(_json));
-        }
-    }
+    craft_jet.thrust().set_throttle(JetType(manta_gen::ex5_sim::craft.thrust().throttle()));
+    craft.thrust().set_throttle(manta_gen::ex5_sim::craft.thrust().throttle());
+    ekf_0.predict(DT, g_Q);
+    ekf_0.run_pending_updates();
 }
 
-void shutdown() {
-    pub_0.reset();
-    g_session.reset();
-}
+void shutdown() {}
 
-// ---- Polymorphic Harness adapter ----
-void Harness::setup()    { ::manta_gen::ex5_est::setup();    }
-void Harness::tick()     { ::manta_gen::ex5_est::tick();     }
-void Harness::shutdown() { ::manta_gen::ex5_est::shutdown(); }
-Harness harness;
+Harness harness{};
+void Harness::setup()    { manta_gen::ex5_est::setup(); }
+void Harness::tick()     { manta_gen::ex5_est::tick(); }
+void Harness::shutdown() { manta_gen::ex5_est::shutdown(); }
 
 }  // namespace manta_gen::ex5_est

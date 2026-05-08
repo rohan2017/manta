@@ -15,10 +15,9 @@ class Magnetometer(PartDescriptor):
     optionally injects white-Gaussian noise.
 
     Bindable signals:
-      * `last_b`           (out, 3 floats) — most recent magnetic-field
-                                              sample in part frame (Tesla).
-      * `set_measurement`  (in,  3 floats) — feed external [bx, by, bz]
-                                              for estimator workflows.
+      * `last_b` (out, 3 floats) — most recent B-field sample in part frame (T).
+
+    Reading injection flows through `ekf.measure(...)`, not a sensor-input signal.
 
     Required fields: `MagField` (registered by Earth via dipole_moment > 0,
     or any user-supplied magnetic-model field).
@@ -34,15 +33,6 @@ class Magnetometer(PartDescriptor):
 
     signals = [
         vec3_out_signal("last_b", "last_b"),
-        Signal(
-            name="set_measurement",
-            direction="in",
-            n_floats=3,
-            cpp_write_stmt=(
-                "{accessor}.set_measurement("
-                "manta::geom::Vec3<manta::PartFrame>{{{v0}, {v1}, {v2}}});"
-            ),
-        ),
     ]
 
     def __init__(self,

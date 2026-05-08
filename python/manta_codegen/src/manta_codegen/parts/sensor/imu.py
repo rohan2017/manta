@@ -33,11 +33,12 @@ class IMU(PartDescriptor):
     augmented filter states (BiasDim grows by 3 per enabled bias).
 
     Bindable signals:
-      * `last_accel`           (out, 3 floats)
-      * `last_gyro`             (out, 3 floats)
-      * `set_measurement`       (in, 6 floats — both at once)
-      * `set_measurement_accel` (in, 3 floats — single channel)
-      * `set_measurement_gyro`  (in, 3 floats — single channel)
+      * `last_accel` (out, 3 floats) — most recent accel sample.
+      * `last_gyro`  (out, 3 floats) — most recent gyro sample.
+
+    Reading injection (e.g. real-data scenarios) flows through
+    `ekf.measure(part.field, reading_from_buffer<...>(...))`, not via
+    a sensor-input signal.
     """
 
     cpp_class_template = "manta::parts::IMUT"
@@ -46,34 +47,6 @@ class IMU(PartDescriptor):
     signals = [
         vec3_out_signal("last_accel", "last_accel"),
         vec3_out_signal("last_gyro",  "last_gyro"),
-        Signal(
-            name="set_measurement",
-            direction="in",
-            n_floats=6,
-            cpp_write_stmt=(
-                "{accessor}.set_measurement("
-                "manta::geom::Vec3<manta::PartFrame>{{{v0}, {v1}, {v2}}}, "
-                "manta::geom::Vec3<manta::PartFrame>{{{v3}, {v4}, {v5}}});"
-            ),
-        ),
-        Signal(
-            name="set_measurement_accel",
-            direction="in",
-            n_floats=3,
-            cpp_write_stmt=(
-                "{accessor}.set_measurement_accel("
-                "manta::geom::Vec3<manta::PartFrame>{{{v0}, {v1}, {v2}}});"
-            ),
-        ),
-        Signal(
-            name="set_measurement_gyro",
-            direction="in",
-            n_floats=3,
-            cpp_write_stmt=(
-                "{accessor}.set_measurement_gyro("
-                "manta::geom::Vec3<manta::PartFrame>{{{v0}, {v1}, {v2}}});"
-            ),
-        ),
     ]
 
     def __init__(self,

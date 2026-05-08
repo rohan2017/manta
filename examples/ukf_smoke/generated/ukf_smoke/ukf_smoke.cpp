@@ -4,226 +4,127 @@
 
 #include "ukf_smoke.hpp"
 
-#include <cstdint>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <mutex>
+#include <atomic>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include <Eigen/Core>
-#include <Eigen/Geometry>
 #include <zenoh.hxx>
-
-// IMU (UKF): placeholder no-net-force prediction.
-// TODO: dynamics-driven h(x) once UKF has a state-
-// preserving evaluate path. Reads craft-0
-// slice (offset 0).
-struct _ukf_0_c0_imu_meas {
-    template <class S>
-    Eigen::Matrix<S, 6, 1> operator()(const Eigen::Matrix<S, 13, 1>& x) const {
-        Eigen::Matrix<S, 6, 1> z;
-        z(0) = S(0); z(1) = S(0); z(2) = S(0);
-        z(3) = x(10); z(4) = x(11); z(5) = x(12);
-        return z;
-    }
-};
-
-// DVL (UKF): closed-form h(x) on the joint state vector.
-// Reads craft-0 slice (offset 0).
-struct _ukf_0_c0_dvl_meas {
-    template <class S>
-    Eigen::Matrix<S, 3, 1> operator()(const Eigen::Matrix<S, 13, 1>& x) const {
-        Eigen::Quaternion<S> q(x(3), x(4), x(5), x(6));
-        Eigen::Matrix<S, 3, 1> v_scene(x(7), x(8), x(9));
-        return q.conjugate() * v_scene;
-    }
-};
 
 namespace manta_gen::ukf_smoke {
 
 manta::WorldT<double>  w{};
 manta::SceneT<double>* scene = nullptr;
 UkfSmokeCraftT<double> craft{};
-manta::estimation::UKF<1, 9> ukf_0(0.001f, 2.0f, 0.0f);
+
+UkfT ukf_0{ manta::estimation::make_state().track(craft).build(), 0.001f, 2.0f, 0.0f };
+manta::estimation::CraftView<UkfT, 0> view_0{ukf_0};
 
 }  // namespace manta_gen::ukf_smoke
 
 namespace {
 
-bool parse_float_array(std::string_view s, std::vector<float>& out) {
+using UkfT  = manta_gen::ukf_smoke::UkfT;
+UkfT::StateCov g_Q = UkfT::StateCov::Identity() * 1e-06f;
+
+// ---- Pattern C reading sources (Zenoh-fed buffers) ----
+std::optional<zenoh::Session> g_reading_session;
+Eigen::Matrix<double, 3, 1> reading_imu_accel_buf{};
+std::atomic<bool> reading_imu_accel_fresh{false};
+Eigen::Matrix<double, 3, 1> reading_imu_gyro_buf{};
+std::atomic<bool> reading_imu_gyro_fresh{false};
+std::optional<zenoh::Subscriber<void>> reading_imu_sub;
+Eigen::Matrix<double, 3, 1> reading_dvl_velocity_buf{};
+std::atomic<bool> reading_dvl_velocity_fresh{false};
+std::optional<zenoh::Subscriber<void>> reading_dvl_sub;
+
+static bool _parse_float_array(std::string_view s,
+                                std::vector<double>& out) {
     out.clear();
-    auto lb = s.find('['); auto rb = s.rfind(']');
-    if (lb == std::string_view::npos || rb == std::string_view::npos || rb <= lb) return false;
-    std::string body(s.substr(lb + 1, rb - lb - 1));
-    char* p = body.data(); char* end = body.data() + body.size();
-    while (p < end) {
-        while (p < end && (*p == ' ' || *p == ',' || *p == '\t' || *p == '\n')) ++p;
-        if (p >= end) break;
-        char* next = nullptr;
-        float v = std::strtof(p, &next);
-        if (next == p) return false;
-        out.push_back(v);
-        p = next;
+    bool in_num = false;
+    std::string buf;
+    for (char c : s) {
+        if ((c >= '0' && c <= '9') || c == '-' || c == '+'
+                || c == '.' || c == 'e' || c == 'E') {
+            buf.push_back(c); in_num = true;
+        } else if (in_num) {
+            try { out.push_back(std::stod(buf)); }
+            catch (...) { return false; }
+            buf.clear(); in_num = false;
+        }
     }
-    return true;
+    if (in_num) {
+        try { out.push_back(std::stod(buf)); }
+        catch (...) { return false; }
+    }
+    return !out.empty();
 }
 
-std::optional<zenoh::Session> g_session;
-
-using EkfT = decltype(manta_gen::ukf_smoke::ukf_0);
-EkfT::StateCov g_Q = EkfT::StateCov::Identity() * 1e-06f;
-
-Eigen::Matrix<double, 6, 6> R_c0_imu = Eigen::Matrix<double, 6, 6>::Zero();
-Eigen::Matrix<double, 3, 3> R_c0_dvl = Eigen::Matrix<double, 3, 3>::Zero();
-
-std::mutex bind_0_mtx;
-std::vector<float> bind_0_payload;
-std::optional<zenoh::Subscriber<void>> bind_0_sub;
-std::mutex bind_1_mtx;
-std::vector<float> bind_1_payload;
-std::optional<zenoh::Subscriber<void>> bind_1_sub;
-std::optional<zenoh::Publisher> pub_2;
-
-int g_pub_decim = 0;
-constexpr int kPubEvery = 20;  // ~50 Hz publish
-
-}  // anonymous namespace
+}  // namespace
 
 namespace manta_gen::ukf_smoke {
 
 void setup() {
-    // ---- value world ----
     w.clock().set_dt(DT);
     scene = &w.create_scene();
     scene->add_craft(craft);
 
-    // ---- Filter init ----
-    EkfT::StateVec x0 = EkfT::StateVec::Zero();
-    // craft 0 initial state
-    x0(0) = 0.0f; x0(1) = 0.0f; x0(2) = 0.0f;
-    x0(3) = 1.0f; x0(4) = 0.0f; x0(5) = 0.0f; x0(6) = 0.0f;
-    x0(7) = 0.0f; x0(8) = 0.0f; x0(9) = 0.0f;
-    x0(10) = 0.0f; x0(11) = 0.0f; x0(12) = 0.0f;
-    EkfT::StateCov P0 = EkfT::StateCov::Identity() * 1.0f;
-    ukf_0.set_state(x0);
-    ukf_0.set_covariance(P0);
-    ukf_0.bind(w, {&craft});
+    ukf_0.bind(w);
 
-    R_c0_imu(0, 0) = 0.0025f;
-    R_c0_imu(1, 1) = 0.0025f;
-    R_c0_imu(2, 2) = 0.0025f;
-    R_c0_imu(3, 3) = 2.5e-05f;
-    R_c0_imu(4, 4) = 2.5e-05f;
-    R_c0_imu(5, 5) = 2.5e-05f;
-    R_c0_dvl(0, 0) = 0.0004f;
-    R_c0_dvl(1, 1) = 0.0004f;
-    R_c0_dvl(2, 2) = 0.0004f;
-
-    // ---- Zenoh ----
-    g_session.emplace(zenoh::Session::open(zenoh::Config::create_default()));
-
-    bind_0_sub.emplace(g_session->declare_subscriber(
+    g_reading_session.emplace(zenoh::Session::open(zenoh::Config::create_default()));
+    reading_imu_sub.emplace(g_reading_session->declare_subscriber(
         zenoh::KeyExpr("manta/ukf_smoke/imu"),
         [](const zenoh::Sample& s) {
-            std::vector<float> v;
+            std::vector<double> v;
             std::string payload(s.get_payload().as_string());
-            if (parse_float_array(payload, v) && v.size() >= 6) {
-                std::lock_guard<std::mutex> lk(bind_0_mtx);
-                bind_0_payload = std::move(v);
-            }
-        }, zenoh::closures::none));
-    bind_1_sub.emplace(g_session->declare_subscriber(
+            if (!_parse_float_array(payload, v)) return;
+            if (v.size() < 6) return;
+            reading_imu_accel_buf(0) = v[0];
+            reading_imu_accel_buf(1) = v[1];
+            reading_imu_accel_buf(2) = v[2];
+            reading_imu_accel_fresh.store(true);
+            reading_imu_gyro_buf(0) = v[3];
+            reading_imu_gyro_buf(1) = v[4];
+            reading_imu_gyro_buf(2) = v[5];
+            reading_imu_gyro_fresh.store(true);
+        },
+        zenoh::closures::none));
+    reading_dvl_sub.emplace(g_reading_session->declare_subscriber(
         zenoh::KeyExpr("manta/ukf_smoke/dvl"),
         [](const zenoh::Sample& s) {
-            std::vector<float> v;
+            std::vector<double> v;
             std::string payload(s.get_payload().as_string());
-            if (parse_float_array(payload, v) && v.size() >= 3) {
-                std::lock_guard<std::mutex> lk(bind_1_mtx);
-                bind_1_payload = std::move(v);
-            }
-        }, zenoh::closures::none));
-    pub_2.emplace(g_session->declare_publisher(zenoh::KeyExpr("manta/ukf_smoke/estimate")));
+            if (!_parse_float_array(payload, v)) return;
+            if (v.size() < 3) return;
+            reading_dvl_velocity_buf(0) = v[0];
+            reading_dvl_velocity_buf(1) = v[1];
+            reading_dvl_velocity_buf(2) = v[2];
+            reading_dvl_velocity_fresh.store(true);
+        },
+        zenoh::closures::none));
+
+    // Initial state.
+    view_0.reset_to_rest();
+    view_0.set_state_covariance(1.0f, 1.0f, 1.0f, 1.0f);
+
+    // Measurement registrations.
+    ukf_0.measure<3>(&craft.imu().accel, manta::reading_from_buffer<3>(&reading_imu_accel_buf, &reading_imu_accel_fresh));
+    ukf_0.measure<3>(&craft.imu().gyro, manta::reading_from_buffer<3>(&reading_imu_gyro_buf, &reading_imu_gyro_fresh));
+    ukf_0.measure<3>(&craft.dvl().velocity, manta::reading_from_buffer<3>(&reading_dvl_velocity_buf, &reading_dvl_velocity_fresh));
 }
 
 void tick() {
-    { std::lock_guard<std::mutex> lk(bind_0_mtx);
-      if (bind_0_payload.size() >= 6) {
-          craft.imu().set_measurement(manta::geom::Vec3<manta::PartFrame, double>{bind_0_payload[0], bind_0_payload[1], bind_0_payload[2]}, manta::geom::Vec3<manta::PartFrame, double>{bind_0_payload[3], bind_0_payload[4], bind_0_payload[5]});    // member: set_measurement
-          bind_0_payload.clear();
-      } }
-    { std::lock_guard<std::mutex> lk(bind_1_mtx);
-      if (bind_1_payload.size() >= 3) {
-          craft.dvl().set_measurement(manta::geom::Vec3<manta::PartFrame, double>{bind_1_payload[0], bind_1_payload[1], bind_1_payload[2]});    // member: set_measurement
-          bind_1_payload.clear();
-      } }
-
     ukf_0.predict(DT, g_Q);
-
-    if (craft.imu().consume_fresh()) {
-        Eigen::Matrix<double, 6, 1> z;
-        z(0) = craft.imu().last_accel().raw()(0);
-        z(1) = craft.imu().last_accel().raw()(1);
-        z(2) = craft.imu().last_accel().raw()(2);
-        z(3) = craft.imu().last_gyro().raw()(0);
-        z(4) = craft.imu().last_gyro().raw()(1);
-        z(5) = craft.imu().last_gyro().raw()(2);
-        ukf_0.template update_n<6>(_ukf_0_c0_imu_meas{}, z, R_c0_imu);
-    }
-    if (craft.dvl().consume_fresh()) {
-        Eigen::Matrix<double, 3, 1> z;
-        z(0) = craft.dvl().last_velocity().raw()(0);
-        z(1) = craft.dvl().last_velocity().raw()(1);
-        z(2) = craft.dvl().last_velocity().raw()(2);
-        ukf_0.template update_n<3>(_ukf_0_c0_dvl_meas{}, z, R_c0_dvl);
-    }
-
-    if (++g_pub_decim >= kPubEvery) {
-        g_pub_decim = 0;
-        { std::string _json = "{";
-          _json += "\"p\":[";
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(ukf_0.position(0)(0))); _json += _b; }
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ukf_0.position(0)(1))); _json += _b; }
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ukf_0.position(0)(2))); _json += _b; }
-          _json += "]";
-          _json += ",";
-          _json += "\"v\":[";
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(ukf_0.vel_linear(0)(0))); _json += _b; }
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ukf_0.vel_linear(0)(1))); _json += _b; }
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ukf_0.vel_linear(0)(2))); _json += _b; }
-          _json += "]";
-          _json += ",";
-          _json += "\"p_stddev\":[";
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(ukf_0.position_stddev(0)(0))); _json += _b; }
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ukf_0.position_stddev(0)(1))); _json += _b; }
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ukf_0.position_stddev(0)(2))); _json += _b; }
-          _json += "]";
-          _json += ",";
-          _json += "\"v_stddev\":[";
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(ukf_0.vel_linear_stddev(0)(0))); _json += _b; }
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ukf_0.vel_linear_stddev(0)(1))); _json += _b; }
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ukf_0.vel_linear_stddev(0)(2))); _json += _b; }
-          _json += "]";
-          _json += "}";
-          pub_2->put(zenoh::Bytes(_json));
-        }
-    }
+    ukf_0.run_pending_updates();
 }
 
-void shutdown() {
-    bind_0_sub.reset();
-    bind_1_sub.reset();
-    pub_2.reset();
-    g_session.reset();
-}
+void shutdown() {}
 
-// ---- Polymorphic Harness adapter ----
-void Harness::setup()    { ::manta_gen::ukf_smoke::setup();    }
-void Harness::tick()     { ::manta_gen::ukf_smoke::tick();     }
-void Harness::shutdown() { ::manta_gen::ukf_smoke::shutdown(); }
-Harness harness;
+Harness harness{};
+void Harness::setup()    { manta_gen::ukf_smoke::setup(); }
+void Harness::tick()     { manta_gen::ukf_smoke::tick(); }
+void Harness::shutdown() { manta_gen::ukf_smoke::shutdown(); }
 
 }  // namespace manta_gen::ukf_smoke

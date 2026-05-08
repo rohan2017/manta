@@ -105,9 +105,14 @@ public:
         jet_handles_ = jet_handles;
 
         // Walk every Jet-side craft's parts to register white-noise
-        // sources for auto-Q. (Phase 2: only Craft slices are walked.
-        // BiasRandomWalk slices are placeholders — see header note.)
+        // sources for auto-Q. RW biases are skipped: they'll be tracked
+        // explicitly as BiasRandomWalk slices in the StateSpec when
+        // Phase 5e wires them in. Skipping at registry time leaves
+        // each RW noise's slot fields at kNoNoiseSlot, so its Jet
+        // operator+ becomes a pass-through (no bias-state Jet injection)
+        // and the Jacobian extraction stays clean.
         noise_registry_.clear();
+        noise_registry_.set_skip_random_walk(true);
         const auto& src_handles = spec_.handles();
         for (int i = 0; i < StateSpecT::num_slices; ++i) {
             if (src_handles[i].kind != TrackedKind::Craft) continue;
@@ -120,14 +125,99 @@ public:
             /*noise_input_offset=*/kNoiseColStart,
             /*bias_state_offset =*/0);
 
-        if (noise_registry_.num_slots() > NumNoiseSlots) {
+        // Now wire up tracked-as-slice RW biases. For each
+        // BiasRandomWalk slice in the spec, find the value-side
+        // Noise<RandomWalk<Dim>> in some tracked craft's part tree,
+        // grab its name, locate the matching Jet-side noise on the
+        // matching Jet craft, and assign:
+        //
+        //   * state_slot = the slice's tangent_offset (the bias's row in
+        //     the EKF's tangent vector). The Jet-side noise's `+`
+        //     operator injects identity Jets at this slot when called
+        //     during update().
+        //   * driver_slot = a fresh slot in the noise-input range, used
+        //     to populate L's bias-driver gain σ_rw·√dt.
+        rw_bindings_.clear();
+        int next_driver_slot_local = noise_registry_.num_slots();
+        const int spec_tangent_offsets[StateSpecT::num_slices] =
+            { /* zero-init; filled below */ };
+        std::array<int, StateSpecT::num_slices> tan_offsets =
+            compute_tangent_offsets();
+        for (int i = 0; i < StateSpecT::num_slices; ++i) {
+            const auto& h = src_handles[i];
+            if (h.kind != TrackedKind::RandomWalkBias) continue;
+            auto* nv = static_cast<NoiseRandomWalkBase*>(h.ptr);
+            // Find which value-side part owns this RW noise.
+            std::string_view rw_name;
+            std::string      part_name;
+            int              owner_craft_slice = -1;
+            bool found = false;
+            for (int k = 0; k < StateSpecT::num_slices && !found; ++k) {
+                if (src_handles[k].kind != TrackedKind::Craft) continue;
+                auto* cv = static_cast<CraftT<double>*>(src_handles[k].ptr);
+                find_owning_rw_in(cv->root(), nv, rw_name, part_name, found);
+                if (found) {
+                    owner_craft_slice = k;
+                }
+            }
+            if (!found) {
+                throw std::runtime_error(
+                    "EKFGeneric::bind: tracked RW bias not found in any "
+                    "tracked craft's parts. Did you call track(part.bias()) "
+                    "for a part that wasn't also track()'d at the craft level?");
+            }
+            // Find the Jet-side part by name + the named RW on it.
+            auto* cj = static_cast<CraftT<Jet>*>(jet_handles_[owner_craft_slice]);
+            NoiseRandomWalkBase* nj = nullptr;
+            find_jet_rw_in(cj->root(), part_name, rw_name, nj);
+            if (!nj) {
+                throw std::runtime_error(
+                    "EKFGeneric::bind: Jet-side counterpart of RW bias "
+                    "'" + part_name + "." + std::string(rw_name) +
+                    "' not found. Sim and Jet part trees must mirror.");
+            }
+            // Assign slots. State_slot is the bias's row in the tangent
+            // vector — that's the slice's tangent_offset. Driver_slot is
+            // local to the noise-input range; we offset it by
+            // kNoiseColStart for the Jet column.
+            nj->set_state_slot(tan_offsets[i]);
+            nj->set_driver_slot(kNoiseColStart + next_driver_slot_local);
+            rw_bindings_.push_back(RWBinding{
+                /*jet_noise=*/nj,
+                /*state_slot=*/tan_offsets[i],
+                /*driver_slot_local=*/next_driver_slot_local,
+                /*dim=*/h.dim,
+            });
+            next_driver_slot_local += h.dim;
+        }
+
+        // Total noise driver slots = whitenoise + RW driver slots.
+        const int total_slots = next_driver_slot_local;
+        if (total_slots > NumNoiseSlots) {
             throw std::runtime_error(
-                "EKFGeneric::bind: registered noise slots (" +
-                std::to_string(noise_registry_.num_slots()) +
+                "EKFGeneric::bind: total noise slots (" +
+                std::to_string(total_slots) +
                 ") exceed NumNoiseSlots template arg (" +
                 std::to_string(NumNoiseSlots) + ").");
         }
     }
+
+private:
+    std::array<int, StateSpecT::num_slices> compute_tangent_offsets() {
+        std::array<int, StateSpecT::num_slices> out{};
+        compute_tangent_offsets_impl<0>(out);
+        return out;
+    }
+    template <int I>
+    void compute_tangent_offsets_impl(
+            std::array<int, StateSpecT::num_slices>& out) {
+        if constexpr (I < StateSpecT::num_slices) {
+            out[I] = StateSpecT::template tangent_offset<I>;
+            compute_tangent_offsets_impl<I + 1>(out);
+        }
+    }
+
+public:
 
     void set_state(const StateVec& x) noexcept {
         x_ref_ = x;
@@ -165,6 +255,7 @@ public:
     void predict(double dt, const StateCov& Q) {
         if (!w_jet_) return;
         w_jet_->clock().set_dt(static_cast<float>(dt));
+        dt_for_L_ = dt;
 
         seed_jets();
         w_jet_->step();
@@ -379,16 +470,34 @@ private:
                 }
             }
         }
+
+        // Bias-driver gain: each tracked RW slice contributes σ_rw·√dt
+        // at L[state_slot..+dim, driver_slot..+dim] (identity scaling).
+        // The full Q = L·diag(σ²)·Lᵀ then picks up σ_rw²·dt on the bias
+        // diagonal automatically via add_auto_q.
+        if constexpr (NumNoiseSlots > 0) {
+            const double sqrt_dt = std::sqrt(dt_for_L_);
+            for (const auto& rw : rw_bindings_) {
+                const double s = static_cast<double>(rw.jet_noise->sigma());
+                const double s_sqrt_dt = s * sqrt_dt;
+                for (int i = 0; i < rw.dim; ++i) {
+                    L(rw.state_slot + i, rw.driver_slot_local + i) = s_sqrt_dt;
+                }
+            }
+        }
     }
 
-    void add_auto_q(double dt, const NoiseGain& L, StateCov& Q_out) {
-        const int n = noise_registry_.num_slots();
+    void add_auto_q(double /*dt*/, const NoiseGain& L, StateCov& Q_out) {
+        // Total active noise driver slots = white slots from registry +
+        // RW bias driver slots from rw_bindings_. Both contribute via L.
+        int n = noise_registry_.num_slots();
+        for (const auto& rw : rw_bindings_) {
+            n = std::max(n, rw.driver_slot_local + rw.dim);
+        }
         if (n == 0) return;
-        const auto& input_var = noise_registry_.input_variance_diag(dt);
-        Eigen::Map<const Eigen::VectorXd> sigma_diag(input_var.data(), n);
-        Q_out.noalias() += L.leftCols(n)
-                         * sigma_diag.asDiagonal()
-                         * L.leftCols(n).transpose();
+        // All slots have unit variance — σ is already baked into L's
+        // entries (σ for white, σ·√dt for RW driver). Q = L·Iₙ·Lᵀ.
+        Q_out.noalias() += L.leftCols(n) * L.leftCols(n).transpose();
     }
 
     void inject_delta(const TangentVec& delta) {
@@ -506,13 +615,69 @@ private:
         return nullptr;
     }
 
-    StateSpecT       spec_;
-    StateVec         x_ref_;
-    StateCov         P_;
-    WorldJ*          w_jet_ = nullptr;
+    // Walk a value-side part subtree to find the part that owns `nv`
+    // and what name the part registered it under. Sets `out_*` and
+    // `found` if hit.
+    static void find_owning_rw_in(PartT<double>& part,
+                                   const NoiseRandomWalkBase* nv,
+                                   std::string_view& out_rw_name,
+                                   std::string& out_part_name,
+                                   bool& found) {
+        for (const auto& named : part.random_walks()) {
+            if (named.noise == nv) {
+                out_rw_name   = named.name;
+                out_part_name = part.name();
+                found = true;
+                return;
+            }
+        }
+        if (auto* kids = part.children()) {
+            for (auto& child : *kids) {
+                find_owning_rw_in(*child, nv, out_rw_name, out_part_name, found);
+                if (found) return;
+            }
+        }
+    }
+
+    // Walk a Jet-side part subtree, find a part by name, find its RW
+    // noise registered under `rw_name`. Writes pointer into `out`.
+    static void find_jet_rw_in(PartT<Jet>& part,
+                                const std::string& part_name,
+                                std::string_view rw_name,
+                                NoiseRandomWalkBase*& out) {
+        if (part.name() == part_name) {
+            for (const auto& named : part.random_walks()) {
+                if (named.name == rw_name) {
+                    out = named.noise;
+                    return;
+                }
+            }
+        }
+        if (auto* kids = part.children()) {
+            for (auto& child : *kids) {
+                find_jet_rw_in(*child, part_name, rw_name, out);
+                if (out) return;
+            }
+        }
+    }
+
+    // Per RW-bias slice resolved at bind time.
+    struct RWBinding {
+        NoiseRandomWalkBase* jet_noise;
+        int state_slot;
+        int driver_slot_local;
+        int dim;
+    };
+
+    StateSpecT             spec_;
+    StateVec               x_ref_;
+    StateCov               P_;
+    WorldJ*                w_jet_ = nullptr;
     std::array<void*, StateSpecT::num_slices> jet_handles_{};
-    NoiseRegistry    noise_registry_;
-    std::vector<Binding> bindings_;
+    NoiseRegistry          noise_registry_;
+    std::vector<Binding>   bindings_;
+    std::vector<RWBinding> rw_bindings_;
+    double                 dt_for_L_ = 0.0;
 };
 
 } // namespace manta::estimation

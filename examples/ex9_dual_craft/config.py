@@ -81,13 +81,17 @@ def make_config() -> MantaConfig:
               initial_position_var=1e-4,
               initial_attitude_var={"drone_0": 1e-4},
               initial_velocity_var=[1e-2, 1e-3],
-              block_decomposed=True)
+              # block_decomposed isn't yet wired into the StateSpec
+              # emit path (legacy-only flag). Use_state_spec opts into
+              # the cleaner monolithic predict — for two crafts the
+              # cost difference is negligible.
+              )
 
     # Each drone's sensor data arrives on its own Zenoh topic.
-    subscribe(imu_0.set_measurement, "manta/ex9/imu/0")
-    subscribe(dvl_0.set_measurement, "manta/ex9/dvl/0")
-    subscribe(imu_1.set_measurement, "manta/ex9/imu/1")
-    subscribe(dvl_1.set_measurement, "manta/ex9/dvl/1")
+    ekf.read_topic(imu_0, "manta/ex9/imu/0")
+    ekf.read_topic(dvl_0, "manta/ex9/dvl/0")
+    ekf.read_topic(imu_1, "manta/ex9/imu/1")
+    ekf.read_topic(dvl_1, "manta/ex9/dvl/1")
 
     # Per-craft signal tree: `ekf.crafts["<name>"]` exposes
     # position/orientation/velocity/stddev BoundSignals scoped to that

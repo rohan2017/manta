@@ -475,7 +475,6 @@ TEST_CASE("CraftT<Jet>: autodiff yields process Jacobian from evaluate()") {
 // twice internally (double for value step, Jet for Jacobian step) and runs
 // predict + update without any hand-written process functor.
 
-#include "../include/manta/estimation/ekf.hpp"
 
 template <class Scalar>
 class FreeBodyCraft : public manta::CraftT<Scalar> {
@@ -495,65 +494,6 @@ struct PositionMeas3D {
     }
 };
 
-TEST_CASE("EKF: free-body predict+update extracts Jacobians from CraftT") {
-    using Ekf = manta::estimation::EKF</*NumCrafts=*/1, /*MeasDim=*/3>;
-    using Jet = Ekf::Jet;
-
-    // Build the value-side world with one craft.
-    manta::WorldT<double> w_real;
-    w_real.clock().set_dt(0.01f);
-    auto& s_real = w_real.create_scene();
-    FreeBodyCraft<double> craft_real;
-    s_real.add_craft(craft_real);
-
-    // Build the Jet-shadow world identically.
-    manta::WorldT<Jet> w_jet;
-    w_jet.clock().set_dt(0.01f);
-    auto& s_jet = w_jet.create_scene();
-    FreeBodyCraft<Jet> craft_jet;
-    s_jet.add_craft(craft_jet);
-
-    Ekf ekf;
-    ekf.bind(w_jet, {&craft_real}, {&craft_jet});
-
-    // Initial state: at origin, identity orientation, small initial velocity.
-    Ekf::StateVec x0;
-    x0.setZero();
-    x0(3) = 1.0;     // identity quaternion w
-    x0(7) = 1.0;     // 1 m/s along x
-    Ekf::StateCov P0 = Ekf::StateCov::Identity() * 0.1;
-
-    ekf.set_state(x0);
-    ekf.set_covariance(P0);
-
-    Ekf::StateCov Q = Ekf::StateCov::Identity() * 1e-6;
-    Ekf::MeasCov  R = Ekf::MeasCov::Identity()  * 1e-4;
-
-    constexpr double dt = 0.01;
-    constexpr int    N  = 100;     // 1 s
-
-    // Drive it for a second with no measurements — pure prediction.
-    for (int i = 0; i < N; ++i) {
-        ekf.predict(dt, Q);
-    }
-
-    // After 1 s of free flight at 1 m/s along x, expect p_x ≈ 1.0.
-    auto x = ekf.state();
-    INFO("p=(", x(0), ",", x(1), ",", x(2), ") v_x=", x(7));
-    CHECK(std::abs(x(0) - 1.0) < 1e-6);
-    CHECK(std::abs(x(1)      ) < 1e-6);
-    CHECK(std::abs(x(7) - 1.0) < 1e-6);
-
-    // Now feed a measurement saying the craft is at origin (resetting position
-    // toward truth — the prediction had drifted to p_x = 1.0). The update
-    // should pull p_x back toward 0, and the velocity estimate toward
-    // something more consistent.
-    Ekf::MeasVec z;
-    z << 0.0, 0.0, 0.0;
-    ekf.update(PositionMeas3D{}, z, R);
-
-    auto x_post = ekf.state();
-    // Position should have moved back toward the measurement (0).
-    CHECK(x_post(0) < x(0));
-    CHECK(std::abs(x_post(0)) < 0.5);
-}
+// Legacy EKF<NumCrafts,...>-wrapper test removed in Phase 6.
+// EKFGeneric end-to-end coverage lives in test_generic_ekf.cpp,
+// test_measurement_e2e.cpp, and test_bias_slice.cpp.

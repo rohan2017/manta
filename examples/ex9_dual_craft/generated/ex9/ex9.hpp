@@ -7,7 +7,12 @@
 #include "manta/core/harness.hpp"
 #include "manta/core/scene.hpp"
 #include "manta/core/world.hpp"
-#include "manta/estimation/block_decomposed_ekf.hpp"
+#include "manta/estimation/craft_view.hpp"
+#include "manta/estimation/generic_ekf.hpp"
+#include "manta/estimation/manifold.hpp"
+#include "manta/estimation/measurement.hpp"
+#include "manta/estimation/reading.hpp"
+#include "manta/estimation/state_spec.hpp"
 #include "drone_0_craft.hpp"
 #include "drone_1_craft.hpp"
 
@@ -17,36 +22,25 @@ namespace manta_gen::ex9 {
 inline constexpr float DT             = 0.001f;
 inline constexpr float SIM_RATE_MULT  = 1.0f;
 
-// value-side simulation infrastructure. The filter holds its own
-// `manta::WorldT<double>` (estimator state lives in double for
-// filter conditioning). The Jet shadow `WorldT<Jet>` for the
-// Jacobian step lives file-private in the .cpp.
+// State spec — one RigidBody slice per tracked craft.
+using Spec = manta::estimation::StateSpec<manta::manifold::RigidBody, manta::manifold::RigidBody>;
+// Total noise slots = sum of every part's enabled noise driver dims.
+using EkfT = manta::estimation::EKFGeneric<Spec, /*MeasDim=*/0, /*NoiseSlots=*/18>;
+using JetType = EkfT::Jet;
+
 extern manta::WorldT<double>          w;
-extern manta::SceneT<double>*         scene;          // valid after setup()
-// Crafts are concatenated in the EKF state vector in the order
-// they're declared here: state[0..12]=craft_0, state[13..25]=craft_1, ...
+extern manta::SceneT<double>*         scene;
 extern Drone0CraftT<double> craft_0;
 extern Drone1CraftT<double> craft_1;
 
-// EKF wrapper. State dim = 13 * 2 = 26.
-// Bound inside setup() to the value world + (for EKF) Jet shadow +
-// per-craft pointer arrays.
-extern manta::estimation::BlockDecomposedEKF<2, 18> ekf_0;
+extern EkfT ekf_0;
+extern manta::estimation::CraftView<EkfT, 0> view_0;
+extern manta::estimation::CraftView<EkfT, 1> view_1;
 
-// One-time initialization. Builds both worlds (MFloat + Jet shadow),
-// registers fields, instantiates the filter wrapper + binds it to
-// the worlds, opens Zenoh + declares pubs/subs.
 void setup();
-
-// One step: applies in-bindings, runs predict(), then for each
-// measurement sensor with consume_fresh()==true runs update_n<N>().
-// On every kPubEvery=20 ticks, publishes out-bindings.
 void tick();
-
-// Tear down Zenoh state before main() returns.
 void shutdown();
 
-// Polymorphic adapter — see manta/core/harness.hpp.
 struct Harness : public manta::Harness {
     void setup()    override;
     void tick()     override;

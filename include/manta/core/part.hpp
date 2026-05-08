@@ -134,6 +134,21 @@ public:
         return {measurements_.data(), measurements_.size()};
     }
 
+    // ---- Random-walk noise registry ----
+    //
+    // Parts that own `Noise<RandomWalk<Dim>>` members publish them
+    // here, name-keyed, so EKFGeneric can resolve a tracked
+    // value-side bias to its Jet-side counterpart at bind time. The
+    // name should match the accessor (e.g. `imu.accel_bias()` →
+    // name="accel_bias").
+    struct NamedRandomWalk {
+        std::string_view     name;
+        NoiseRandomWalkBase* noise;
+    };
+    std::span<const NamedRandomWalk> random_walks() const noexcept {
+        return {random_walks_.data(), random_walks_.size()};
+    }
+
     // Wrench application — accumulates within a single tick. Multiple calls add.
     void apply_force_at(const geom::Vec3<PartFrame, Scalar>& force,
                         const geom::Vec3<PartFrame, Scalar>& point =
@@ -225,6 +240,10 @@ protected:
     // pointers to their typed Measurement members. Stays empty for
     // non-sensor parts.
     std::vector<Measurement*>           measurements_;
+
+    // RW noises this part owns, name-keyed for EKFGeneric's
+    // value-to-Jet resolution.
+    std::vector<NamedRandomWalk>        random_walks_;
 
 private:
     template <class S> friend class CompositePartT;

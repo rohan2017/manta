@@ -21,7 +21,7 @@ int main() {
     std::signal(SIGTERM, on_signal);
 
     manta_gen::ex9::setup();
-    std::printf("ex9: ready (EKF). 2 craft(s), 5 binding(s), 4 measurement sensor(s).\n");
+    std::printf("ex9: ready (EKF). 2 craft(s), 1 binding(s), 4 measurement sensor(s).\n");
 
     constexpr float WALL_PERIOD = manta_gen::ex9::DT / manta_gen::ex9::SIM_RATE_MULT;
     auto next = std::chrono::steady_clock::now();

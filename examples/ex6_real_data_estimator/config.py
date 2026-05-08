@@ -38,11 +38,12 @@ def make_config() -> MantaConfig:
     ekf = EKF(w, measurements=[imu, dvl],
               initial_covariance=1.0)
 
-    # MFloat-time sensor feeds — each set_measurement call also flips the
-    # part's freshness bit, so the EKF's per-sensor `consume_fresh()` gate
-    # picks up the new reading on the next predict tick.
-    subscribe(imu.set_measurement, "manta/ex6/imu")
-    subscribe(dvl.set_measurement, "manta/ex6/dvl")
+    # Each Zenoh topic feeds the matching sensor part's measurements via
+    # the codegen-emitted Reading buffers. Topic payload convention:
+    #   IMU:  6 floats — accel_x,y,z, gyro_x,y,z
+    #   DVL:  3 floats — velocity_x,y,z
+    ekf.read_topic(imu, "manta/ex6/imu")
+    ekf.read_topic(dvl, "manta/ex6/dvl")
 
     publish({
         "p": ekf.position,

@@ -8,7 +8,6 @@
 #include <doctest/doctest.h>
 
 #include "../include/manta/estimation/ukf_kernel.hpp"
-#include "../include/manta/estimation/ukf.hpp"
 #include "../include/manta/core/craft.hpp"
 #include "../include/manta/parts/structure/mass.hpp"
 
@@ -110,67 +109,5 @@ struct PositionMeas3D_U {
 };
 }  // namespace
 
-TEST_CASE("UKF: free-body propagation matches kinematic prediction") {
-    using Ukf = manta::estimation::UKF</*NumCrafts=*/1, /*MeasDim=*/3>;
-    Ukf ukf;
-
-    manta::WorldT<double> w_real;
-    w_real.clock().set_dt(0.01f);
-    auto& s = w_real.create_scene();
-    FreeBodyCraftU<double> craft;
-    s.add_craft(craft);
-    ukf.bind(w_real, {&craft});
-
-    Ukf::StateVec x0; x0.setZero();
-    x0(3) = 1.0;        // identity quaternion w
-    x0(7) = 1.0;        // 1 m/s along x
-    Ukf::StateCov P0 = Ukf::StateCov::Identity() * 0.01;
-    ukf.set_state(x0);
-    ukf.set_covariance(P0);
-
-    Ukf::StateCov Q = Ukf::StateCov::Identity() * 1e-6;
-
-    constexpr double dt = 0.01;
-    for (int i = 0; i < 100; ++i) ukf.predict(dt, Q);
-
-    auto x = ukf.state();
-    INFO("p=(", x(0), ",", x(1), ",", x(2), ") v_x=", x(7));
-    // After 1s at 1 m/s on x, expect p_x ≈ 1.
-    CHECK(std::abs(x(0) - 1.0) < 1e-3);
-    CHECK(std::abs(x(7) - 1.0) < 1e-3);
-}
-
-TEST_CASE("UKF: position measurement pulls state toward observation") {
-    using Ukf = manta::estimation::UKF</*NumCrafts=*/1, /*MeasDim=*/3>;
-    Ukf ukf;
-
-    manta::WorldT<double> w_real;
-    w_real.clock().set_dt(0.01f);
-    auto& s = w_real.create_scene();
-    FreeBodyCraftU<double> craft;
-    s.add_craft(craft);
-    ukf.bind(w_real, {&craft});
-
-    Ukf::StateVec x0; x0.setZero();
-    x0(3) = 1.0;
-    x0(0) = 1.0;        // start at p_x = 1
-    Ukf::StateCov P0 = Ukf::StateCov::Identity() * 0.1;
-    ukf.set_state(x0);
-    ukf.set_covariance(P0);
-
-    Ukf::MeasVec z; z << 0.0, 0.0, 0.0;
-    Ukf::MeasCov R = Ukf::MeasCov::Identity() * 1e-4;
-    ukf.update(PositionMeas3D_U{}, z, R);
-
-    auto x = ukf.state();
-    // Update should pull p_x back toward 0.
-    CHECK(x(0) < 1.0);
-    CHECK(std::abs(x(0)) < 0.5);
-}
-
-// Note: the historical "non-templated craft via UKF" test has been
-// removed. With the new architecture, every filter-target craft must be
-// scalar_templated (instantiated as <double> for both EKF and UKF MFloat
-// worlds). The Scene/World templating ripples through to require this.
-// Existing non-templated user crafts can opt in by setting
-// `scalar_templated=True` on the descriptor.
+// Legacy UKF<NumCrafts, ...>-wrapper tests removed in Phase 6.
+// UKFGeneric end-to-end coverage lives in test_generic_ukf.cpp.

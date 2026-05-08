@@ -7,42 +7,33 @@
 #include "manta/core/harness.hpp"
 #include "manta/core/scene.hpp"
 #include "manta/core/world.hpp"
-#include "manta/estimation/ukf.hpp"
+#include "manta/estimation/craft_view.hpp"
+#include "manta/estimation/generic_ukf.hpp"
+#include "manta/estimation/manifold.hpp"
+#include "manta/estimation/measurement.hpp"
+#include "manta/estimation/reading.hpp"
+#include "manta/estimation/state_spec.hpp"
 #include "ukf_smoke_craft.hpp"
 
 namespace manta_gen::ukf_smoke {
 
-// Sim-tick parameters, frozen at codegen time.
 inline constexpr float DT             = 0.001f;
 inline constexpr float SIM_RATE_MULT  = 1.0f;
 
-// value-side simulation infrastructure. The filter holds its own
-// `manta::WorldT<double>` (estimator state lives in double for
-// filter conditioning). The Jet shadow `WorldT<Jet>` for the
-// Jacobian step lives file-private in the .cpp.
+using Spec = manta::estimation::StateSpec<manta::manifold::RigidBody>;
+using UkfT = manta::estimation::UKFGeneric<Spec, /*MeasDim=*/0>;
+
 extern manta::WorldT<double>          w;
-extern manta::SceneT<double>*         scene;          // valid after setup()
+extern manta::SceneT<double>*         scene;
 extern UkfSmokeCraftT<double> craft;
 
-// UKF wrapper. State dim = 13 * 1 = 13.
-// Bound inside setup() to the value world + (for EKF) Jet shadow +
-// per-craft pointer arrays.
-extern manta::estimation::UKF<1, 9> ukf_0;
+extern UkfT ukf_0;
+extern manta::estimation::CraftView<UkfT, 0> view_0;
 
-// One-time initialization. Builds both worlds (MFloat + Jet shadow),
-// registers fields, instantiates the filter wrapper + binds it to
-// the worlds, opens Zenoh + declares pubs/subs.
 void setup();
-
-// One step: applies in-bindings, runs predict(), then for each
-// measurement sensor with consume_fresh()==true runs update_n<N>().
-// On every kPubEvery=20 ticks, publishes out-bindings.
 void tick();
-
-// Tear down Zenoh state before main() returns.
 void shutdown();
 
-// Polymorphic adapter — see manta/core/harness.hpp.
 struct Harness : public manta::Harness {
     void setup()    override;
     void tick()     override;

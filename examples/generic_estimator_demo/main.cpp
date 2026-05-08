@@ -127,18 +127,13 @@ int main() {
     ekf.measure<3>(&est_craft.dvl().velocity,
                    reading_from<3>(sim_craft.dvl().velocity));
 
-    // ---- Initial belief: identity quat, moderate covariance. ----
-    EkfT::StateVec x0 = EkfT::StateVec::Zero();
-    x0(3) = 1.0;   // identity quaternion
-    EkfT::StateCov P0 = EkfT::StateCov::Identity();
-    P0.diagonal().head<3>().setConstant(1e-4);    // pos
-    P0.diagonal().segment<3>(3).setConstant(1e-4); // attitude
-    P0.diagonal().segment<3>(6).setConstant(1e-2); // vel
-    P0.diagonal().segment<3>(9).setConstant(1e-4); // angvel
-    ekf.set_state(x0);
-    ekf.set_covariance(P0);
-
+    // ---- Initial belief: at rest at origin, moderate covariance. ----
     CraftView<EkfT, 0> est_view{ekf};
+    est_view.reset_to_rest();
+    est_view.set_state_covariance(/*pos_var=*/1e-4,
+                                  /*attitude_var=*/1e-4,
+                                  /*vel_var=*/1e-2,
+                                  /*angvel_var=*/1e-4);
 
     // ---- Tick loop. ----
     noise_seed(7);

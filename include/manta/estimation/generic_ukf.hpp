@@ -29,14 +29,18 @@
 #include <Eigen/Core>
 #include <array>
 #include <cmath>
+#include <functional>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <vector>
 
 #include "../core/craft.hpp"
 #include "../core/scene.hpp"
 #include "../core/world.hpp"
 #include "manifold.hpp"
+#include "measurement.hpp"
+#include "reading.hpp"
 #include "state_spec.hpp"
 #include "ukf_kernel.hpp"
 
@@ -146,6 +150,116 @@ public:
         spec_.push_ambient(x_ref_);
     }
 
+    // ---- Measurement registration (parallel to EKFGeneric) ----
+    template <int Dim>
+    void measure(Measurement* model_value_side, Reading<Dim> reading) {
+        if (!model_value_side) {
+            throw std::runtime_error("UKFGeneric::measure: model is null");
+        }
+        if (Dim != model_value_side->dim) {
+            throw std::runtime_error(
+                "UKFGeneric::measure: Reading dim doesn't match Measurement dim");
+        }
+        bindings_.push_back(Binding{
+            .dim = Dim,
+            .meas_name = model_value_side->name,
+            .model_value = model_value_side,
+            .pull_z = [r = std::move(reading)]() mutable {
+                auto s = r.pull();
+                Eigen::VectorXd z(Dim);
+                for (int i = 0; i < Dim; ++i) z(i) = s.z(i);
+                return std::pair{z, s.fresh};
+            },
+        });
+    }
+
+    void run_pending_updates() {
+        if (!w_real_) return;
+        if (bindings_.empty()) return;
+
+        for (auto& b : bindings_) {
+            auto [z, fresh] = b.pull_z();
+            if (!fresh) continue;
+
+            // h(x) closure that runs the value-side part's update on
+            // boxplus(x_ref, xi) and reads the typed measurement field.
+            // The kernel's sigma-point sweep calls this 2*tangent+1 times.
+            //
+            // Resolve the value-side part once per binding (by walking
+            // the tracked crafts) — same lookup as the EKF, but here
+            // we read the value-typed cache directly via the
+            // Measurement's read_value.
+            auto* model = b.model_value;
+            const int n = model->dim;
+
+            auto h = [model, n, this](const StateVec& x_full) {
+                Eigen::VectorXd hv(n);
+                // Push x_full into the bound crafts so the part's
+                // update() reads the right state, then run the world
+                // step to populate caches, then read the measurement.
+                spec_.push_ambient(x_full);
+                w_real_->kinematic_and_aggregate();
+                model->read_value(hv.data());
+                return hv;
+            };
+
+            // Fixed R = σ²·I per the model's noise.
+            const double sigma = model->r_sigma();
+            Eigen::MatrixXd R = Eigen::MatrixXd::Identity(n, n) * sigma * sigma;
+
+            // Save state, run the kernel update over xi, restore state.
+            kernel_.set_state(TangentVec::Zero());
+            kernel_.set_covariance(P_);
+
+            auto h_lifted = [&](const TangentVec& xi) {
+                StateVec x_full;
+                StateSpecT::template boxplus<double>(x_ref_.data(),
+                                                     xi.data(),
+                                                     x_full.data());
+                return h(x_full);
+            };
+            // Dispatch to a runtime-N update via a switch on dim.
+            // Common dims: 1, 3, 6.
+            if (n == 1) {
+                Eigen::Matrix<double, 1, 1> z1; z1(0) = z(0);
+                Eigen::Matrix<double, 1, 1> R1; R1(0, 0) = R(0, 0);
+                auto h1 = [&](const TangentVec& xi) {
+                    auto v = h_lifted(xi); Eigen::Matrix<double, 1, 1> r;
+                    r(0) = v(0); return r;
+                };
+                kernel_.template update_n<1>(h1, z1, R1);
+            } else if (n == 3) {
+                Eigen::Matrix<double, 3, 1> z3 = z;
+                Eigen::Matrix<double, 3, 3> R3 = R;
+                auto h3 = [&](const TangentVec& xi) {
+                    auto v = h_lifted(xi); Eigen::Matrix<double, 3, 1> r;
+                    for (int i = 0; i < 3; ++i) r(i) = v(i); return r;
+                };
+                kernel_.template update_n<3>(h3, z3, R3);
+            } else if (n == 6) {
+                Eigen::Matrix<double, 6, 1> z6 = z;
+                Eigen::Matrix<double, 6, 6> R6 = R;
+                auto h6 = [&](const TangentVec& xi) {
+                    auto v = h_lifted(xi); Eigen::Matrix<double, 6, 1> r;
+                    for (int i = 0; i < 6; ++i) r(i) = v(i); return r;
+                };
+                kernel_.template update_n<6>(h6, z6, R6);
+            } else {
+                throw std::runtime_error(
+                    "UKFGeneric::run_pending_updates: dim " +
+                    std::to_string(n) +
+                    " not yet supported (add a switch arm for it).");
+            }
+
+            const TangentVec correction = kernel_.state();
+            inject_delta(correction);
+            kernel_.set_state(TangentVec::Zero());
+            P_ = kernel_.covariance();
+        }
+
+        spec_.push_ambient(x_ref_);
+    }
+
     // ---- Update ----
     //
     // Standard sigma-point measurement update. `h` takes an ambient
@@ -244,12 +358,20 @@ private:
         x_ref_ = x_post;
     }
 
+    struct Binding {
+        int dim;
+        std::string  meas_name;
+        Measurement* model_value = nullptr;
+        std::function<std::pair<Eigen::VectorXd, bool>()> pull_z;
+    };
+
     StateSpecT                       spec_;
     UKFKernel<kTangentDim, MeasDim>  kernel_;
     WorldR*                          w_real_ = nullptr;
     StateVec                         x_ref_;
     StateCov                         P_;
     StateVec                         ref_snapshot_ = StateVec::Zero();
+    std::vector<Binding>             bindings_;
 };
 
 } // namespace manta::estimation

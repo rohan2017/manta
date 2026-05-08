@@ -12,9 +12,9 @@ class DVL(PartDescriptor):
     its own (part) frame, with optional white-Gaussian noise.
 
     Bindable signals:
-      * `last_velocity`   (out, 3 floats) — most recent velocity sample.
-      * `set_measurement` (in,  3 floats) — feed external [vx, vy, vz] into
-        the part's `set_measurement(velocity)`.
+      * `last_velocity` (out, 3 floats) — most recent velocity sample.
+
+    Reading injection flows through `ekf.measure(...)`, not a sensor-input signal.
 
     Required fields: none.
     """
@@ -24,15 +24,6 @@ class DVL(PartDescriptor):
 
     signals = [
         vec3_out_signal("last_velocity", "last_velocity"),
-        Signal(
-            name="set_measurement",
-            direction="in",
-            n_floats=3,
-            cpp_write_stmt=(
-                "{accessor}.set_measurement("
-                "manta::geom::Vec3<manta::PartFrame>{{{v0}, {v1}, {v2}}});"
-            ),
-        ),
     ]
 
     def __init__(self,

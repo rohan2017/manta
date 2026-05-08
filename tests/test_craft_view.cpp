@@ -80,6 +80,85 @@ TEST_CASE("CraftView: position() reads the right slice for each craft") {
     CHECK(w1(2) == doctest::Approx(3.0));
 }
 
+TEST_CASE("CraftView: setters write to the right slice") {
+    CraftT<double> drone0("drone0");
+    CraftT<double> drone1("drone1");
+    drone0.root().template add<parts::MassT<double>>("body", 1.0);
+    drone1.root().template add<parts::MassT<double>>("body", 1.0);
+    drone0.root().compute_params();
+    drone1.root().compute_params();
+
+    auto state = make_state().track(drone0).track(drone1).build();
+    using Spec = decltype(state);
+    EKFGeneric<Spec, 0, 0> ekf{state};
+
+    CraftView<decltype(ekf), 0> view0{ekf};
+    CraftView<decltype(ekf), 1> view1{ekf};
+
+    view0.set_position(1.0, 2.0, 3.0);
+    view0.set_orientation_identity();
+    view0.set_vel_linear(0.5, 0.6, 0.7);
+    view1.set_position(10.0, 20.0, 30.0);
+
+    auto p0 = view0.position();
+    CHECK(p0(0) == doctest::Approx(1.0));
+    CHECK(p0(1) == doctest::Approx(2.0));
+    CHECK(p0(2) == doctest::Approx(3.0));
+    auto p1 = view1.position();
+    CHECK(p1(0) == doctest::Approx(10.0));
+    auto v0 = view0.vel_linear();
+    CHECK(v0(0) == doctest::Approx(0.5));
+}
+
+TEST_CASE("CraftView: bundled set_state and reset_to_rest") {
+    CraftT<double> c("c");
+    c.root().template add<parts::MassT<double>>("body", 1.0);
+    c.root().compute_params();
+
+    auto state = make_state().track(c).build();
+    EKFGeneric<decltype(state), 0, 0> ekf{state};
+    CraftView<decltype(ekf), 0> view{ekf};
+
+    view.set_state(Eigen::Vector3d{1, 2, 3},
+                   Eigen::Vector4d{1, 0, 0, 0},
+                   Eigen::Vector3d{4, 5, 6},
+                   Eigen::Vector3d{0.1, 0.2, 0.3});
+    CHECK(view.position()(2) == doctest::Approx(3.0));
+    CHECK(view.vel_linear()(0) == doctest::Approx(4.0));
+
+    view.reset_to_rest();
+    CHECK(view.position().norm() == doctest::Approx(0.0));
+    CHECK(view.orientation()(0) == doctest::Approx(1.0));
+}
+
+TEST_CASE("CraftView: covariance setters write the right diagonal block") {
+    CraftT<double> c("c");
+    c.root().template add<parts::MassT<double>>("body", 1.0);
+    c.root().compute_params();
+
+    auto state = make_state().track(c).build();
+    EKFGeneric<decltype(state), 0, 0> ekf{state};
+    CraftView<decltype(ekf), 0> view{ekf};
+
+    view.set_state_covariance(/*pos=*/4.0, /*att=*/1.0, /*vel=*/0.25, /*ang=*/0.16);
+    auto p_sd = view.position_stddev();
+    auto a_sd = view.orientation_stddev();
+    auto v_sd = view.vel_linear_stddev();
+    auto w_sd = view.vel_angular_stddev();
+    for (int i = 0; i < 3; ++i) CHECK(p_sd(i) == doctest::Approx(2.0));
+    for (int i = 0; i < 3; ++i) CHECK(a_sd(i) == doctest::Approx(1.0));
+    for (int i = 0; i < 3; ++i) CHECK(v_sd(i) == doctest::Approx(0.5));
+    for (int i = 0; i < 3; ++i) CHECK(w_sd(i) == doctest::Approx(0.4));
+
+    // Per-block setter overrides one block; others stay.
+    view.set_position_stddev(0.1);
+    p_sd = view.position_stddev();
+    for (int i = 0; i < 3; ++i) CHECK(p_sd(i) == doctest::Approx(0.1));
+    // Vel block unchanged.
+    v_sd = view.vel_linear_stddev();
+    for (int i = 0; i < 3; ++i) CHECK(v_sd(i) == doctest::Approx(0.5));
+}
+
 TEST_CASE("CraftView: stddev reads the right tangent slice") {
     CraftT<double> drone0("drone0");
     drone0.root().template add<parts::MassT<double>>("body", 1.0);

@@ -62,9 +62,9 @@ def make_config() -> MantaConfig:
     sim_w = World("ex5_sim").add_field(grav).add_craft(sim_c)
 
     # ---- Est craft (templated) ----
-    # Full Kalibr IMU on the est side: white noise + RW biases. Codegen
-    # picks up the 4-channel noise spec and grows BiasDim by 6 (3 + 3)
-    # so the EKF estimates accel_bias and gyro_bias as augmented states.
+    # Full Kalibr IMU: white noise + RW biases. With # the codegen automatically grows the StateSpec by one BiasRandomWalk
+    # slice per enabled bias channel and emits `track(imu.accel_bias())`
+    # in setup() — Phase 5e wired this end-to-end.
     est_c = Craft("ex5_est")
     est_c.add(Mass("body", mass=1.0, moi=(0.05, 0.05, 0.05)))
     est_imu = IMU("imu",
@@ -94,16 +94,11 @@ def make_config() -> MantaConfig:
               initial_position_var=1e-4,
               initial_attitude_var=1e-4,
               initial_velocity_var=1e-2,
-              initial_angular_velocity_var=1e-4)
+              initial_angular_velocity_var=1e-4)   # Phase 5d: StateSpec + EKFGeneric codegen.
 
-    # ---- In-process plumbing ----
-    # Cross-world: sim sensor outputs feed est sensor measurement inputs
-    # so the EKF's predict + update see the same readings the sim produced.
-    connect(sim_imu.last_accel, est_imu.set_measurement_accel)
-    connect(sim_imu.last_gyro,  est_imu.set_measurement_gyro)
-    connect(sim_dvl.last_velocity, est_dvl.set_measurement)
-    # Mirror commanded throttle so predict's force model matches the sim.
-    connect(sim_thrust.throttle, est_thrust.set_throttle)
+    # Cross-world wiring (sim sensors → EKF readings, throttle mirror)
+    # is owned by the StateSpec/EKFGeneric setup() emit. No legacy
+    # `connect(...)` lines needed.
 
     # ---- Zenoh I/O ----
     subscribe(sim_thrust.set_throttle, "manta/ex5/cmd")

@@ -257,31 +257,7 @@ TEST_CASE("DVL: reads body velocity in part frame") {
     CHECK(dvl.last_velocity().z() == doctest::Approx(1.0f).epsilon(1e-2f));
 }
 
-#include "manta/parts/sensor/imu.hpp"
-
-TEST_CASE("DVL: set_measurement injects external reading, bypasses update()") {
-    Craft c("test");
-    auto& dvl = c.root().add<DVL>("dvl");
-    c.root().compute_params();
-
-    dvl.set_measurement(Vec3<PartFrame>{1.5f, -0.5f, 0.25f});
-
-    CHECK(dvl.last_velocity().x() == doctest::Approx( 1.5f));
-    CHECK(dvl.last_velocity().y() == doctest::Approx(-0.5f));
-    CHECK(dvl.last_velocity().z() == doctest::Approx( 0.25f));
-}
-
-TEST_CASE("IMU: set_measurement injects external accel + gyro") {
-    Craft c("test");
-    auto& imu = c.root().add<IMU>("imu");
-    c.root().compute_params();
-
-    imu.set_measurement(
-        Vec3<PartFrame>{0.1f, 0.2f, 9.81f},
-        Vec3<PartFrame>{0.0f, 0.0f, 0.5f});
-
-    CHECK(imu.last_accel().x() == doctest::Approx(0.1f));
-    CHECK(imu.last_accel().y() == doctest::Approx(0.2f));
-    CHECK(imu.last_accel().z() == doctest::Approx(9.81f));
-    CHECK(imu.last_gyro().z()  == doctest::Approx(0.5f));
-}
+// Legacy `set_measurement*` external-injection tests were removed when
+// the bridges came out — Phase 6 deletion. External readings now feed
+// the EKF via `Reading<Dim>` sources passed to `ekf.measure(...)`,
+// covered end-to-end by test_measurement_e2e.cpp.

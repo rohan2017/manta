@@ -200,6 +200,18 @@ class EKF:
     # when crafts are guaranteed independent (decoupled swarm).
     block_decomposed: bool = False
 
+    # Held over from the migration window when the legacy emit existed
+    # alongside the StateSpec/EKFGeneric path. Now always True; kept as
+    # a no-op accessor for backwards compatibility with user configs
+    # that still pass it explicitly.
+    use_state_spec: bool = True
+
+    # Pattern C: Zenoh topics that feed measurement reads. Each entry
+    # is `(part, topic)` — the codegen emits one per-field buffer +
+    # atomic + Zenoh subscriber + reading_from_buffer wiring per part.
+    # Populated via the post-construction `read_topic(part, topic)` method.
+    reading_topics: list = field(default_factory=list)
+
     # Static dimension of the rigid-body state — matches CraftT::kRigidStateDim.
     STATE_DIM: int = 13
 
@@ -321,6 +333,28 @@ class EKF:
     def cpp_var_name(self) -> str:
         """Stable identifier the codegen uses for this EKF's C++ instance."""
         return f"ekf_{self._ekf_id}"
+
+    def read_topic(self, part, topic: str) -> "EKF":
+        """Bind a Zenoh topic as the reading source for a sensor part.
+
+        The codegen emits per-field buffers + an atomic_fresh + a Zenoh
+        subscriber that decodes the topic's float payload into the
+        buffers and sets the fresh flags. The EKF then reads via
+        `reading_from_buffer<>(&buf, &fresh)` per measurement field.
+
+        Topic payload convention:
+          * IMU: 6 floats — accel_x,y,z, gyro_x,y,z.
+          * DVL / Magnetometer: 3 floats — vx,vy,vz or bx,by,bz.
+
+        For per-field topics (separate accel + gyro publishers), use
+        multiple `read_topic` calls or a more granular API once added.
+        """
+        if part not in self.measurements:
+            raise ValueError(
+                f"EKF.read_topic: part {part.name!r} must be in the EKF's "
+                f"`measurements=` list before binding a reading topic to it.")
+        self.reading_topics.append((part, topic))
+        return self
 
     def measurement_dim(self) -> int:
         """Total measurement-vector width (sum of n_floats over all

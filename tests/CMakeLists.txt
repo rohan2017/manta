@@ -35,8 +35,6 @@ add_executable(manta_tests
     test_kinematic_link.cpp
     test_craft.cpp
     test_craft_state.cpp
-    test_noise_registry.cpp
-    test_random_walk_bias.cpp
     test_noise.cpp
     test_parts.cpp
     test_world.cpp
@@ -51,10 +49,9 @@ add_executable(manta_tests
     test_ekf.cpp
     test_ekf_against_sim.cpp
     test_manifold.cpp
-    test_generic_ekf.cpp
-    test_generic_ukf.cpp
     test_craft_view.cpp
     test_measurement_e2e.cpp
+    test_bias_slice.cpp
     test_ukf.cpp
     test_planet.cpp
     test_system_id.cpp

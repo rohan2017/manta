@@ -52,12 +52,29 @@ public:
         return start;
     }
 
+    // When true, `register_random_walk` becomes a no-op. Used by the
+    // StateSpec-based EKFGeneric, where RW biases are tracked as
+    // explicit slices in the StateSpec rather than auto-augmented via
+    // the registry. Without this flag, parts' default `register_noise`
+    // calls (which unconditionally register both white and RW noises)
+    // would corrupt the EKFGeneric's Jet derivative slot layout.
+    void set_skip_random_walk(bool skip) noexcept { skip_rw_ = skip; }
+    bool skip_random_walk() const noexcept       { return skip_rw_; }
+
     // Register a random-walk bias source of any dimension. Allocates Dim
     // contiguous bias-state slots AND Dim contiguous driver slots in the
     // white-noise input range. Updates the source's state_slot/driver_slot.
     // The dim is read from the source's runtime `dim()` (set by its
     // RandomWalk<Dim> template argument).
     int register_random_walk(NoiseRandomWalkBase& source) {
+        if (skip_rw_) {
+            // No-op: leave the source at no-slot (kNoNoiseSlot). Its
+            // operator+ on the Jet path will pass-through, producing no
+            // bias-state Jet injection — which is what EKFGeneric wants
+            // when biases aren't tracked as state slices.
+            source.clear_slots();
+            return kNoNoiseSlot;
+        }
         const int dim          = source.dim();
         const int driver_start = next_slot_;
         const int bias_start   = next_bias_slot_;
@@ -164,6 +181,7 @@ private:
     std::vector<RWEntry>         rw_entries_;
     int                          next_slot_      = 0;
     int                          next_bias_slot_ = 0;
+    bool                         skip_rw_        = false;
     // Lazily-built unit-variance buffer for input_variance_diag().
     // mutable: input_variance_diag() is conceptually const (just reads
     // slot count) but caches the result to avoid per-tick allocation.

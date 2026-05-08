@@ -63,8 +63,6 @@ TEST_CASE("IMU: default (no rate cap) is fresh after every update") {
     CHECK(imu.fresh() == false);
     w.step();
     CHECK(imu.fresh() == true);
-    CHECK(imu.consume_fresh() == true);
-    CHECK(imu.fresh() == false);
     w.step();
     CHECK(imu.fresh() == true);
 }
@@ -84,7 +82,7 @@ TEST_CASE("IMU: rate_hz=100 on 1kHz sim fires every 10 ticks") {
     int fires = 0;
     for (int i = 0; i < 50; ++i) {
         w.step();
-        if (imu.consume_fresh()) ++fires;
+        if (imu.fresh()) ++fires;
     }
     CHECK(fires == 5);   // tick 0, 10, 20, 30, 40
 }
@@ -102,12 +100,12 @@ TEST_CASE("DVL: rate_hz=50 on 1kHz sim fires every 20 ticks") {
     int fires = 0;
     for (int i = 0; i < 100; ++i) {
         w.step();
-        if (dvl.consume_fresh()) ++fires;
+        if (dvl.fresh()) ++fires;
     }
     CHECK(fires == 5);   // tick 0, 20, 40, 60, 80
 }
 
-TEST_CASE("set_measurement bypasses the gate (always fresh)") {
+TEST_CASE("Rate gate gates fresh between firings") {
     World w;
     w.clock().set_dt(0.001f);
     auto& s = w.create_scene();
@@ -115,18 +113,12 @@ TEST_CASE("set_measurement bypasses the gate (always fresh)") {
     auto& imu = c.root().add<parts::IMU>("imu",
         /*accel_sigma=*/0.0f, /*gyro_sigma=*/0.0f,
         /*accel_bias_sigma=*/-1.0f, /*gyro_bias_sigma=*/-1.0f,
-        /*rate_hz=*/MFloat(10));   // very slow native rate
+        /*rate_hz=*/MFloat(10));   // very slow native rate (every 100 ms)
     c.root().compute_params();
     s.add_craft(c);
 
     w.step();              // first tick fires
-    (void)imu.consume_fresh();
-    w.step();              // gate would block this one
-    CHECK(imu.fresh() == false);
-
-    // External feed: should mark fresh regardless of rate cap.
-    imu.set_measurement(geom::Vec3<PartFrame>{MFloat(0.1f), MFloat(0), MFloat(0)},
-                        geom::Vec3<PartFrame>{MFloat(0), MFloat(0), MFloat(0.5f)});
     CHECK(imu.fresh() == true);
-    CHECK(imu.consume_fresh() == true);
+    w.step();              // gate blocks this one (100 Hz vs 1 kHz)
+    CHECK(imu.fresh() == false);
 }

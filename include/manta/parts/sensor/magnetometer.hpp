@@ -78,11 +78,6 @@ public:
 
     Measurement b;
 
-    // ---- Legacy bridges (will be removed in Phase 5c) ----
-    void set_measurement(const geom::Vec3<PartFrame, Scalar>& v) noexcept {
-        last_b_ = v; fresh_ = true;
-    }
-    bool consume_fresh() noexcept { bool was = fresh_; fresh_ = false; return was; }
 
 private:
     Noise<WhiteGaussian>           noise_;

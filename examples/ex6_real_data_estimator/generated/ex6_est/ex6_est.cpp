@@ -4,11 +4,9 @@
 
 #include "ex6_est.hpp"
 
-#include <cstdint>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -23,222 +21,123 @@ namespace manta_gen::ex6_est {
 manta::WorldT<double>  w{};
 manta::SceneT<double>* scene = nullptr;
 Ex6EstCraftT<double> craft{};
-manta::estimation::EKF<1, 9, 9, 0> ekf_0;
+
+EkfT ekf_0{ manta::estimation::make_state().track(craft).build() };
+manta::estimation::CraftView<EkfT, 0> view_0{ekf_0};
 
 }  // namespace manta_gen::ex6_est
 
 namespace {
 
-bool parse_float_array(std::string_view s, std::vector<float>& out) {
-    out.clear();
-    auto lb = s.find('['); auto rb = s.rfind(']');
-    if (lb == std::string_view::npos || rb == std::string_view::npos || rb <= lb) return false;
-    std::string body(s.substr(lb + 1, rb - lb - 1));
-    char* p = body.data(); char* end = body.data() + body.size();
-    while (p < end) {
-        while (p < end && (*p == ' ' || *p == ',' || *p == '\t' || *p == '\n')) ++p;
-        if (p >= end) break;
-        char* next = nullptr;
-        float v = std::strtof(p, &next);
-        if (next == p) return false;
-        out.push_back(v);
-        p = next;
-    }
-    return true;
-}
+using JetType = manta_gen::ex6_est::JetType;
+using EkfT    = manta_gen::ex6_est::EkfT;
 
-std::optional<zenoh::Session> g_session;
-
-using EkfT = decltype(manta_gen::ex6_est::ekf_0);
-EkfT::StateCov g_Q = EkfT::StateCov::Zero();
-
-// Jet shadow world. Built identically to the value side in
-// setup(); EKF::predict drives this through autodiff to
-// extract the state-transition Jacobian.
-using JetType = EkfT::Jet;
-manta::WorldT<JetType>   w_jet{};
-manta::SceneT<JetType>*  scene_jet = nullptr;
+manta::WorldT<JetType>  w_jet{};
+manta::SceneT<JetType>* scene_jet = nullptr;
 Ex6EstCraftT<JetType> craft_jet{};
 
-// IMU (EKF): h(x) = [specific_force_body; ω_body].
-// Reads the Jet sensor directly; values + H come
-// from the begin_step evaluate at x_pre.
-struct _ekf_0_c0_imu_meas {
-    Eigen::Matrix<JetType, 6, 1> operator()(EkfT&) const {
-        Eigen::Matrix<JetType, 6, 1> z;
-        const auto _a = craft_jet.imu().specific_force_body();
-        const auto _w = craft_jet.imu().angular_velocity_body();
-        z(0) = _a.raw()(0);
-        z(1) = _a.raw()(1);
-        z(2) = _a.raw()(2);
-        z(3) = _w.raw()(0);
-        z(4) = _w.raw()(1);
-        z(5) = _w.raw()(2);
-        return z;
+EkfT::StateCov g_Q = EkfT::StateCov::Zero();
+
+// ---- Pattern C reading sources (Zenoh-fed buffers) ----
+std::optional<zenoh::Session> g_reading_session;
+Eigen::Matrix<double, 3, 1> reading_c0_imu_accel_buf{};
+std::atomic<bool> reading_c0_imu_accel_fresh{false};
+Eigen::Matrix<double, 3, 1> reading_c0_imu_gyro_buf{};
+std::atomic<bool> reading_c0_imu_gyro_fresh{false};
+std::optional<zenoh::Subscriber<void>> reading_c0_imu_sub;
+Eigen::Matrix<double, 3, 1> reading_c0_dvl_velocity_buf{};
+std::atomic<bool> reading_c0_dvl_velocity_fresh{false};
+std::optional<zenoh::Subscriber<void>> reading_c0_dvl_sub;
+
+static bool _parse_float_array(std::string_view s,
+                                std::vector<double>& out) {
+    out.clear();
+    bool in_num = false;
+    std::string buf;
+    for (char c : s) {
+        if ((c >= '0' && c <= '9') || c == '-' || c == '+'
+                || c == '.' || c == 'e' || c == 'E') {
+            buf.push_back(c); in_num = true;
+        } else if (in_num) {
+            try { out.push_back(std::stod(buf)); }
+            catch (...) { return false; }
+            buf.clear(); in_num = false;
+        }
     }
-};
-
-// DVL (EKF): h = R(q)^T * v_scene, read from Jet sensor.
-struct _ekf_0_c0_dvl_meas {
-    Eigen::Matrix<JetType, 3, 1> operator()(EkfT&) const {
-        return craft_jet.dvl().velocity_body().raw();
+    if (in_num) {
+        try { out.push_back(std::stod(buf)); }
+        catch (...) { return false; }
     }
-};
+    return !out.empty();
+}
 
-Eigen::Matrix<double, 6, 6> R_c0_imu = Eigen::Matrix<double, 6, 6>::Zero();
-Eigen::Matrix<double, 3, 3> R_c0_dvl = Eigen::Matrix<double, 3, 3>::Zero();
-
-std::mutex bind_0_mtx;
-std::vector<float> bind_0_payload;
-std::optional<zenoh::Subscriber<void>> bind_0_sub;
-std::mutex bind_1_mtx;
-std::vector<float> bind_1_payload;
-std::optional<zenoh::Subscriber<void>> bind_1_sub;
-std::optional<zenoh::Publisher> pub_2;
-
-int g_pub_decim = 0;
-constexpr int kPubEvery = 20;  // ~50 Hz publish
-
-}  // anonymous namespace
+}  // namespace
 
 namespace manta_gen::ex6_est {
 
 void setup() {
-    // ---- value world ----
     w.clock().set_dt(DT);
     scene = &w.create_scene();
     scene->add_craft(craft);
 
-    // ---- Jet shadow world (built identically) ----
     w_jet.clock().set_dt(DT);
     scene_jet = &w_jet.create_scene();
     scene_jet->add_craft(craft_jet);
 
-    // ---- Filter init ----
-    EkfT::StateVec x0 = EkfT::StateVec::Zero();
-    // craft 0 initial state
-    x0(0) = 0.0f; x0(1) = 0.0f; x0(2) = 0.0f;
-    x0(3) = 1.0f; x0(4) = 0.0f; x0(5) = 0.0f; x0(6) = 0.0f;
-    x0(7) = 0.0f; x0(8) = 0.0f; x0(9) = 0.0f;
-    x0(10) = 0.0f; x0(11) = 0.0f; x0(12) = 0.0f;
-    EkfT::StateCov P0 = EkfT::StateCov::Identity() * 1.0f;
-    ekf_0.set_state(x0);
-    ekf_0.set_covariance(P0);
-    ekf_0.bind(w_jet, {&craft}, {&craft_jet});
+    ekf_0.bind(w_jet, { static_cast<void*>(&craft_jet) });
 
-    R_c0_imu(0, 0) = 0.0025f;
-    R_c0_imu(1, 1) = 0.0025f;
-    R_c0_imu(2, 2) = 0.0025f;
-    R_c0_imu(3, 3) = 2.5e-05f;
-    R_c0_imu(4, 4) = 2.5e-05f;
-    R_c0_imu(5, 5) = 2.5e-05f;
-    R_c0_dvl(0, 0) = 0.0004f;
-    R_c0_dvl(1, 1) = 0.0004f;
-    R_c0_dvl(2, 2) = 0.0004f;
-
-    // ---- Zenoh ----
-    g_session.emplace(zenoh::Session::open(zenoh::Config::create_default()));
-
-    bind_0_sub.emplace(g_session->declare_subscriber(
+    g_reading_session.emplace(zenoh::Session::open(zenoh::Config::create_default()));
+    reading_c0_imu_sub.emplace(g_reading_session->declare_subscriber(
         zenoh::KeyExpr("manta/ex6/imu"),
         [](const zenoh::Sample& s) {
-            std::vector<float> v;
+            std::vector<double> v;
             std::string payload(s.get_payload().as_string());
-            if (parse_float_array(payload, v) && v.size() >= 6) {
-                std::lock_guard<std::mutex> lk(bind_0_mtx);
-                bind_0_payload = std::move(v);
-            }
-        }, zenoh::closures::none));
-    bind_1_sub.emplace(g_session->declare_subscriber(
+            if (!_parse_float_array(payload, v)) return;
+            if (v.size() < 6) return;
+            reading_c0_imu_accel_buf(0) = v[0];
+            reading_c0_imu_accel_buf(1) = v[1];
+            reading_c0_imu_accel_buf(2) = v[2];
+            reading_c0_imu_accel_fresh.store(true);
+            reading_c0_imu_gyro_buf(0) = v[3];
+            reading_c0_imu_gyro_buf(1) = v[4];
+            reading_c0_imu_gyro_buf(2) = v[5];
+            reading_c0_imu_gyro_fresh.store(true);
+        },
+        zenoh::closures::none));
+    reading_c0_dvl_sub.emplace(g_reading_session->declare_subscriber(
         zenoh::KeyExpr("manta/ex6/dvl"),
         [](const zenoh::Sample& s) {
-            std::vector<float> v;
+            std::vector<double> v;
             std::string payload(s.get_payload().as_string());
-            if (parse_float_array(payload, v) && v.size() >= 3) {
-                std::lock_guard<std::mutex> lk(bind_1_mtx);
-                bind_1_payload = std::move(v);
-            }
-        }, zenoh::closures::none));
-    pub_2.emplace(g_session->declare_publisher(zenoh::KeyExpr("manta/ex6/estimate")));
+            if (!_parse_float_array(payload, v)) return;
+            if (v.size() < 3) return;
+            reading_c0_dvl_velocity_buf(0) = v[0];
+            reading_c0_dvl_velocity_buf(1) = v[1];
+            reading_c0_dvl_velocity_buf(2) = v[2];
+            reading_c0_dvl_velocity_fresh.store(true);
+        },
+        zenoh::closures::none));
+
+    // Initial state.
+    view_0.reset_to_rest();
+    view_0.set_state_covariance(1.0f, 1.0f, 1.0f, 1.0f);
+
+    // Measurement registrations.
+    ekf_0.measure<3>(&craft.imu().accel, manta::reading_from_buffer<3>(&reading_c0_imu_accel_buf, &reading_c0_imu_accel_fresh));
+    ekf_0.measure<3>(&craft.imu().gyro, manta::reading_from_buffer<3>(&reading_c0_imu_gyro_buf, &reading_c0_imu_gyro_fresh));
+    ekf_0.measure<3>(&craft.dvl().velocity, manta::reading_from_buffer<3>(&reading_c0_dvl_velocity_buf, &reading_c0_dvl_velocity_fresh));
 }
 
 void tick() {
-    { std::lock_guard<std::mutex> lk(bind_0_mtx);
-      if (bind_0_payload.size() >= 6) {
-          craft.imu().set_measurement(manta::geom::Vec3<manta::PartFrame, double>{bind_0_payload[0], bind_0_payload[1], bind_0_payload[2]}, manta::geom::Vec3<manta::PartFrame, double>{bind_0_payload[3], bind_0_payload[4], bind_0_payload[5]});    // member: set_measurement
-          bind_0_payload.clear();
-      } }
-    { std::lock_guard<std::mutex> lk(bind_1_mtx);
-      if (bind_1_payload.size() >= 3) {
-          craft.dvl().set_measurement(manta::geom::Vec3<manta::PartFrame, double>{bind_1_payload[0], bind_1_payload[1], bind_1_payload[2]});    // member: set_measurement
-          bind_1_payload.clear();
-      } }
-
-    ekf_0.begin_step(DT, g_Q);
-
-    if (craft.imu().consume_fresh()) {
-        Eigen::Matrix<double, 6, 1> z;
-        z(0) = craft.imu().last_accel().raw()(0);
-        z(1) = craft.imu().last_accel().raw()(1);
-        z(2) = craft.imu().last_accel().raw()(2);
-        z(3) = craft.imu().last_gyro().raw()(0);
-        z(4) = craft.imu().last_gyro().raw()(1);
-        z(5) = craft.imu().last_gyro().raw()(2);
-        ekf_0.template add_update<6>(_ekf_0_c0_imu_meas{}, z, R_c0_imu);
-    }
-    if (craft.dvl().consume_fresh()) {
-        Eigen::Matrix<double, 3, 1> z;
-        z(0) = craft.dvl().last_velocity().raw()(0);
-        z(1) = craft.dvl().last_velocity().raw()(1);
-        z(2) = craft.dvl().last_velocity().raw()(2);
-        ekf_0.template add_update<3>(_ekf_0_c0_dvl_meas{}, z, R_c0_dvl);
-    }
-
-    ekf_0.end_step();
-
-    if (++g_pub_decim >= kPubEvery) {
-        g_pub_decim = 0;
-        { std::string _json = "{";
-          _json += "\"p\":[";
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(ekf_0.position(0)(0))); _json += _b; }
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ekf_0.position(0)(1))); _json += _b; }
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ekf_0.position(0)(2))); _json += _b; }
-          _json += "]";
-          _json += ",";
-          _json += "\"v\":[";
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(ekf_0.vel_linear(0)(0))); _json += _b; }
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ekf_0.vel_linear(0)(1))); _json += _b; }
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ekf_0.vel_linear(0)(2))); _json += _b; }
-          _json += "]";
-          _json += ",";
-          _json += "\"p_stddev\":[";
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(ekf_0.position_stddev(0)(0))); _json += _b; }
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ekf_0.position_stddev(0)(1))); _json += _b; }
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ekf_0.position_stddev(0)(2))); _json += _b; }
-          _json += "]";
-          _json += ",";
-          _json += "\"v_stddev\":[";
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(ekf_0.vel_linear_stddev(0)(0))); _json += _b; }
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ekf_0.vel_linear_stddev(0)(1))); _json += _b; }
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(ekf_0.vel_linear_stddev(0)(2))); _json += _b; }
-          _json += "]";
-          _json += "}";
-          pub_2->put(zenoh::Bytes(_json));
-        }
-    }
+    ekf_0.predict(DT, g_Q);
+    ekf_0.run_pending_updates();
 }
 
-void shutdown() {
-    bind_0_sub.reset();
-    bind_1_sub.reset();
-    pub_2.reset();
-    g_session.reset();
-}
+void shutdown() {}
 
-// ---- Polymorphic Harness adapter ----
-void Harness::setup()    { ::manta_gen::ex6_est::setup();    }
-void Harness::tick()     { ::manta_gen::ex6_est::tick();     }
-void Harness::shutdown() { ::manta_gen::ex6_est::shutdown(); }
-Harness harness;
+Harness harness{};
+void Harness::setup()    { manta_gen::ex6_est::setup(); }
+void Harness::tick()     { manta_gen::ex6_est::tick(); }
+void Harness::shutdown() { manta_gen::ex6_est::shutdown(); }
 
 }  // namespace manta_gen::ex6_est

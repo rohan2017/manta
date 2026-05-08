@@ -122,10 +122,7 @@ def make_config() -> MantaConfig:
 
     # ---- Cross-world plumbing ----
     # Sim sensor outputs feed est sensor measurement inputs.
-    connect(sim_imu.last_accel,    est_imu.set_measurement_accel)
-    connect(sim_imu.last_gyro,     est_imu.set_measurement_gyro)
-    connect(sim_dvl.last_velocity, est_dvl.set_measurement)
-    connect(sim_mag.last_b,        est_mag.set_measurement)
+    # Cross-world wiring is owned by the EKF's setup() (StateSpec path).
     # Throttle mirrors so predict's force model matches the sim's input.
     connect(sim_thrust_x.throttle, est_thrust_x.set_throttle)
     connect(sim_thrust_z.throttle, est_thrust_z.set_throttle)

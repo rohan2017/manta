@@ -106,6 +106,13 @@ class UKF:
     beta:  float = 2.0
     kappa: float = 0.0
 
+    # Held over from the migration window. Now always True; kept as a
+    # no-op accessor for backwards compatibility.
+    use_state_spec: bool = True
+
+    # Pattern C reading topics — see EKF.read_topic for the semantics.
+    reading_topics: list = field(default_factory=list)
+
     STATE_DIM: int = 13
 
     def __post_init__(self) -> None:
@@ -197,6 +204,16 @@ class UKF:
             signal=sig,
             craft_ref=self,
         )
+
+    def read_topic(self, part, topic: str) -> "UKF":
+        """Bind a Zenoh topic as the reading source for a sensor part.
+        See EKF.read_topic for the contract — payload conventions match."""
+        if part not in self.measurements:
+            raise ValueError(
+                f"UKF.read_topic: part {part.name!r} must be in the UKF's "
+                f"`measurements=` list before binding a reading topic to it.")
+        self.reading_topics.append((part, topic))
+        return self
 
     def cpp_var_name(self) -> str:
         return f"ukf_{self._ukf_id}"
