@@ -27,8 +27,9 @@
 //       w.create_scene().add_craft(craft0);
 //   });
 //
+//   ukf.measure(&craft0.imu().accel, reading_from(sim_imu.accel));
 //   ukf.predict(dt, Q);
-//   ukf.update<MeasDim>(measurement_functor, z, R);
+//   ukf.run_pending_updates();
 
 #include <Eigen/Core>
 #include <array>

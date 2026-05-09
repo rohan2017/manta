@@ -9,35 +9,33 @@
 // linear algebra and dispatches manifold ops via StateSpec::boxplus /
 // boxminus.
 //
-// Phase 2 scope: full craft tracking only. `track(craft)` slices contribute
-// 13 ambient / 12 tangent each. White-noise auto-Q from
-// `Noise<WhiteGaussian>` parts is wired through the existing
-// NoiseRegistry. RW-bias-as-tracked-slice (`track(imu.accel_bias())`)
-// is supported by the StateSpec but the EKF's bias-state machinery is
-// deferred to Phase 5; for now register RW noises through parts and let
-// the legacy EKF's bias path handle them. The two filters coexist
-// during the migration.
+// Tracked slices: full crafts (`track(craft)` → 13 ambient / 12 tangent
+// per craft) and random-walk biases (`track(part.bias())` → Dim ambient
+// / Dim tangent per bias). White-noise auto-Q is assembled from
+// `Noise<WhiteGaussian>` parts via NoiseRegistry; RW-bias drift is added
+// via per-slice σ_rw·√dt entries on L.
 //
 // User-facing flow:
 //
 //   auto state = make_state()
-//       .track(craft0)               // → RigidBody slice
-//       .track(craft1)               // → RigidBody slice
+//       .track(craft0)
+//       .track(craft0.imu().accel_bias())
 //       .build();
 //
-//   constexpr int kNoiseSlots = /* sum of registered white noises */;
+//   constexpr int kNoiseSlots = /* sum of white-noise dims + RW dims */;
 //   EKFGeneric<decltype(state), MeasDim, kNoiseSlots> ekf{state};
 //
-//   // CraftView constructs the Jet shadow internally — no manual jet
-//   // world or void* casts. Pass a generic-Scalar craft factory.
+//   // CraftView owns the Jet shadow. Pass a generic-Scalar factory.
 //   CraftView<decltype(ekf), 0> view0(ekf, [&](auto& w) {
-//       auto c = std::make_unique<MyCraft<typename decltype(w)::Scalar>>(...);
+//       using S = typename std::remove_reference_t<decltype(w)>::Scalar;
+//       auto c = std::make_unique<MyCraft<S>>(...);
 //       w.create_scene().add_craft(*c);
 //       return c;
 //   });
 //
+//   ekf.measure(&craft.imu().accel, reading_from(sim_imu.accel));
 //   ekf.predict(dt, Q);
-//   ekf.update<MeasDim>(measurement_functor, z, R);
+//   ekf.run_pending_updates();
 
 #include <Eigen/Core>
 #include <ceres/jet.h>
@@ -301,10 +299,11 @@ public:
     // ---- Measurement registration ----
     //
     // Bind a Measurement (the model — h(x) cache + R σ source) to a
-    // Reading (where z comes from). At bind() time the EKF resolves the
-    // Jet-side Measurement counterpart by walking the Jet-side craft's
-    // part tree and matching by part-name / measurement-name. The Jet
-    // measurement is what `run_pending_updates()` reads each tick.
+    // Reading (where z comes from). On the first run_pending_updates()
+    // call the EKF resolves the Jet-side Measurement counterpart by
+    // walking the Jet craft's part tree and matching by part-name +
+    // measurement-name; the Jet measurement is what each subsequent
+    // run_pending_updates() reads.
     //
     // Usage:
     //   ekf.measure(&est_craft.imu().accel, reading_from(sim_craft.imu().accel));
