@@ -395,7 +395,15 @@ public:
             TangentVec delta = upd_K_ * upd_y_;
             inject_delta(delta);
 
-            P_ = (StateCov::Identity() - upd_K_ * upd_H_) * P_;
+            // Joseph form: P = (I - K H) P (I - K H)ᵀ + K R Kᵀ. Slightly
+            // more arithmetic than the simple (I - K H) P form, but
+            // preserves PSD under floating-point error — important for
+            // long runs with small innovations. P_ aliases the RHS, so
+            // assemble into a scratch first.
+            upd_IKH_.noalias() = StateCov::Identity() - upd_K_ * upd_H_;
+            upd_P_new_.noalias() = upd_IKH_ * P_ * upd_IKH_.transpose()
+                                 + r * (upd_K_ * upd_K_.transpose());
+            P_ = upd_P_new_;
             P_ = 0.5 * (P_ + P_.transpose().eval());
         }
 
@@ -683,6 +691,8 @@ private:
     Eigen::MatrixXd                                       upd_S_;
     Eigen::Matrix<double, kTangentDim, Eigen::Dynamic>    upd_K_;
     Eigen::MatrixXd                                       upd_eye_;
+    StateCov                                              upd_IKH_;
+    StateCov                                              upd_P_new_;
 };
 
 } // namespace manta::estimation
