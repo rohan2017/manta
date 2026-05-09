@@ -70,7 +70,7 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/ex1_orbit/generated/ex1/ex1.cmake)
 # does X-config mixing on the four Thruster1 rotors.
 include(${CMAKE_CURRENT_SOURCE_DIR}/ex2_quadcopter/generated/ex2/ex2.cmake)
 add_executable(ex2_quadcopter
-    ex2_quadcopter/ex2.cpp
+    ex2_quadcopter/main.cpp
     ${manta_ex2_SOURCES})
 target_link_libraries(ex2_quadcopter PRIVATE manta_examples_shared)
 manta_ex2_apply(ex2_quadcopter)
@@ -80,7 +80,7 @@ manta_ex2_apply(ex2_quadcopter)
 # rate PIDs.
 include(${CMAKE_CURRENT_SOURCE_DIR}/ex3_tvc_rocket/generated/ex3/ex3.cmake)
 add_executable(ex3_tvc_rocket
-    ex3_tvc_rocket/ex3.cpp
+    ex3_tvc_rocket/main.cpp
     ${manta_ex3_SOURCES})
 target_link_libraries(ex3_tvc_rocket PRIVATE manta_examples_shared)
 manta_ex3_apply(ex3_tvc_rocket)

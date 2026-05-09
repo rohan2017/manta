@@ -2,7 +2,7 @@
 
 The deleted `GimbaledThruster` is decomposed into a yaw motor (axis x)
 hosting a pitch motor (axis y) hosting a `Thruster1` engine. The
-controller in `ex3.cpp` runs a stiff position PD on each motor to
+controller in `main.cpp` runs a stiff position PD on each motor to
 emulate the old `set_gimbal(pitch, yaw)` semantics.
 
 Library workflow: codegen emits the Craft type and telemetry; the user's
