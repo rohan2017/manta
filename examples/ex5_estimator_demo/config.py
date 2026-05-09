@@ -31,7 +31,7 @@ Codegen:
 """
 
 from manta_codegen import (Craft, EKF, MantaConfig, Target, World,
-                           connect, publish, subscribe)
+                           publish, subscribe)
 from manta_codegen.parts  import DVL, IMU, Mass, Thruster
 from manta_codegen.fields import GravityField
 
@@ -94,11 +94,14 @@ def make_config() -> MantaConfig:
               initial_position_var=1e-4,
               initial_attitude_var=1e-4,
               initial_velocity_var=1e-2,
-              initial_angular_velocity_var=1e-4)   # Phase 5d: StateSpec + EKFGeneric codegen.
+              initial_angular_velocity_var=1e-4)
 
-    # Cross-world wiring (sim sensors → EKF readings, throttle mirror)
-    # is owned by the StateSpec/EKFGeneric setup() emit. No legacy
-    # `connect(...)` lines needed.
+    # Explicit sim → est actuator mirror so the EKF's predict step
+    # integrates the same throttle the sim is applying. Cross-world
+    # measurement wiring is still owned by the EKF's setup() emit
+    # (sensor parts in `measurements=` are auto-resolved to their
+    # sim counterparts by name + type).
+    ekf.mirror_actuator(sim_thrust.throttle, est_thrust.set_throttle)
 
     # ---- Zenoh I/O ----
     subscribe(sim_thrust.set_throttle, "manta/ex5/cmd")

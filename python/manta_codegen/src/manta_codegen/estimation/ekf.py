@@ -212,6 +212,14 @@ class EKF:
     # Populated via the post-construction `read_topic(part, topic)` method.
     reading_topics: list = field(default_factory=list)
 
+    # Sim-craft → est-craft actuator mirrors. Each entry is
+    # `(source: BoundSignal, sink: BoundSignal)`. The codegen emits one
+    # per-tick mirror in the est module, writing to BOTH the value-side
+    # est craft and its Jet shadow so predict's process model integrates
+    # the same input the source applies. Populated via
+    # `mirror_actuator(source, sink)`.
+    actuator_mirrors: list = field(default_factory=list)
+
     # Static dimension of the rigid-body state — matches CraftT::kRigidStateDim.
     STATE_DIM: int = 13
 
@@ -354,6 +362,36 @@ class EKF:
                 f"EKF.read_topic: part {part.name!r} must be in the EKF's "
                 f"`measurements=` list before binding a reading topic to it.")
         self.reading_topics.append((part, topic))
+        return self
+
+    def mirror_actuator(self, source, sink) -> "EKF":
+        """Mirror an actuator signal from a source craft into the EKF's
+        tracked craft (and its Jet shadow) every tick.
+
+        `source` and `sink` are BoundSignals. The source must be an
+        out-direction signal (e.g. `sim_thrust.throttle`); the sink an
+        in-direction signal on a part of the EKF's tracked craft (e.g.
+        `est_thrust.set_throttle`). Each tick the codegen emits both
+        the value-side and Jet-side write so predict's process model
+        integrates the same input the source applies.
+
+        Required: every actuator on the est-side craft must have a
+        mirror declared explicitly — the EKF will not auto-discover
+        sim/est pairs.
+        """
+        if source.direction != "out":
+            raise ValueError(
+                f"EKF.mirror_actuator: source signal {source.name!r} must "
+                f"be out-direction (got {source.direction!r}).")
+        if sink.direction != "in":
+            raise ValueError(
+                f"EKF.mirror_actuator: sink signal {sink.name!r} must be "
+                f"in-direction (got {sink.direction!r}).")
+        if source.signal.n_floats != sink.signal.n_floats:
+            raise ValueError(
+                f"EKF.mirror_actuator: source/sink width mismatch "
+                f"({source.signal.n_floats} vs {sink.signal.n_floats}).")
+        self.actuator_mirrors.append((source, sink))
         return self
 
     def measurement_dim(self) -> int:

@@ -367,33 +367,47 @@ def emit_filter_cpp(target, filter_obj) -> str:
     lines += [
         "void tick() {",
     ]
-    for ci, c in enumerate(crafts):
-        for est_part in c.all_parts():
-            actuator_pairs = getattr(type(est_part), "actuator_state", None) or []
-            if not actuator_pairs:
-                continue
-            found_sim_var = None
-            found_sim_part = None
-            for sw_name, sw in sim_worlds:
-                sw_idx = ci if ci < len(sw.crafts) else 0
-                sw_entry = sw.crafts[sw_idx]
-                for cand in sw_entry.craft.all_parts():
-                    if cand.name == est_part.name and \
-                            type(cand) is type(est_part):
-                        found_sim_var = (
-                            f"manta_gen::{sw.name}::"
-                            f"{sim_craft_var(sw, sw_idx)}")
-                        found_sim_part = cand
-                        break
-                if found_sim_part is not None:
+    for source_sig, sink_sig in filter_obj.actuator_mirrors:
+        # Locate source craft in sim worlds (or UKF's own world).
+        src_var = None
+        for sw_name, sw in sim_worlds:
+            for i, entry in enumerate(sw.crafts):
+                if entry.craft is source_sig.craft_ref:
+                    src_var = (f"manta_gen::{sw.name}::"
+                               f"{sim_craft_var(sw, i)}")
                     break
-            if found_sim_part is None:
-                continue
-            est_var = craft_var_for(ci)
-            for setter, getter in actuator_pairs:
-                lines.append(
-                    f"    {est_var}.{est_part.name}().{setter}("
-                    f"{found_sim_var}.{found_sim_part.name}().{getter}());")
+            if src_var is not None:
+                break
+        if src_var is None:
+            for i, c in enumerate(crafts):
+                if c is source_sig.craft_ref:
+                    src_var = craft_var_for(i)
+                    break
+        if src_var is None:
+            raise RuntimeError(
+                f"mirror_actuator: source craft for signal "
+                f"{source_sig.part_name}.{source_sig.name!r} not found.")
+
+        # Locate sink craft in UKF's world.
+        sink_idx = None
+        for i, c in enumerate(crafts):
+            if c is sink_sig.craft_ref:
+                sink_idx = i
+                break
+        if sink_idx is None:
+            raise RuntimeError(
+                f"mirror_actuator: sink craft for signal "
+                f"{sink_sig.part_name}.{sink_sig.name!r} is not in the "
+                f"UKF's tracked world.")
+
+        src_acc = f"{src_var}.{source_sig.part_name}()"
+        sink_acc = f"{craft_var_for(sink_idx)}.{sink_sig.part_name}()"
+        n = source_sig.signal.n_floats
+        read_exprs = [source_sig.signal.cpp_read_exprs[i].format(accessor=src_acc)
+                      for i in range(n)]
+        fmt = {"accessor": sink_acc,
+               **{f"v{i}": read_exprs[i] for i in range(n)}}
+        lines.append(f"    {sink_sig.signal.cpp_write_stmt.format(**fmt)}")
 
     lines += [
         f"    {filter_var}.predict(DT, g_Q);",

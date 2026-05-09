@@ -64,8 +64,8 @@ void setup() {
 }
 
 void tick() {
-    view_0.template jet_craft<Ex5EstCraftT<JetType>>().thrust().set_throttle(JetType(manta_gen::ex5_sim::craft.thrust().throttle()));
     craft.thrust().set_throttle(manta_gen::ex5_sim::craft.thrust().throttle());
+    view_0.template jet_craft<Ex5EstCraftT<JetType>>().thrust().set_throttle(JetType(manta_gen::ex5_sim::craft.thrust().throttle()));
     ekf_0.predict(DT, g_Q);
     ekf_0.run_pending_updates();
 }

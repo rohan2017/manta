@@ -605,45 +605,66 @@ def emit_filter_cpp(target, filter_obj) -> str:
     # ---- tick() ----
     #
     # Sim worlds step in their own modules' tick(); the per-target
-    # orchestrator calls them before invoking ours. Here we just mirror
-    # actuator state (so the predict's process model sees the sim's
-    # commanded inputs) and run predict + measurement updates.
+    # orchestrator calls them before invoking ours. Here we just emit the
+    # user-declared actuator mirrors (so the predict's process model
+    # sees the same input the source applies) and run predict +
+    # measurement updates.
     lines += [
         "void tick() {",
     ]
-    for ci, c in enumerate(crafts):
-        for est_part in c.all_parts():
-            actuator_pairs = getattr(type(est_part), "actuator_state", None) or []
-            if not actuator_pairs:
-                continue
-            # Find sim source: same craft slot, same part name + type.
-            found_sim_var = None
-            found_sim_part = None
-            for sw_name, sw in sim_worlds:
-                sw_idx = ci if ci < len(sw.crafts) else 0
-                sw_entry = sw.crafts[sw_idx]
-                for cand in sw_entry.craft.all_parts():
-                    if cand.name == est_part.name and \
-                            type(cand) is type(est_part):
-                        found_sim_var = (
-                            f"manta_gen::{sw.name}::"
-                            f"{sim_craft_var(sw, sw_idx)}")
-                        found_sim_part = cand
-                        break
-                if found_sim_part is not None:
+    for source_sig, sink_sig in filter_obj.actuator_mirrors:
+        # Locate the source craft in the sim worlds (or in the EKF's
+        # own world for the degenerate same-instance case).
+        src_var = None
+        for sw_name, sw in sim_worlds:
+            for i, entry in enumerate(sw.crafts):
+                if entry.craft is source_sig.craft_ref:
+                    src_var = (f"manta_gen::{sw.name}::"
+                               f"{sim_craft_var(sw, i)}")
                     break
-            if found_sim_part is None:
-                continue
-            est_var = craft_var_for(ci)
-            cls = class_name_for_craft(c.name)
-            jet_accessor = f"view_{ci}.template jet_craft<{cls}T<JetType>>()"
-            for setter, getter in actuator_pairs:
-                lines.append(
-                    f"    {jet_accessor}.{est_part.name}().{setter}("
-                    f"JetType({found_sim_var}.{found_sim_part.name}().{getter}()));")
-                lines.append(
-                    f"    {est_var}.{est_part.name}().{setter}("
-                    f"{found_sim_var}.{found_sim_part.name}().{getter}());")
+            if src_var is not None:
+                break
+        if src_var is None:
+            for i, c in enumerate(crafts):
+                if c is source_sig.craft_ref:
+                    src_var = craft_var_for(i)
+                    break
+        if src_var is None:
+            raise RuntimeError(
+                f"mirror_actuator: source craft for signal "
+                f"{source_sig.part_name}.{source_sig.name!r} not found in "
+                f"any sim world or in the EKF's own world.")
+
+        # Locate the sink craft in the EKF's world.
+        sink_idx = None
+        for i, c in enumerate(crafts):
+            if c is sink_sig.craft_ref:
+                sink_idx = i
+                break
+        if sink_idx is None:
+            raise RuntimeError(
+                f"mirror_actuator: sink craft for signal "
+                f"{sink_sig.part_name}.{sink_sig.name!r} is not in the "
+                f"EKF's tracked world. Sinks must live on the EKF craft.")
+
+        src_acc = f"{src_var}.{source_sig.part_name}()"
+        sink_var = craft_var_for(sink_idx)
+        sink_acc = f"{sink_var}.{sink_sig.part_name}()"
+        cls = class_name_for_craft(crafts[sink_idx].name)
+        jet_acc = (f"view_{sink_idx}.template jet_craft<"
+                   f"{cls}T<JetType>>().{sink_sig.part_name}()")
+
+        n = source_sig.signal.n_floats
+        read_exprs = [source_sig.signal.cpp_read_exprs[i].format(accessor=src_acc)
+                      for i in range(n)]
+        # Value-side write.
+        fmt_v = {"accessor": sink_acc, **{f"v{i}": read_exprs[i] for i in range(n)}}
+        lines.append(f"    {sink_sig.signal.cpp_write_stmt.format(**fmt_v)}")
+        # Jet-side write — wrap each value with JetType(...) so the Jet
+        # shadow craft sees the same input.
+        fmt_j = {"accessor": jet_acc,
+                 **{f"v{i}": f"JetType({read_exprs[i]})" for i in range(n)}}
+        lines.append(f"    {sink_sig.signal.cpp_write_stmt.format(**fmt_j)}")
 
     lines += [
         f"    {filter_var}.predict(DT, g_Q);",

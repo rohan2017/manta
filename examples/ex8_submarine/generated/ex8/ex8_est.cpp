@@ -65,10 +65,10 @@ void setup() {
 }
 
 void tick() {
-    view_0.template jet_craft<Ex8EstCraftT<JetType>>().thrust_x().set_throttle(JetType(manta_gen::ex8_sim::craft.thrust_x().throttle()));
     craft.thrust_x().set_throttle(manta_gen::ex8_sim::craft.thrust_x().throttle());
-    view_0.template jet_craft<Ex8EstCraftT<JetType>>().thrust_z().set_throttle(JetType(manta_gen::ex8_sim::craft.thrust_z().throttle()));
+    view_0.template jet_craft<Ex8EstCraftT<JetType>>().thrust_x().set_throttle(JetType(manta_gen::ex8_sim::craft.thrust_x().throttle()));
     craft.thrust_z().set_throttle(manta_gen::ex8_sim::craft.thrust_z().throttle());
+    view_0.template jet_craft<Ex8EstCraftT<JetType>>().thrust_z().set_throttle(JetType(manta_gen::ex8_sim::craft.thrust_z().throttle()));
     ekf_0.predict(DT, g_Q);
     ekf_0.run_pending_updates();
 }

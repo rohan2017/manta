@@ -113,6 +113,10 @@ class UKF:
     # Pattern C reading topics — see EKF.read_topic for the semantics.
     reading_topics: list = field(default_factory=list)
 
+    # Sim → real-world actuator mirrors — see EKF.mirror_actuator. The
+    # UKF emits only the value-side write (no Jet shadow).
+    actuator_mirrors: list = field(default_factory=list)
+
     STATE_DIM: int = 13
 
     def __post_init__(self) -> None:
@@ -213,6 +217,25 @@ class UKF:
                 f"UKF.read_topic: part {part.name!r} must be in the UKF's "
                 f"`measurements=` list before binding a reading topic to it.")
         self.reading_topics.append((part, topic))
+        return self
+
+    def mirror_actuator(self, source, sink) -> "UKF":
+        """Mirror an actuator signal from a source craft into the UKF's
+        tracked craft. See EKF.mirror_actuator — same shape; UKF emits
+        only the value-side write (no Jet shadow)."""
+        if source.direction != "out":
+            raise ValueError(
+                f"UKF.mirror_actuator: source signal {source.name!r} must "
+                f"be out-direction (got {source.direction!r}).")
+        if sink.direction != "in":
+            raise ValueError(
+                f"UKF.mirror_actuator: sink signal {sink.name!r} must be "
+                f"in-direction (got {sink.direction!r}).")
+        if source.signal.n_floats != sink.signal.n_floats:
+            raise ValueError(
+                f"UKF.mirror_actuator: source/sink width mismatch "
+                f"({source.signal.n_floats} vs {sink.signal.n_floats}).")
+        self.actuator_mirrors.append((source, sink))
         return self
 
     def cpp_var_name(self) -> str:

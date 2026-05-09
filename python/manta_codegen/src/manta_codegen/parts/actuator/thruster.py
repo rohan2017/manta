@@ -26,11 +26,6 @@ class _ThrusterBase(PartDescriptor):
         scalar_in_signal ("set_throttle", "set_throttle"),
     ]
 
-    # Mirror the commanded throttle from MFloat to Jet before predict so
-    # the Jet world's force model matches what the value-side craft was
-    # told to apply (via cross-world `connect()` or external Zenoh).
-    actuator_state = [("set_throttle", "throttle")]
-
     def __init__(self,
                  name: str,
                  force_coefs:  list[tuple[float, float, float]],
