@@ -19,9 +19,13 @@
 //   auto state = make_state().track(craft0).build();
 //   UKFGeneric<decltype(state), MeasDim> ukf{state};
 //
-//   manta::WorldT<double> world_real;
-//   /* ...build value-side scene + craft0... */
-//   ukf.bind(world_real);
+//   // CraftView configures the UKF's internal value world via a factory.
+//   // The user-owned `craft0` is added to the world; fields registered
+//   // inside the factory are owned externally and outlive the UKF.
+//   CraftView<decltype(ukf), 0> view0(ukf, [&](auto& w) {
+//       w.register_field(grav);
+//       w.create_scene().add_craft(craft0);
+//   });
 //
 //   ukf.predict(dt, Q);
 //   ukf.update<MeasDim>(measurement_functor, z, R);
@@ -75,7 +79,10 @@ public:
         spec_.pull_ambient(x_ref_);
     }
 
-    void bind(WorldR& w_real) { w_real_ = &w_real; }
+    // The UKF owns its real (value-typed) world. CraftView's factory ctor
+    // populates it; the user never touches this directly.
+    WorldR&       real_world()       noexcept { return real_world_; }
+    const WorldR& real_world() const noexcept { return real_world_; }
 
     void set_state(const StateVec& x) noexcept {
         x_ref_ = x;
@@ -93,8 +100,8 @@ public:
     // value world. The first sigma (chi_0 = zero tangent) propagation
     // captures x_ref_post; subsequent sigmas reduce relative to that.
     void predict(double dt, const StateCov& Q) {
-        if (!w_real_) return;
-        w_real_->clock().set_dt(static_cast<float>(dt));
+        if (!real_world_.crafts_added()) return;
+        real_world_.clock().set_dt(static_cast<float>(dt));
 
         // Snapshot current ambient state — every sigma evaluation
         // restores it before the next sigma.
@@ -112,7 +119,7 @@ public:
         auto f = [&](const TangentVec& xi, double /*dt_*/) -> TangentVec {
             // Lift: x_full = x_ref ⊞ xi.
             apply_tangent_to_ambient(xi);
-            w_real_->step();
+            real_world_.step();
 
             // Read back ambient state.
             StateVec x_full_post;
@@ -174,7 +181,7 @@ public:
     }
 
     void run_pending_updates() {
-        if (!w_real_) return;
+        if (!real_world_.crafts_added()) return;
         if (bindings_.empty()) return;
 
         for (auto& b : bindings_) {
@@ -198,7 +205,7 @@ public:
                 // update() reads the right state, then run the world
                 // step to populate caches, then read the measurement.
                 spec_.push_ambient(x_full);
-                w_real_->kinematic_and_aggregate();
+                real_world_.kinematic_and_aggregate();
                 model->read_value(hv.data());
                 return hv;
             };
@@ -367,7 +374,7 @@ private:
 
     StateSpecT                       spec_;
     UKFKernel<kTangentDim, MeasDim>  kernel_;
-    WorldR*                          w_real_ = nullptr;
+    WorldR                           real_world_{};
     StateVec                         x_ref_;
     StateCov                         P_;
     StateVec                         ref_snapshot_ = StateVec::Zero();

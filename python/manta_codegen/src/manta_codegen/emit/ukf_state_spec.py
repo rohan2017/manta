@@ -73,8 +73,6 @@ def emit_filter_hpp(target, filter_obj) -> str:
         f"using Spec = manta::estimation::StateSpec<{spec_args}>;",
         f"using UkfT = manta::estimation::UKFGeneric<Spec, /*MeasDim=*/{meas_dim}>;",
         "",
-        "extern manta::WorldT<double>          w;",
-        "extern manta::SceneT<double>*         scene;",
     ]
     if world.fields:
         for i, f in enumerate(world.fields):
@@ -162,9 +160,10 @@ def emit_filter_cpp(target, filter_obj) -> str:
         "",
         f"namespace manta_gen::{name} {{",
         "",
-        "manta::WorldT<double>  w{};",
-        "manta::SceneT<double>* scene = nullptr;",
     ]
+    # Fields and the user-owned crafts live at namespace scope so they
+    # outlive the UKF's internal real world (the world holds field
+    # pointers + craft references, but doesn't own them).
     for i, f in enumerate(world.fields):
         lines.append(f.emit_construction(f"field_{i}"))
     for i, c in enumerate(crafts):
@@ -178,9 +177,25 @@ def emit_filter_cpp(target, filter_obj) -> str:
         f"{_f(filter_obj.alpha)}, {_f(filter_obj.beta)}, {_f(filter_obj.kappa)} "
         f"}};",
     ]
+    # CraftView's UKF-shaped factory ctor: configures the UKF's internal
+    # real world by registering fields and adding the user-owned craft.
+    field_regs = "".join(
+        f"        w.register_field(field_{i});\n"
+        for i in range(len(world.fields))
+    )
     for i in range(num):
-        lines.append(
-            f"manta::estimation::CraftView<UkfT, {i}> view_{i}{{{filter_var}}};")
+        lines += [
+            f"manta::estimation::CraftView<UkfT, {i}> view_{i}{{{filter_var},",
+            f"    [](auto& w) {{",
+        ]
+        if i == 0 and field_regs:
+            # Only the first CraftView registers fields (all live in the
+            # same world; subsequent registrations would re-register).
+            lines.append(field_regs.rstrip("\n"))
+        lines += [
+            f"        w.create_scene().add_craft({craft_var_for(i)});",
+            f"    }}}};",
+        ]
     lines += [
         "",
         f"}}  // namespace manta_gen::{name}",
@@ -242,22 +257,12 @@ def emit_filter_cpp(target, filter_obj) -> str:
         "",
     ]
 
-    # setup
+    # setup — UKF owns its real world; field/craft setup happens in the
+    # CraftView factory closures at namespace-scope construction time.
     lines += [
         f"namespace manta_gen::{name} {{",
         "",
         "void setup() {",
-        "    w.clock().set_dt(DT);",
-        "    scene = &w.create_scene();",
-    ]
-    for i, f in enumerate(world.fields):
-        lines.append(f"    w.register_field(field_{i});")
-    for i in range(num):
-        lines.append(f"    scene->add_craft({craft_var_for(i)});")
-    lines += [
-        "",
-        f"    {filter_var}.bind(w);",
-        "",
     ]
 
     # Pattern C subscribers.

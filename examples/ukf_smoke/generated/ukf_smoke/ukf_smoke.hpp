@@ -23,8 +23,6 @@ inline constexpr float SIM_RATE_MULT  = 1.0f;
 using Spec = manta::estimation::StateSpec<manta::manifold::RigidBody>;
 using UkfT = manta::estimation::UKFGeneric<Spec, /*MeasDim=*/0>;
 
-extern manta::WorldT<double>          w;
-extern manta::SceneT<double>*         scene;
 extern UkfSmokeCraftT<double> craft;
 
 extern UkfT ukf_0;

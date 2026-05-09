@@ -89,6 +89,10 @@ public:
     //       return c;
     //   });
     template <class CraftFactory>
+        requires requires(FilterT& f, CraftT<typename FilterT::Jet>* p) {
+            f.jet_world();
+            f.template register_jet_craft<SliceIdx>(p);
+        }
     CraftView(FilterT& filter, CraftFactory&& factory) : filter_(filter) {
         WorldT<Jet>& jw = filter.jet_world();
 
@@ -111,6 +115,28 @@ public:
         jet_craft_uptr_ = std::move(jet_uptr);
 
         filter.template register_jet_craft<SliceIdx>(jc_raw);
+    }
+
+    // UKF path — UKF owns its real (value-typed) world. The factory
+    // configures that world: registers fields and adds the user-owned
+    // craft to a scene. No unique_ptr is returned (the craft is owned by
+    // the user, NOT by CraftView).
+    //
+    // Example:
+    //
+    //   fields::GravityField grav{...};
+    //   UkfSmokeCraftT<double> craft{...};
+    //   auto state = make_state().track(craft).build();
+    //   UkfT ukf{state};
+    //   CraftView<UkfT, 0> view(ukf, [&](auto& w) {
+    //       w.register_field(grav);
+    //       w.create_scene().add_craft(craft);
+    //   });
+    template <class WorldFactory>
+        requires requires(FilterT& f) { f.real_world(); }
+              && (!requires { typename FilterT::Jet; })
+    CraftView(FilterT& filter, WorldFactory&& factory) : filter_(filter) {
+        factory(filter.real_world());
     }
 
     // Typed accessor for the Jet-side craft (downcast to the user type).

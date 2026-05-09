@@ -15,12 +15,13 @@
 
 namespace manta_gen::ukf_smoke {
 
-manta::WorldT<double>  w{};
-manta::SceneT<double>* scene = nullptr;
 UkfSmokeCraftT<double> craft{};
 
 UkfT ukf_0{ manta::estimation::make_state().track(craft).build(), 0.001f, 2.0f, 0.0f };
-manta::estimation::CraftView<UkfT, 0> view_0{ukf_0};
+manta::estimation::CraftView<UkfT, 0> view_0{ukf_0,
+    [](auto& w) {
+        w.create_scene().add_craft(craft);
+    }};
 
 }  // namespace manta_gen::ukf_smoke
 
@@ -67,12 +68,6 @@ static bool _parse_float_array(std::string_view s,
 namespace manta_gen::ukf_smoke {
 
 void setup() {
-    w.clock().set_dt(DT);
-    scene = &w.create_scene();
-    scene->add_craft(craft);
-
-    ukf_0.bind(w);
-
     g_reading_session.emplace(zenoh::Session::open(zenoh::Config::create_default()));
     reading_imu_sub.emplace(g_reading_session->declare_subscriber(
         zenoh::KeyExpr("manta/ukf_smoke/imu"),
