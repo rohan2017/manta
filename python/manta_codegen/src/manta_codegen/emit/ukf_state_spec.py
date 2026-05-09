@@ -363,51 +363,56 @@ def emit_filter_cpp(target, filter_obj) -> str:
                     f"call ukf.read_topic({m.name}, '...') in Python config)")
     lines += ["}", ""]
 
-    # tick
+    # tick — cross-world `connect()` calls whose sink is on this UKF's
+    # tracked craft are emitted here as the per-tick mirror (value-side
+    # only; UKF has no Jet shadow).
     lines += [
         "void tick() {",
     ]
-    for source_sig, sink_sig in filter_obj.actuator_mirrors:
-        # Locate source craft in sim worlds (or UKF's own world).
-        src_var = None
-        for sw_name, sw in sim_worlds:
-            for i, entry in enumerate(sw.crafts):
-                if entry.craft is source_sig.craft_ref:
-                    src_var = (f"manta_gen::{sw.name}::"
-                               f"{sim_craft_var(sw, i)}")
+    est_craft_ids = {id(c) for c in crafts}
+    seen_world_ids = set()
+    for sw_name, sw in sim_worlds:
+        if id(sw) in seen_world_ids:
+            continue
+        seen_world_ids.add(id(sw))
+        for conn in sw.connections:
+            if id(conn.sink.craft_ref) not in est_craft_ids:
+                continue
+            src = conn.source
+            snk = conn.sink
+            # Locate source craft.
+            src_var = None
+            for ssw_name, ssw in sim_worlds:
+                for i, entry in enumerate(ssw.crafts):
+                    if entry.craft is src.craft_ref:
+                        src_var = (f"manta_gen::{ssw.name}::"
+                                   f"{sim_craft_var(ssw, i)}")
+                        break
+                if src_var is not None:
                     break
-            if src_var is not None:
-                break
-        if src_var is None:
+            if src_var is None:
+                for i, c in enumerate(crafts):
+                    if c is src.craft_ref:
+                        src_var = craft_var_for(i)
+                        break
+            if src_var is None:
+                raise RuntimeError(
+                    f"connect: source craft for {src.part_name}.{src.name!r} "
+                    f"not found.")
+            # Locate sink craft.
+            sink_idx = None
             for i, c in enumerate(crafts):
-                if c is source_sig.craft_ref:
-                    src_var = craft_var_for(i)
+                if c is snk.craft_ref:
+                    sink_idx = i
                     break
-        if src_var is None:
-            raise RuntimeError(
-                f"mirror_actuator: source craft for signal "
-                f"{source_sig.part_name}.{source_sig.name!r} not found.")
-
-        # Locate sink craft in UKF's world.
-        sink_idx = None
-        for i, c in enumerate(crafts):
-            if c is sink_sig.craft_ref:
-                sink_idx = i
-                break
-        if sink_idx is None:
-            raise RuntimeError(
-                f"mirror_actuator: sink craft for signal "
-                f"{sink_sig.part_name}.{sink_sig.name!r} is not in the "
-                f"UKF's tracked world.")
-
-        src_acc = f"{src_var}.{source_sig.part_name}()"
-        sink_acc = f"{craft_var_for(sink_idx)}.{sink_sig.part_name}()"
-        n = source_sig.signal.n_floats
-        read_exprs = [source_sig.signal.cpp_read_exprs[i].format(accessor=src_acc)
-                      for i in range(n)]
-        fmt = {"accessor": sink_acc,
-               **{f"v{i}": read_exprs[i] for i in range(n)}}
-        lines.append(f"    {sink_sig.signal.cpp_write_stmt.format(**fmt)}")
+            src_acc = f"{src_var}.{src.part_name}()"
+            sink_acc = f"{craft_var_for(sink_idx)}.{snk.part_name}()"
+            n = src.signal.n_floats
+            read_exprs = [src.signal.cpp_read_exprs[i].format(accessor=src_acc)
+                          for i in range(n)]
+            fmt = {"accessor": sink_acc,
+                   **{f"v{i}": read_exprs[i] for i in range(n)}}
+            lines.append(f"    {snk.signal.cpp_write_stmt.format(**fmt)}")
 
     lines += [
         f"    {filter_var}.predict(DT, g_Q);",

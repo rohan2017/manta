@@ -98,6 +98,62 @@ def _world_noise_slot_count(world) -> int:
     return n
 
 
+def _emit_cross_world_mirror(lines, conn, crafts, sim_worlds,
+                              sim_craft_var, craft_var_for,
+                              class_name_for_craft):
+    """Emit the value-side + Jet-shadow mirror for a cross-world
+    `connect(source, sink)` whose sink lives on this EKF's tracked
+    craft. The source can live on any sim world."""
+    src = conn.source
+    snk = conn.sink
+
+    # Locate source craft in sim worlds (or in the EKF's own world if
+    # the user wired a same-world connect — degenerate but allowed).
+    src_var = None
+    for sw_name, sw in sim_worlds:
+        for i, entry in enumerate(sw.crafts):
+            if entry.craft is src.craft_ref:
+                src_var = f"manta_gen::{sw.name}::{sim_craft_var(sw, i)}"
+                break
+        if src_var is not None:
+            break
+    if src_var is None:
+        for i, c in enumerate(crafts):
+            if c is src.craft_ref:
+                src_var = craft_var_for(i)
+                break
+    if src_var is None:
+        raise RuntimeError(
+            f"connect: source craft for {src.part_name}.{src.name!r} "
+            f"not found in any sim world or in the EKF's own world.")
+
+    # Locate sink craft index in EKF's world.
+    sink_idx = None
+    for i, c in enumerate(crafts):
+        if c is snk.craft_ref:
+            sink_idx = i
+            break
+    if sink_idx is None:
+        raise RuntimeError(
+            f"connect: sink craft for {snk.part_name}.{snk.name!r} not "
+            f"in the EKF's world.")
+
+    src_acc  = f"{src_var}.{src.part_name}()"
+    sink_acc = f"{craft_var_for(sink_idx)}.{snk.part_name}()"
+    cls = class_name_for_craft(crafts[sink_idx].name)
+    jet_acc = (f"view_{sink_idx}.template jet_craft<"
+               f"{cls}T<JetType>>().{snk.part_name}()")
+
+    n = src.signal.n_floats
+    read_exprs = [src.signal.cpp_read_exprs[i].format(accessor=src_acc)
+                  for i in range(n)]
+    fmt_v = {"accessor": sink_acc, **{f"v{i}": read_exprs[i] for i in range(n)}}
+    lines.append(f"    {snk.signal.cpp_write_stmt.format(**fmt_v)}")
+    fmt_j = {"accessor": jet_acc,
+             **{f"v{i}": f"JetType({read_exprs[i]})" for i in range(n)}}
+    lines.append(f"    {snk.signal.cpp_write_stmt.format(**fmt_j)}")
+
+
 def _find_sim_source_part(target, est_part):
     """Find a sim-side part with the same name as `est_part` in another
     craft in the same Target (Pattern A — sim+est in one process). The
@@ -605,66 +661,31 @@ def emit_filter_cpp(target, filter_obj) -> str:
     # ---- tick() ----
     #
     # Sim worlds step in their own modules' tick(); the per-target
-    # orchestrator calls them before invoking ours. Here we just emit the
-    # user-declared actuator mirrors (so the predict's process model
-    # sees the same input the source applies) and run predict +
-    # measurement updates.
+    # orchestrator calls them before invoking ours. Cross-world
+    # `connect(source, sink)` calls — those whose sink lands on a craft
+    # in this filter's world — get emitted here as the per-tick mirror,
+    # writing to BOTH the value-side est craft and its Jet shadow so
+    # predict's process model integrates the same input the source
+    # applies. Intra-source-world connects are handled by main.py.
     lines += [
         "void tick() {",
     ]
-    for source_sig, sink_sig in filter_obj.actuator_mirrors:
-        # Locate the source craft in the sim worlds (or in the EKF's
-        # own world for the degenerate same-instance case).
-        src_var = None
-        for sw_name, sw in sim_worlds:
-            for i, entry in enumerate(sw.crafts):
-                if entry.craft is source_sig.craft_ref:
-                    src_var = (f"manta_gen::{sw.name}::"
-                               f"{sim_craft_var(sw, i)}")
-                    break
-            if src_var is not None:
-                break
-        if src_var is None:
-            for i, c in enumerate(crafts):
-                if c is source_sig.craft_ref:
-                    src_var = craft_var_for(i)
-                    break
-        if src_var is None:
-            raise RuntimeError(
-                f"mirror_actuator: source craft for signal "
-                f"{source_sig.part_name}.{source_sig.name!r} not found in "
-                f"any sim world or in the EKF's own world.")
-
-        # Locate the sink craft in the EKF's world.
-        sink_idx = None
-        for i, c in enumerate(crafts):
-            if c is sink_sig.craft_ref:
-                sink_idx = i
-                break
-        if sink_idx is None:
-            raise RuntimeError(
-                f"mirror_actuator: sink craft for signal "
-                f"{sink_sig.part_name}.{sink_sig.name!r} is not in the "
-                f"EKF's tracked world. Sinks must live on the EKF craft.")
-
-        src_acc = f"{src_var}.{source_sig.part_name}()"
-        sink_var = craft_var_for(sink_idx)
-        sink_acc = f"{sink_var}.{sink_sig.part_name}()"
-        cls = class_name_for_craft(crafts[sink_idx].name)
-        jet_acc = (f"view_{sink_idx}.template jet_craft<"
-                   f"{cls}T<JetType>>().{sink_sig.part_name}()")
-
-        n = source_sig.signal.n_floats
-        read_exprs = [source_sig.signal.cpp_read_exprs[i].format(accessor=src_acc)
-                      for i in range(n)]
-        # Value-side write.
-        fmt_v = {"accessor": sink_acc, **{f"v{i}": read_exprs[i] for i in range(n)}}
-        lines.append(f"    {sink_sig.signal.cpp_write_stmt.format(**fmt_v)}")
-        # Jet-side write — wrap each value with JetType(...) so the Jet
-        # shadow craft sees the same input.
-        fmt_j = {"accessor": jet_acc,
-                 **{f"v{i}": f"JetType({read_exprs[i]})" for i in range(n)}}
-        lines.append(f"    {sink_sig.signal.cpp_write_stmt.format(**fmt_j)}")
+    est_craft_ids = {id(c) for c in crafts}
+    # Walk every world's connections list; pick those whose sink craft is
+    # in the EKF's world.
+    seen_world_ids = set()
+    for sw_name, sw in sim_worlds:
+        if id(sw) in seen_world_ids:
+            continue
+        seen_world_ids.add(id(sw))
+        for conn in sw.connections:
+            if id(conn.sink.craft_ref) not in est_craft_ids:
+                continue
+            _emit_cross_world_mirror(lines, conn, crafts, sim_worlds,
+                                      sim_craft_var, craft_var_for,
+                                      class_name_for_craft)
+    # Same-world connects (source on the est craft itself) are intra-world
+    # and handled by main.py — skip here.
 
     lines += [
         f"    {filter_var}.predict(DT, g_Q);",

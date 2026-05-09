@@ -23,7 +23,7 @@ Codegen:
 """
 
 from manta_codegen import (Craft, EKF, MantaConfig, Target, World,
-                           publish, subscribe)
+                           connect, publish, subscribe)
 from manta_codegen.parts  import (DVL, IMU, Magnetometer, Mass, PointBuoy,
                                   Surface1, Thruster)
 from manta_codegen.fields import FluidField, GravityField, MagField
@@ -122,10 +122,11 @@ def make_config() -> MantaConfig:
 
     # ---- Cross-world plumbing ----
     # Sensor measurement wiring is owned by the EKF's setup() (StateSpec
-    # path); actuator mirrors are explicit so predict's force model
-    # integrates the same input the sim is applying.
-    ekf.mirror_actuator(sim_thrust_x.throttle, est_thrust_x.set_throttle)
-    ekf.mirror_actuator(sim_thrust_z.throttle, est_thrust_z.set_throttle)
+    # path); actuator mirrors go through the unified `connect()`
+    # mechanism — when the sink lands on an EKF-tracked craft the
+    # codegen emits both the value-side and Jet-shadow write.
+    connect(sim_thrust_x.throttle, est_thrust_x.set_throttle)
+    connect(sim_thrust_z.throttle, est_thrust_z.set_throttle)
 
     # ---- Zenoh I/O ----
     subscribe(sim_thrust_x.set_throttle, "manta/ex8/thrust_x/cmd")
