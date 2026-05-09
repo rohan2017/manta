@@ -68,8 +68,6 @@ class EKFGeneric {
 public:
     // ---- Spec accessor (used by CraftView) ----
     using StateSpec = StateSpecT;
-    // Convenience alias for clients (older naming).
-    using StateSpecType = StateSpecT;
 
     // ---- Compile-time dimensions ----
     static constexpr int kStateDim     = StateSpecT::ambient_dim;
@@ -143,10 +141,10 @@ private:
     // user's NumNoiseSlots template arg.
     void finalize_bindings() {
         // Walk every Jet-side craft's parts to register white-noise sources
-        // for auto-Q. RW biases are skipped — they're tracked as
-        // BiasRandomWalk slices and wired up below.
+        // for auto-Q. RW biases are tracked as BiasRandomWalk slices in
+        // the StateSpec and wired up below — register_random_walk in the
+        // registry just clears the source's slots.
         noise_registry_.clear();
-        noise_registry_.set_skip_random_walk(true);
         const auto& src_handles = spec_.handles();
         for (int i = 0; i < StateSpecT::num_slices; ++i) {
             if (src_handles[i].kind != TrackedKind::Craft) continue;
@@ -160,9 +158,7 @@ private:
             auto* cj = static_cast<CraftT<Jet>*>(jet_handles_[i]);
             walk_register_noise(cj->root(), noise_registry_);
         }
-        noise_registry_.apply_slot_offsets(
-            /*noise_input_offset=*/kNoiseColStart,
-            /*bias_state_offset =*/0);
+        noise_registry_.apply_slot_offsets(kNoiseColStart);
 
         rw_bindings_.clear();
         int next_driver_slot_local = noise_registry_.num_slots();
@@ -398,41 +394,6 @@ public:
             P_ = (StateCov::Identity() - K * H) * P_;
             P_ = 0.5 * (P_ + P_.transpose().eval());
         }
-
-        spec_.push_ambient(x_ref_);
-    }
-
-    // ---- Single-shot Update (legacy / explicit-functor path) ----
-    template <int N, class HFunctor>
-    void update(const HFunctor& h,
-                const Eigen::Matrix<double, N, 1>& z,
-                const Eigen::Matrix<double, N, N>& R) {
-        // Seed the ambient state with identity tangent Jets.
-        Eigen::Matrix<Jet, kTangentDim, 1> delta_jet;
-        for (int i = 0; i < kTangentDim; ++i) delta_jet(i) = Jet(0.0, i);
-
-        Eigen::Matrix<Jet, kStateDim, 1> x_jet;
-        StateSpecT::template boxplus<Jet>(x_ref_.data(), delta_jet.data(),
-                                          x_jet.data());
-
-        Eigen::Matrix<Jet, N, 1> z_jet = h(x_jet);
-
-        Eigen::Matrix<double, N, 1>           z_pred;
-        Eigen::Matrix<double, N, kTangentDim> H;
-        for (int i = 0; i < N; ++i) {
-            z_pred(i) = z_jet(i).a;
-            for (int j = 0; j < kTangentDim; ++j) H(i, j) = z_jet(i).v[j];
-        }
-
-        Eigen::Matrix<double, N, 1>           y = z - z_pred;
-        Eigen::Matrix<double, N, N>           S = H * P_ * H.transpose() + R;
-        Eigen::Matrix<double, kTangentDim, N> K = P_ * H.transpose() * S.inverse();
-
-        TangentVec delta = K * y;
-        inject_delta(delta);
-
-        P_ = (StateCov::Identity() - K * H) * P_;
-        P_ = 0.5 * (P_ + P_.transpose().eval());
 
         spec_.push_ambient(x_ref_);
     }

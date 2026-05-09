@@ -55,8 +55,7 @@ class UKFGeneric {
     static_assert(MeasDim >= 0, "MeasDim must be non-negative");
 
 public:
-    using StateSpec     = StateSpecT;
-    using StateSpecType = StateSpecT;
+    using StateSpec = StateSpecT;
 
     static constexpr int kStateDim   = StateSpecT::ambient_dim;
     static constexpr int kTangentDim = StateSpecT::tangent_dim;
