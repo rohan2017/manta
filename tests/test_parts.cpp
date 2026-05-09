@@ -61,13 +61,17 @@ TEST_CASE("Thruster: half throttle → half force (linear in throttle)") {
     CHECK(test::approx_equal(c.root().net_wrench().force(), Vec3<PartFrame>{0, 0, 4}));
 }
 
-TEST_CASE("Thruster: throttle clamped to [0, 1]") {
+TEST_CASE("Thruster: throttle clamped to [-1, 1] (bipolar)") {
     Craft c("test");
     auto& t = c.root().add<Thruster>("t", 10.0f);
     t.set_throttle(2.0f);
     CHECK(t.throttle() == doctest::Approx(1.0f));
+    t.set_throttle(-2.0f);
+    CHECK(t.throttle() == doctest::Approx(-1.0f));
+    // Negative throttle reverses the force direction.
     t.set_throttle(-0.5f);
-    CHECK(t.throttle() == doctest::Approx(0.0f));
+    c.update();
+    CHECK(test::approx_equal(c.root().net_wrench().force(), Vec3<PartFrame>{0, 0, -5.0f}));
 }
 
 TEST_CASE("Thruster: custom direction") {

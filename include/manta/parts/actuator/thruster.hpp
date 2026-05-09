@@ -9,12 +9,18 @@
 namespace manta::parts {
 
 // Polynomial-in-throttle thruster — the actuator analog of `Surface`. Each
-// tick the thruster's throttle command (clamped to [0, 1]) is raised to N
-// powers and combined with N user-supplied force and torque coefficients in
-// part frame:
+// tick the thruster's throttle command (clamped to [-1, 1]) is raised to N
+// sign-preserving powers and combined with N user-supplied force and
+// torque coefficients in part frame:
 //
-//     F = Σ_{k=1..N} F_k · throttle^k
-//     τ = Σ_{k=1..N} τ_k · throttle^k
+//     F = Σ_{k=1..N} F_k · sign(throttle) · |throttle|^k
+//     τ = Σ_{k=1..N} τ_k · sign(throttle) · |throttle|^k
+//
+// Throttle is bipolar: a negative command produces force in the opposite
+// direction of `F_1` (reverse thrust). The sign-preserving power form is
+// equivalent to `throttle * |throttle|^(k-1)`, which keeps the direction
+// flip across even orders — without it, even-order terms would erase
+// sign and break the bipolar physics.
 //
 // The user-facing classes are `Thruster1`..`Thruster4` (and Scalar-templated
 // `Thruster1T<Scalar>`..`Thruster4T<Scalar>` for estimator use). Most real
@@ -47,7 +53,7 @@ public:
         , force_noise_(force_noise_sigma) {}
 
     void set_throttle(Scalar t) noexcept {
-        throttle_ = t < Scalar(0) ? Scalar(0) : (t > Scalar(1) ? Scalar(1) : t);
+        throttle_ = t < Scalar(-1) ? Scalar(-1) : (t > Scalar(1) ? Scalar(1) : t);
     }
     Scalar throttle() const noexcept { return throttle_; }
 
@@ -85,11 +91,16 @@ public:
     void update() override {
         Eigen::Matrix<Scalar, 3, 1> F = Eigen::Matrix<Scalar, 3, 1>::Zero();
         Eigen::Matrix<Scalar, 3, 1> T = Eigen::Matrix<Scalar, 3, 1>::Zero();
-        Scalar power = throttle_;                  // throttle^1
+        // Bipolar throttle: build sign(t)·|t|^k iteratively as
+        // power_{k+1} = power_k · |t|. Without the abs(), an even-order
+        // term on a negative throttle would flip the wrong way (Surface
+        // had the same bug; same fix).
+        const Scalar abs_t = throttle_ < Scalar(0) ? -throttle_ : throttle_;
+        Scalar power = throttle_;                  // sign(t)·|t|^1
         for (int k = 0; k < N; ++k) {
             F += F_[k].raw() * power;
             T += T_[k].raw() * power;
-            if (k + 1 < N) power *= throttle_;
+            if (k + 1 < N) power *= abs_t;         // → sign(t)·|t|^(k+1)
         }
         // Inject force noise via the canonical Vec + Noise operator —
         // sim path samples and adds; EKF Jet path injects Jet inputs.

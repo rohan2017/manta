@@ -8,10 +8,12 @@ from ...signal import scalar_in_signal, scalar_out_signal
 
 
 class _ThrusterBase(PartDescriptor):
-    """Common scaffolding for `Thruster1`..`Thruster4`. Each tick:
-        F = Σ_k F_k · throttle^k
-        τ = Σ_k τ_k · throttle^k
-    where F_k and τ_k are user-supplied 3-vectors in part frame.
+    """Common scaffolding for `Thruster1`..`Thruster4`. Bipolar throttle
+    in [-1, 1]; each tick:
+        F = Σ_k F_k · sign(throttle) · |throttle|^k
+        τ = Σ_k τ_k · sign(throttle) · |throttle|^k
+    where F_k and τ_k are user-supplied 3-vectors in part frame. Negative
+    throttle reverses thrust along the same direction axis.
     """
 
     cpp_header  = "manta/parts/actuator/thruster.hpp"
@@ -128,11 +130,16 @@ class Thruster(Thruster1):
         rr.log(path, rr.Boxes3D(half_sizes=[[0.04, 0.04, 0.06]],
                                 colors=[[200, 100, 50]]))
         thr = float(telemetry.get("throttle", 0.0))
-        if thr > 0:
+        if thr != 0.0:
             d = self.direction
-            length = 0.5 * thr
+            # Plume points opposite to the thrust direction. Sign of
+            # throttle just reverses the plume.
+            length = 0.5 * abs(thr)
+            sign   = 1.0 if thr > 0.0 else -1.0
             rr.log(f"{path}/plume",
                    rr.Arrows3D(origins=[[0, 0, 0]],
-                               vectors=[[-d[0]*length, -d[1]*length, -d[2]*length]],
+                               vectors=[[-sign*d[0]*length,
+                                         -sign*d[1]*length,
+                                         -sign*d[2]*length]],
                                colors=[[255, 100, 50]]))
         rr.log(f"{path}/throttle", rr.Scalar(thr))
