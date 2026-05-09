@@ -74,7 +74,8 @@ public:
 
     const geom::Vec3<PartFrame, Scalar>& last_b() const noexcept { return last_b_; }
 
-    Noise<WhiteGaussian>& noise() noexcept { return noise_; }
+    Noise<WhiteGaussian>&       noise()       noexcept { return noise_; }
+    const Noise<WhiteGaussian>& noise() const noexcept { return noise_; }
 
     MeasurementHandle<3> b;
 

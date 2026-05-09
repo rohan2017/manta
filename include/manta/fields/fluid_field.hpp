@@ -20,21 +20,27 @@ namespace fluid_tags {
 
 // Snapshot of fluid state at a query point.
 //
-//   R is the specific gas constant in J/(kg·K). Sentinel value -1 marks the
-//   fluid as weakly compressible (water-like): density is treated as a free
-//   variable independent of pressure and temperature, so the four state
-//   channels are added independently with no correction.
+//   R is the specific gas constant in J/(kg·K). The sentinel value
+//   `kIncompressibleR` (= -1) marks the fluid as weakly compressible
+//   (water-like): density is a free variable independent of pressure
+//   and temperature, so the four state channels add independently
+//   with no correction.
 //
-//   For R != -1 (gas), the state honors p = ρRT. Disturbances contribute
-//   delta_temperature and delta_pressure; density is *derived* from the
-//   summed p and T as ρ = p/(RT). Any contribution from delta_density is
-//   ignored on gases. Velocity always sums.
+//   For R != kIncompressibleR (gas), the state honors p = ρRT.
+//   Disturbances contribute delta_temperature and delta_pressure;
+//   density is *derived* from the summed p and T as ρ = p/(RT). Any
+//   contribution from delta_density is ignored on gases. Velocity
+//   always sums.
 struct FluidState {
-    MFloat                   R           = MFloat(-1);
+    static constexpr MFloat kIncompressibleR = MFloat(-1);
+
+    MFloat                   R           = kIncompressibleR;
     MFloat                   temperature = MFloat(0);
     MFloat                   density     = MFloat(0);
     MFloat                   pressure    = MFloat(0);
     geom::Vec3<SceneFrame> velocity    = geom::Vec3<SceneFrame>::zero();
+
+    bool is_incompressible() const noexcept { return R == kIncompressibleR; }
 };
 
 struct FluidDisturbance {
@@ -44,7 +50,7 @@ struct FluidDisturbance {
     using Influence = std::function<bool(const Vec& offset)>;
 
     Vec           origin           = Vec::zero();
-    MFloat          R                = MFloat(-1);
+    MFloat          R                = FluidState::kIncompressibleR;
     ScalarFn      delta_temperature;
     ScalarFn      delta_density;
     ScalarFn      delta_pressure;
@@ -56,11 +62,11 @@ struct FluidDisturbance {
     struct UniformIncompressParams { MFloat density, vx, vy, vz; };
     struct UniformGasParams        { MFloat R, temperature, pressure, vx, vy, vz; };
 
-    // Uniform incompressible fluid (R=-1).
+    // Uniform incompressible fluid.
     static FluidDisturbance uniform_incompressible(MFloat density,
                                                    Vec  velocity = Vec::zero()) {
         FluidDisturbance d;
-        d.R   = MFloat(-1);
+        d.R   = FluidState::kIncompressibleR;
         d.tag = fluid_tags::UNIFORM_INCOMPRESS;
         UniformIncompressParams up{
             density, MFloat(velocity.x()), MFloat(velocity.y()), MFloat(velocity.z())};
@@ -105,7 +111,7 @@ public:
             Vec off = Vec::from_raw(pos.raw() - e.d.origin.raw());
             if (e.d.in_influence && !e.d.in_influence(off)) continue;
 
-            if (e.d.R == MFloat(-1)) {
+            if (e.d.R == FluidState::kIncompressibleR) {
                 liq_active = true;
                 if (e.d.delta_density)
                     liq.density += e.d.delta_density(off);
@@ -132,7 +138,7 @@ public:
                         : MFloat(0);
             return gas;
         }
-        if (liq_active) { liq.R = MFloat(-1); return liq; }
+        if (liq_active) { liq.R = FluidState::kIncompressibleR; return liq; }
         return FluidState{};
     }
 

@@ -45,6 +45,7 @@ public:
 
     const geom::Vec3<PartFrame, Scalar>& last_velocity() const noexcept { return last_vel_; }
     Noise<WhiteGaussian>&                 noise()              noexcept { return noise_; }
+    const Noise<WhiteGaussian>&           noise()        const noexcept { return noise_; }
 
     MeasurementHandle<3> velocity;
 
