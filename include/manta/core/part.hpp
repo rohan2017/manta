@@ -43,6 +43,20 @@ public:
     explicit PartT(std::string name) noexcept : name_(std::move(name)) {}
     virtual ~PartT() = default;
 
+    // Parts are non-copyable + non-movable. Sensors expose
+    // `MeasurementHandle<Dim>` members that capture raw pointers to
+    // their own internal storage (h(x) cache, σ field, freshness flag);
+    // moving the part would dangle those pointers in the EKF/UKF's
+    // resolved Measurement table. Composite parts further hold
+    // `unique_ptr` children whose `craft_` and `parent_` back-references
+    // are also stable-address. Concrete parts always live inside a
+    // unique_ptr managed by their owning Craft/composite, so no move is
+    // ever needed in practice.
+    PartT(const PartT&)            = delete;
+    PartT& operator=(const PartT&) = delete;
+    PartT(PartT&&)                 = delete;
+    PartT& operator=(PartT&&)      = delete;
+
     // Subclasses implement this to sense the environment and apply wrenches.
     virtual void update() = 0;
 
