@@ -110,9 +110,9 @@ void setup() {
     view_0.set_state_covariance(1.0f, 1.0f, 1.0f, 1.0f);
 
     // Measurement registrations.
-    ukf_0.measure<3>(&craft.imu().accel, manta::reading_from_buffer<3>(&reading_imu_accel_buf, &reading_imu_accel_fresh));
-    ukf_0.measure<3>(&craft.imu().gyro, manta::reading_from_buffer<3>(&reading_imu_gyro_buf, &reading_imu_gyro_fresh));
-    ukf_0.measure<3>(&craft.dvl().velocity, manta::reading_from_buffer<3>(&reading_dvl_velocity_buf, &reading_dvl_velocity_fresh));
+    ukf_0.measure(&craft.imu().accel, manta::reading_from_buffer<3>(&reading_imu_accel_buf, &reading_imu_accel_fresh));
+    ukf_0.measure(&craft.imu().gyro, manta::reading_from_buffer<3>(&reading_imu_gyro_buf, &reading_imu_gyro_fresh));
+    ukf_0.measure(&craft.dvl().velocity, manta::reading_from_buffer<3>(&reading_dvl_velocity_buf, &reading_dvl_velocity_fresh));
 }
 
 void tick() {

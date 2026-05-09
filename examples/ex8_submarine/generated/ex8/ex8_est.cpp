@@ -5,9 +5,15 @@
 #include "ex8_est.hpp"
 #include "ex8_sim.hpp"
 
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <type_traits>
+#include <vector>
 
 #include <Eigen/Core>
 #include <Eigen/Geometry>
@@ -20,7 +26,13 @@ manta::fields::MagField field_0{};
 Ex8EstCraftT<double> craft{};
 
 EkfT ekf_0{ manta::estimation::make_state().track(craft).build() };
-manta::estimation::CraftView<EkfT, 0> view_0{ekf_0};
+manta::estimation::CraftView<EkfT, 0> view_0{ekf_0,
+    [](auto& w) {
+        using S = typename std::remove_reference_t<decltype(w)>::Scalar;
+        auto c = std::make_unique<Ex8EstCraftT<S>>();
+        w.create_scene().add_craft(*c);
+        return c;
+    }};
 
 }  // namespace manta_gen::ex8_est
 
@@ -28,10 +40,6 @@ namespace {
 
 using JetType = manta_gen::ex8_est::JetType;
 using EkfT    = manta_gen::ex8_est::EkfT;
-
-manta::WorldT<JetType>  w_jet{};
-manta::SceneT<JetType>* scene_jet = nullptr;
-Ex8EstCraftT<JetType> craft_jet{};
 
 EkfT::StateCov g_Q = EkfT::StateCov::Zero();
 
@@ -45,28 +53,21 @@ void setup() {
     w.register_field(field_0);
     scene->add_craft(craft);
 
-    w_jet.clock().set_dt(DT);
-    scene_jet = &w_jet.create_scene();
-    w_jet.register_field(field_0);
-    scene_jet->add_craft(craft_jet);
-
-    ekf_0.bind(w_jet, { static_cast<void*>(&craft_jet) });
-
     // Initial state.
     view_0.reset_to_rest();
     view_0.set_state_covariance(0.0001f, 0.0001f, 0.01f, 0.0001f);
 
     // Measurement registrations.
-    ekf_0.measure<3>(&craft.imu().accel, manta::reading_from<3>(manta_gen::ex8_sim::craft.imu().accel));
-    ekf_0.measure<3>(&craft.imu().gyro, manta::reading_from<3>(manta_gen::ex8_sim::craft.imu().gyro));
-    ekf_0.measure<3>(&craft.dvl().velocity, manta::reading_from<3>(manta_gen::ex8_sim::craft.dvl().velocity));
-    ekf_0.measure<3>(&craft.mag().b, manta::reading_from<3>(manta_gen::ex8_sim::craft.mag().b));
+    ekf_0.measure(&craft.imu().accel, manta::reading_from(manta_gen::ex8_sim::craft.imu().accel));
+    ekf_0.measure(&craft.imu().gyro, manta::reading_from(manta_gen::ex8_sim::craft.imu().gyro));
+    ekf_0.measure(&craft.dvl().velocity, manta::reading_from(manta_gen::ex8_sim::craft.dvl().velocity));
+    ekf_0.measure(&craft.mag().b, manta::reading_from(manta_gen::ex8_sim::craft.mag().b));
 }
 
 void tick() {
-    craft_jet.thrust_x().set_throttle(JetType(manta_gen::ex8_sim::craft.thrust_x().throttle()));
+    view_0.template jet_craft<Ex8EstCraftT<JetType>>().thrust_x().set_throttle(JetType(manta_gen::ex8_sim::craft.thrust_x().throttle()));
     craft.thrust_x().set_throttle(manta_gen::ex8_sim::craft.thrust_x().throttle());
-    craft_jet.thrust_z().set_throttle(JetType(manta_gen::ex8_sim::craft.thrust_z().throttle()));
+    view_0.template jet_craft<Ex8EstCraftT<JetType>>().thrust_z().set_throttle(JetType(manta_gen::ex8_sim::craft.thrust_z().throttle()));
     craft.thrust_z().set_throttle(manta_gen::ex8_sim::craft.thrust_z().throttle());
     ekf_0.predict(DT, g_Q);
     ekf_0.run_pending_updates();

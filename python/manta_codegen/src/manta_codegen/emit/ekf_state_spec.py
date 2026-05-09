@@ -8,7 +8,7 @@ the legacy `EKF<NumCrafts, MeasDim, ...>` + per-sensor functor + R-init
 
   * `auto state = make_state().track(craft0)...build();`
   * `EKFGeneric<decltype(state), MeasDim, NoiseSlots> ekf{state};`
-  * `ekf.measure<Dim>(&est_part.field, reading_from<Dim>(sim_part.field));`
+  * `ekf.measure(&est_part.field, reading_from(sim_part.field));`
   * `ekf.predict(dt, Q); ekf.run_pending_updates();`
 
 Gated by `EKF.use_state_spec=True` on the Python descriptor. Falls back
@@ -318,9 +318,11 @@ def emit_filter_cpp(target, filter_obj) -> str:
         "#include <atomic>",
         "#include <cstdio>",
         "#include <cstdlib>",
+        "#include <memory>",
         "#include <optional>",
         "#include <string>",
         "#include <string_view>",
+        "#include <type_traits>",
         "#include <vector>",
         "",
         "#include <Eigen/Core>",
@@ -358,9 +360,21 @@ def emit_filter_cpp(target, filter_obj) -> str:
         "",
         f"EkfT {filter_var}{{ manta::estimation::make_state().{track_chain}.build() }};",
     ]
-    for i in range(num):
-        lines.append(
-            f"manta::estimation::CraftView<EkfT, {i}> view_{i}{{{filter_var}}};")
+    # CraftViews own their Jet-side counterparts via a generic-Scalar
+    # factory. The factory is invoked with the EKF's internal Jet world;
+    # field mirroring + slice registration happen automatically.
+    for i, c in enumerate(crafts):
+        cls = class_name_for_craft(c.name)
+        ctor_args = "" if not getattr(c, "name", "") else f""
+        lines += [
+            f"manta::estimation::CraftView<EkfT, {i}> view_{i}{{{filter_var},",
+            f"    [](auto& w) {{",
+            f"        using S = typename std::remove_reference_t<decltype(w)>::Scalar;",
+            f"        auto c = std::make_unique<{cls}T<S>>();",
+            f"        w.create_scene().add_craft(*c);",
+            f"        return c;",
+            f"    }}}};",
+        ]
     lines += [
         "",
         f"}}  // namespace manta_gen::{name}",
@@ -373,14 +387,6 @@ def emit_filter_cpp(target, filter_obj) -> str:
         "",
         f"using JetType = manta_gen::{name}::JetType;",
         f"using EkfT    = manta_gen::{name}::EkfT;",
-        "",
-        "manta::WorldT<JetType>  w_jet{};",
-        "manta::SceneT<JetType>* scene_jet = nullptr;",
-    ]
-    for i, c in enumerate(crafts):
-        lines.append(
-            f"{class_name_for_craft(c.name)}T<JetType> {craft_var_for(i)}_jet{{}};")
-    lines += [
         "",
         "EkfT::StateCov g_Q = EkfT::StateCov::Zero();",
         "",
@@ -452,25 +458,10 @@ def emit_filter_cpp(target, filter_obj) -> str:
     # Sim worlds: their own modules' setup() builds them. Nothing for
     # us to do here — the orchestrator (<target>.cpp) will call each
     # drive's setup() in order.
-
-    # Jet world setup.
-    lines += [
-        "",
-        "    w_jet.clock().set_dt(DT);",
-        "    scene_jet = &w_jet.create_scene();",
-    ]
-    for i, f in enumerate(world.fields):
-        lines.append(f"    w_jet.register_field(field_{i});")
-    for i in range(num):
-        lines.append(f"    scene_jet->add_craft({craft_var_for(i)}_jet);")
-
-    jet_array = ", ".join(
-        f"static_cast<void*>(&{craft_var_for(i)}_jet)" for i in range(num))
-    lines += [
-        "",
-        f"    {filter_var}.bind(w_jet, {{ {jet_array} }});",
-        "",
-    ]
+    #
+    # The Jet shadow world + Jet-side crafts + slice bindings are owned
+    # by the CraftViews above; the EKF lazy-finalizes on first predict().
+    lines.append("")
 
     # Pattern C subscribers — one Zenoh sub per part with reading_topics.
     # Each subscriber's lambda decodes the float payload and writes to
@@ -589,7 +580,7 @@ def emit_filter_cpp(target, filter_obj) -> str:
             # codegen-allocated buffers fed by the Zenoh subscriber.
             for field_name, dim in _meas_fields_for(m):
                 lines.append(
-                    f"    {filter_var}.measure<{dim}>("
+                    f"    {filter_var}.measure("
                     f"&{est_var}.{m.name}().{field_name}, "
                     f"manta::reading_from_buffer<{dim}>("
                     f"&{reading_buf_var(est_idx, m.name, field_name)}, "
@@ -600,9 +591,9 @@ def emit_filter_cpp(target, filter_obj) -> str:
                           f".{sim_part.name}()")
             for field_name, dim in _meas_fields_for(m):
                 lines.append(
-                    f"    {filter_var}.measure<{dim}>("
+                    f"    {filter_var}.measure("
                     f"&{est_var}.{m.name}().{field_name}, "
-                    f"manta::reading_from<{dim}>({source_var}.{field_name}));")
+                    f"manta::reading_from({source_var}.{field_name}));")
         else:
             # No source declared at all — emit a stub comment.
             for field_name, dim in _meas_fields_for(m):
@@ -644,10 +635,11 @@ def emit_filter_cpp(target, filter_obj) -> str:
             if found_sim_part is None:
                 continue
             est_var = craft_var_for(ci)
-            jet_var = f"{est_var}_jet"
+            cls = class_name_for_craft(c.name)
+            jet_accessor = f"view_{ci}.template jet_craft<{cls}T<JetType>>()"
             for setter, getter in actuator_pairs:
                 lines.append(
-                    f"    {jet_var}.{est_part.name}().{setter}("
+                    f"    {jet_accessor}.{est_part.name}().{setter}("
                     f"JetType({found_sim_var}.{found_sim_part.name}().{getter}()));")
                 lines.append(
                     f"    {est_var}.{est_part.name}().{setter}("

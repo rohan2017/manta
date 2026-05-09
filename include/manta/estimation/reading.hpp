@@ -61,6 +61,13 @@ inline Reading<Dim> reading_from(const Measurement& src) {
     }};
 }
 
+// Dim-deducing overload: when the source is a `MeasurementHandle<Dim>`
+// (a part's public field), the dim is recoverable from the type.
+template <int Dim>
+inline Reading<Dim> reading_from(const MeasurementHandle<Dim>& src) {
+    return reading_from<Dim>(static_cast<const Measurement&>(src));
+}
+
 // ---------------------------------------------------------------------
 // Factory: pull from a user-owned buffer + freshness flag. The flag is
 // an atomic<bool> so producer and consumer can be on different threads

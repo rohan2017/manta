@@ -7,9 +7,11 @@
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 #include <Eigen/Core>
@@ -24,8 +26,20 @@ Drone0CraftT<double> craft_0{};
 Drone1CraftT<double> craft_1{};
 
 EkfT ekf_0{ manta::estimation::make_state().track(craft_0).track(craft_1).build() };
-manta::estimation::CraftView<EkfT, 0> view_0{ekf_0};
-manta::estimation::CraftView<EkfT, 1> view_1{ekf_0};
+manta::estimation::CraftView<EkfT, 0> view_0{ekf_0,
+    [](auto& w) {
+        using S = typename std::remove_reference_t<decltype(w)>::Scalar;
+        auto c = std::make_unique<Drone0CraftT<S>>();
+        w.create_scene().add_craft(*c);
+        return c;
+    }};
+manta::estimation::CraftView<EkfT, 1> view_1{ekf_0,
+    [](auto& w) {
+        using S = typename std::remove_reference_t<decltype(w)>::Scalar;
+        auto c = std::make_unique<Drone1CraftT<S>>();
+        w.create_scene().add_craft(*c);
+        return c;
+    }};
 
 }  // namespace manta_gen::ex9
 
@@ -33,11 +47,6 @@ namespace {
 
 using JetType = manta_gen::ex9::JetType;
 using EkfT    = manta_gen::ex9::EkfT;
-
-manta::WorldT<JetType>  w_jet{};
-manta::SceneT<JetType>* scene_jet = nullptr;
-Drone0CraftT<JetType> craft_0_jet{};
-Drone1CraftT<JetType> craft_1_jet{};
 
 EkfT::StateCov g_Q = EkfT::StateCov::Zero();
 
@@ -91,13 +100,6 @@ void setup() {
     scene = &w.create_scene();
     scene->add_craft(craft_0);
     scene->add_craft(craft_1);
-
-    w_jet.clock().set_dt(DT);
-    scene_jet = &w_jet.create_scene();
-    scene_jet->add_craft(craft_0_jet);
-    scene_jet->add_craft(craft_1_jet);
-
-    ekf_0.bind(w_jet, { static_cast<void*>(&craft_0_jet), static_cast<void*>(&craft_1_jet) });
 
     g_reading_session.emplace(zenoh::Session::open(zenoh::Config::create_default()));
     reading_c0_imu_sub.emplace(g_reading_session->declare_subscriber(
@@ -168,12 +170,12 @@ void setup() {
     view_1.set_state_covariance(0.0001f, 0.0001f, 0.01f, 1.0f);
 
     // Measurement registrations.
-    ekf_0.measure<3>(&craft_0.imu().accel, manta::reading_from_buffer<3>(&reading_c0_imu_accel_buf, &reading_c0_imu_accel_fresh));
-    ekf_0.measure<3>(&craft_0.imu().gyro, manta::reading_from_buffer<3>(&reading_c0_imu_gyro_buf, &reading_c0_imu_gyro_fresh));
-    ekf_0.measure<3>(&craft_0.dvl().velocity, manta::reading_from_buffer<3>(&reading_c0_dvl_velocity_buf, &reading_c0_dvl_velocity_fresh));
-    ekf_0.measure<3>(&craft_1.imu().accel, manta::reading_from_buffer<3>(&reading_c1_imu_accel_buf, &reading_c1_imu_accel_fresh));
-    ekf_0.measure<3>(&craft_1.imu().gyro, manta::reading_from_buffer<3>(&reading_c1_imu_gyro_buf, &reading_c1_imu_gyro_fresh));
-    ekf_0.measure<3>(&craft_1.dvl().velocity, manta::reading_from_buffer<3>(&reading_c1_dvl_velocity_buf, &reading_c1_dvl_velocity_fresh));
+    ekf_0.measure(&craft_0.imu().accel, manta::reading_from_buffer<3>(&reading_c0_imu_accel_buf, &reading_c0_imu_accel_fresh));
+    ekf_0.measure(&craft_0.imu().gyro, manta::reading_from_buffer<3>(&reading_c0_imu_gyro_buf, &reading_c0_imu_gyro_fresh));
+    ekf_0.measure(&craft_0.dvl().velocity, manta::reading_from_buffer<3>(&reading_c0_dvl_velocity_buf, &reading_c0_dvl_velocity_fresh));
+    ekf_0.measure(&craft_1.imu().accel, manta::reading_from_buffer<3>(&reading_c1_imu_accel_buf, &reading_c1_imu_accel_fresh));
+    ekf_0.measure(&craft_1.imu().gyro, manta::reading_from_buffer<3>(&reading_c1_imu_gyro_buf, &reading_c1_imu_gyro_fresh));
+    ekf_0.measure(&craft_1.dvl().velocity, manta::reading_from_buffer<3>(&reading_c1_dvl_velocity_buf, &reading_c1_dvl_velocity_fresh));
 }
 
 void tick() {

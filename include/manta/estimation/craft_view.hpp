@@ -34,21 +34,96 @@
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <cmath>
+#include <memory>
+#include <type_traits>
+#include <utility>
 
+#include "../core/craft.hpp"
 #include "../core/types.hpp"
+#include "../core/world.hpp"
 #include "../geom/ori.hpp"
 #include "../geom/vec3.hpp"
+#include "state_spec.hpp"
 
 namespace manta::estimation {
+
+namespace detail {
+// Detect FilterT::Jet — EKFGeneric has it, UKFGeneric does not. UKF
+// uses CraftView only for state read/write, not for owning a Jet shadow.
+template <class F, class = void>
+struct jet_alias_or_double { using type = double; };
+template <class F>
+struct jet_alias_or_double<F, std::void_t<typename F::Jet>> {
+    using type = typename F::Jet;
+};
+}  // namespace detail
 
 template <class FilterT, int SliceIdx>
 class CraftView {
 public:
     using Spec = typename FilterT::StateSpec;
+    using Jet  = typename detail::jet_alias_or_double<FilterT>::type;
     static constexpr int kAmbOff = Spec::template ambient_offset<SliceIdx>;
     static constexpr int kTanOff = Spec::template tangent_offset<SliceIdx>;
 
+    // State-only ctor — for views that want to read/write the EKF's
+    // tracked state for a slice without owning a Jet-side craft (the
+    // Jet craft is registered via a separate CraftView or test scaffold).
     explicit CraftView(FilterT& filter) noexcept : filter_(filter) {}
+
+    // Primary ctor — constructs the Jet-side counterpart of this slice
+    // via a generic-Scalar factory. The factory is invoked once with the
+    // EKF's internal Jet world; it must construct the craft, add it to a
+    // scene, and return a `unique_ptr` to it. CraftView retains ownership.
+    //
+    // Fields registered on the value-side world are mirrored into the
+    // Jet world automatically (they are not Scalar-templated). The
+    // factory must NOT register fields; it only constructs the craft.
+    //
+    // Example:
+    //
+    //   CraftView<EkfT, 0> view(ekf, [&](auto& w) {
+    //       auto c = std::make_unique<DemoCraftT<
+    //           typename std::remove_reference_t<decltype(w)>::Scalar>>("est");
+    //       w.create_scene().add_craft(*c);
+    //       return c;
+    //   });
+    template <class CraftFactory>
+    CraftView(FilterT& filter, CraftFactory&& factory) : filter_(filter) {
+        WorldT<Jet>& jw = filter.jet_world();
+
+        // Mirror fields from value-side once — only on the first
+        // CraftView construction (before any Jet craft is added). The
+        // value-side world is the world owning the tracked craft.
+        if (!jw.crafts_added()) {
+            const auto& src_handles = filter.spec().handles();
+            if (src_handles[SliceIdx].kind == TrackedKind::Craft) {
+                auto* val_craft =
+                    static_cast<CraftT<double>*>(src_handles[SliceIdx].ptr);
+                if (val_craft && val_craft->has_world()) {
+                    jw.mirror_fields_from(val_craft->world());
+                }
+            }
+        }
+
+        auto jet_uptr = factory(jw);
+        CraftT<Jet>* jc_raw = jet_uptr.get();
+        jet_craft_uptr_ = std::move(jet_uptr);
+
+        filter.template register_jet_craft<SliceIdx>(jc_raw);
+    }
+
+    // Typed accessor for the Jet-side craft (downcast to the user type).
+    // The caller is responsible for picking the right T — a wrong cast
+    // is undefined behavior.
+    template <class JetCraftT>
+    JetCraftT& jet_craft() noexcept {
+        return *static_cast<JetCraftT*>(jet_craft_uptr_.get());
+    }
+    template <class JetCraftT>
+    const JetCraftT& jet_craft() const noexcept {
+        return *static_cast<const JetCraftT*>(jet_craft_uptr_.get());
+    }
 
     // ---- Reference-state reads ----
     Eigen::Matrix<double, 3, 1> position() const noexcept {
@@ -260,6 +335,7 @@ private:
     }
 
     FilterT& filter_;
+    std::unique_ptr<CraftT<Jet>> jet_craft_uptr_;
 };
 
 } // namespace manta::estimation

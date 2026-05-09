@@ -140,8 +140,8 @@ public:
     const Noise<RandomWalk<3>>& gyro_bias()   const noexcept { return gyro_bias_; }
 
     // Public Measurement handles — pass to ekf.measure(...).
-    Measurement accel;
-    Measurement gyro;
+    MeasurementHandle<3> accel;
+    MeasurementHandle<3> gyro;
 
 private:
     Noise<WhiteGaussian>           accel_noise_;

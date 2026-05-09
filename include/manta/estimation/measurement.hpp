@@ -136,4 +136,27 @@ inline Measurement make_measurement(std::string name,
     };
 }
 
+// MeasurementHandle<Dim> — Measurement tagged with a compile-time dim.
+// =====================================================================
+//
+// Lets `reading_from(handle)` and `ekf.measure(handle, reading)` deduce
+// Dim from the field type instead of forcing the user to spell `<3>` at
+// every call site. Storage and Scalar erasure are unchanged — Dim is
+// the only piece liftable to compile time without breaking double/Jet
+// polymorphism. Parts hold their public measurement fields as
+// `MeasurementHandle<3>` etc.; everything that works on a
+// `Measurement*` upcasts transparently.
+template <int Dim>
+class MeasurementHandle : public Measurement {
+public:
+    static constexpr int kDim = Dim;
+    MeasurementHandle() noexcept = default;
+    MeasurementHandle(Measurement&& m) noexcept : Measurement(std::move(m)) {}
+    MeasurementHandle(const Measurement& m) : Measurement(m) {}
+    MeasurementHandle& operator=(Measurement&& m) noexcept {
+        Measurement::operator=(std::move(m));
+        return *this;
+    }
+};
+
 } // namespace manta

@@ -23,11 +23,15 @@
 
 #include <doctest/doctest.h>
 
+#include "../include/manta/estimation/craft_view.hpp"
 #include "../include/manta/estimation/generic_ekf.hpp"
 #include "../include/manta/estimation/state_spec.hpp"
 #include "../include/manta/parts/sensor/imu.hpp"
 #include "../include/manta/parts/structure/mass.hpp"
 #include "../include/manta/fields/gravity_field.hpp"
+
+#include <memory>
+#include <type_traits>
 
 using namespace manta;
 using namespace manta::estimation;
@@ -89,15 +93,20 @@ TEST_CASE("Phase 5e: predict grows P diagonal at bias slots by σ²·dt") {
 
     Ekf ekf{state};
 
-    WorldT<Jet> w_jet;
-    w_jet.clock().set_dt(DT);
+    // The value-side craft needs a host world for field mirroring + the
+    // EKF's RW-bias resolution to work — point it at a minimal scaffolding.
+    WorldT<double> est_world;
+    est_world.clock().set_dt(DT);
     fields::GravityField grav{geom::Vec3<SceneFrame>{0.0f, 0.0f, -9.81f}};
-    w_jet.register_field(grav);
-    auto& s_jet = w_jet.create_scene();
-    BiasTestCraft<Jet> craft_jet;
-    s_jet.add_craft(craft_jet);
+    est_world.register_field(grav);
+    est_world.create_scene().add_craft(craft);
 
-    ekf.bind(w_jet, { static_cast<void*>(&craft_jet) });
+    CraftView<Ekf, 0> view(ekf, [](auto& w) {
+        using S = typename std::remove_reference_t<decltype(w)>::Scalar;
+        auto c = std::make_unique<BiasTestCraft<S>>();
+        w.create_scene().add_craft(*c);
+        return c;
+    });
 
     typename Ekf::StateVec x0 = Ekf::StateVec::Zero();
     x0(3) = 1.0;   // identity quat

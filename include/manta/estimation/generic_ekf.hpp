@@ -28,12 +28,13 @@
 //   constexpr int kNoiseSlots = /* sum of registered white noises */;
 //   EKFGeneric<decltype(state), MeasDim, kNoiseSlots> ekf{state};
 //
-//   using Jet = typename decltype(ekf)::Jet;
-//   manta::WorldT<Jet> world_jet;
-//   /* ...construct Jet-side crafts in same slice order... */
-//
-//   ekf.bind(world_jet, { static_cast<void*>(&craft0_jet),
-//                         static_cast<void*>(&craft1_jet) });
+//   // CraftView constructs the Jet shadow internally — no manual jet
+//   // world or void* casts. Pass a generic-Scalar craft factory.
+//   CraftView<decltype(ekf), 0> view0(ekf, [&](auto& w) {
+//       auto c = std::make_unique<MyCraft<typename decltype(w)::Scalar>>(...);
+//       w.create_scene().add_craft(*c);
+//       return c;
+//   });
 //
 //   ekf.predict(dt, Q);
 //   ekf.update<MeasDim>(measurement_functor, z, R);
@@ -97,57 +98,65 @@ public:
         spec_.pull_ambient(x_ref_);
     }
 
-    // Bind the filter to its Jet shadow World + per-slice Jet handles
-    // (void*-erased; same slice order as the StateSpec).
-    void bind(WorldJ& w_jet,
-              std::array<void*, StateSpecT::num_slices> jet_handles) {
-        w_jet_       = &w_jet;
-        jet_handles_ = jet_handles;
+    // The EKF owns its Jet shadow world. CraftView's factory ctor uses
+    // this reference to populate the world with Jet-typed crafts.
+    WorldJ&       jet_world()       noexcept { return jet_world_; }
+    const WorldJ& jet_world() const noexcept { return jet_world_; }
 
-        // Walk every Jet-side craft's parts to register white-noise
-        // sources for auto-Q. RW biases are skipped: they'll be tracked
-        // explicitly as BiasRandomWalk slices in the StateSpec when
-        // Phase 5e wires them in. Skipping at registry time leaves
-        // each RW noise's slot fields at kNoNoiseSlot, so its Jet
-        // operator+ becomes a pass-through (no bias-state Jet injection)
-        // and the Jacobian extraction stays clean.
+    // Register a Jet-side craft for slice `I` (called by CraftView; not
+    // typically invoked directly by users). The slice index must match
+    // the StateSpec's `track(...)` order. Bindings finalize lazily on
+    // the next `predict()` / `run_pending_updates()` call.
+    template <int I>
+    void register_jet_craft(CraftT<Jet>* jet_craft) {
+        static_assert(I >= 0 && I < StateSpecT::num_slices,
+                      "register_jet_craft: slice index out of range");
+        if (!jet_craft) {
+            throw std::runtime_error(
+                "EKFGeneric::register_jet_craft: null craft pointer");
+        }
+        jet_handles_[I] = static_cast<void*>(jet_craft);
+        finalized_ = false;
+    }
+
+private:
+    // Finalize Jet-side bindings: walk the registered Jet crafts to populate
+    // the noise registry (white noise) and the RW-bias slot table. Called
+    // lazily on the first predict()/run_pending_updates() after a new
+    // register_jet_craft. Throws if any tracked craft slice lacks a
+    // registered Jet handle, or if the total noise-slot count exceeds the
+    // user's NumNoiseSlots template arg.
+    void finalize_bindings() {
+        // Walk every Jet-side craft's parts to register white-noise sources
+        // for auto-Q. RW biases are skipped — they're tracked as
+        // BiasRandomWalk slices and wired up below.
         noise_registry_.clear();
         noise_registry_.set_skip_random_walk(true);
         const auto& src_handles = spec_.handles();
         for (int i = 0; i < StateSpecT::num_slices; ++i) {
             if (src_handles[i].kind != TrackedKind::Craft) continue;
+            if (!jet_handles_[i]) {
+                throw std::runtime_error(
+                    "EKFGeneric: tracked craft slice " + std::to_string(i) +
+                    " has no registered Jet counterpart. Construct a "
+                    "CraftView<Filter, " + std::to_string(i) +
+                    "> with a craft factory before predict().");
+            }
             auto* cj = static_cast<CraftT<Jet>*>(jet_handles_[i]);
             walk_register_noise(cj->root(), noise_registry_);
         }
-        // Promote registry-local slot indices to global Jet-column.
-        // Bias-state-offset is unused in Phase 2 (no tracked bias states).
         noise_registry_.apply_slot_offsets(
             /*noise_input_offset=*/kNoiseColStart,
             /*bias_state_offset =*/0);
 
-        // Now wire up tracked-as-slice RW biases. For each
-        // BiasRandomWalk slice in the spec, find the value-side
-        // Noise<RandomWalk<Dim>> in some tracked craft's part tree,
-        // grab its name, locate the matching Jet-side noise on the
-        // matching Jet craft, and assign:
-        //
-        //   * state_slot = the slice's tangent_offset (the bias's row in
-        //     the EKF's tangent vector). The Jet-side noise's `+`
-        //     operator injects identity Jets at this slot when called
-        //     during update().
-        //   * driver_slot = a fresh slot in the noise-input range, used
-        //     to populate L's bias-driver gain σ_rw·√dt.
         rw_bindings_.clear();
         int next_driver_slot_local = noise_registry_.num_slots();
-        const int spec_tangent_offsets[StateSpecT::num_slices] =
-            { /* zero-init; filled below */ };
         std::array<int, StateSpecT::num_slices> tan_offsets =
             compute_tangent_offsets();
         for (int i = 0; i < StateSpecT::num_slices; ++i) {
             const auto& h = src_handles[i];
             if (h.kind != TrackedKind::RandomWalkBias) continue;
             auto* nv = static_cast<NoiseRandomWalkBase*>(h.ptr);
-            // Find which value-side part owns this RW noise.
             std::string_view rw_name;
             std::string      part_name;
             int              owner_craft_slice = -1;
@@ -162,24 +171,19 @@ public:
             }
             if (!found) {
                 throw std::runtime_error(
-                    "EKFGeneric::bind: tracked RW bias not found in any "
+                    "EKFGeneric: tracked RW bias not found in any "
                     "tracked craft's parts. Did you call track(part.bias()) "
                     "for a part that wasn't also track()'d at the craft level?");
             }
-            // Find the Jet-side part by name + the named RW on it.
             auto* cj = static_cast<CraftT<Jet>*>(jet_handles_[owner_craft_slice]);
             NoiseRandomWalkBase* nj = nullptr;
             find_jet_rw_in(cj->root(), part_name, rw_name, nj);
             if (!nj) {
                 throw std::runtime_error(
-                    "EKFGeneric::bind: Jet-side counterpart of RW bias "
-                    "'" + part_name + "." + std::string(rw_name) +
+                    "EKFGeneric: Jet-side counterpart of RW bias '" +
+                    part_name + "." + std::string(rw_name) +
                     "' not found. Sim and Jet part trees must mirror.");
             }
-            // Assign slots. State_slot is the bias's row in the tangent
-            // vector — that's the slice's tangent_offset. Driver_slot is
-            // local to the noise-input range; we offset it by
-            // kNoiseColStart for the Jet column.
             nj->set_state_slot(tan_offsets[i]);
             nj->set_driver_slot(kNoiseColStart + next_driver_slot_local);
             rw_bindings_.push_back(RWBinding{
@@ -191,18 +195,22 @@ public:
             next_driver_slot_local += h.dim;
         }
 
-        // Total noise driver slots = whitenoise + RW driver slots.
         const int total_slots = next_driver_slot_local;
         if (total_slots > NumNoiseSlots) {
             throw std::runtime_error(
-                "EKFGeneric::bind: total noise slots (" +
+                "EKFGeneric: total noise slots (" +
                 std::to_string(total_slots) +
                 ") exceed NumNoiseSlots template arg (" +
                 std::to_string(NumNoiseSlots) + ").");
         }
+
+        finalized_ = true;
     }
 
-private:
+    void finalize_if_needed() {
+        if (!finalized_) finalize_bindings();
+    }
+
     std::array<int, StateSpecT::num_slices> compute_tangent_offsets() {
         std::array<int, StateSpecT::num_slices> out{};
         compute_tangent_offsets_impl<0>(out);
@@ -253,12 +261,13 @@ public:
 
     // ---- Predict ----
     void predict(double dt, const StateCov& Q) {
-        if (!w_jet_) return;
-        w_jet_->clock().set_dt(static_cast<float>(dt));
+        if (!jet_world_.crafts_added()) return;
+        finalize_if_needed();
+        jet_world_.clock().set_dt(static_cast<float>(dt));
         dt_for_L_ = dt;
 
         seed_jets();
-        w_jet_->step();
+        jet_world_.step();
 
         StateVec  x_ref_post;
         StateCov  F;
@@ -318,11 +327,12 @@ public:
     //      read h(x_pre) + H + R from the Jet-side Measurement; apply
     //      Kalman update; accumulate δ and shrink P.
     void run_pending_updates() {
-        if (!w_jet_) return;
+        if (!jet_world_.crafts_added()) return;
         if (bindings_.empty()) return;
+        finalize_if_needed();
 
         seed_jets();
-        w_jet_->kinematic_and_aggregate();
+        jet_world_.kinematic_and_aggregate();
 
         Eigen::VectorXd buf_a(64);    // scratch — resized per binding
         Eigen::VectorXd buf_v(kJetWidth);
@@ -672,11 +682,12 @@ private:
     StateSpecT             spec_;
     StateVec               x_ref_;
     StateCov               P_;
-    WorldJ*                w_jet_ = nullptr;
+    WorldJ                 jet_world_{};
     std::array<void*, StateSpecT::num_slices> jet_handles_{};
     NoiseRegistry          noise_registry_;
     std::vector<Binding>   bindings_;
     std::vector<RWBinding> rw_bindings_;
+    bool                   finalized_ = false;
     double                 dt_for_L_ = 0.0;
 };
 

@@ -4,8 +4,6 @@
 
 #include "ex8.hpp"
 
-#include <Eigen/Core>
-
 namespace manta_gen::ex8 {
 
 void setup() {
@@ -15,7 +13,6 @@ void setup() {
 
 void tick() {
     manta_gen::ex8_sim::tick();
-
     manta_gen::ex8_est::tick();
 }
 

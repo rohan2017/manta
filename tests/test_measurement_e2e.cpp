@@ -25,6 +25,9 @@
 #include "../include/manta/parts/structure/mass.hpp"
 #include "../include/manta/fields/gravity_field.hpp"
 
+#include <memory>
+#include <type_traits>
+
 using namespace manta;
 using namespace manta::estimation;
 
@@ -83,32 +86,28 @@ TEST_CASE("Measurement+Reading: end-to-end IMU+DVL update on free-fall") {
     using EkfT = EKFGeneric<Spec, /*MeasDim=*/0, kNoiseSlots>;
     EkfT ekf{state};
 
-    // ---- Jet world ----
-    WorldT<typename EkfT::Jet> jet_world;
-    jet_world.clock().set_dt(DT);
-    fields::GravityField jet_grav{geom::Vec3<SceneFrame>{0.0f, 0.0f, -9.81f}};
-    jet_world.register_field(jet_grav);
-    auto& jet_scene = jet_world.create_scene();
-    TestMeasCraft<typename EkfT::Jet> est_craft_jet("est");
-    jet_scene.add_craft(est_craft_jet);
-
-    ekf.bind(jet_world, { static_cast<void*>(&est_craft_jet) });
+    // CraftView constructs the Jet shadow craft via factory; fields on
+    // est_world are mirrored automatically.
+    CraftView<EkfT, 0> est_view(ekf, [](auto& w) {
+        using S = typename std::remove_reference_t<decltype(w)>::Scalar;
+        auto c = std::make_unique<TestMeasCraft<S>>("est");
+        w.create_scene().add_craft(*c);
+        return c;
+    });
 
     // ---- Wire measurements: model = est_craft, reading = sim_craft ----
-    ekf.measure<3>(&est_craft.imu().accel,
-                   reading_from<3>(sim_craft.imu().accel));
-    ekf.measure<3>(&est_craft.imu().gyro,
-                   reading_from<3>(sim_craft.imu().gyro));
-    ekf.measure<3>(&est_craft.dvl().velocity,
-                   reading_from<3>(sim_craft.dvl().velocity));
+    ekf.measure(&est_craft.imu().accel,
+                reading_from(sim_craft.imu().accel));
+    ekf.measure(&est_craft.imu().gyro,
+                reading_from(sim_craft.imu().gyro));
+    ekf.measure(&est_craft.dvl().velocity,
+                reading_from(sim_craft.dvl().velocity));
 
     // Initial state — at rest, identity quat.
     typename EkfT::StateVec x0 = EkfT::StateVec::Zero();
     x0(3) = 1.0;
     ekf.set_state(x0);
     ekf.set_covariance(EkfT::StateCov::Identity() * 0.01);
-
-    CraftView<EkfT, 0> est_view{ekf};
 
     // ---- Run ----
     noise_seed(7);

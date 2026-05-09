@@ -337,7 +337,7 @@ def emit_filter_cpp(target, filter_obj) -> str:
         if id(m) in reading_part_ids:
             for field_name, dim in _meas_fields_for(m):
                 lines.append(
-                    f"    {filter_var}.measure<{dim}>("
+                    f"    {filter_var}.measure("
                     f"&{est_var}.{m.name}().{field_name}, "
                     f"manta::reading_from_buffer<{dim}>("
                     f"&{reading_buf_var(m.name, field_name)}, "
@@ -348,9 +348,9 @@ def emit_filter_cpp(target, filter_obj) -> str:
                           f".{sim_part.name}()")
             for field_name, dim in _meas_fields_for(m):
                 lines.append(
-                    f"    {filter_var}.measure<{dim}>("
+                    f"    {filter_var}.measure("
                     f"&{est_var}.{m.name}().{field_name}, "
-                    f"manta::reading_from<{dim}>({source_var}.{field_name}));")
+                    f"manta::reading_from({source_var}.{field_name}));")
         else:
             for field_name, dim in _meas_fields_for(m):
                 lines.append(

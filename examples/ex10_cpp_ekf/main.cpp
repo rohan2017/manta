@@ -65,31 +65,29 @@ int main() {
     using EkfT = EKFGeneric<Spec, /*MeasDim=*/0, kNoiseSlots>;
     EkfT ekf{state};
 
-    // ---- Jet shadow world (autodiff). ----
-    using Jet = EkfT::Jet;
-    WorldT<Jet> jet_world;
-    jet_world.clock().set_dt(DT);
-    fields::GravityField jet_grav{geom::Vec3<SceneFrame>{0.0f, 0.0f, -9.81f}};
-    jet_world.register_field(jet_grav);
-    auto& jet_scene = jet_world.create_scene();
-    DemoCraftT<Jet> est_craft_jet("est");
-    jet_scene.add_craft(est_craft_jet);
-
-    ekf.bind(jet_world, { static_cast<void*>(&est_craft_jet) });
-    est_craft_jet.thrust().set_throttle(Jet(1.0));
+    // ---- CraftView owns the Jet shadow craft. ----
+    // The factory is invoked once with the EKF's internal Jet world. It
+    // constructs the craft, adds it to a scene, and returns ownership.
+    // Fields registered on est_world are mirrored automatically.
+    CraftView<EkfT, 0> est_view(ekf, [&](auto& w) {
+        using S = typename std::remove_reference_t<decltype(w)>::Scalar;
+        auto c = std::make_unique<DemoCraftT<S>>("est");
+        w.create_scene().add_craft(*c);
+        c->thrust().set_throttle(S(1.0));
+        return c;
+    });
 
     // ---- Wire the measurements. ----
     // model = est_craft's IMU/DVL (h(x) + R)
     // reading = sim_craft's IMU/DVL (z source — synthetic noisy readings)
-    ekf.measure<3>(&est_craft.imu().accel,
-                   reading_from<3>(sim_craft.imu().accel));
-    ekf.measure<3>(&est_craft.imu().gyro,
-                   reading_from<3>(sim_craft.imu().gyro));
-    ekf.measure<3>(&est_craft.dvl().velocity,
-                   reading_from<3>(sim_craft.dvl().velocity));
+    ekf.measure(&est_craft.imu().accel,
+                reading_from(sim_craft.imu().accel));
+    ekf.measure(&est_craft.imu().gyro,
+                reading_from(sim_craft.imu().gyro));
+    ekf.measure(&est_craft.dvl().velocity,
+                reading_from(sim_craft.dvl().velocity));
 
     // ---- Initial belief: at rest at origin, moderate covariance. ----
-    CraftView<EkfT, 0> est_view{ekf};
     est_view.reset_to_rest();
     est_view.set_state_covariance(/*pos_var=*/1e-4,
                                   /*attitude_var=*/1e-4,

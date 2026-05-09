@@ -33,9 +33,10 @@ namespace manta {
 // Fields are likewise not templated; field queries from inside Jet-typed
 // craft code go through `state_at_templated<Scalar>` which casts/finite-
 // diffs as needed.
-template <class Scalar>
+template <class Scalar_>
 class WorldT {
 public:
+    using Scalar = Scalar_;
     WorldT() noexcept = default;
 
     // --- Scene management ---
@@ -102,6 +103,32 @@ public:
     // field registry. Not part of the public API; users should not call
     // this directly.
     void mark_crafts_added() noexcept { crafts_added_ = true; }
+
+    // Has any craft been added to any scene yet? Used by CraftView to
+    // skip duplicate field mirroring on subsequent registrations.
+    bool crafts_added() const noexcept { return crafts_added_; }
+
+    // Mirror every field registration from `other` into this world.
+    // Fields are not Scalar-templated — a single `GravityField` instance
+    // can be shared across `WorldT<double>` and `WorldT<ceres::Jet<...>>`.
+    // Used by the EKF's CraftView to populate the Jet shadow world from
+    // the user's value-side world without making the user re-register
+    // each field.
+    template <class OtherScalar>
+    void mirror_fields_from(const WorldT<OtherScalar>& other) {
+        if (crafts_added_) {
+            throw std::runtime_error(
+                "WorldT::mirror_fields_from: a craft was already added to "
+                "this world. Mirror fields BEFORE adding any craft.");
+        }
+        for (const auto& [ti, ptr] : other.fields_for_mirror()) {
+            fields_[ti] = ptr;
+        }
+    }
+
+    // Read-only access to the field map for cross-Scalar mirroring.
+    const std::unordered_map<std::type_index, fields::Field*>&
+    fields_for_mirror() const noexcept { return fields_; }
 
     template<typename FieldT>
     FieldT& field() {

@@ -76,7 +76,7 @@ public:
 
     Noise<WhiteGaussian>& noise() noexcept { return noise_; }
 
-    Measurement b;
+    MeasurementHandle<3> b;
 
 
 private:
