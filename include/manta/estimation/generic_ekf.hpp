@@ -119,6 +119,21 @@ public:
         finalized_ = false;
     }
 
+    // Inverse of register_jet_craft — called by CraftView's destructor.
+    // Removes the Jet craft from the internal jet world's scene and
+    // clears the slot so the registry walk on the next predict skips it
+    // (or throws if the slot is still required by the StateSpec).
+    template <int I>
+    void unregister_jet_craft() noexcept {
+        static_assert(I >= 0 && I < StateSpecT::num_slices,
+                      "unregister_jet_craft: slice index out of range");
+        if (!jet_handles_[I]) return;
+        auto* jc = static_cast<CraftT<Jet>*>(jet_handles_[I]);
+        for (auto& s : jet_world_.scenes()) s->remove_craft(*jc);
+        jet_handles_[I] = nullptr;
+        finalized_ = false;
+    }
+
 private:
     // Finalize Jet-side bindings: walk the registered Jet crafts to populate
     // the noise registry (white noise) and the RW-bias slot table. Called

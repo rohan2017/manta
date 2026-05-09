@@ -84,6 +84,20 @@ public:
     WorldR&       real_world()       noexcept { return real_world_; }
     const WorldR& real_world() const noexcept { return real_world_; }
 
+    // Inverse of CraftView's factory ctor — called by CraftView's
+    // destructor to remove a tracked craft from the internal real world's
+    // scene. The user-side craft is left intact (it's user-owned).
+    template <int I>
+    void unregister_value_craft() noexcept {
+        static_assert(I >= 0 && I < StateSpecT::num_slices,
+                      "unregister_value_craft: slice index out of range");
+        const auto& h = spec_.handles()[I];
+        if (h.kind != TrackedKind::Craft) return;
+        auto* val_craft = static_cast<CraftT<double>*>(h.ptr);
+        if (!val_craft) return;
+        for (auto& s : real_world_.scenes()) s->remove_craft(*val_craft);
+    }
+
     void set_state(const StateVec& x) noexcept {
         x_ref_ = x;
         spec_.push_ambient(x_ref_);

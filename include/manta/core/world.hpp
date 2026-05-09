@@ -53,6 +53,9 @@ public:
     const std::vector<std::unique_ptr<SceneT<Scalar>>>& scenes() const noexcept {
         return scenes_;
     }
+    std::vector<std::unique_ptr<SceneT<Scalar>>>& scenes() noexcept {
+        return scenes_;
+    }
 
     // --- Planet management ---
     // Planets are constructed value-typed (they're shared between value and

@@ -66,14 +66,29 @@ public:
     static constexpr int kAmbOff = Spec::template ambient_offset<SliceIdx>;
     static constexpr int kTanOff = Spec::template tangent_offset<SliceIdx>;
 
-    // State-only ctor — for views that want to read/write the EKF's
-    // tracked state for a slice without owning a Jet-side craft (the
-    // Jet craft is registered via a separate CraftView or test scaffold).
+    // CraftView is a per-slice handle. The factory ctor below registers
+    // the slice with the filter (EKF: owns the Jet craft; UKF: adds the
+    // user-owned craft to the real world). The state-only ctor is a
+    // read/write adapter with NO registration — useful for tests and for
+    // out-of-band state inspection. With the state-only ctor, the
+    // filter's predict()/run_pending_updates() will silently no-op
+    // until *some* CraftView with a factory ctor registers a craft.
+    //
+    // Non-copyable and non-movable: the dtor's unregister call is bound
+    // to `*this`, and moving would dangle the filter's slot pointer.
+    CraftView(const CraftView&) = delete;
+    CraftView& operator=(const CraftView&) = delete;
+    CraftView(CraftView&&)                 = delete;
+    CraftView& operator=(CraftView&&)      = delete;
+
+    // State-only ctor — read/write the slice's state without registering
+    // anything. The filter must be separately registered (via another
+    // CraftView with a factory ctor, or by a sibling process).
     explicit CraftView(FilterT& filter) noexcept : filter_(filter) {}
 
-    // Primary ctor — constructs the Jet-side counterpart of this slice
-    // via a generic-Scalar factory. The factory is invoked once with the
-    // EKF's internal Jet world; it must construct the craft, add it to a
+    // EKF ctor — constructs the Jet-side counterpart of this slice via a
+    // generic-Scalar factory. The factory is invoked once with the EKF's
+    // internal Jet world; it must construct the craft, add it to a
     // scene, and return a `unique_ptr` to it. CraftView retains ownership.
     //
     // Fields registered on the value-side world are mirrored into the
@@ -83,8 +98,8 @@ public:
     // Example:
     //
     //   CraftView<EkfT, 0> view(ekf, [&](auto& w) {
-    //       auto c = std::make_unique<DemoCraftT<
-    //           typename std::remove_reference_t<decltype(w)>::Scalar>>("est");
+    //       using S = typename std::remove_reference_t<decltype(w)>::Scalar;
+    //       auto c = std::make_unique<DemoCraftT<S>>("est");
     //       w.create_scene().add_craft(*c);
     //       return c;
     //   });
@@ -115,6 +130,7 @@ public:
         jet_craft_uptr_ = std::move(jet_uptr);
 
         filter.template register_jet_craft<SliceIdx>(jc_raw);
+        registered_ = true;
     }
 
     // UKF path — UKF owns its real (value-typed) world. The factory
@@ -137,6 +153,23 @@ public:
               && (!requires { typename FilterT::Jet; })
     CraftView(FilterT& filter, WorldFactory&& factory) : filter_(filter) {
         factory(filter.real_world());
+        registered_ = true;
+    }
+
+    // Destructor — clears the filter's slot if this CraftView registered
+    // one. Without this, the filter's `jet_handles_` slot or its
+    // real-world scene would dangle for the rest of the filter's lifetime.
+    ~CraftView() {
+        if (!registered_) return;
+        if constexpr (requires(FilterT& f) {
+                          f.template unregister_jet_craft<SliceIdx>();
+                      }) {
+            filter_.template unregister_jet_craft<SliceIdx>();
+        } else if constexpr (requires(FilterT& f) {
+                                 f.template unregister_value_craft<SliceIdx>();
+                             }) {
+            filter_.template unregister_value_craft<SliceIdx>();
+        }
     }
 
     // Typed accessor for the Jet-side craft (downcast to the user type).
@@ -362,6 +395,7 @@ private:
 
     FilterT& filter_;
     std::unique_ptr<CraftT<Jet>> jet_craft_uptr_;
+    bool                         registered_ = false;
 };
 
 } // namespace manta::estimation

@@ -257,8 +257,12 @@ public:
     // Track a full craft (RigidBody slice). The value-side craft is
     // always `CraftT<double>` — the EKF does its arithmetic at double
     // precision regardless of how the sim was built (MFloat may be
-    // float). The Jet-side craft, of type CraftT<ceres::Jet<double, N>>,
-    // is handed to EKF::bind separately.
+    // float). The Jet-side craft is constructed and managed by the
+    // CraftView's factory ctor; the user does not pass it here.
+    //
+    // LIFETIME: the tracked `craft` must outlive the filter and the
+    // CraftView. The StateSpec stores a raw pointer; destroying or
+    // moving the craft while a filter is bound dangles it.
     auto track(CraftT<double>& craft) {
         std::array<TrackedHandle, sizeof...(Slices) + 1> h;
         for (std::size_t i = 0; i < handles_.size(); ++i) h[i] = handles_[i];

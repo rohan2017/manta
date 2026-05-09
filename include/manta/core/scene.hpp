@@ -186,6 +186,14 @@ public:
         c.set_state(s);
     }
 
+    // Remove a craft from this scene. No-op if the craft isn't in the
+    // scene. Note: any filter (EKFGeneric / UKFGeneric) that was tracking
+    // this craft via `make_state().track(c)` will hold a dangling pointer
+    // afterwards — predict() will crash. Tracked crafts must outlive the
+    // filter. CraftView's destructor calls back into the filter to clear
+    // its slot before this method runs, so the standard CraftView-managed
+    // lifetime is safe; manual `remove_craft` is only an issue for the
+    // (deprecated) state-only path or non-CraftView users.
     void remove_craft(CraftT<Scalar>& c) {
         auto it = std::find(crafts_.begin(), crafts_.end(), &c);
         if (it != crafts_.end()) {
