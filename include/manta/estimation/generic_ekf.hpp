@@ -320,11 +320,11 @@ public:
             .dim = Dim,
             .meas_name = model_value_side->name,
             .model_value = model_value_side,
-            .pull_z = [r = std::move(reading)]() mutable {
+            .pull_z = [r = std::move(reading)](double* out) mutable -> bool {
                 auto s = r.pull();
-                Eigen::VectorXd z(Dim);
-                for (int i = 0; i < Dim; ++i) z(i) = s.z(i);
-                return std::pair{z, s.fresh};
+                if (!s.fresh) return false;
+                for (int i = 0; i < Dim; ++i) out[i] = s.z(i);
+                return true;
             },
         });
     }
@@ -344,12 +344,14 @@ public:
         seed_jets();
         jet_world_.kinematic_and_aggregate();
 
-        Eigen::VectorXd buf_a(64);    // scratch — resized per binding
-        Eigen::VectorXd buf_v(kJetWidth);
+        // Member scratch buffers — resized to the largest n encountered.
+        // After the first tick, conservativeResize() is allocation-free.
+        upd_jet_v_.resize(kJetWidth);
 
         for (auto& b : bindings_) {
-            auto [z, fresh] = b.pull_z();
-            if (!fresh) continue;
+            const int n = b.dim;
+            upd_z_.conservativeResize(n);
+            if (!b.pull_z(upd_z_.data())) continue;
 
             // Resolve at first use — the value-side Measurement we
             // captured at registration carries the part name; we walk
@@ -358,39 +360,42 @@ public:
             if (!b.model_jet) b.model_jet = resolve_jet_measurement(b);
             if (!b.model_jet) continue;
 
-            const int n = b.dim;
-            buf_a.conservativeResize(n);
+            upd_h_.conservativeResize(n);
+            upd_y_.conservativeResize(n);
+            upd_H_.conservativeResize(n, kTangentDim);
+            upd_S_.conservativeResize(n, n);
+            upd_K_.conservativeResize(kTangentDim, n);
 
             // h(x_pre) — value channel of the Jet's ambient.
-            b.model_jet->read_value(buf_a.data());
+            b.model_jet->read_value(upd_h_.data());
 
             // H — the .v channel rows (kTangentDim columns of interest;
             // the trailing kNoiseSlots columns are noise-input gains we
             // don't need here since R is taken from the σ field).
-            Eigen::Matrix<double, Eigen::Dynamic, kTangentDim> H(n, kTangentDim);
             for (int row = 0; row < n; ++row) {
-                b.model_jet->read_jacobian_row(row, buf_v.data(), kJetWidth);
-                for (int j = 0; j < kTangentDim; ++j) H(row, j) = buf_v(j);
+                b.model_jet->read_jacobian_row(row, upd_jet_v_.data(), kJetWidth);
+                for (int j = 0; j < kTangentDim; ++j) upd_H_(row, j) = upd_jet_v_(j);
             }
 
-            // R = σ²·I_n.
+            // S = H P Hᵀ + σ²·I.
             const double sigma = b.model_jet->r_sigma();
-            Eigen::MatrixXd R = Eigen::MatrixXd::Identity(n, n) * sigma * sigma;
+            const double r     = sigma * sigma;
+            upd_S_.noalias() = upd_H_ * P_ * upd_H_.transpose();
+            for (int i = 0; i < n; ++i) upd_S_(i, i) += r;
 
-            // Innovation.
-            Eigen::VectorXd y = z - buf_a;
-
-            // S = H P Hᵀ + R.
-            Eigen::MatrixXd S = H * P_ * H.transpose() + R;
             // K = P Hᵀ S⁻¹.
-            Eigen::Matrix<double, kTangentDim, Eigen::Dynamic> K =
-                P_ * H.transpose() * S.ldlt().solve(
-                    Eigen::MatrixXd::Identity(n, n));
+            upd_eye_.conservativeResize(n, n);
+            upd_eye_.setIdentity();
+            upd_K_.noalias() =
+                P_ * upd_H_.transpose() * upd_S_.ldlt().solve(upd_eye_);
 
-            TangentVec delta = K * y;
+            // Innovation y = z - h(x_pre).
+            upd_y_.noalias() = upd_z_ - upd_h_;
+
+            TangentVec delta = upd_K_ * upd_y_;
             inject_delta(delta);
 
-            P_ = (StateCov::Identity() - K * H) * P_;
+            P_ = (StateCov::Identity() - upd_K_ * upd_H_) * P_;
             P_ = 0.5 * (P_ + P_.transpose().eval());
         }
 
@@ -535,12 +540,14 @@ private:
 
     // Per-measurement registration. Stored in registration order;
     // resolved Jet-side Measurement* is filled lazily on first use.
+    // pull_z writes z into a caller-provided buffer (avoids per-call
+    // heap allocation) and returns the freshness flag.
     struct Binding {
         int dim;
         std::string  meas_name;
         Measurement* model_value = nullptr;
         Measurement* model_jet   = nullptr;
-        std::function<std::pair<Eigen::VectorXd, bool>()> pull_z;
+        std::function<bool(double* out)> pull_z;
     };
 
     // Walk the Jet-side craft for a given binding's value-side
@@ -664,6 +671,18 @@ private:
     std::vector<RWBinding> rw_bindings_;
     bool                   finalized_ = false;
     double                 dt_for_L_ = 0.0;
+
+    // Scratch buffers for run_pending_updates — sized lazily to the
+    // largest measurement dim seen so far. Keep here (not local) to
+    // amortize the heap allocation across all ticks.
+    Eigen::VectorXd                                       upd_z_;
+    Eigen::VectorXd                                       upd_h_;
+    Eigen::VectorXd                                       upd_y_;
+    Eigen::VectorXd                                       upd_jet_v_;
+    Eigen::Matrix<double, Eigen::Dynamic, kTangentDim>    upd_H_;
+    Eigen::MatrixXd                                       upd_S_;
+    Eigen::Matrix<double, kTangentDim, Eigen::Dynamic>    upd_K_;
+    Eigen::MatrixXd                                       upd_eye_;
 };
 
 } // namespace manta::estimation
