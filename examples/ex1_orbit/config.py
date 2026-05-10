@@ -1,4 +1,17 @@
-"""ex1 — same 6-thruster craft as ex0, in 1 km circular orbit around Earth.
+"""ex1 — 6-thruster manoeuvring craft in a 1 km circular orbit.
+
+Two bipolar thrusters per body axis, each offset from the centerline so
+differential thrust produces a torque. Equal throttles on a pair give
+pure translation along that axis; opposite throttles give pure rotation
+about the perpendicular axis they lever against.
+
+Axis layout (body frame, X forward / Y left / Z up):
+
+    Pair        thrust axis    offset axis    differential ⇒ rotation
+    ----        -----------    -----------    -----------------------
+    tx_zp/tx_zn  ±X             ±Z             about Y  (pitch)
+    ty_xp/ty_xn  ±Y             ±X             about Z  (yaw)
+    tz_yp/tz_yn  ±Z             ±Y             about X  (roll)
 
 Inverse-square central gravity, no atmosphere, no rotation.
 Sim runs at 200x realtime so a full orbit completes in ~28 wall-seconds.
@@ -7,37 +20,54 @@ Generate from the repo root:
 
     PYTHONPATH=python/manta_codegen/src \
         python -m manta_codegen.cli examples/ex1_orbit/config.py --workflow binary
+
+A keyboard controller for live manoeuvring is in `controller.py`:
+WASD = XY translation, QE = Z translation, arrow keys = pitch/yaw, ZX = roll.
 """
 
 import math
 
 from manta_codegen import (Craft, MantaConfig, Target, World, publish,
-                           subscribe)
+                           subscribe, tf)
 from manta_codegen.parts  import Mass, Thruster
 from manta_codegen.fields import GravityField
 
 
 # Earth.
-MU              = 3.986004418e14   # m^3/s^2
+MU              = 3.986004418e14    # m^3/s^2
 EARTH_RADIUS    = 6.371e6           # m
 ALTITUDE        = 1.0e3             # 1 km
 ORBIT_R         = EARTH_RADIUS + ALTITUDE
 V_CIRC          = math.sqrt(MU / ORBIT_R)
 
+# Thruster geometry. Lever arm L sets the moment arm for the differential
+# thrust rotation modes; max_thrust scales force and torque proportionally.
+LEVER_ARM       = 0.5               # m, offset of each thruster from the body center
+MAX_THRUST      = 5.0               # N per thruster
 
-THRUSTER_DIRS: list[tuple[str, tuple[float, float, float]]] = [
-    ("tx_p", ( 1.0,  0.0,  0.0)),
-    ("tx_n", (-1.0,  0.0,  0.0)),
-    ("ty_p", ( 0.0,  1.0,  0.0)),
-    ("ty_n", ( 0.0, -1.0,  0.0)),
-    ("tz_p", ( 0.0,  0.0,  1.0)),
-    ("tz_n", ( 0.0,  0.0, -1.0)),
+# Body inertia (kg·m²). Picked so a max differential moment of
+# 2·L·max_thrust = 5 N·m gives ~25 rad/s² peak angular accel — fast
+# enough to be responsive in the demo but not twitchy.
+BODY_MOI        = (0.2, 0.2, 0.2)
+
+
+THRUSTERS: list[tuple[str, tuple[float, float, float], tuple[float, float, float]]] = [
+    # name,    direction,         body-frame offset
+    ("tx_zp",  ( 1.0, 0.0, 0.0),  (0.0, 0.0,  LEVER_ARM)),   # +X thrust, +Z offset
+    ("tx_zn",  ( 1.0, 0.0, 0.0),  (0.0, 0.0, -LEVER_ARM)),   # +X thrust, -Z offset
+    ("ty_xp",  ( 0.0, 1.0, 0.0),  ( LEVER_ARM, 0.0, 0.0)),   # +Y thrust, +X offset
+    ("ty_xn",  ( 0.0, 1.0, 0.0),  (-LEVER_ARM, 0.0, 0.0)),   # +Y thrust, -X offset
+    ("tz_yp",  ( 0.0, 0.0, 1.0),  (0.0,  LEVER_ARM, 0.0)),   # +Z thrust, +Y offset
+    ("tz_yn",  ( 0.0, 0.0, 1.0),  (0.0, -LEVER_ARM, 0.0)),   # +Z thrust, -Y offset
 ]
 
 
 def make_config() -> MantaConfig:
-    body      = Mass("body", mass=1.0)
-    thrusters = [Thruster(name, max_thrust=5.0, direction=d) for name, d in THRUSTER_DIRS]
+    body      = Mass("body", mass=1.0, moi=BODY_MOI)
+    thrusters = [
+        Thruster(name, max_thrust=MAX_THRUST, direction=d, transform=tf(pos))
+        for name, d, pos in THRUSTERS
+    ]
 
     c = Craft("ex1")
     c.add(body)

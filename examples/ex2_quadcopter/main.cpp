@@ -17,6 +17,7 @@
 //       python -m manta_codegen.cli examples/ex2_quadcopter/config.py \
 //           --workflow library
 
+#include <algorithm>
 #include <atomic>
 #include <csignal>
 #include <cstdio>
@@ -112,10 +113,13 @@ int main() {
         // X-config mixing.
         // CCW props: fr, bl. CW props: fl, br. Thruster1's CCW yields -z body torque.
         // For +yaw command we want +z body torque → boost CW (fl, br), dim CCW (fr, bl).
-        craft.fr().set_throttle(thr - u_roll + u_pitch - u_yaw);
-        craft.fl().set_throttle(thr + u_roll + u_pitch + u_yaw);
-        craft.bl().set_throttle(thr + u_roll - u_pitch - u_yaw);
-        craft.br().set_throttle(thr - u_roll - u_pitch + u_yaw);
+        // Thruster is bipolar (clamp [-1, 1]); quad rotors don't reverse,
+        // so clamp each mixed throttle to [0, 1] before commanding.
+        auto clamp01 = [](float v) { return std::clamp(v, 0.0f, 1.0f); };
+        craft.fr().set_throttle(clamp01(thr - u_roll + u_pitch - u_yaw));
+        craft.fl().set_throttle(clamp01(thr + u_roll + u_pitch + u_yaw));
+        craft.bl().set_throttle(clamp01(thr + u_roll - u_pitch - u_yaw));
+        craft.br().set_throttle(clamp01(thr - u_roll - u_pitch + u_yaw));
 
         manta_gen::ex2::tick();
 

@@ -16,24 +16,24 @@ struct Ex1CraftTelemetry {
     float q[4] = {1,0,0,0};   // (w, x, y, z)
     float v[3] = {0,0,0};
     float w[3] = {0,0,0};
-    struct Tx_pT {
+    struct Tx_zpT {
         float throttle{};
-    } tx_p;
-    struct Tx_nT {
+    } tx_zp;
+    struct Tx_znT {
         float throttle{};
-    } tx_n;
-    struct Ty_pT {
+    } tx_zn;
+    struct Ty_xpT {
         float throttle{};
-    } ty_p;
-    struct Ty_nT {
+    } ty_xp;
+    struct Ty_xnT {
         float throttle{};
-    } ty_n;
-    struct Tz_pT {
+    } ty_xn;
+    struct Tz_ypT {
         float throttle{};
-    } tz_p;
-    struct Tz_nT {
+    } tz_yp;
+    struct Tz_ynT {
         float throttle{};
-    } tz_n;
+    } tz_yn;
 
     std::string to_json() const;
 };
@@ -52,23 +52,23 @@ inline std::string Ex1CraftTelemetry::to_json() const {
         (double)v[0], (double)v[1], (double)v[2],
         (double)w[0], (double)w[1], (double)w[2]);
     s += buf;
-    s += ",\"tx_p\":{";
-    { char b[64]; std::snprintf(b, sizeof(b), "\"throttle\":%.6f", (double)tx_p.throttle); s += b; }
+    s += ",\"tx_zp\":{";
+    { char b[64]; std::snprintf(b, sizeof(b), "\"throttle\":%.6f", (double)tx_zp.throttle); s += b; }
     s += "}";
-    s += ",\"tx_n\":{";
-    { char b[64]; std::snprintf(b, sizeof(b), "\"throttle\":%.6f", (double)tx_n.throttle); s += b; }
+    s += ",\"tx_zn\":{";
+    { char b[64]; std::snprintf(b, sizeof(b), "\"throttle\":%.6f", (double)tx_zn.throttle); s += b; }
     s += "}";
-    s += ",\"ty_p\":{";
-    { char b[64]; std::snprintf(b, sizeof(b), "\"throttle\":%.6f", (double)ty_p.throttle); s += b; }
+    s += ",\"ty_xp\":{";
+    { char b[64]; std::snprintf(b, sizeof(b), "\"throttle\":%.6f", (double)ty_xp.throttle); s += b; }
     s += "}";
-    s += ",\"ty_n\":{";
-    { char b[64]; std::snprintf(b, sizeof(b), "\"throttle\":%.6f", (double)ty_n.throttle); s += b; }
+    s += ",\"ty_xn\":{";
+    { char b[64]; std::snprintf(b, sizeof(b), "\"throttle\":%.6f", (double)ty_xn.throttle); s += b; }
     s += "}";
-    s += ",\"tz_p\":{";
-    { char b[64]; std::snprintf(b, sizeof(b), "\"throttle\":%.6f", (double)tz_p.throttle); s += b; }
+    s += ",\"tz_yp\":{";
+    { char b[64]; std::snprintf(b, sizeof(b), "\"throttle\":%.6f", (double)tz_yp.throttle); s += b; }
     s += "}";
-    s += ",\"tz_n\":{";
-    { char b[64]; std::snprintf(b, sizeof(b), "\"throttle\":%.6f", (double)tz_n.throttle); s += b; }
+    s += ",\"tz_yn\":{";
+    { char b[64]; std::snprintf(b, sizeof(b), "\"throttle\":%.6f", (double)tz_yn.throttle); s += b; }
     s += "}";
     s += "}";
     return s;
@@ -84,10 +84,10 @@ inline void capture_ex1_telemetry(const Ex1Craft& craft, double t_sec, Ex1CraftT
     telem.q[0]=q.w(); telem.q[1]=q.x(); telem.q[2]=q.y(); telem.q[3]=q.z();
     telem.v[0]=v.x(); telem.v[1]=v.y(); telem.v[2]=v.z();
     telem.w[0]=w.x(); telem.w[1]=w.y(); telem.w[2]=w.z();
-    telem.tx_p.throttle = craft.tx_p().throttle();
-    telem.tx_n.throttle = craft.tx_n().throttle();
-    telem.ty_p.throttle = craft.ty_p().throttle();
-    telem.ty_n.throttle = craft.ty_n().throttle();
-    telem.tz_p.throttle = craft.tz_p().throttle();
-    telem.tz_n.throttle = craft.tz_n().throttle();
+    telem.tx_zp.throttle = craft.tx_zp().throttle();
+    telem.tx_zn.throttle = craft.tx_zn().throttle();
+    telem.ty_xp.throttle = craft.ty_xp().throttle();
+    telem.ty_xn.throttle = craft.ty_xn().throttle();
+    telem.tz_yp.throttle = craft.tz_yp().throttle();
+    telem.tz_yn.throttle = craft.tz_yn().throttle();
 }

@@ -19,6 +19,7 @@
 //   subscribe 'manta/ex3/cmd'   = [thr, pitch_rate, yaw_rate]
 //   publish   'manta/ex3/state' = standard nested telemetry JSON
 
+#include <algorithm>
 #include <atomic>
 #include <csignal>
 #include <cstdio>
@@ -125,7 +126,9 @@ int main() {
         // old `set_gimbal(-u_pitch, +u_yaw)` mapping.
         craft.pitch_motor().set_torque(gimbal_pd(craft.pitch_motor(), -pitch_angle_sp));
         craft.yaw_motor()  .set_torque(gimbal_pd(craft.yaw_motor(),   +yaw_angle_sp));
-        craft.engine().set_throttle(thr);
+        // Thruster is bipolar (clamp [-1, 1]); the rocket engine doesn't
+        // reverse, so clamp the commanded throttle to [0, 1].
+        craft.engine().set_throttle(std::clamp(thr, 0.0f, 1.0f));
 
         manta_gen::ex3::tick();
 

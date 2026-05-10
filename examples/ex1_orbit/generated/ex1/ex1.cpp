@@ -88,7 +88,7 @@ void setup() {
 
     pub_0.emplace(g_session->declare_publisher(zenoh::KeyExpr("manta/ex1/state")));
     bind_1_sub.emplace(g_session->declare_subscriber(
-        zenoh::KeyExpr("manta/ex1/tx_p/cmd"),
+        zenoh::KeyExpr("manta/ex1/tx_zp/cmd"),
         [](const zenoh::Sample& s) {
             std::vector<float> v;
             std::string payload(s.get_payload().as_string());
@@ -98,7 +98,7 @@ void setup() {
             }
         }, zenoh::closures::none));
     bind_2_sub.emplace(g_session->declare_subscriber(
-        zenoh::KeyExpr("manta/ex1/tx_n/cmd"),
+        zenoh::KeyExpr("manta/ex1/tx_zn/cmd"),
         [](const zenoh::Sample& s) {
             std::vector<float> v;
             std::string payload(s.get_payload().as_string());
@@ -108,7 +108,7 @@ void setup() {
             }
         }, zenoh::closures::none));
     bind_3_sub.emplace(g_session->declare_subscriber(
-        zenoh::KeyExpr("manta/ex1/ty_p/cmd"),
+        zenoh::KeyExpr("manta/ex1/ty_xp/cmd"),
         [](const zenoh::Sample& s) {
             std::vector<float> v;
             std::string payload(s.get_payload().as_string());
@@ -118,7 +118,7 @@ void setup() {
             }
         }, zenoh::closures::none));
     bind_4_sub.emplace(g_session->declare_subscriber(
-        zenoh::KeyExpr("manta/ex1/ty_n/cmd"),
+        zenoh::KeyExpr("manta/ex1/ty_xn/cmd"),
         [](const zenoh::Sample& s) {
             std::vector<float> v;
             std::string payload(s.get_payload().as_string());
@@ -128,7 +128,7 @@ void setup() {
             }
         }, zenoh::closures::none));
     bind_5_sub.emplace(g_session->declare_subscriber(
-        zenoh::KeyExpr("manta/ex1/tz_p/cmd"),
+        zenoh::KeyExpr("manta/ex1/tz_yp/cmd"),
         [](const zenoh::Sample& s) {
             std::vector<float> v;
             std::string payload(s.get_payload().as_string());
@@ -138,7 +138,7 @@ void setup() {
             }
         }, zenoh::closures::none));
     bind_6_sub.emplace(g_session->declare_subscriber(
-        zenoh::KeyExpr("manta/ex1/tz_n/cmd"),
+        zenoh::KeyExpr("manta/ex1/tz_yn/cmd"),
         [](const zenoh::Sample& s) {
             std::vector<float> v;
             std::string payload(s.get_payload().as_string());
@@ -179,32 +179,32 @@ void setup() {
 void tick() {
     { std::lock_guard<std::mutex> lk(bind_1_mtx);
       if (bind_1_payload.size() >= 1) {
-          craft.tx_p().set_throttle(bind_1_payload[0]);    // member: set_throttle
+          craft.tx_zp().set_throttle(bind_1_payload[0]);    // member: set_throttle
           bind_1_payload.clear();
       } }
     { std::lock_guard<std::mutex> lk(bind_2_mtx);
       if (bind_2_payload.size() >= 1) {
-          craft.tx_n().set_throttle(bind_2_payload[0]);    // member: set_throttle
+          craft.tx_zn().set_throttle(bind_2_payload[0]);    // member: set_throttle
           bind_2_payload.clear();
       } }
     { std::lock_guard<std::mutex> lk(bind_3_mtx);
       if (bind_3_payload.size() >= 1) {
-          craft.ty_p().set_throttle(bind_3_payload[0]);    // member: set_throttle
+          craft.ty_xp().set_throttle(bind_3_payload[0]);    // member: set_throttle
           bind_3_payload.clear();
       } }
     { std::lock_guard<std::mutex> lk(bind_4_mtx);
       if (bind_4_payload.size() >= 1) {
-          craft.ty_n().set_throttle(bind_4_payload[0]);    // member: set_throttle
+          craft.ty_xn().set_throttle(bind_4_payload[0]);    // member: set_throttle
           bind_4_payload.clear();
       } }
     { std::lock_guard<std::mutex> lk(bind_5_mtx);
       if (bind_5_payload.size() >= 1) {
-          craft.tz_p().set_throttle(bind_5_payload[0]);    // member: set_throttle
+          craft.tz_yp().set_throttle(bind_5_payload[0]);    // member: set_throttle
           bind_5_payload.clear();
       } }
     { std::lock_guard<std::mutex> lk(bind_6_mtx);
       if (bind_6_payload.size() >= 1) {
-          craft.tz_n().set_throttle(bind_6_payload[0]);    // member: set_throttle
+          craft.tz_yn().set_throttle(bind_6_payload[0]);    // member: set_throttle
           bind_6_payload.clear();
       } }
 
@@ -241,23 +241,23 @@ void tick() {
           { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().vel_angular().raw()(2))); _json += _b; }
           _json += "]";
           _json += ",";
-          _json += "\"tx_p\":";
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%g", double(craft.tx_p().throttle())); _json += _b; }
+          _json += "\"tx_zp\":";
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%g", double(craft.tx_zp().throttle())); _json += _b; }
           _json += ",";
-          _json += "\"tx_n\":";
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%g", double(craft.tx_n().throttle())); _json += _b; }
+          _json += "\"tx_zn\":";
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%g", double(craft.tx_zn().throttle())); _json += _b; }
           _json += ",";
-          _json += "\"ty_p\":";
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%g", double(craft.ty_p().throttle())); _json += _b; }
+          _json += "\"ty_xp\":";
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%g", double(craft.ty_xp().throttle())); _json += _b; }
           _json += ",";
-          _json += "\"ty_n\":";
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%g", double(craft.ty_n().throttle())); _json += _b; }
+          _json += "\"ty_xn\":";
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%g", double(craft.ty_xn().throttle())); _json += _b; }
           _json += ",";
-          _json += "\"tz_p\":";
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%g", double(craft.tz_p().throttle())); _json += _b; }
+          _json += "\"tz_yp\":";
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%g", double(craft.tz_yp().throttle())); _json += _b; }
           _json += ",";
-          _json += "\"tz_n\":";
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%g", double(craft.tz_n().throttle())); _json += _b; }
+          _json += "\"tz_yn\":";
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%g", double(craft.tz_yn().throttle())); _json += _b; }
           _json += "}";
           pub_0->put(zenoh::Bytes(_json));
         }
