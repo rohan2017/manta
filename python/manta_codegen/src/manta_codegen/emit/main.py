@@ -669,7 +669,7 @@ def _emit_binding_publish(lines: list[str], i: int, b: Binding,
             cpp_expr = sig.signal.cpp_read_exprs[0].format(accessor=accessor)
             lines.append(f'          _json += "\\"{member_name}\\":";')
             lines.append(
-                f"          {{ char _b[32]; std::snprintf(_b, sizeof(_b), \"%g\", "
+                f"          {{ char _b[32]; std::snprintf(_b, sizeof(_b), \"%.17g\", "
                 f"double({cpp_expr})); _json += _b; }}"
             )
         else:
@@ -678,7 +678,7 @@ def _emit_binding_publish(lines: list[str], i: int, b: Binding,
                 cpp_expr = expr.format(accessor=accessor)
                 sep = '","' if k > 0 else '""'
                 lines.append(
-                    f"          {{ char _b[32]; std::snprintf(_b, sizeof(_b), \"%s%g\", "
+                    f"          {{ char _b[32]; std::snprintf(_b, sizeof(_b), \"%s%.17g\", "
                     f"{sep}, double({cpp_expr})); _json += _b; }}"
                 )
             lines.append('          _json += "]";')

@@ -73,7 +73,7 @@ void setup() {
     w.register_field(field_1);
     field_2.add(manta::fields::MagField::Disturbance::uniform(manta::geom::Vec3<manta::SceneFrame>{2.5e-05f, 0.0f, -4.5e-05f}), manta::fields::PERSISTENT);
     w.register_field(field_2);
-    scene->add_craft(craft, manta::InitialState{manta::geom::Vec3<manta::SceneFrame>{0.0f, 0.0f, -5.0f}, manta::geom::Ori<manta::SceneFrame>{Eigen::Quaternion<manta::MFloat>{manta::MFloat(1.0f), manta::MFloat(0.0f), manta::MFloat(0.0f), manta::MFloat(0.0f)}}, manta::geom::Vec3<manta::SceneFrame>{0.0f, 0.0f, 0.0f}, manta::geom::Vec3<manta::CraftFrame>{0.0f, 0.0f, 0.0f}});
+    scene->add_craft(craft, manta::InitialState{manta::geom::Vec3<manta::SceneFrame>{manta::MFloat(0.0), manta::MFloat(0.0), manta::MFloat(-5.0)}, manta::geom::Ori<manta::SceneFrame>{Eigen::Quaternion<manta::MFloat>{manta::MFloat(1.0), manta::MFloat(0.0), manta::MFloat(0.0), manta::MFloat(0.0)}}, manta::geom::Vec3<manta::SceneFrame>{manta::MFloat(0.0), manta::MFloat(0.0), manta::MFloat(0.0)}, manta::geom::Vec3<manta::CraftFrame>{manta::MFloat(0.0), manta::MFloat(0.0), manta::MFloat(0.0)}});
 
     g_session.emplace(zenoh::Session::open(zenoh::Config::create_default()));
 
@@ -118,28 +118,28 @@ void tick() {
         g_pub_decim = 0;
         { std::string _json = "{";
           _json += "\"p\":[";
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.scene_to_craft().position().raw()(0))); _json += _b; }
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().position().raw()(1))); _json += _b; }
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().position().raw()(2))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", "", double(craft.scene_to_craft().position().raw()(0))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(craft.scene_to_craft().position().raw()(1))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(craft.scene_to_craft().position().raw()(2))); _json += _b; }
           _json += "]";
           _json += ",";
           _json += "\"q\":[";
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.scene_to_craft().orientation().raw().w())); _json += _b; }
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().orientation().raw().x())); _json += _b; }
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().orientation().raw().y())); _json += _b; }
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().orientation().raw().z())); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", "", double(craft.scene_to_craft().orientation().raw().w())); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(craft.scene_to_craft().orientation().raw().x())); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(craft.scene_to_craft().orientation().raw().y())); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(craft.scene_to_craft().orientation().raw().z())); _json += _b; }
           _json += "]";
           _json += ",";
           _json += "\"v\":[";
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.scene_to_craft().vel_linear().raw()(0))); _json += _b; }
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().vel_linear().raw()(1))); _json += _b; }
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().vel_linear().raw()(2))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", "", double(craft.scene_to_craft().vel_linear().raw()(0))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(craft.scene_to_craft().vel_linear().raw()(1))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(craft.scene_to_craft().vel_linear().raw()(2))); _json += _b; }
           _json += "]";
           _json += ",";
           _json += "\"w\":[";
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", "", double(craft.scene_to_craft().vel_angular().raw()(0))); _json += _b; }
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().vel_angular().raw()(1))); _json += _b; }
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%g", ",", double(craft.scene_to_craft().vel_angular().raw()(2))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", "", double(craft.scene_to_craft().vel_angular().raw()(0))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(craft.scene_to_craft().vel_angular().raw()(1))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(craft.scene_to_craft().vel_angular().raw()(2))); _json += _b; }
           _json += "]";
           _json += "}";
           pub_2->put(zenoh::Bytes(_json));

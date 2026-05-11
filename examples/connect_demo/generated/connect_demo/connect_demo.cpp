@@ -96,10 +96,10 @@ void tick() {
         g_pub_decim = 0;
         { std::string _json = "{";
           _json += "\"leader\":";
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%g", double(craft.leader().throttle())); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%.17g", double(craft.leader().throttle())); _json += _b; }
           _json += ",";
           _json += "\"follower\":";
-          { char _b[32]; std::snprintf(_b, sizeof(_b), "%g", double(craft.follower().throttle())); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%.17g", double(craft.follower().throttle())); _json += _b; }
           _json += "}";
           pub_1->put(zenoh::Bytes(_json));
         }
