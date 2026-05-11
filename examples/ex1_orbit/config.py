@@ -41,20 +41,11 @@ ALTITUDE        = 100.0             # m — ~100 m above the surface
 ORBIT_R         = MOON_RADIUS + ALTITUDE
 V_CIRC          = math.sqrt(MU / ORBIT_R)   # ≈ 1680 m/s
 
-# Craft geometry / mass budget. The 15 t mass is Apollo-LM scale.
-# LEVER_ARM = 3 m is large enough that the thrusters bracket the body
-# visibly in the viewer, even with the Apollo_LM.gltf model at meter
-# scale; max_thrust is sized so 6 thrusters at full throttle can hold
-# the craft against lunar gravity with margin.
-LEVER_ARM       = 3.0               # m
-MAX_THRUST      = 5000.0            # N per thruster (Moon hover: 15000·1.62 ≈ 24.3 kN)
+# Craft geometry / mass budget.
+LEVER_ARM       = 3.0               # m   — thruster offset from body center
+MAX_THRUST      = 500.0             # N   — peak per-thruster (bang-bang)
 CRAFT_MASS      = 15000.0           # kg
-
-# Body inertia (kg·m²). Order-of-magnitude estimate for a 15 t craft of
-# ~3 m extent: I ≈ (1/6)·m·L² ≈ 22500 kg·m². At max differential moment
-# 2·L·max_thrust = 30 kN·m, peak angular accel ≈ 1.3 rad/s² — responsive
-# but not twitchy at human reaction time.
-BODY_MOI        = (22500.0, 22500.0, 22500.0)
+BODY_MOI        = (50000.0, 50000.0, 50000.0)   # kg·m² (isotropic)
 
 
 THRUSTERS: list[tuple[str, tuple[float, float, float], tuple[float, float, float]]] = [

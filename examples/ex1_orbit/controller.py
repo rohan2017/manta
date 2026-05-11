@@ -1,13 +1,17 @@
-"""Keyboard controller for ex1_orbit (terminal-focused, WSL-compatible).
+"""Keyboard controller for ex1_orbit — bang-bang, WSL-compatible.
 
-Reads keys from the terminal in raw mode (no OS-level keyboard hook),
-so pynput-style "held key" signals aren't available. Instead we use an
-auto-repeat + decay model: a press boosts the input toward 1.0, and the
-input decays back to 0.0 over ~0.3 s with no further press. On most
-terminals the OS already auto-repeats a held key at ~30 Hz, which keeps
-the input alive while you hold; releasing the key lets it decay.
+Reads keys from this terminal in raw mode (no OS-level keyboard hook,
+so it works under WSL where pynput's hook silently fails). Each
+thruster command is bang-bang: +1, -1, or 0. The user feels the
+command saturate; no analog blending.
 
-The controller terminal must have focus for the keys to register.
+"Held key" semantics without OS release events: every keystroke updates
+that key's last-seen timestamp. The OS auto-repeats a physically held
+key at ~30 Hz, so a key is considered held if it was seen in the last
+HOLD_MS milliseconds. Releasing the key stops the repeat stream and the
+"held" state expires shortly after.
+
+The controller terminal must have focus for keys to register.
 
     Key              Action            Affects
     ---              ------            -------
@@ -17,15 +21,11 @@ The controller terminal must have focus for the keys to register.
     ↑ / ↓            ±Y rotation       tx_zp / tx_zn  (opposite)
     ← / →            ±Z rotation       ty_xp / ty_xn  (opposite)
     Z / X            ±X rotation       tz_yp / tz_yn  (opposite)
-    SPACE            zero all thrusters
-    q (lowercase q is used for -Z — use Ctrl-C to quit)
-
-Run:  .venv/bin/python examples/ex1_orbit/controller.py
-Quit: Ctrl-C
+    SPACE            zero all + clear held state
+    Ctrl-C           quit
 """
 
 import json
-import math
 import os
 import select
 import signal
@@ -40,40 +40,35 @@ PUB_HZ          = 50.0
 PUB_PERIOD      = 1.0 / PUB_HZ
 THRUSTERS       = ["tx_zp", "tx_zn", "ty_xp", "ty_xn", "tz_yp", "tz_yn"]
 
-# Per-DOF intensity follows an impulse-with-decay model. A keystroke
-# adds IMPULSE to the relevant DOF (clamped to ±1). Each tick, the
-# DOF magnitude decays toward zero with time-constant DECAY_TAU.
-IMPULSE         = 1.0           # peak input per keystroke
-DECAY_TAU       = 0.2           # seconds — half-life ≈ 140 ms
-
-
-# ---------------------------------------------------------------------
-# Terminal key reader. Reads stdin in raw mode, decodes single-byte
-# printable keys + 3-byte arrow-key escape sequences.
+# A keystroke marks the key as "held"; the key stays held for HOLD_S
+# seconds after the last keystroke. Linux's default terminal auto-repeat
+# is ~25–35 Hz when a key is physically held, so 150 ms is comfortably
+# longer than the repeat interval but short enough that releasing a key
+# feels instant.
+HOLD_S          = 0.15
 
 ESC = '\x1b'
 
-# Map raw token → list of (dof_name, sign) contributions.
-KEY_TO_DOFS: dict[str, list[tuple[str, float]]] = {
-    'w':       [('uy',     +1.0)],
-    's':       [('uy',     -1.0)],
-    'a':       [('ux',     -1.0)],
-    'd':       [('ux',     +1.0)],
-    'e':       [('uz',     +1.0)],
-    'q':       [('uz',     -1.0)],
-    'z':       [('uroll',  -1.0)],
-    'x':       [('uroll',  +1.0)],
-    'UP':      [('upitch', +1.0)],
-    'DOWN':    [('upitch', -1.0)],
-    'LEFT':    [('uyaw',   -1.0)],
-    'RIGHT':   [('uyaw',   +1.0)],
-    ' ':       [('zero', 1.0)],
+# Map raw key token → (dof_name, sign). One token per DOF contribution.
+KEY_TO_DOF: dict[str, tuple[str, float]] = {
+    'w':     ('uy',     +1.0),
+    's':     ('uy',     -1.0),
+    'a':     ('ux',     -1.0),
+    'd':     ('ux',     +1.0),
+    'e':     ('uz',     +1.0),
+    'q':     ('uz',     -1.0),
+    'z':     ('uroll',  -1.0),
+    'x':     ('uroll',  +1.0),
+    'UP':    ('upitch', +1.0),
+    'DOWN':  ('upitch', -1.0),
+    'LEFT':  ('uyaw',   -1.0),
+    'RIGHT': ('uyaw',   +1.0),
 }
 
 
 def _drain_keys() -> list[str]:
-    """Read all available keystrokes from stdin. Returns a list of
-    tokens — single chars or 'UP'/'DOWN'/'LEFT'/'RIGHT' for arrows."""
+    """Read all available keystrokes from stdin. Single-byte tokens
+    pass through; CSI arrow sequences become 'UP'/'DOWN'/'LEFT'/'RIGHT'."""
     out: list[str] = []
     while select.select([sys.stdin], [], [], 0)[0]:
         ch = sys.stdin.read(1)
@@ -82,7 +77,6 @@ def _drain_keys() -> list[str]:
         if ch != ESC:
             out.append(ch)
             continue
-        # Possible CSI arrow sequence: ESC [ A/B/C/D
         seq = ch
         for _ in range(2):
             if not select.select([sys.stdin], [], [], 0)[0]:
@@ -92,16 +86,17 @@ def _drain_keys() -> list[str]:
                  ESC + '[C': 'RIGHT', ESC + '[D': 'LEFT'}.get(seq)
         if arrow:
             out.append(arrow)
-        # Bare ESC or unknown seq → ignored.
     return out
 
 
-# ---------------------------------------------------------------------
-# Mixer: DOF inputs → per-thruster throttle.
+def sign(x: float) -> float:
+    return 1.0 if x > 0.0 else (-1.0 if x < 0.0 else 0.0)
+
 
 def mix(ux: float, uy: float, uz: float,
         upitch: float, uyaw: float, uroll: float) -> dict[str, float]:
-    cmd = {
+    """Sum DOF contributions per thruster, then bang-bang via sign(sum)."""
+    raw = {
         "tx_zp": ux + upitch,
         "tx_zn": ux - upitch,
         "ty_xp": uy + uyaw,
@@ -109,11 +104,8 @@ def mix(ux: float, uy: float, uz: float,
         "tz_yp": uz + uroll,
         "tz_yn": uz - uroll,
     }
-    return {k: max(-1.0, min(1.0, v)) for k, v in cmd.items()}
+    return {k: sign(v) for k, v in raw.items()}
 
-
-# ---------------------------------------------------------------------
-# Main loop.
 
 def main() -> int:
     if not sys.stdin.isatty():
@@ -131,58 +123,45 @@ def main() -> int:
     pubs = {name: session.declare_publisher(f"manta/ex1/{name}/cmd")
             for name in THRUSTERS}
 
-    print("ex1 controller: WASD/QE = translate, arrows = pitch/yaw, "
-          "Z/X = roll, SPACE = zero, Ctrl-C = quit.")
-    print("Focus this terminal for keys to register. Keys auto-repeat "
-          "while held; releasing decays the input over ~0.2 s.")
+    print("ex1 controller (bang-bang). WASD/QE = translate, arrows = "
+          "pitch/yaw, Z/X = roll, SPACE = zero, Ctrl-C = quit.")
+    print("This terminal must have focus. Keys auto-repeat while held; "
+          "releasing decays held-state in ~150 ms.")
 
-    # Switch the terminal to cbreak mode so single keystrokes are read
-    # without enter, but signals (Ctrl-C) still fire.
     fd = sys.stdin.fileno()
     saved = termios.tcgetattr(fd)
     tty.setcbreak(fd)
-    # Also stop newline/echo from the OS for cleanliness.
-    last_pub: dict[str, float] = {n: math.nan for n in THRUSTERS}
 
-    dofs = {'ux': 0.0, 'uy': 0.0, 'uz': 0.0,
-            'upitch': 0.0, 'uyaw': 0.0, 'uroll': 0.0}
+    last_seen: dict[str, float] = {}     # token → monotonic timestamp
+    last_pub:  dict[str, float] = {n: float('nan') for n in THRUSTERS}
+
     try:
-        last_t = time.monotonic()
         while running:
             now = time.monotonic()
-            dt  = now - last_t
-            last_t = now
-
-            # Decay all DOFs toward zero.
-            decay = math.exp(-dt / DECAY_TAU)
-            for k in dofs:
-                dofs[k] *= decay
-
-            # Apply any new keystrokes.
             for tok in _drain_keys():
-                if tok == '\x03':       # Ctrl-C — defensive (signal handler usually catches)
-                    running = False
-                    break
-                actions = KEY_TO_DOFS.get(tok)
-                if not actions:
+                if tok == ' ':
+                    last_seen.clear()
                     continue
-                if actions == [('zero', 1.0)]:
-                    for k in dofs:
-                        dofs[k] = 0.0
-                    continue
-                for dof_name, sign in actions:
-                    dofs[dof_name] = max(-1.0, min(1.0, dofs[dof_name] + sign * IMPULSE))
+                if tok in KEY_TO_DOF:
+                    last_seen[tok] = now
+
+            # Held = seen in the last HOLD_S seconds.
+            held = {tok for tok, t in last_seen.items() if now - t < HOLD_S}
+            dofs = {'ux': 0.0, 'uy': 0.0, 'uz': 0.0,
+                    'upitch': 0.0, 'uyaw': 0.0, 'uroll': 0.0}
+            for tok in held:
+                name, sgn = KEY_TO_DOF[tok]
+                dofs[name] += sgn
 
             cmd = mix(dofs['ux'], dofs['uy'], dofs['uz'],
                       dofs['upitch'], dofs['uyaw'], dofs['uroll'])
             for name, v in cmd.items():
-                if abs(v - last_pub[name]) > 1e-4:
+                if v != last_pub[name]:
                     pubs[name].put(json.dumps([v]).encode("utf-8"))
                     last_pub[name] = v
 
             time.sleep(PUB_PERIOD)
     finally:
-        # Zero all thrusters on exit so the craft stops accelerating.
         for pub in pubs.values():
             pub.put(json.dumps([0.0]).encode("utf-8"))
         termios.tcsetattr(fd, termios.TCSADRAIN, saved)
