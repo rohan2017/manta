@@ -92,6 +92,12 @@ def main() -> None:
     rr.log("world/craft/body",
            rr.Asset3D(path=str(_model_path)),
            static=True)
+    # Body-frame coordinate axes (X red / Y green / Z blue), attached
+    # to the craft's Transform3D entity. Length is in body-local meters
+    # — the parent Transform3D's scale magnifies them.
+    rr.log("world/craft",
+           rr.archetypes.TransformAxes3D(length=1.0),
+           static=True)
 
     for name, _direction, offset in THRUSTERS:
         rr.log(f"world/craft/thrusters/{name}/origin",
@@ -126,8 +132,7 @@ def main() -> None:
                    translation=p_world,
                    rotation=rr.Quaternion(xyzw=[d["q"][1], d["q"][2],
                                                 d["q"][3], d["q"][0]]),
-                   scale=[CRAFT_SCALE, CRAFT_SCALE, CRAFT_SCALE],
-                   axis_length=0.6))    # body-local meters
+                   scale=[CRAFT_SCALE, CRAFT_SCALE, CRAFT_SCALE]))
 
         # Per-thruster force arrows. Each arrow's tail sits at the
         # thruster's body-local offset; the vector points along the
