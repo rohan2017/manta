@@ -20,9 +20,18 @@ import collections
 import importlib.util
 import json
 import math
+import os
 import pathlib
 import signal
 import sys
+
+# rr.init(spawn=True) shells out to a `rerun` binary that's installed
+# alongside rerun-sdk in the venv. If the user runs this without
+# activating .venv, that binary isn't on PATH. Prepend the interpreter's
+# directory so the spawn always finds it.
+_interpreter_dir = pathlib.Path(sys.executable).parent
+if str(_interpreter_dir) not in os.environ.get("PATH", "").split(os.pathsep):
+    os.environ["PATH"] = f"{_interpreter_dir}{os.pathsep}{os.environ.get('PATH', '')}"
 
 import rerun as rr
 import zenoh
