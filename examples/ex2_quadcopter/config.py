@@ -26,11 +26,22 @@ KT    = 0.02     # counter-torque coefficient
 MAX_THRUST_PER_PROP = 2 * (MASS * 9.81) / 4  # 2× hover thrust per prop
 
 
+# X-config rotor layout. Looking down +z (top-down), CCW props twist
+# the body in -z and CW props twist it in +z (Thruster1 reaction torque
+# follows the τ_1 sign in _prop). Geometry is exported as a module-level
+# list so the viewer can render rotor markers + thrust arrows at the
+# same positions without duplicating the magic numbers.
+ROTORS: list[tuple[str, tuple[float, float, float], bool]] = [
+    # name, (x, y, z) body-frame offset, cw?
+    ("fr", (+ARM_L, -ARM_L, 0.0), False),
+    ("fl", (+ARM_L, +ARM_L, 0.0), True),
+    ("bl", (-ARM_L, +ARM_L, 0.0), False),
+    ("br", (-ARM_L, -ARM_L, 0.0), True),
+]
+
+
 def _prop(name: str, x: float, y: float, cw: bool) -> Thruster1:
-    """X-config rotor: vertical thrust + reaction torque about z. CCW props
-    (sign=-1) twist the body in -z; CW props (+1) twist it in +z. Mounting
-    transform is just the (x, y, 0) arm offset.
-    """
+    """X-config rotor: vertical thrust + reaction torque about z."""
     sign = +1.0 if cw else -1.0
     F1 = (0.0, 0.0, MAX_THRUST_PER_PROP)
     T1 = (0.0, 0.0, sign * KT * MAX_THRUST_PER_PROP)
@@ -46,15 +57,8 @@ def make_config() -> MantaConfig:
     # GravityField is registered).
     c.add(Mass("body", mass=MASS, moi=(0.01, 0.01, 0.02)))
 
-    # X-config: looking down +z,
-    #   front-right (+x,-y) : CCW
-    #   front-left  (+x,+y) : CW
-    #   back-left   (-x,+y) : CCW
-    #   back-right  (-x,-y) : CW
-    c.add(_prop("fr", +ARM_L, -ARM_L, cw=False))
-    c.add(_prop("fl", +ARM_L, +ARM_L, cw=True))
-    c.add(_prop("bl", -ARM_L, +ARM_L, cw=False))
-    c.add(_prop("br", -ARM_L, -ARM_L, cw=True))
+    for name, (x, y, _z), cw in ROTORS:
+        c.add(_prop(name, x, y, cw=cw))
 
     c.add(IMU("imu"))
 
