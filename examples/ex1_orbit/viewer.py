@@ -96,7 +96,7 @@ def main() -> None:
     # to the craft's Transform3D entity. Length is in body-local meters
     # — the parent Transform3D's scale magnifies them.
     rr.log("world/craft",
-           rr.archetypes.TransformAxes3D(length=1.0),
+           rr.archetypes.TransformAxes3D(1.0),
            static=True)
 
     for name, _direction, offset in THRUSTERS:
