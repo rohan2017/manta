@@ -78,13 +78,10 @@ def main() -> None:
     # ---- Static craft body + thruster-origin markers. ----
     # All values below are in body-local meters; the craft node's
     # Transform3D will apply CRAFT_SCALE to render them visibly.
+    _model_path = pathlib.Path(__file__).parent / "Apollo_LM.gltf"
     rr.log("world/craft/body",
-           rr.Boxes3D(half_sizes=[[0.3, 0.3, 0.3]],
-                      colors=[[200, 200, 200]]),
+           rr.Asset3D(path=str(_model_path)),
            static=True)
-    # Tip: comment the Boxes3D out and uncomment the next line to swap in
-    # a real model.
-    # rr.log("world/craft/body", rr.Asset3D(path="my_craft.glb"), static=True)
 
     for name, _direction, offset in THRUSTERS:
         rr.log(f"world/craft/thrusters/{name}/origin",
