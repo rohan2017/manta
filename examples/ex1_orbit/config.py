@@ -1,9 +1,10 @@
-"""ex1 — 6-thruster manoeuvring craft in a 1 km circular orbit.
+"""ex1 — 6-thruster lunar-orbit manoeuvring craft (Apollo-LM scale).
 
-Two bipolar thrusters per body axis, each offset from the centerline so
-differential thrust produces a torque. Equal throttles on a pair give
-pure translation along that axis; opposite throttles give pure rotation
-about the perpendicular axis they lever against.
+A 15 t lander with two bipolar thrusters per body axis, each offset 3 m
+from the centerline so differential thrust produces a torque. Equal
+throttles on a pair give pure translation along that axis; opposite
+throttles give pure rotation about the perpendicular axis they lever
+against.
 
 Axis layout (body frame, X forward / Y left / Z up):
 
@@ -13,13 +14,13 @@ Axis layout (body frame, X forward / Y left / Z up):
     ty_xp/ty_xn  ±Y             ±X             about Z  (yaw)
     tz_yp/tz_yn  ±Z             ±Y             about X  (roll)
 
-Inverse-square central gravity, no atmosphere, no rotation.
-Sim runs at 200x realtime so a full orbit completes in ~28 wall-seconds.
+The craft starts in a circular orbit ~100 m above the Moon's mean
+surface. Inverse-square lunar gravity, no atmosphere, no rotation. Sim
+runs at 200x realtime so a full orbit completes in ~17 wall-seconds.
 
 Generate from the repo root:
 
-    PYTHONPATH=python/manta_codegen/src \
-        python -m manta_codegen.cli examples/ex1_orbit/config.py --workflow binary
+    .venv/bin/python -m manta_codegen.cli examples/ex1_orbit/config.py --workflow binary
 
 A keyboard controller for live manoeuvring is in `controller.py`:
 WASD = XY translation, QE = Z translation, arrow keys = pitch/yaw, ZX = roll.
@@ -33,22 +34,27 @@ from manta_codegen.parts  import Mass, Thruster
 from manta_codegen.fields import GravityField
 
 
-# Earth.
-MU              = 3.986004418e14    # m^3/s^2
-EARTH_RADIUS    = 6.371e6           # m
-ALTITUDE        = 1.0e3             # 1 km
-ORBIT_R         = EARTH_RADIUS + ALTITUDE
-V_CIRC          = math.sqrt(MU / ORBIT_R)
+# Moon.
+MU              = 4.9048695e12      # m^3/s^2  (lunar gravitational parameter)
+MOON_RADIUS     = 1.7374e6          # m
+ALTITUDE        = 100.0             # m — ~100 m above the surface
+ORBIT_R         = MOON_RADIUS + ALTITUDE
+V_CIRC          = math.sqrt(MU / ORBIT_R)   # ≈ 1680 m/s
 
-# Thruster geometry. Lever arm L sets the moment arm for the differential
-# thrust rotation modes; max_thrust scales force and torque proportionally.
-LEVER_ARM       = 0.5               # m, offset of each thruster from the body center
-MAX_THRUST      = 5.0               # N per thruster
+# Craft geometry / mass budget. The 15 t mass is Apollo-LM scale.
+# LEVER_ARM = 3 m is large enough that the thrusters bracket the body
+# visibly in the viewer, even with the Apollo_LM.gltf model at meter
+# scale; max_thrust is sized so 6 thrusters at full throttle can hold
+# the craft against lunar gravity with margin.
+LEVER_ARM       = 3.0               # m
+MAX_THRUST      = 5000.0            # N per thruster (Moon hover: 15000·1.62 ≈ 24.3 kN)
+CRAFT_MASS      = 15000.0           # kg
 
-# Body inertia (kg·m²). Picked so a max differential moment of
-# 2·L·max_thrust = 5 N·m gives ~25 rad/s² peak angular accel — fast
-# enough to be responsive in the demo but not twitchy.
-BODY_MOI        = (0.2, 0.2, 0.2)
+# Body inertia (kg·m²). Order-of-magnitude estimate for a 15 t craft of
+# ~3 m extent: I ≈ (1/6)·m·L² ≈ 22500 kg·m². At max differential moment
+# 2·L·max_thrust = 30 kN·m, peak angular accel ≈ 1.3 rad/s² — responsive
+# but not twitchy at human reaction time.
+BODY_MOI        = (22500.0, 22500.0, 22500.0)
 
 
 THRUSTERS: list[tuple[str, tuple[float, float, float], tuple[float, float, float]]] = [
@@ -63,7 +69,7 @@ THRUSTERS: list[tuple[str, tuple[float, float, float], tuple[float, float, float
 
 
 def make_config() -> MantaConfig:
-    body      = Mass("body", mass=1.0, moi=BODY_MOI)
+    body      = Mass("body", mass=CRAFT_MASS, moi=BODY_MOI)
     thrusters = [
         Thruster(name, max_thrust=MAX_THRUST, direction=d, transform=tf(pos))
         for name, d, pos in THRUSTERS

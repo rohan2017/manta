@@ -52,35 +52,36 @@ except ModuleNotFoundError as e:
 THRUSTERS  = _cfg.THRUSTERS          # [(name, direction, offset), ...]
 MAX_THRUST = _cfg.MAX_THRUST         # N
 LEVER_ARM  = _cfg.LEVER_ARM          # m
+MOON_RADIUS = _cfg.MOON_RADIUS       # m
 
-EARTH_RADIUS = 6.371e6
-SCALE        = 1.0 / 1.0e6           # 1 rerun unit per Mm — Earth ≈ 6.371 units
-CRAFT_SCALE  = 5e5                   # rerun units per m of body geometry. The
-                                     # craft is ~1 m physical; this magnifies
-                                     # the body so it's visible against an
-                                     # orbit at 6.4 Mm-radius scale.
-ARROW_PER_N  = 0.04                  # rerun units (after CRAFT_SCALE) per Newton
-                                     # of thrust. With MAX_THRUST=5 N and
-                                     # LEVER_ARM=0.5 m, full-throttle arrows
-                                     # are 4× the body's half-width — easy
-                                     # to read without dwarfing the body.
+SCALE        = 1.0 / 1.0e6           # 1 rerun unit per Mm — Moon ≈ 1.737 units
+CRAFT_SCALE  = 5e2                   # rerun units per m of body geometry.
+                                     # The Apollo LM model is at meter scale;
+                                     # this magnifies the ~6 m craft to ~3 mm
+                                     # of rerun space against the 1.7-unit
+                                     # Moon — visible but not dwarfing.
+ARROW_PER_N  = 8e-5                  # rerun units (after CRAFT_SCALE) per
+                                     # Newton of thrust. With MAX_THRUST=5000
+                                     # and LEVER_ARM=3 m, full-throttle arrows
+                                     # are ~40% of the lever — easy to read
+                                     # without overlapping the body model.
 
 
 def main() -> None:
     rr.init("manta_ex1", spawn=True)
     rr.log("world", rr.ViewCoordinates.RIGHT_HAND_Z_UP, static=True)
 
-    # ---- Earth + spin axis (world frame, at full sim scale via SCALE). ----
-    rr.log("world/earth",
+    # ---- Moon + spin axis (world frame, at full sim scale via SCALE). ----
+    rr.log("world/moon",
            rr.Points3D(
                positions=[[0, 0, 0]],
-               radii=[EARTH_RADIUS * SCALE],
-               colors=[[60, 100, 180]]),
+               radii=[MOON_RADIUS * SCALE],
+               colors=[[170, 170, 170]]),
            static=True)
-    rr.log("world/earth_axis",
+    rr.log("world/moon_axis",
            rr.Arrows3D(
                origins=[[0, 0, 0]],
-               vectors=[[0, 0, EARTH_RADIUS * 1.3 * SCALE]],
+               vectors=[[0, 0, MOON_RADIUS * 1.3 * SCALE]],
                colors=[[230, 230, 80]]),
            static=True)
 
@@ -110,7 +111,7 @@ def main() -> None:
         except Exception as e:
             print(f"bad payload: {e}", file=sys.stderr)
             return
-        rr.set_time_seconds("sim_time", d["t"])
+        rr.set_time("sim_time", duration=float(d["t"]))
 
         p_world = [d["p"][0] * SCALE, d["p"][1] * SCALE, d["p"][2] * SCALE]
         trail.append(p_world)
@@ -154,9 +155,9 @@ def main() -> None:
 
         # Scalar plots.
         r = math.sqrt(d["p"][0]**2 + d["p"][1]**2 + d["p"][2]**2)
-        rr.log("plots/altitude_km", rr.Scalar((r - EARTH_RADIUS) / 1000.0))
+        rr.log("plots/altitude_m", rr.Scalars(r - MOON_RADIUS))
         v = math.sqrt(d["v"][0]**2 + d["v"][1]**2 + d["v"][2]**2)
-        rr.log("plots/speed_mps", rr.Scalar(v))
+        rr.log("plots/speed_mps", rr.Scalars(v))
 
     sub = session.declare_subscriber("manta/ex1/state", on_state)
 

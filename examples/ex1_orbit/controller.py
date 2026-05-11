@@ -1,9 +1,13 @@
-"""Keyboard controller for ex1_orbit.
+"""Keyboard controller for ex1_orbit (terminal-focused, WSL-compatible).
 
-Publishes per-thruster throttle commands on `manta/ex1/<name>/cmd` based on
-held keys. The thruster layout (see config.py) is six bipolar thrusters
-in three offset pairs; this script maps 6 keyboard inputs to the 6
-thrusters via a fixed mixer:
+Reads keys from the terminal in raw mode (no OS-level keyboard hook),
+so pynput-style "held key" signals aren't available. Instead we use an
+auto-repeat + decay model: a press boosts the input toward 1.0, and the
+input decays back to 0.0 over ~0.3 s with no further press. On most
+terminals the OS already auto-repeats a held key at ~30 Hz, which keeps
+the input alive while you hold; releasing the key lets it decay.
+
+The controller terminal must have focus for the keys to register.
 
     Key              Action            Affects
     ---              ------            -------
@@ -14,99 +18,96 @@ thrusters via a fixed mixer:
     ← / →            ±Z rotation       ty_xp / ty_xn  (opposite)
     Z / X            ±X rotation       tz_yp / tz_yn  (opposite)
     SPACE            zero all thrusters
-    Esc / Ctrl-C     quit
+    q (lowercase q is used for -Z — use Ctrl-C to quit)
 
-Each held key contributes a unit input; the per-thruster sum is clamped to
-[-1, 1] before publishing. Releasing a key drops its contribution to zero.
-
-Requires `pynput`:  python -m pip install pynput zenoh
+Run:  .venv/bin/python examples/ex1_orbit/controller.py
+Quit: Ctrl-C
 """
 
 import json
 import math
+import os
+import select
 import signal
 import sys
-import threading
+import termios
 import time
+import tty
 
 import zenoh
-
-try:
-    from pynput import keyboard
-except ImportError:
-    sys.exit("controller.py: install pynput first: python -m pip install pynput")
-
 
 PUB_HZ          = 50.0
 PUB_PERIOD      = 1.0 / PUB_HZ
 THRUSTERS       = ["tx_zp", "tx_zn", "ty_xp", "ty_xn", "tz_yp", "tz_yn"]
 
+# Per-DOF intensity follows an impulse-with-decay model. A keystroke
+# adds IMPULSE to the relevant DOF (clamped to ±1). Each tick, the
+# DOF magnitude decays toward zero with time-constant DECAY_TAU.
+IMPULSE         = 1.0           # peak input per keystroke
+DECAY_TAU       = 0.2           # seconds — half-life ≈ 140 ms
+
 
 # ---------------------------------------------------------------------
-# Input state — one float per logical DOF, set from keyboard callbacks.
+# Terminal key reader. Reads stdin in raw mode, decodes single-byte
+# printable keys + 3-byte arrow-key escape sequences.
 
-class Input:
-    """Tracks which keys are currently held; converts to 6 DOF inputs."""
+ESC = '\x1b'
 
-    def __init__(self) -> None:
-        self.held: set = set()
-        self.lock   = threading.Lock()
-
-    def on_press(self, key) -> None:
-        with self.lock:
-            self.held.add(_normalize(key))
-
-    def on_release(self, key) -> None:
-        with self.lock:
-            self.held.discard(_normalize(key))
-
-    def dofs(self) -> tuple[float, float, float, float, float, float]:
-        """Return (u_x, u_y, u_z, u_pitch, u_yaw, u_roll) each in {-1, 0, +1}."""
-        with self.lock:
-            held = set(self.held)
-        ux = _axis(held, 'd', 'a')           # WASD: D = +X, A = -X
-        uy = _axis(held, 'w', 's')           # W = +Y, S = -Y
-        uz = _axis(held, 'e', 'q')           # E = +Z, Q = -Z
-        u_pitch = _axis(held, 'up', 'down')
-        u_yaw   = _axis(held, 'right', 'left')
-        u_roll  = _axis(held, 'x', 'z')
-        return ux, uy, uz, u_pitch, u_yaw, u_roll
+# Map raw token → list of (dof_name, sign) contributions.
+KEY_TO_DOFS: dict[str, list[tuple[str, float]]] = {
+    'w':       [('uy',     +1.0)],
+    's':       [('uy',     -1.0)],
+    'a':       [('ux',     -1.0)],
+    'd':       [('ux',     +1.0)],
+    'e':       [('uz',     +1.0)],
+    'q':       [('uz',     -1.0)],
+    'z':       [('uroll',  -1.0)],
+    'x':       [('uroll',  +1.0)],
+    'UP':      [('upitch', +1.0)],
+    'DOWN':    [('upitch', -1.0)],
+    'LEFT':    [('uyaw',   -1.0)],
+    'RIGHT':   [('uyaw',   +1.0)],
+    ' ':       [('zero', 1.0)],
+}
 
 
-def _normalize(key) -> str:
-    """Map a pynput key to a stable lowercase string token."""
-    if hasattr(key, 'char') and key.char is not None:
-        return key.char.lower()
-    name = str(key).removeprefix('Key.')
-    return name.lower()
-
-
-def _axis(held: set, positive: str, negative: str) -> float:
-    """+1 if `positive` is held, -1 if `negative` is held, else 0."""
-    p = positive in held
-    n = negative in held
-    return float(p) - float(n)
+def _drain_keys() -> list[str]:
+    """Read all available keystrokes from stdin. Returns a list of
+    tokens — single chars or 'UP'/'DOWN'/'LEFT'/'RIGHT' for arrows."""
+    out: list[str] = []
+    while select.select([sys.stdin], [], [], 0)[0]:
+        ch = sys.stdin.read(1)
+        if not ch:
+            break
+        if ch != ESC:
+            out.append(ch)
+            continue
+        # Possible CSI arrow sequence: ESC [ A/B/C/D
+        seq = ch
+        for _ in range(2):
+            if not select.select([sys.stdin], [], [], 0)[0]:
+                break
+            seq += sys.stdin.read(1)
+        arrow = {ESC + '[A': 'UP', ESC + '[B': 'DOWN',
+                 ESC + '[C': 'RIGHT', ESC + '[D': 'LEFT'}.get(seq)
+        if arrow:
+            out.append(arrow)
+        # Bare ESC or unknown seq → ignored.
+    return out
 
 
 # ---------------------------------------------------------------------
 # Mixer: DOF inputs → per-thruster throttle.
 
 def mix(ux: float, uy: float, uz: float,
-        u_pitch: float, u_yaw: float, u_roll: float) -> dict[str, float]:
-    """Map 6 DOF inputs to 6 thruster throttles, each clamped to [-1, 1].
-
-    Translation: both thrusters in a pair get the same throttle.
-    Rotation:    differential throttle (one +, the other -)."""
+        upitch: float, uyaw: float, uroll: float) -> dict[str, float]:
     cmd = {
-        # X-pair offset in Z → translation X, differential ⇒ pitch (about Y).
-        "tx_zp": ux + u_pitch,
-        "tx_zn": ux - u_pitch,
-        # Y-pair offset in X → translation Y, differential ⇒ yaw (about Z).
-        "ty_xp": uy + u_yaw,
-        "ty_xn": uy - u_yaw,
-        # Z-pair offset in Y → translation Z, differential ⇒ roll (about X).
-        "tz_yp": uz + u_roll,
-        "tz_yn": uz - u_roll,
+        "tx_zp": ux + upitch,
+        "tx_zn": ux - upitch,
+        "ty_xp": uy + uyaw,
+        "ty_xn": uy - uyaw,
+        "tz_yp": uz + uroll,
+        "tz_yn": uz - uroll,
     }
     return {k: max(-1.0, min(1.0, v)) for k, v in cmd.items()}
 
@@ -115,17 +116,15 @@ def mix(ux: float, uy: float, uz: float,
 # Main loop.
 
 def main() -> int:
-    running = threading.Event()
-    running.set()
+    if not sys.stdin.isatty():
+        sys.exit("controller.py: stdin must be a TTY (run in a terminal).")
 
+    running = True
     def on_signal(*_):
-        running.clear()
+        nonlocal running
+        running = False
     signal.signal(signal.SIGINT,  on_signal)
     signal.signal(signal.SIGTERM, on_signal)
-
-    inp = Input()
-    listener = keyboard.Listener(on_press=inp.on_press, on_release=inp.on_release)
-    listener.start()
 
     cfg = zenoh.Config()
     session = zenoh.open(cfg)
@@ -133,29 +132,62 @@ def main() -> int:
             for name in THRUSTERS}
 
     print("ex1 controller: WASD/QE = translate, arrows = pitch/yaw, "
-          "Z/X = roll, SPACE = zero, Esc = quit.")
+          "Z/X = roll, SPACE = zero, Ctrl-C = quit.")
+    print("Focus this terminal for keys to register. Keys auto-repeat "
+          "while held; releasing decays the input over ~0.2 s.")
 
-    last_cmd: dict[str, float] = {n: math.nan for n in THRUSTERS}
-    while running.is_set():
-        ux, uy, uz, up, uyaw, ur = inp.dofs()
-        if 'space' in inp.held:
-            ux = uy = uz = up = uyaw = ur = 0.0
-        if 'esc' in inp.held:
-            running.clear()
-            break
-        cmd = mix(ux, uy, uz, up, uyaw, ur)
-        # Publish only when something changed to keep the wire quiet.
-        for name, v in cmd.items():
-            if abs(v - last_cmd[name]) > 1e-4:
-                pubs[name].put(json.dumps([v]).encode("utf-8"))
-                last_cmd[name] = v
-        time.sleep(PUB_PERIOD)
+    # Switch the terminal to cbreak mode so single keystrokes are read
+    # without enter, but signals (Ctrl-C) still fire.
+    fd = sys.stdin.fileno()
+    saved = termios.tcgetattr(fd)
+    tty.setcbreak(fd)
+    # Also stop newline/echo from the OS for cleanliness.
+    last_pub: dict[str, float] = {n: math.nan for n in THRUSTERS}
 
-    # Zero all thrusters on exit so the craft stops accelerating.
-    for name, pub in pubs.items():
-        pub.put(json.dumps([0.0]).encode("utf-8"))
-    listener.stop()
-    session.close()
+    dofs = {'ux': 0.0, 'uy': 0.0, 'uz': 0.0,
+            'upitch': 0.0, 'uyaw': 0.0, 'uroll': 0.0}
+    try:
+        last_t = time.monotonic()
+        while running:
+            now = time.monotonic()
+            dt  = now - last_t
+            last_t = now
+
+            # Decay all DOFs toward zero.
+            decay = math.exp(-dt / DECAY_TAU)
+            for k in dofs:
+                dofs[k] *= decay
+
+            # Apply any new keystrokes.
+            for tok in _drain_keys():
+                if tok == '\x03':       # Ctrl-C — defensive (signal handler usually catches)
+                    running = False
+                    break
+                actions = KEY_TO_DOFS.get(tok)
+                if not actions:
+                    continue
+                if actions == [('zero', 1.0)]:
+                    for k in dofs:
+                        dofs[k] = 0.0
+                    continue
+                for dof_name, sign in actions:
+                    dofs[dof_name] = max(-1.0, min(1.0, dofs[dof_name] + sign * IMPULSE))
+
+            cmd = mix(dofs['ux'], dofs['uy'], dofs['uz'],
+                      dofs['upitch'], dofs['uyaw'], dofs['uroll'])
+            for name, v in cmd.items():
+                if abs(v - last_pub[name]) > 1e-4:
+                    pubs[name].put(json.dumps([v]).encode("utf-8"))
+                    last_pub[name] = v
+
+            time.sleep(PUB_PERIOD)
+    finally:
+        # Zero all thrusters on exit so the craft stops accelerating.
+        for pub in pubs.values():
+            pub.put(json.dumps([0.0]).encode("utf-8"))
+        termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+        session.close()
+        print("\ncontroller: stopped.")
     return 0
 
 
