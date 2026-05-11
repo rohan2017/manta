@@ -125,10 +125,10 @@ class StaticTransform:
         """C++ literal for `manta::geom::StaticLink<ParentFrame, PartFrame, Scalar>`."""
         x, y, z = self.position
         w, qx, qy, qz = self.quaternion
-        quat_type = (
-            "Eigen::Quaternionf" if scalar == "manta::MFloat"
-            else f"Eigen::Quaternion<{scalar}>"
-        )
+        # Use the templated Eigen::Quaternion<Scalar> in every case so
+        # the literal's type matches the surrounding Ori<...> regardless
+        # of MFloat being float or double (MANTA_DOUBLE_PRECISION).
+        quat_type = f"Eigen::Quaternion<{scalar}>"
         # Cast quaternion components through `scalar(...)` so the call works
         # for any Scalar (MFloat, double, ceres::Jet, ...).
         qexpr = (f"{quat_type}{{{scalar}({_f(w)}), {scalar}({_f(qx)}), "

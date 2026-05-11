@@ -73,7 +73,7 @@ void setup() {
     w.register_field(field_1);
     field_2.add(manta::fields::MagField::Disturbance::uniform(manta::geom::Vec3<manta::SceneFrame>{2.5e-05f, 0.0f, -4.5e-05f}), manta::fields::PERSISTENT);
     w.register_field(field_2);
-    scene->add_craft(craft, manta::InitialState{manta::geom::Vec3<manta::SceneFrame>{0.0f, 0.0f, -5.0f}, manta::geom::Ori<manta::SceneFrame>{Eigen::Quaternionf{1.0f, 0.0f, 0.0f, 0.0f}}, manta::geom::Vec3<manta::SceneFrame>{0.0f, 0.0f, 0.0f}, manta::geom::Vec3<manta::CraftFrame>{0.0f, 0.0f, 0.0f}});
+    scene->add_craft(craft, manta::InitialState{manta::geom::Vec3<manta::SceneFrame>{0.0f, 0.0f, -5.0f}, manta::geom::Ori<manta::SceneFrame>{Eigen::Quaternion<manta::MFloat>{manta::MFloat(1.0f), manta::MFloat(0.0f), manta::MFloat(0.0f), manta::MFloat(0.0f)}}, manta::geom::Vec3<manta::SceneFrame>{0.0f, 0.0f, 0.0f}, manta::geom::Vec3<manta::CraftFrame>{0.0f, 0.0f, 0.0f}});
 
     g_session.emplace(zenoh::Session::open(zenoh::Config::create_default()));
 

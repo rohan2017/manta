@@ -18,9 +18,9 @@ The controller terminal must have focus for keys to register.
     W / S            ±Y translation    ty_xp, ty_xn   (both equal)
     A / D            ∓X translation    tx_zp, tx_zn   (both equal)
     Q / E            ±Z translation    tz_yp, tz_yn   (both equal)
-    ↑ / ↓            ±Y rotation       tx_zp / tx_zn  (opposite)
-    ← / →            ±Z rotation       ty_xp / ty_xn  (opposite)
-    Z / X            ±X rotation       tz_yp / tz_yn  (opposite)
+    J / L            ±X rotation (roll, about A/D axis)         (opposite)
+    I / K            ±Y rotation (pitch, about W/S axis)        (opposite)
+    U / O            ±Z rotation (yaw, about Q/E axis)          (opposite)
     SPACE            zero all + clear held state
     Ctrl-C           quit
 """
@@ -50,6 +50,10 @@ HOLD_S          = 0.15
 ESC = '\x1b'
 
 # Map raw key token → (dof_name, sign). One token per DOF contribution.
+# Rotation keys use the convention "rotation about the AD/WS/QE axis":
+#   J/L  → roll  about ±X  (the A/D translation axis)
+#   I/K  → pitch about ±Y  (the W/S translation axis)
+#   U/O  → yaw   about ±Z  (the Q/E translation axis)
 KEY_TO_DOF: dict[str, tuple[str, float]] = {
     'w':     ('uy',     +1.0),
     's':     ('uy',     -1.0),
@@ -57,35 +61,34 @@ KEY_TO_DOF: dict[str, tuple[str, float]] = {
     'd':     ('ux',     +1.0),
     'e':     ('uz',     +1.0),
     'q':     ('uz',     -1.0),
-    'z':     ('uroll',  -1.0),
-    'x':     ('uroll',  +1.0),
-    'UP':    ('upitch', +1.0),
-    'DOWN':  ('upitch', -1.0),
-    'LEFT':  ('uyaw',   -1.0),
-    'RIGHT': ('uyaw',   +1.0),
+    'l':     ('uroll',  +1.0),
+    'j':     ('uroll',  -1.0),
+    'i':     ('upitch', +1.0),
+    'k':     ('upitch', -1.0),
+    'o':     ('uyaw',   +1.0),
+    'u':     ('uyaw',   -1.0),
 }
 
 
 def _drain_keys() -> list[str]:
-    """Read all available keystrokes from stdin. Single-byte tokens
-    pass through; CSI arrow sequences become 'UP'/'DOWN'/'LEFT'/'RIGHT'."""
+    """Read all available keystrokes from stdin. Single-byte printable
+    tokens pass through (lowercased). Any ESC-prefixed sequence is
+    swallowed silently so arrow keys etc. don't accidentally trigger
+    other actions."""
     out: list[str] = []
     while select.select([sys.stdin], [], [], 0)[0]:
         ch = sys.stdin.read(1)
         if not ch:
             break
-        if ch != ESC:
-            out.append(ch)
+        if ch == ESC:
+            # Consume any trailing CSI bytes so they don't leak into
+            # the next read.
+            for _ in range(2):
+                if not select.select([sys.stdin], [], [], 0)[0]:
+                    break
+                sys.stdin.read(1)
             continue
-        seq = ch
-        for _ in range(2):
-            if not select.select([sys.stdin], [], [], 0)[0]:
-                break
-            seq += sys.stdin.read(1)
-        arrow = {ESC + '[A': 'UP', ESC + '[B': 'DOWN',
-                 ESC + '[C': 'RIGHT', ESC + '[D': 'LEFT'}.get(seq)
-        if arrow:
-            out.append(arrow)
+        out.append(ch.lower())
     return out
 
 

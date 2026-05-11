@@ -51,17 +51,23 @@ MOON_RADIUS = _cfg.MOON_RADIUS
 ALTITUDE    = _cfg.ALTITUDE
 
 SCALE          = 1.0 / 1.0e6        # 1 rerun unit per Mm — Moon ≈ 1.737 units
-ALT_EXAGGERATE = 5.0e3              # multiplier on (altitude above Moon surface)
+ALT_EXAGGERATE = 1.0e3              # multiplier on (altitude above Moon surface)
                                     # before scaling into rerun units. At 100 m
-                                    # physical, this lifts the orbit visibly off
-                                    # the Moon's surface.
-CRAFT_SCALE    = 0.05               # rerun units per body-frame meter. Sized
-                                    # so the 6-m craft is ~0.3 rerun units
-                                    # (~17% of Moon radius — visible without
-                                    # dwarfing).
-ARROW_PER_N    = 8e-3               # rerun units (after CRAFT_SCALE) per N.
-                                    # Full-throttle 500 N arrow = 4 body-m
-                                    # ≈ 1.3 × LEVER_ARM — easy to read.
+                                    # physical, this lifts the orbit by 0.1
+                                    # rerun units above the moon — visible
+                                    # without amplifying integrator drift.
+CRAFT_SCALE    = 5.0e-3             # rerun units per body-frame meter. The
+                                    # 6m craft renders as 0.03 rerun units
+                                    # — small but clearly above the Moon
+                                    # surface (whose nearest edge sits at
+                                    # rerun-radius MOON_RADIUS*SCALE ≈ 1.737,
+                                    # craft at ~1.837).
+ARROW_PER_N    = 6e-3               # body-frame meters per Newton (gets
+                                    # multiplied by CRAFT_SCALE like the rest
+                                    # of the body geometry). Full-throttle
+                                    # 500 N arrow = 3 body-m = 1 LEVER_ARM,
+                                    # so arrows are readable next to the
+                                    # thruster offsets.
 
 
 def render_position(p_phys: list[float]) -> list[float]:

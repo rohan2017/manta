@@ -69,7 +69,7 @@ void setup() {
     craft_0.root().compute_params();
     craft_1.root().compute_params();
     scene->add_craft(craft_0, manta::InitialState{});
-    scene->add_craft(craft_1, manta::InitialState{manta::geom::Vec3<manta::SceneFrame>{2.0f, 0.0f, 0.0f}, manta::geom::Ori<manta::SceneFrame>{Eigen::Quaternionf{1.0f, 0.0f, 0.0f, 0.0f}}, manta::geom::Vec3<manta::SceneFrame>{0.0f, 0.0f, 0.0f}, manta::geom::Vec3<manta::CraftFrame>{0.0f, 0.0f, 0.0f}});
+    scene->add_craft(craft_1, manta::InitialState{manta::geom::Vec3<manta::SceneFrame>{2.0f, 0.0f, 0.0f}, manta::geom::Ori<manta::SceneFrame>{Eigen::Quaternion<manta::MFloat>{manta::MFloat(1.0f), manta::MFloat(0.0f), manta::MFloat(0.0f), manta::MFloat(0.0f)}}, manta::geom::Vec3<manta::SceneFrame>{0.0f, 0.0f, 0.0f}, manta::geom::Vec3<manta::CraftFrame>{0.0f, 0.0f, 0.0f}});
 
     g_session.emplace(zenoh::Session::open(zenoh::Config::create_default()));
 

@@ -82,7 +82,7 @@ void setup() {
     scene = &w.create_scene();
     field_0.add(manta::fields::GravityField::Disturbance::point_mass(manta::geom::Vec3<manta::SceneFrame>{0.0f, 0.0f, 0.0f}, manta::MFloat(4904869500000.0)), manta::fields::PERSISTENT);
     w.register_field(field_0);
-    scene->add_craft(craft, manta::InitialState{manta::geom::Vec3<manta::SceneFrame>{1737500.0f, 0.0f, 0.0f}, manta::geom::Ori<manta::SceneFrame>{Eigen::Quaternionf{1.0f, 0.0f, 0.0f, 0.0f}}, manta::geom::Vec3<manta::SceneFrame>{0.0f, 1680.163f, 0.0f}, manta::geom::Vec3<manta::CraftFrame>{0.0f, 0.0f, 0.0f}});
+    scene->add_craft(craft, manta::InitialState{manta::geom::Vec3<manta::SceneFrame>{manta::MFloat(1737500.0), manta::MFloat(0.0), manta::MFloat(0.0)}, manta::geom::Ori<manta::SceneFrame>{Eigen::Quaternion<manta::MFloat>{manta::MFloat(1.0), manta::MFloat(0.0), manta::MFloat(0.0), manta::MFloat(0.0)}}, manta::geom::Vec3<manta::SceneFrame>{manta::MFloat(0.0), manta::MFloat(1680.1626334436032), manta::MFloat(0.0)}, manta::geom::Vec3<manta::CraftFrame>{manta::MFloat(0.0), manta::MFloat(0.0), manta::MFloat(0.0)}});
 
     g_session.emplace(zenoh::Session::open(zenoh::Config::create_default()));
 

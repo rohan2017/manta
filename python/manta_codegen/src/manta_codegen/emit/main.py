@@ -27,6 +27,7 @@ own main and reuses `manta_gen::<world>::setup`/`tick`.
 from __future__ import annotations
 
 from .._format import cpp_float as _f
+from .._format import cpp_mfloat as _mf
 from ..core import Craft, World
 from ..signal import Binding, accessor_for
 from ._util import GENERATED_BANNER, CPP_INCLUDE_GUARD, class_name_for_craft
@@ -49,10 +50,10 @@ def _initial_state_literal(entry) -> str:
         return "manta::InitialState{}"
     return (
         "manta::InitialState{"
-        f"manta::geom::Vec3<manta::SceneFrame>{{{_f(px)}, {_f(py)}, {_f(pz)}}}, "
-        f"manta::geom::Ori<manta::SceneFrame>{{Eigen::Quaternionf{{{_f(ow)}, {_f(ox)}, {_f(oy)}, {_f(oz)}}}}}, "
-        f"manta::geom::Vec3<manta::SceneFrame>{{{_f(vx)}, {_f(vy)}, {_f(vz)}}}, "
-        f"manta::geom::Vec3<manta::CraftFrame>{{{_f(wx)}, {_f(wy)}, {_f(wz)}}}"
+        f"manta::geom::Vec3<manta::SceneFrame>{{{_mf(px)}, {_mf(py)}, {_mf(pz)}}}, "
+        f"manta::geom::Ori<manta::SceneFrame>{{Eigen::Quaternion<manta::MFloat>{{{_mf(ow)}, {_mf(ox)}, {_mf(oy)}, {_mf(oz)}}}}}, "
+        f"manta::geom::Vec3<manta::SceneFrame>{{{_mf(vx)}, {_mf(vy)}, {_mf(vz)}}}, "
+        f"manta::geom::Vec3<manta::CraftFrame>{{{_mf(wx)}, {_mf(wy)}, {_mf(wz)}}}"
         "}"
     )
 
