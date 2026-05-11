@@ -126,8 +126,17 @@ def main() -> int:
     pubs = {name: session.declare_publisher(f"manta/ex1/{name}/cmd")
             for name in THRUSTERS}
 
-    print("ex1 controller (bang-bang). WASD/QE = translate, arrows = "
-          "pitch/yaw, Z/X = roll, SPACE = zero, Ctrl-C = quit.")
+    print("ex1 controller — bang-bang thrusters (full ±1.0 or 0).")
+    print("  Translation:")
+    print("    W / S    →  ±Y")
+    print("    A / D    →  ∓X / ±X")
+    print("    Q / E    →  ∓Z / ±Z")
+    print("  Rotation:")
+    print("    J / L    →  roll  (about A/D axis)")
+    print("    I / K    →  pitch (about W/S axis)")
+    print("    U / O    →  yaw   (about Q/E axis)")
+    print("  SPACE      →  zero all thrusters")
+    print("  Ctrl-C     →  quit")
     print("This terminal must have focus. Keys auto-repeat while held; "
           "releasing decays held-state in ~150 ms.")
 
