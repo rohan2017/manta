@@ -33,14 +33,12 @@ except ModuleNotFoundError as e:
     sys.exit(f"viewer.py: failed to load config ({e}). "
              "Run via .venv/bin/python (it has manta_codegen installed).")
 
-ROTORS    = _cfg.ROTORS                          # [(name, (x,y,z), cw?), ...]
-ARM_L     = _cfg.ARM_L                           # m
-OMEGA_REF = 100.0                                # rad/s — typical hover
-                                                 # spin rate; arrows are
-                                                 # scaled relative to this
-ARROW_AT_OMEGA_REF = 0.20                        # rerun units (= 0.8·ARM_L)
-                                                 # so a hovering rotor's
-                                                 # arrow is ~the arm length
+ROTORS      = _cfg.ROTORS                        # [(name, (x,y,z), cw?), ...]
+ARM_L       = _cfg.ARM_L                         # m
+BLADE_CHORD = _cfg.BLADE_CHORD                   # m
+BLADE_SPAN  = _cfg.BLADE_SPAN                    # m (motor center → tip)
+OMEGA_REF   = 100.0                              # rad/s — typical hover
+ARROW_AT_OMEGA_REF = 0.20                        # rerun units (≈ ARM_L)
 
 
 def main() -> None:
@@ -63,12 +61,31 @@ def main() -> None:
     rr.log("world/quad",
            rr.archetypes.TransformAxes3D(0.3),
            static=True)
-    # Rotor origin markers (body-local meters).
-    for name, offset, _cw in ROTORS:
+    # Per-rotor static geometry: an origin marker plus two flat-plate
+    # blades extending in ±x of the motor's *rotating* frame, each
+    # `BLADE_SPAN × BLADE_CHORD` in the disk plane (thickness ≈ 0).
+    # The rotor's Transform3D (logged per tick) translates to the body-
+    # frame attach point AND rotates by the motor's live angle about
+    # +z — so children logged here in motor coords visibly spin.
+    THIN_Z = 0.001
+    blade_half = [BLADE_SPAN / 2.0, BLADE_CHORD / 2.0, THIN_Z]
+    for name, _offset, cw in ROTORS:
         rr.log(f"world/quad/rotors/{name}/origin",
-               rr.Points3D(positions=[list(offset)],
-                           radii=[0.04],
+               rr.Points3D(positions=[[0.0, 0.0, 0.0]],
+                           radii=[0.02],
                            colors=[[80, 80, 80]]),
+               static=True)
+        # Two flat-plate blades, 180° apart in the disk plane. Color
+        # one yellow, the other cyan so the rotation is visible.
+        rr.log(f"world/quad/rotors/{name}/blade_a",
+               rr.Boxes3D(centers=[[+BLADE_SPAN / 2.0, 0.0, 0.0]],
+                          half_sizes=[blade_half],
+                          colors=[[235, 220, 80]]),
+               static=True)
+        rr.log(f"world/quad/rotors/{name}/blade_b",
+               rr.Boxes3D(centers=[[-BLADE_SPAN / 2.0, 0.0, 0.0]],
+                          half_sizes=[blade_half],
+                          colors=[[80, 200, 220]]),
                static=True)
 
     cfg = zenoh.Config()
@@ -88,12 +105,26 @@ def main() -> None:
                    rotation=rr.Quaternion(xyzw=[d["q"][1], d["q"][2],
                                                 d["q"][3], d["q"][0]])))
 
-        # Per-rotor "thrust" arrows. We don't have direct thrust in the
-        # telemetry anymore — each rotor is a Motor + 2 airfoils, and
-        # the thrust comes from the integrated aerodynamic force.
-        # Proxy: arrow length ∝ |ω|²/OMEGA_REF² (lift scales as ω²).
-        # Sign of the arrow flips with rotation direction so CW and CCW
-        # rotors are visually distinguishable.
+        # Per-rotor Transform3D: position the rotor at its body-frame
+        # mount AND spin it by the motor's live angle about +z. The
+        # static blade plates logged earlier inherit this transform, so
+        # they rotate with the motor.
+        for name, offset, _cw in ROTORS:
+            angle = float(d.get(f"{name}_motor", {}).get("angle", 0.0))
+            # AngleAxis(angle, +z) as a quaternion (w, x, y, z) =
+            # (cos α/2, 0, 0, sin α/2).
+            half = angle * 0.5
+            rr.log(f"world/quad/rotors/{name}",
+                   rr.Transform3D(
+                       translation=list(offset),
+                       rotation=rr.Quaternion(xyzw=[0.0, 0.0,
+                                                    math.sin(half),
+                                                    math.cos(half)])))
+
+        # Per-rotor "thrust" arrows. Logged at body-frame level (above
+        # the spinning rotor frame) so the arrows don't sweep with the
+        # blades. Proxy: arrow length ∝ (ω / OMEGA_REF)² since lift
+        # scales as ω². Color: red CCW, blue CW.
         origins: list[list[float]] = []
         vectors: list[list[float]] = []
         colors:  list[list[int]]   = []
@@ -103,9 +134,8 @@ def main() -> None:
             length = ARROW_AT_OMEGA_REF * mag2
             origins.append(list(offset))
             vectors.append([0.0, 0.0, length])
-            # Color by sense: red = CCW (+ω), blue = CW (−ω).
             colors.append([255, 100, 100] if rate >= 0.0 else [100, 140, 255])
-        rr.log("world/quad/rotors/forces",
+        rr.log("world/quad/rotor_forces",
                rr.Arrows3D(origins=origins, vectors=vectors, colors=colors))
 
     sub = session.declare_subscriber("manta/ex2/state", on_state)
