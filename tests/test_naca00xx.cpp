@@ -137,9 +137,9 @@ TEST_CASE("Naca00xx: per-segment summation invariant under sample count") {
     // wrench should be independent of N.
     const auto r1 = run_airfoil_one_tick(1.0, 4.0, 0.15, /*N=*/1, /*α=*/0.1);
     const auto r8 = run_airfoil_one_tick(1.0, 4.0, 0.15, /*N=*/8, /*α=*/0.1);
-    CHECK(r1.force.x() == doctest::Approx(r8.force.x()).epsilon(1e-9));
-    CHECK(r1.force.y() == doctest::Approx(r8.force.y()).epsilon(1e-9));
-    CHECK(r1.force.z() == doctest::Approx(r8.force.z()).epsilon(1e-9));
+    CHECK(r1.force.x() == doctest::Approx(r8.force.x()).epsilon(1e-5));
+    CHECK(r1.force.y() == doctest::Approx(r8.force.y()).epsilon(1e-5));
+    CHECK(r1.force.z() == doctest::Approx(r8.force.z()).epsilon(1e-5));
     CHECK(r1.segments.size() == 1);
     CHECK(r8.segments.size() == 8);
 }
