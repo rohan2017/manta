@@ -172,6 +172,92 @@ TEST_CASE("Airfoil regression: motor + one airfoil blade is stable") {
     CHECK(bad == 0.0);
 }
 
+// Chirality check: a 2-blade prop driven by motor torque must produce
+// upward lift (motor +z direction). With a backwards chord-rotation
+// install the airfoil sees post-stall α and the model returns lift
+// pointing into −z — visually the prop spins but the craft is pushed
+// into the ground.
+//
+// Setup: craft pinned to scene (no gravity, no contact, motor takes
+// stall_torque to spin up fast). After 0.1 s of spin-up, check that
+// the craft's net z-acceleration is positive — i.e. the prop is
+// pushing it up.
+TEST_CASE("Airfoil regression: 2-blade prop produces upward lift, not down") {
+    constexpr MFloat dt = MFloat(0.001);
+    constexpr int    N  = 200;   // 200 ms
+
+    World w;
+    w.clock().set_dt(dt);
+    FluidField air;
+    air.add(FluidDisturbance::uniform_gas(
+        MFloat(287.05), MFloat(288.15), MFloat(101325)),
+        PERSISTENT);
+    w.register_field(air);
+    // NOTE: no gravity. We just want to see the sign of the aero z-force.
+
+    Craft c("chirality_probe");
+    c.root().add<Mass>("body", MFloat(1.0), [] {
+        Mat3<PartFrame, PartFrame> m = Mat3<PartFrame, PartFrame>::identity();
+        m.raw()(0,0) = MFloat(0.01);
+        m.raw()(1,1) = MFloat(0.01);
+        m.raw()(2,2) = MFloat(0.02);
+        return m;
+    }());
+    auto& motor = c.root().add<Motor>("m", Vec3<PartFrame>{0, 0, 1},
+                                       /*stall=*/MFloat(2.0));
+    motor.add<Mass>("hub", MFloat(0.05), [] {
+        Mat3<PartFrame, PartFrame> m = Mat3<PartFrame, PartFrame>::identity();
+        m.raw()(0,0) = MFloat(1e-3);
+        m.raw()(1,1) = MFloat(1e-3);
+        m.raw()(2,2) = MFloat(1e-3);
+        return m;
+    }());
+
+    // Match ex2's blade install for a CCW prop (cw=False): blade 0 at
+    // +x_motor with rot_z = +π/2 (so airfoil +x → motor +y, i.e. LE
+    // points in the direction of motion when ω is +z), pitched −12°
+    // about airfoil +y. Blade 1 mirrored.
+    Eigen::Quaternion<MFloat> q_pitch;
+    q_pitch = Eigen::AngleAxis<MFloat>(MFloat(-12.0 * M_PI / 180.0),
+                                       Eigen::Matrix<MFloat,3,1>::UnitY());
+    Eigen::Quaternion<MFloat> q_a;
+    q_a = Eigen::AngleAxis<MFloat>(MFloat(+M_PI/2),
+                                   Eigen::Matrix<MFloat,3,1>::UnitZ());
+    Eigen::Quaternion<MFloat> q_b;
+    q_b = Eigen::AngleAxis<MFloat>(MFloat(-M_PI/2),
+                                   Eigen::Matrix<MFloat,3,1>::UnitZ());
+    auto& blade_a = motor.add<Naca00xx>("blade_a",
+        MFloat(0.03), MFloat(0.20), MFloat(0.12), 4);
+    blade_a.set_transform(StaticLink<ParentFrame, PartFrame>{
+        Vec3<ParentFrame>{MFloat(0.10), 0, 0},
+        Ori<ParentFrame>{Eigen::Quaternion<MFloat>(q_a * q_pitch)}});
+    auto& blade_b = motor.add<Naca00xx>("blade_b",
+        MFloat(0.03), MFloat(0.20), MFloat(0.12), 4);
+    blade_b.set_transform(StaticLink<ParentFrame, PartFrame>{
+        Vec3<ParentFrame>{MFloat(-0.10), 0, 0},
+        Ori<ParentFrame>{Eigen::Quaternion<MFloat>(q_b * q_pitch)}});
+    c.root().compute_params();
+
+    // Drive the motor in +z direction (the "natural CCW" sense for
+    // this install). At full stall torque (2 N·m) and hub I=1e-3, the
+    // motor reaches its target inertia-limited speed in ~ms.
+    motor.set_torque(MFloat(2.0));
+
+    auto& scene = w.create_scene();
+    scene.add_craft(c, InitialState{});
+
+    // Run long enough for spin-up + a couple of ticks of aero lift.
+    for (int i = 0; i < N; ++i) w.step();
+
+    // The craft should be moving UP (positive scene z velocity) — the
+    // 2-blade prop is the only force in the world apart from joint
+    // reactions, and a correctly installed prop produces +z lift.
+    const auto v = c.scene_to_craft().vel_linear().raw();
+    INFO("vx=", v.x(), " vy=", v.y(), " vz=", v.z());
+    INFO("motor rate=", motor.rate());
+    CHECK(v.z() > MFloat(0.05));   // at least 5 cm/s upward by t=200 ms
+}
+
 // Two-blade prop (ex2's blade pair: 180° apart, chirality-matched).
 // Drag should be symmetric → no net moment on motor. Lift is also
 // symmetric if AOA is symmetric.

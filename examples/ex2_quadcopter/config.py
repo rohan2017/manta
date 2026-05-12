@@ -96,20 +96,23 @@ def _blade(motor: Motor, blade_idx: int, cw: bool, name: str) -> None:
     Installation: the blade's part-frame chord lies along the motor's
     tangent direction (so the relative wind from rotation hits the LE),
     the airfoil span runs from motor center out to the tip, and the
-    airfoil lift axis (+z airfoil) maps to motor +z (thrust up). For a
-    CCW motor (positive ω about +z), blade 0 has LE at motor −y; for a
-    CW motor, LE is at motor +y. The chirality of the install reverses
-    between CW/CCW so that *commanding torque in the motor's natural
-    direction* yields upward thrust either way."""
+    airfoil lift axis (+z airfoil) maps to motor +z (thrust up).
+
+    For a CCW motor (positive ω about +z), the blade at +x_motor moves
+    in +y_motor as it spins. The leading edge must point along +y_motor
+    for the wind to hit it correctly — that's a +90° rotation about
+    motor +z applied to the airfoil's +x. Blade 1 at −x_motor is the
+    mirror: it moves in −y_motor when the prop spins CCW, so its LE is
+    at −y_motor (a −90° rotation). CW props reverse both."""
     sign = +1.0 if blade_idx == 0 else -1.0
     pos = (sign * BLADE_SPAN / 2.0, 0.0, 0.0)
 
-    # Rotor-z component of the install. CCW: blade 0 → −90°, blade 1 → +90°.
+    # Rotor-z component of the install. CCW: blade 0 → +90°, blade 1 → −90°.
     # CW swaps them.
     if cw:
-        rot_z = +math.pi / 2 if blade_idx == 0 else -math.pi / 2
-    else:
         rot_z = -math.pi / 2 if blade_idx == 0 else +math.pi / 2
+    else:
+        rot_z = +math.pi / 2 if blade_idx == 0 else -math.pi / 2
     q_rot   = _quat_z(rot_z)
     # Pitch: rotate the airfoil about its +y by −α so LE tilts toward +z
     # in motor frame (positive thrust for the chosen rotation direction).
