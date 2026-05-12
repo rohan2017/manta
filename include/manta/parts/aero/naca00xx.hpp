@@ -146,11 +146,16 @@ public:
                                                     Scalar(y_local),
                                                     Scalar(0));
 
-            // Sample location in scene frame.
-            auto sample_scene_raw = q_scene_from_part_raw * sample_part +
-                                    p_part_origin_scene_raw;
-            auto sample_scene_mfloat = sample_scene_raw.template cast<MFloat>();
-            auto fs = fluid.state_at(
+            // Sample location in scene frame. MUST materialize: `auto` on
+            // an Eigen expression that mixes a quaternion-product temporary
+            // with a stored matrix produces a dangling-reference expression
+            // template — when later evaluated, it reads stack memory that
+            // has been reused for unrelated locals (the fluid state below).
+            Eigen::Matrix<Scalar, 3, 1> sample_scene_raw =
+                q_scene_from_part_raw * sample_part + p_part_origin_scene_raw;
+            Eigen::Matrix<MFloat, 3, 1> sample_scene_mfloat =
+                sample_scene_raw.template cast<MFloat>();
+            fields::FluidState fs = fluid.state_at(
                 geom::Vec3<SceneFrame>::from_raw(sample_scene_mfloat));
 
             // Fluid velocity at sample, in scene frame.

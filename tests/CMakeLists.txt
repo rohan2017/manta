@@ -59,6 +59,7 @@ add_executable(manta_tests
     test_rate_gate.cpp
     test_collision_field.cpp
     test_naca00xx.cpp
+    test_airfoil_motor_coupling.cpp
     "${_signal_sync_test_out}")
 
 target_link_libraries(manta_tests PRIVATE
