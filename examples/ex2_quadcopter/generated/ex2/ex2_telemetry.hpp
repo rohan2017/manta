@@ -16,22 +16,30 @@ struct Ex2CraftTelemetry {
     float q[4] = {1,0,0,0};   // (w, x, y, z)
     float v[3] = {0,0,0};
     float w[3] = {0,0,0};
-    struct FrT {
-        float throttle{};
-    } fr;
-    struct FlT {
-        float throttle{};
-    } fl;
-    struct BlT {
-        float throttle{};
-    } bl;
-    struct BrT {
-        float throttle{};
-    } br;
     struct ImuT {
         manta::geom::Vec3<manta::PartFrame> accel{};
         manta::geom::Vec3<manta::PartFrame> gyro{};
     } imu;
+    struct Fr_motorT {
+        manta::MFloat angle{};
+        manta::MFloat rate{};
+        manta::MFloat accel{};
+    } fr_motor;
+    struct Fl_motorT {
+        manta::MFloat angle{};
+        manta::MFloat rate{};
+        manta::MFloat accel{};
+    } fl_motor;
+    struct Bl_motorT {
+        manta::MFloat angle{};
+        manta::MFloat rate{};
+        manta::MFloat accel{};
+    } bl_motor;
+    struct Br_motorT {
+        manta::MFloat angle{};
+        manta::MFloat rate{};
+        manta::MFloat accel{};
+    } br_motor;
 
     std::string to_json() const;
 };
@@ -50,21 +58,29 @@ inline std::string Ex2CraftTelemetry::to_json() const {
         (double)v[0], (double)v[1], (double)v[2],
         (double)w[0], (double)w[1], (double)w[2]);
     s += buf;
-    s += ",\"fr\":{";
-    { char b[64]; std::snprintf(b, sizeof(b), "\"throttle\":%.6f", (double)fr.throttle); s += b; }
-    s += "}";
-    s += ",\"fl\":{";
-    { char b[64]; std::snprintf(b, sizeof(b), "\"throttle\":%.6f", (double)fl.throttle); s += b; }
-    s += "}";
-    s += ",\"bl\":{";
-    { char b[64]; std::snprintf(b, sizeof(b), "\"throttle\":%.6f", (double)bl.throttle); s += b; }
-    s += "}";
-    s += ",\"br\":{";
-    { char b[64]; std::snprintf(b, sizeof(b), "\"throttle\":%.6f", (double)br.throttle); s += b; }
-    s += "}";
     s += ",\"imu\":{";
     // TODO: telemetry serializer for type "manta::geom::Vec3<manta::PartFrame>" (member imu.accel)
     // TODO: telemetry serializer for type "manta::geom::Vec3<manta::PartFrame>" (member imu.gyro)
+    s += "}";
+    s += ",\"fr_motor\":{";
+    { char b[64]; std::snprintf(b, sizeof(b), "\"angle\":%.6f", (double)fr_motor.angle); s += b; }
+    { char b[64]; std::snprintf(b, sizeof(b), ",\"rate\":%.6f", (double)fr_motor.rate); s += b; }
+    { char b[64]; std::snprintf(b, sizeof(b), ",\"accel\":%.6f", (double)fr_motor.accel); s += b; }
+    s += "}";
+    s += ",\"fl_motor\":{";
+    { char b[64]; std::snprintf(b, sizeof(b), "\"angle\":%.6f", (double)fl_motor.angle); s += b; }
+    { char b[64]; std::snprintf(b, sizeof(b), ",\"rate\":%.6f", (double)fl_motor.rate); s += b; }
+    { char b[64]; std::snprintf(b, sizeof(b), ",\"accel\":%.6f", (double)fl_motor.accel); s += b; }
+    s += "}";
+    s += ",\"bl_motor\":{";
+    { char b[64]; std::snprintf(b, sizeof(b), "\"angle\":%.6f", (double)bl_motor.angle); s += b; }
+    { char b[64]; std::snprintf(b, sizeof(b), ",\"rate\":%.6f", (double)bl_motor.rate); s += b; }
+    { char b[64]; std::snprintf(b, sizeof(b), ",\"accel\":%.6f", (double)bl_motor.accel); s += b; }
+    s += "}";
+    s += ",\"br_motor\":{";
+    { char b[64]; std::snprintf(b, sizeof(b), "\"angle\":%.6f", (double)br_motor.angle); s += b; }
+    { char b[64]; std::snprintf(b, sizeof(b), ",\"rate\":%.6f", (double)br_motor.rate); s += b; }
+    { char b[64]; std::snprintf(b, sizeof(b), ",\"accel\":%.6f", (double)br_motor.accel); s += b; }
     s += "}";
     s += "}";
     return s;
@@ -80,10 +96,18 @@ inline void capture_ex2_telemetry(const Ex2Craft& craft, double t_sec, Ex2CraftT
     telem.q[0]=q.w(); telem.q[1]=q.x(); telem.q[2]=q.y(); telem.q[3]=q.z();
     telem.v[0]=v.x(); telem.v[1]=v.y(); telem.v[2]=v.z();
     telem.w[0]=w.x(); telem.w[1]=w.y(); telem.w[2]=w.z();
-    telem.fr.throttle = craft.fr().throttle();
-    telem.fl.throttle = craft.fl().throttle();
-    telem.bl.throttle = craft.bl().throttle();
-    telem.br.throttle = craft.br().throttle();
     telem.imu.accel = craft.imu().last_accel();
     telem.imu.gyro = craft.imu().last_gyro();
+    telem.fr_motor.angle = craft.fr_motor().angle();
+    telem.fr_motor.rate = craft.fr_motor().rate();
+    telem.fr_motor.accel = craft.fr_motor().accel();
+    telem.fl_motor.angle = craft.fl_motor().angle();
+    telem.fl_motor.rate = craft.fl_motor().rate();
+    telem.fl_motor.accel = craft.fl_motor().accel();
+    telem.bl_motor.angle = craft.bl_motor().angle();
+    telem.bl_motor.rate = craft.bl_motor().rate();
+    telem.bl_motor.accel = craft.bl_motor().accel();
+    telem.br_motor.angle = craft.br_motor().angle();
+    telem.br_motor.rate = craft.br_motor().rate();
+    telem.br_motor.accel = craft.br_motor().accel();
 }

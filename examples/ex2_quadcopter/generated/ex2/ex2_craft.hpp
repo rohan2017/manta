@@ -6,8 +6,10 @@
 
 #include "manta/core/craft.hpp"
 #include "manta/parts/structure/mass.hpp"
-#include "manta/parts/actuator/thruster.hpp"
+#include "manta/parts/field_src/collider.hpp"
 #include "manta/parts/sensor/imu.hpp"
+#include "manta/parts/articulation/motor.hpp"
+#include "manta/parts/aero/naca00xx.hpp"
 
 class Ex2Craft : public manta::Craft {
 public:
@@ -15,22 +17,61 @@ public:
 
     manta::parts::MassT<manta::MFloat>& body() { return *body_; }
     const manta::parts::MassT<manta::MFloat>& body() const { return *body_; }
-    manta::parts::Thruster1T<manta::MFloat>& fr() { return *fr_; }
-    const manta::parts::Thruster1T<manta::MFloat>& fr() const { return *fr_; }
-    manta::parts::Thruster1T<manta::MFloat>& fl() { return *fl_; }
-    const manta::parts::Thruster1T<manta::MFloat>& fl() const { return *fl_; }
-    manta::parts::Thruster1T<manta::MFloat>& bl() { return *bl_; }
-    const manta::parts::Thruster1T<manta::MFloat>& bl() const { return *bl_; }
-    manta::parts::Thruster1T<manta::MFloat>& br() { return *br_; }
-    const manta::parts::Thruster1T<manta::MFloat>& br() const { return *br_; }
+    manta::parts::ColliderT<manta::MFloat>& hull() { return *hull_; }
+    const manta::parts::ColliderT<manta::MFloat>& hull() const { return *hull_; }
     manta::parts::IMUT<manta::MFloat>& imu() { return *imu_; }
     const manta::parts::IMUT<manta::MFloat>& imu() const { return *imu_; }
+    manta::parts::Motor& fr_motor() { return *fr_motor_; }
+    const manta::parts::Motor& fr_motor() const { return *fr_motor_; }
+    manta::parts::MassT<manta::MFloat>& fr_hub() { return *fr_hub_; }
+    const manta::parts::MassT<manta::MFloat>& fr_hub() const { return *fr_hub_; }
+    manta::parts::Naca00xxT<manta::MFloat>& fr_blade_a() { return *fr_blade_a_; }
+    const manta::parts::Naca00xxT<manta::MFloat>& fr_blade_a() const { return *fr_blade_a_; }
+    manta::parts::Naca00xxT<manta::MFloat>& fr_blade_b() { return *fr_blade_b_; }
+    const manta::parts::Naca00xxT<manta::MFloat>& fr_blade_b() const { return *fr_blade_b_; }
+    manta::parts::Motor& fl_motor() { return *fl_motor_; }
+    const manta::parts::Motor& fl_motor() const { return *fl_motor_; }
+    manta::parts::MassT<manta::MFloat>& fl_hub() { return *fl_hub_; }
+    const manta::parts::MassT<manta::MFloat>& fl_hub() const { return *fl_hub_; }
+    manta::parts::Naca00xxT<manta::MFloat>& fl_blade_a() { return *fl_blade_a_; }
+    const manta::parts::Naca00xxT<manta::MFloat>& fl_blade_a() const { return *fl_blade_a_; }
+    manta::parts::Naca00xxT<manta::MFloat>& fl_blade_b() { return *fl_blade_b_; }
+    const manta::parts::Naca00xxT<manta::MFloat>& fl_blade_b() const { return *fl_blade_b_; }
+    manta::parts::Motor& bl_motor() { return *bl_motor_; }
+    const manta::parts::Motor& bl_motor() const { return *bl_motor_; }
+    manta::parts::MassT<manta::MFloat>& bl_hub() { return *bl_hub_; }
+    const manta::parts::MassT<manta::MFloat>& bl_hub() const { return *bl_hub_; }
+    manta::parts::Naca00xxT<manta::MFloat>& bl_blade_a() { return *bl_blade_a_; }
+    const manta::parts::Naca00xxT<manta::MFloat>& bl_blade_a() const { return *bl_blade_a_; }
+    manta::parts::Naca00xxT<manta::MFloat>& bl_blade_b() { return *bl_blade_b_; }
+    const manta::parts::Naca00xxT<manta::MFloat>& bl_blade_b() const { return *bl_blade_b_; }
+    manta::parts::Motor& br_motor() { return *br_motor_; }
+    const manta::parts::Motor& br_motor() const { return *br_motor_; }
+    manta::parts::MassT<manta::MFloat>& br_hub() { return *br_hub_; }
+    const manta::parts::MassT<manta::MFloat>& br_hub() const { return *br_hub_; }
+    manta::parts::Naca00xxT<manta::MFloat>& br_blade_a() { return *br_blade_a_; }
+    const manta::parts::Naca00xxT<manta::MFloat>& br_blade_a() const { return *br_blade_a_; }
+    manta::parts::Naca00xxT<manta::MFloat>& br_blade_b() { return *br_blade_b_; }
+    const manta::parts::Naca00xxT<manta::MFloat>& br_blade_b() const { return *br_blade_b_; }
 
 private:
     manta::parts::MassT<manta::MFloat>* body_ = nullptr;
-    manta::parts::Thruster1T<manta::MFloat>* fr_ = nullptr;
-    manta::parts::Thruster1T<manta::MFloat>* fl_ = nullptr;
-    manta::parts::Thruster1T<manta::MFloat>* bl_ = nullptr;
-    manta::parts::Thruster1T<manta::MFloat>* br_ = nullptr;
+    manta::parts::ColliderT<manta::MFloat>* hull_ = nullptr;
     manta::parts::IMUT<manta::MFloat>* imu_ = nullptr;
+    manta::parts::Motor* fr_motor_ = nullptr;
+    manta::parts::MassT<manta::MFloat>* fr_hub_ = nullptr;
+    manta::parts::Naca00xxT<manta::MFloat>* fr_blade_a_ = nullptr;
+    manta::parts::Naca00xxT<manta::MFloat>* fr_blade_b_ = nullptr;
+    manta::parts::Motor* fl_motor_ = nullptr;
+    manta::parts::MassT<manta::MFloat>* fl_hub_ = nullptr;
+    manta::parts::Naca00xxT<manta::MFloat>* fl_blade_a_ = nullptr;
+    manta::parts::Naca00xxT<manta::MFloat>* fl_blade_b_ = nullptr;
+    manta::parts::Motor* bl_motor_ = nullptr;
+    manta::parts::MassT<manta::MFloat>* bl_hub_ = nullptr;
+    manta::parts::Naca00xxT<manta::MFloat>* bl_blade_a_ = nullptr;
+    manta::parts::Naca00xxT<manta::MFloat>* bl_blade_b_ = nullptr;
+    manta::parts::Motor* br_motor_ = nullptr;
+    manta::parts::MassT<manta::MFloat>* br_hub_ = nullptr;
+    manta::parts::Naca00xxT<manta::MFloat>* br_blade_a_ = nullptr;
+    manta::parts::Naca00xxT<manta::MFloat>* br_blade_b_ = nullptr;
 };

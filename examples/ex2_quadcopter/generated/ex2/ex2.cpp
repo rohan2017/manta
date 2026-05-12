@@ -21,6 +21,8 @@ namespace manta_gen::ex2 {
 manta::World    w{};
 manta::Scene*   scene = nullptr;
 manta::fields::GravityField field_0{};
+manta::fields::FluidField field_1{};
+manta::fields::CollisionField field_2{};
 Ex2Craft craft{};
 
 }  // namespace manta_gen::ex2
@@ -59,6 +61,10 @@ void setup() {
     scene = &w.create_scene();
     field_0.add(manta::fields::GravityField::Disturbance::uniform(manta::geom::Vec3<manta::SceneFrame>{0.0f, 0.0f, -9.81f}), manta::fields::PERSISTENT);
     w.register_field(field_0);
+    field_1.add(manta::fields::FluidField::Disturbance::uniform_gas(manta::MFloat(287.05000000000001),manta::MFloat(288.14999999999998),manta::MFloat(101325.0), manta::geom::Vec3<manta::SceneFrame>{0.0f, 0.0f, 0.0f}), manta::fields::PERSISTENT);
+    w.register_field(field_1);
+    field_2.add(manta::fields::CollisionField::Disturbance::infinite_plane(manta::geom::Vec3<manta::SceneFrame>{0.0f, 0.0f, 0.0f}, manta::geom::Vec3<manta::SceneFrame>{0.0f, 0.0f, 1.0f}, manta::MFloat(5000.0), manta::MFloat(50.0), manta::MFloat(0.69999999999999996), manta::MFloat(0.5)), manta::fields::PERSISTENT);
+    w.register_field(field_2);
     scene->add_craft(craft, manta::InitialState{});
 
     g_session.emplace(zenoh::Session::open(zenoh::Config::create_default()));

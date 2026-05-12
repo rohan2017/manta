@@ -9,6 +9,8 @@
 #include "manta/core/world.hpp"
 #include "ex2_craft.hpp"
 #include "manta/fields/gravity_field.hpp"
+#include "manta/fields/fluid_field.hpp"
+#include "manta/fields/collision_field.hpp"
 
 namespace manta_gen::ex2 {
 
@@ -22,6 +24,8 @@ extern manta::Scene*   scene;
 
 // Registered fields. setup() populates disturbances + registers with w.
 extern manta::fields::GravityField field_0;
+extern manta::fields::FluidField field_1;
+extern manta::fields::CollisionField field_2;
 
 // Craft instance(s). setup() adds them to the scene.
 extern Ex2Craft craft;

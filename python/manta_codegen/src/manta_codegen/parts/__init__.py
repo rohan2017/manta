@@ -11,12 +11,14 @@ from .aero.surface         import Surface1, Surface2, Surface3, Surface4
 from .aero.naca00xx        import Naca00xx
 
 from .field_src.point_gravity_src import PointGravitySrc
+from .field_src.collider          import Collider
 
 from .coupling.tether_endpoint    import TetherEndpoint
 
 from .articulation.motor          import Motor
 
 __all__ = [
+    "Collider",
     "DVL",
     "IMU",
     "Magnetometer",

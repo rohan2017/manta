@@ -110,16 +110,49 @@ int main() {
         float u_pitch = pitch_pid.update(pitch_err, DT);
         float u_yaw   = yaw_pid  .update(yaw_err  , DT);
 
-        // X-config mixing.
-        // CCW props: fr, bl. CW props: fl, br. Thruster1's CCW yields -z body torque.
-        // For +yaw command we want +z body torque → boost CW (fl, br), dim CCW (fr, bl).
-        // Thruster is bipolar (clamp [-1, 1]); quad rotors don't reverse,
-        // so clamp each mixed throttle to [0, 1] before commanding.
-        auto clamp01 = [](float v) { return std::clamp(v, 0.0f, 1.0f); };
-        craft.fr().set_throttle(clamp01(thr - u_roll + u_pitch - u_yaw));
-        craft.fl().set_throttle(clamp01(thr + u_roll + u_pitch + u_yaw));
-        craft.bl().set_throttle(clamp01(thr + u_roll - u_pitch - u_yaw));
-        craft.br().set_throttle(clamp01(thr - u_roll - u_pitch + u_yaw));
+        // X-config mixing. The rotors are now Motor + 2 airfoil blades each
+        // (see config.py); we command motor torque via a velocity-PI loop.
+        //
+        // CCW props (fr, bl) take positive ω about +z motor to lift; CW
+        // props (fl, br) take negative ω. The drag torques are opposite-
+        // signed, which cancels yaw at balanced ω-magnitudes; differential
+        // ω-magnitudes between the two pairs creates a net yaw torque.
+        //
+        // Map throttle (0..1) and PID outputs (small dimensionless) to a
+        // per-rotor ω_target, then compute torque = K_v · (ω_target − ω).
+        constexpr float OMEGA_HOVER  = 520.0f;  // ≈ ω that gives MASS·g/4 thrust
+        constexpr float OMEGA_MAX    = 900.0f;
+        constexpr float OMEGA_PID_SCALE = 200.0f; // PID output (rad/s of ω cmd)
+        constexpr float K_V          = 0.02f;     // N·m per rad/s of ω error
+        constexpr float TAU_LIMIT    = 5.0f;      // motor stall torque
+
+        auto clamp = [](float v, float lo, float hi) {
+            return std::min(hi, std::max(lo, v));
+        };
+
+        // ω_target per rotor. Direction sign baked into the rotor (CCW or
+        // CW); we work in magnitude here and let the motor's natural spin
+        // direction (set by which way torque pushes) decide.
+        const float thr_omega = OMEGA_HOVER * thr * 2.0f;  // thr=0.5 → hover
+        const float w_fr_mag = thr_omega + (-u_roll + u_pitch + u_yaw) * OMEGA_PID_SCALE;
+        const float w_fl_mag = thr_omega + ( u_roll + u_pitch - u_yaw) * OMEGA_PID_SCALE;
+        const float w_bl_mag = thr_omega + ( u_roll - u_pitch + u_yaw) * OMEGA_PID_SCALE;
+        const float w_br_mag = thr_omega + (-u_roll - u_pitch - u_yaw) * OMEGA_PID_SCALE;
+
+        auto drive = [&](auto& motor, float omega_target_mag, float spin_sign) {
+            // ω_target is signed by the rotor's natural spin direction.
+            const float w_target = spin_sign * clamp(omega_target_mag, 0.0f, OMEGA_MAX);
+            const float w_actual = float(motor.rate());
+            const float tau = K_V * (w_target - w_actual);
+            motor.set_torque(clamp(tau, -TAU_LIMIT, +TAU_LIMIT));
+        };
+
+        // CCW props spin in +z direction → spin_sign = +1.
+        drive(craft.fr_motor(), w_fr_mag, +1.0f);
+        drive(craft.bl_motor(), w_bl_mag, +1.0f);
+        // CW props spin in -z direction → spin_sign = -1.
+        drive(craft.fl_motor(), w_fl_mag, -1.0f);
+        drive(craft.br_motor(), w_br_mag, -1.0f);
 
         manta_gen::ex2::tick();
 
