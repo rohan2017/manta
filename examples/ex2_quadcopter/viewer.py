@@ -91,12 +91,27 @@ def main() -> None:
     cfg = zenoh.Config()
     session = zenoh.open(cfg)
 
+    state = {"n": 0}   # diagnostic counter (closed-over by on_state)
+
     def on_state(sample: zenoh.Sample) -> None:
+        payload = bytes(sample.payload).decode("utf-8", errors="replace")
         try:
-            d = json.loads(bytes(sample.payload))
+            d = json.loads(payload)
         except Exception as e:
-            print(f"bad payload: {e}", file=sys.stderr)
+            # Most common cause: sim has produced NaN (e.g. propeller
+            # dynamics blew up at dt=1ms), and `%.6f` formatted that as
+            # "nan"/"-nan" which Python json can't parse.
+            print(f"viewer: bad payload (first 200 chars): {payload[:200]}",
+                  file=sys.stderr)
+            print(f"  parse error: {e}", file=sys.stderr)
             return
+        state["n"] += 1
+        if state["n"] == 1:
+            print(f"viewer: first state received  t={d.get('t', '?')}  "
+                  f"keys={sorted(d.keys())}", file=sys.stderr)
+        elif state["n"] % 200 == 0:
+            print(f"viewer: {state['n']} state samples processed  "
+                  f"sim_t={d['t']:.2f}", file=sys.stderr)
         rr.set_time("sim_time", duration=float(d["t"]))
 
         rr.log("world/quad",
