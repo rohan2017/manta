@@ -57,6 +57,7 @@ add_executable(manta_tests
     test_system_id.cpp
     test_parameter_fit.cpp
     test_rate_gate.cpp
+    test_collision_field.cpp
     "${_signal_sync_test_out}")
 
 target_link_libraries(manta_tests PRIVATE
@@ -72,7 +73,8 @@ target_link_libraries(manta_tests PRIVATE
 target_compile_definitions(manta_tests PRIVATE
     MANTA_HAS_GRAVITY_FIELD=1
     MANTA_HAS_MAG_FIELD=1
-    MANTA_HAS_FLUID_FIELD=1)
+    MANTA_HAS_FLUID_FIELD=1
+    MANTA_HAS_COLLISION_FIELD=1)
 
 include(${doctest_SOURCE_DIR}/scripts/cmake/doctest.cmake)
 doctest_discover_tests(manta_tests)

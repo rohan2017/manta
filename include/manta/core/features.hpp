@@ -70,6 +70,10 @@
 #define MANTA_HAS_FLUID_FIELD 0
 #endif
 
+#ifndef MANTA_HAS_COLLISION_FIELD
+#define MANTA_HAS_COLLISION_FIELD 0
+#endif
+
 // ---- Part-side declaration macros ----
 
 namespace manta::detail {
