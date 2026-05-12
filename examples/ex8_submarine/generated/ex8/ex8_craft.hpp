@@ -7,7 +7,7 @@
 #include "manta/core/craft.hpp"
 #include "manta/parts/structure/mass.hpp"
 #include "manta/parts/structure/point_buoy.hpp"
-#include "manta/parts/structure/surface.hpp"
+#include "manta/parts/aero/surface.hpp"
 #include "manta/parts/actuator/thruster.hpp"
 #include "manta/parts/sensor/imu.hpp"
 #include "manta/parts/sensor/dvl.hpp"

@@ -22,7 +22,7 @@
 #include "../include/manta/fields/fluid_field.hpp"
 #include "../include/manta/parts/actuator/thruster.hpp"
 #include "../include/manta/parts/structure/mass.hpp"
-#include "../include/manta/parts/structure/surface.hpp"
+#include "../include/manta/parts/aero/surface.hpp"
 
 using namespace manta;
 using namespace manta::parts;

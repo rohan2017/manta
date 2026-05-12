@@ -58,7 +58,7 @@ class _SurfaceBase(PartDescriptor):
 
     N: int = 0    # subclasses override
 
-    cpp_header = "manta/parts/structure/surface.hpp"
+    cpp_header = "manta/parts/aero/surface.hpp"
 
     # Drag/lift forces are ρ-scaled — Surface is meaningless without
     # a FluidField in the world.

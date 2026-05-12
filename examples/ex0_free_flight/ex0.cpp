@@ -32,7 +32,7 @@
 #include "manta/fields/gravity_field.hpp"
 #include "manta/parts/actuator/thruster.hpp"
 #include "manta/parts/structure/mass.hpp"
-#include "manta/parts/structure/surface.hpp"
+#include "manta/parts/aero/surface.hpp"
 
 using namespace manta;
 using namespace manta::geom;
