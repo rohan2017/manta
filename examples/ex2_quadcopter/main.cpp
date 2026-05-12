@@ -113,15 +113,16 @@ int main() {
         // X-config mixing. The rotors are Motor + 2 airfoil blades each
         // (see config.py); we command motor torque via a velocity-PI loop.
         //
-        // Yaw sign convention:
-        //   CCW props (fr, bl) spin +z. Motor torque → body reaction −z.
-        //   CW  props (fl, br) spin −z. Motor torque → body reaction +z.
-        //   At balanced |ω| the reactions cancel. To yaw body +z, INCREASE
-        //   CW |ω| and DECREASE CCW |ω|. Hence +u_yaw subtracts from CCW
-        //   magnitudes and adds to CW magnitudes.
+        // All rate commands are right-hand-rule body rates, matching the
+        // gyro convention so the PID error is sign-consistent. Body frame
+        // is +x forward, +y left, +z up. Signs derived from r × F per
+        // rotor with F = (0, 0, +Fz) (each rotor thrusts in body +z):
+        //   +u_roll  → +ω_x (right bank, left wing up): +y rotors faster
+        //   +u_pitch → +ω_y (nose-down):                  −x rotors faster
+        //   +u_yaw   → +ω_z (yaw left, CCW from above):   CW rotors faster
         //
-        // Map throttle (0..1) and PID outputs (small dimensionless) to a
-        // per-rotor ω_target, then compute torque = K_v · (ω_target − ω).
+        // CCW reactions on body sum to −z; CW reactions sum to +z. At
+        // balanced |ω| the reactions cancel.
         constexpr float OMEGA_HOVER     = 90.0f;    // ≈ ω for MASS·g/4 thrust
         constexpr float OMEGA_MAX       = 250.0f;
         constexpr float OMEGA_PID_SCALE = 40.0f;
@@ -136,10 +137,10 @@ int main() {
         // CW); we work in magnitude here and let the motor's natural spin
         // direction (set by which way torque pushes) decide.
         const float thr_omega = OMEGA_HOVER * thr * 2.0f;  // thr=0.5 → hover
-        const float w_fr_mag = thr_omega + (-u_roll + u_pitch - u_yaw) * OMEGA_PID_SCALE;
-        const float w_fl_mag = thr_omega + ( u_roll + u_pitch + u_yaw) * OMEGA_PID_SCALE;
-        const float w_bl_mag = thr_omega + ( u_roll - u_pitch - u_yaw) * OMEGA_PID_SCALE;
-        const float w_br_mag = thr_omega + (-u_roll - u_pitch + u_yaw) * OMEGA_PID_SCALE;
+        const float w_fr_mag = thr_omega + (-u_roll - u_pitch - u_yaw) * OMEGA_PID_SCALE;
+        const float w_fl_mag = thr_omega + ( u_roll - u_pitch + u_yaw) * OMEGA_PID_SCALE;
+        const float w_bl_mag = thr_omega + ( u_roll + u_pitch - u_yaw) * OMEGA_PID_SCALE;
+        const float w_br_mag = thr_omega + (-u_roll + u_pitch + u_yaw) * OMEGA_PID_SCALE;
 
         auto drive = [&](auto& motor, float omega_target_mag, float spin_sign) {
             // ω_target is signed by the rotor's natural spin direction.

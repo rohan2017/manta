@@ -40,14 +40,16 @@ THROTTLE_RAMP = 0.5    # throttle units per second while I/K is held
 
 ESC = '\x1b'
 
-# Rotation keys map to (axis_name, sign). Released → axis goes to 0.
+# Rotation keys map to (axis_name, sign). Signs are right-hand-rule body
+# rates (+ω about the axis), matching the cmd convention the sim expects.
+# Released → axis goes to 0.
 ROTATION_KEYS: dict[str, tuple[str, float]] = {
-    'w': ('pitch', -1.0),  # nose-down (W = forward tilt)
-    's': ('pitch', +1.0),  # nose-up
-    'a': ('roll',  -1.0),
-    'd': ('roll',  +1.0),
-    'q': ('yaw',   -1.0),
-    'e': ('yaw',   +1.0),
+    'w': ('pitch', +1.0),  # +ω_y = nose-down (W = forward tilt)
+    's': ('pitch', -1.0),  # −ω_y = nose-up
+    'a': ('roll',  -1.0),  # −ω_x = left bank (left wing dips)
+    'd': ('roll',  +1.0),  # +ω_x = right bank
+    'q': ('yaw',   +1.0),  # +ω_z = yaw left (CCW from above)
+    'e': ('yaw',   -1.0),  # −ω_z = yaw right
 }
 
 # Throttle keys (continuous integration while held).
