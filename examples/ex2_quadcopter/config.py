@@ -34,13 +34,16 @@ ARM_L               = 0.25          # half-diagonal of the X-config (m)
 BODY_COLLIDER_R     = 0.05          # m — sphere radius for ground contact
 
 # ---- Propeller geometry --------------------------------------------------
-BLADE_CHORD         = 0.02          # m
-BLADE_SPAN          = 0.10          # m   (each blade: motor center → tip)
+# Bigger blades vs. the canonical micro-quad geometry: lift scales as
+# b³ (blade-element integration) and a slower hover ω means the rotor
+# dynamics integrate cleanly with the default 1 ms dt.
+BLADE_CHORD         = 0.03          # m
+BLADE_SPAN          = 0.20          # m   (each blade: motor center → tip)
 BLADE_THICKNESS     = 0.12          # NACA 0012
 BLADE_PITCH_DEG     = 12.0          # well below stall (15°)
 BLADE_PITCH_RAD     = math.radians(BLADE_PITCH_DEG)
 N_SEGMENTS          = 4
-MOTOR_STALL_TORQUE  = 5.0           # N·m
+MOTOR_STALL_TORQUE  = 2.0           # N·m  (capped: cheaper to keep ω small)
 
 # ---- Atmosphere -----------------------------------------------------------
 # ISA sea-level: R_air = 287.05 J/(kg·K), T = 288.15 K, p = 101325 Pa
@@ -141,8 +144,9 @@ def make_config() -> MantaConfig:
     # the joint (no spin-up under torque). 1e-4 kg·m² is ballpark for a
     # 0.02 kg hub at ~0.07 m radius — same order as a real micro-prop +
     # motor armature combined.
-    HUB_MASS = 0.02         # kg
-    HUB_MOI  = (1.0e-4, 1.0e-4, 1.0e-4)
+    HUB_MASS = 0.05         # kg
+    HUB_MOI  = (1.0e-3, 1.0e-3, 1.0e-3)   # axial 1 mN·m·s²/rad — slow enough
+                                          # for dt=1ms stability under ~2 N·m
     for name, pos, cw in ROTORS:
         m = Motor(f"{name}_motor",
                   axis=(0.0, 0.0, 1.0),

@@ -120,11 +120,16 @@ int main() {
         //
         // Map throttle (0..1) and PID outputs (small dimensionless) to a
         // per-rotor ω_target, then compute torque = K_v · (ω_target − ω).
-        constexpr float OMEGA_HOVER  = 520.0f;  // ≈ ω that gives MASS·g/4 thrust
-        constexpr float OMEGA_MAX    = 900.0f;
-        constexpr float OMEGA_PID_SCALE = 200.0f; // PID output (rad/s of ω cmd)
-        constexpr float K_V          = 0.02f;     // N·m per rad/s of ω error
-        constexpr float TAU_LIMIT    = 5.0f;      // motor stall torque
+        // Bigger blades (b=0.20 m, c=0.03 m) give hover thrust at much
+        // lower ω: lift ∝ ω²·b³, so hover happens around 100 rad/s
+        // (~1000 RPM) instead of 500+. Cap ω_max well below the regime
+        // where tip-Mach approaches 0.3 (M=0.3 → ω·b ≈ 100 m/s →
+        // ω ≈ 500 rad/s for b=0.20 m).
+        constexpr float OMEGA_HOVER     = 90.0f;    // ≈ ω for MASS·g/4 thrust
+        constexpr float OMEGA_MAX       = 250.0f;
+        constexpr float OMEGA_PID_SCALE = 40.0f;
+        constexpr float K_V             = 0.05f;    // N·m per rad/s of ω error
+        constexpr float TAU_LIMIT       = 2.0f;     // motor stall torque
 
         auto clamp = [](float v, float lo, float hi) {
             return std::min(hi, std::max(lo, v));

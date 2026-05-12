@@ -33,13 +33,14 @@ except ModuleNotFoundError as e:
     sys.exit(f"viewer.py: failed to load config ({e}). "
              "Run via .venv/bin/python (it has manta_codegen installed).")
 
-ROTORS              = _cfg.ROTORS                 # [(name, (x,y,z), cw?), ...]
-MAX_THRUST_PER_PROP = _cfg.MAX_THRUST_PER_PROP    # N
-ARM_L               = _cfg.ARM_L                  # m
-
-ARROW_PER_N = 0.05          # rerun units per N. Full-throttle arrow ≈
-                            # MAX_THRUST_PER_PROP * 0.05 ≈ 0.25 m, same
-                            # order as the rotor arm so it reads.
+ROTORS    = _cfg.ROTORS                          # [(name, (x,y,z), cw?), ...]
+ARM_L     = _cfg.ARM_L                           # m
+OMEGA_REF = 100.0                                # rad/s — typical hover
+                                                 # spin rate; arrows are
+                                                 # scaled relative to this
+ARROW_AT_OMEGA_REF = 0.20                        # rerun units (= 0.8·ARM_L)
+                                                 # so a hovering rotor's
+                                                 # arrow is ~the arm length
 
 
 def main() -> None:
@@ -87,18 +88,23 @@ def main() -> None:
                    rotation=rr.Quaternion(xyzw=[d["q"][1], d["q"][2],
                                                 d["q"][3], d["q"][0]])))
 
-        # Per-rotor thrust arrows. Thrust is along body +z; arrow length
-        # ∝ throttle. The codegen-emitted telemetry exposes each rotor's
-        # throttle under `<name>.throttle`.
+        # Per-rotor "thrust" arrows. We don't have direct thrust in the
+        # telemetry anymore — each rotor is a Motor + 2 airfoils, and
+        # the thrust comes from the integrated aerodynamic force.
+        # Proxy: arrow length ∝ |ω|²/OMEGA_REF² (lift scales as ω²).
+        # Sign of the arrow flips with rotation direction so CW and CCW
+        # rotors are visually distinguishable.
         origins: list[list[float]] = []
         vectors: list[list[float]] = []
         colors:  list[list[int]]   = []
         for name, offset, _cw in ROTORS:
-            thr = float(d.get(name, {}).get("throttle", 0.0))
-            length = thr * MAX_THRUST_PER_PROP * ARROW_PER_N
+            rate = float(d.get(f"{name}_motor", {}).get("rate", 0.0))
+            mag2 = (rate / OMEGA_REF) ** 2
+            length = ARROW_AT_OMEGA_REF * mag2
             origins.append(list(offset))
             vectors.append([0.0, 0.0, length])
-            colors.append([255, 100, 100])
+            # Color by sense: red = CCW (+ω), blue = CW (−ω).
+            colors.append([255, 100, 100] if rate >= 0.0 else [100, 140, 255])
         rr.log("world/quad/rotors/forces",
                rr.Arrows3D(origins=origins, vectors=vectors, colors=colors))
 
