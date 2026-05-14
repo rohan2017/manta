@@ -112,6 +112,19 @@ public:
     // no-op. ArticulatedPartT overrides.
     virtual void integrate_joint_state(Scalar /*dt*/) noexcept {}
 
+    // Angular momentum stored in this part's joint rotation (NOT counted
+    // in the parent's I_aggregate · ω because it's the "extra" rotation
+    // about the joint axis). Returned in the part's PartFrame. Default
+    // zero for non-articulated parts; ArticulatedPartT overrides with
+    // I_axial · rate · axis. The Craft walks the tree to sum these into
+    // h_rotor in CraftFrame and adds −ω_craft × h_rotor to the body
+    // Euler equation — the gyroscopic torque a spinning rotor exerts on
+    // its mount when the body rotates.
+    virtual geom::Vec3<PartFrame, Scalar>
+    rotor_angular_momentum_part_frame() const noexcept {
+        return geom::Vec3<PartFrame, Scalar>::zero();
+    }
+
     // Register the part's white-noise sources with an EKF's noise
     // registry. Default no-op. Parts that have noise (e.g. Thruster's
     // force_noise_) override and call `r.register_white_3d(noise_)`.

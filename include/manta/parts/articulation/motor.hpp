@@ -38,6 +38,7 @@ public:
     MFloat damping()      const noexcept { return damping_;     }
 
     void resolve(const Wrench<PartFrame>& child_total,
+                 const geom::Vec3<PartFrame>& omega_mount,
                  Wrench<PartFrame>&       parent_out,
                  MFloat&                    joint_accel_out) override;
 

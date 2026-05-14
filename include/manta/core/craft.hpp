@@ -197,6 +197,16 @@ public:
         EigenV tau_origin  = w.torque().raw();
         EigenV r_com_craft = root_.get_com().raw();    // COM in CraftFrame
 
+        // Rotor gyroscopic torque on the body. The aggregated MOI handles
+        // the I·ω part of L_body, but each joint also stores
+        // I_axial·θ̇·axis of angular momentum that the body's Euler
+        // equation must account for via −ω × h_rotor. Without this term,
+        // a free-spinning rotor (reaction wheel, prop) wouldn't gyro-
+        // stabilize its body — the body just rotates under applied
+        // torques as if the rotor's stored momentum didn't exist.
+        EigenV h_rotor = EigenV::Zero();
+        accumulate_rotor_momentum(root_, h_rotor);
+
         if (scene_) {
             // omega_S, alpha_S = scene's angular velocity / acceleration
             // relative to WorldFrame, in scene-frame components.
@@ -229,10 +239,13 @@ public:
         EigenV a_com_scene =
             scene_to_craft_.orientation().raw() * (F / m);
 
-        // Angular: solve I_COM · α = τ_COM − ω × (I_COM · ω) in CraftFrame.
+        // Angular: solve I_COM · α = τ_COM − ω × (I_COM · ω) − ω × h_rotor
+        // in CraftFrame. The h_rotor term gives gyroscopic precession from
+        // spinning rotors stored in joints.
         const auto& I_com = root_.get_moi();
         EigenV omega_craft = scene_to_craft_.vel_angular().raw();
-        EigenV tau_com     = tau_origin - r_com_craft.cross(F);
+        EigenV tau_com     = tau_origin - r_com_craft.cross(F)
+                           - omega_craft.cross(h_rotor);
         EigenV alpha_craft = EigenV::Zero();
         Scalar det = I_com.raw().determinant();
         if (det > Scalar(1e-18)) {
@@ -251,6 +264,36 @@ public:
         EigenV a_origin_scene = a_com_scene
                               + alpha_C.cross(r_oc_scene)
                               + omega_C.cross(omega_C.cross(r_oc_scene));
+
+        // Moving-COM correction. The r_OC formula above handles only the
+        // rigid-at-this-instant centripetal/Euler terms, treating the
+        // craft as if it were rigid at this tick's COM. When joints are
+        // moving, the COM has body-frame velocity v_C_body and body-frame
+        // acceleration a_C_body which contribute additional terms:
+        //
+        //   a_O = a_C + R·[α × r_OC + ω × (ω × r_OC) − 2·ω × v_C_body − a_C_body]
+        //
+        // We accumulate v_C_body and a_C_body by walking mass-bearing leaves
+        // (their craft_to_part_ caches carry the kinematic-chain velocity and
+        // acceleration components). For rigid parts both contributions are
+        // zero; for parts in articulated chains the joint's rate and accel
+        // propagate down via the KinematicLink composition.
+        //
+        // Crucially, this correction is added to a_O — NOT to the body's
+        // wrench. Adding it to the wrench would pollute m_total·a_C = F_total
+        // and make the system COM drift, violating conservation of linear
+        // momentum for a closed craft with only internal forces.
+        EigenV v_C_accum = EigenV::Zero();
+        EigenV a_C_accum = EigenV::Zero();
+        accumulate_leaf_com_motion(root_, v_C_accum, a_C_accum);
+        if (m > Scalar(0)) {
+            EigenV v_C_body = v_C_accum / m;
+            EigenV a_C_body = a_C_accum / m;
+            EigenV a_O_correction_body =
+                -Scalar(2) * omega_craft.cross(v_C_body) - a_C_body;
+            a_origin_scene +=
+                scene_to_craft_.orientation().raw() * a_O_correction_body;
+        }
 
         scene_to_craft_.set_acc_linear(
             geom::Vec3<SceneFrame, Scalar>::from_raw(a_origin_scene));
@@ -397,6 +440,82 @@ private:
         if (!kids) return;
         for (auto& child : *kids) {
             integrate_joints_recurse(*child, dt);
+        }
+    }
+
+    // Walk mass-bearing leaves accumulating their contribution to the
+    // system's body-frame COM velocity and acceleration:
+    //   v_C_body = Σ m_i · v_com_in_body / m_total
+    //   a_C_body = Σ m_i · a_com_in_body / m_total
+    // Each leaf's craft_to_part_ kinematic cache holds the body-frame
+    // velocity/acceleration of the part's origin (computed by the
+    // KinematicLink chain from any articulated joints upstream). Combined
+    // with the leaf's own com_in_part offset and angular vel/accel of the
+    // part frame, this gives the leaf COM's full body-frame motion:
+    //
+    //   v_com_in_body = v_origin + ω_part_in_body × R_part_to_body·com_in_part
+    //   a_com_in_body = a_origin + α_part_in_body × R·com
+    //                            + ω_part_in_body × (ω_part_in_body × R·com)
+    //
+    // Used by sense_and_aggregate to apply the moving-COM correction to
+    // the body origin's inertial acceleration. Composite parts (which
+    // hold aggregate mass but no actual particle) are skipped — we only
+    // visit leaves (children() == nullptr or empty).
+    static void accumulate_leaf_com_motion(
+            const PartT<Scalar>& part,
+            Eigen::Matrix<Scalar, 3, 1>& v_accum,
+            Eigen::Matrix<Scalar, 3, 1>& a_accum) {
+        auto* kids = part.children();
+        const bool is_leaf = (kids == nullptr || kids->empty());
+
+        if (is_leaf) {
+            const Scalar m_i = part.get_mass();
+            if (m_i > Scalar(0)) {
+                using EigenV = Eigen::Matrix<Scalar, 3, 1>;
+                const auto& link = part.craft_to_part();
+                EigenV com_in_part = part.get_com().raw();
+                EigenV R_com       = link.orientation().raw() * com_in_part;
+                EigenV omega_in_part = link.vel_angular().raw();
+                EigenV alpha_in_part = link.acc_angular().raw();
+                EigenV omega_in_body = link.orientation().raw() * omega_in_part;
+                EigenV alpha_in_body = link.orientation().raw() * alpha_in_part;
+                EigenV v_com = link.vel_linear().raw()
+                             + omega_in_body.cross(R_com);
+                EigenV a_com = link.acc_linear().raw()
+                             + alpha_in_body.cross(R_com)
+                             + omega_in_body.cross(omega_in_body.cross(R_com));
+                v_accum += m_i * v_com;
+                a_accum += m_i * a_com;
+            }
+            return;
+        }
+
+        for (const auto& child : *kids) {
+            accumulate_leaf_com_motion(*child, v_accum, a_accum);
+        }
+    }
+
+    // Walk the part tree summing each articulated joint's stored angular
+    // momentum (I_axial · rate · axis), rotated into CraftFrame. Used by
+    // sense_and_aggregate to inject the gyroscopic torque correction
+    // −ω_craft × h_rotor on the body's Euler equation — what a spinning
+    // rotor exerts on its mount when the body rotates.
+    //
+    // Exact for axially-symmetric rotors with axis-fixed-in-body joints
+    // (every Motor in stock parts). For non-axisymmetric rotors with
+    // mass-shifting subtrees, the time-varying inertia tensor introduces
+    // additional terms not captured here — but the I·ω piece handled by
+    // the body Euler already accounts for the bulk of those.
+    static void accumulate_rotor_momentum(const PartT<Scalar>& part,
+                                          Eigen::Matrix<Scalar, 3, 1>& accum) {
+        auto h_part = part.rotor_angular_momentum_part_frame();
+        if (h_part.raw().squaredNorm() > Scalar(0)) {
+            accum += part.craft_to_part().orientation().raw() * h_part.raw();
+        }
+        auto* kids = part.children();
+        if (!kids) return;
+        for (const auto& child : *kids) {
+            accumulate_rotor_momentum(*child, accum);
         }
     }
 

@@ -14,12 +14,13 @@ templated C++ that compiles into a regular binary.
 ```
 include/manta/        C++ runtime: parts, fields, planets, scenes, EKF/UKF
 python/manta_codegen/ Python descriptors + emitter
-examples/             ex0 (free flight), ex1 (orbit), ex2 (quad), ex3 (TVC),
-                      ex4 (reaction wheel), ex5 (sim+EKF), ex6 (real-data
-                      EKF), ex7 (tethered pair), ex8 (submarine + Mag),
-                      ex9 (block-decomposed dual-craft EKF), ukf_smoke,
-                      connect_demo, sync_smoke, wire_debug
-tests/                doctest unit + integration tests (231 cases)
+examples/             ex0 (free flight), ex1 (LM lunar orbit), ex2 (quad
+                      with blade-element aero), ex3 (TVC), ex4 (reaction
+                      wheel), ex5 (sim+EKF), ex6 (real-data EKF),
+                      ex7 (tethered pair), ex8 (submarine + Mag),
+                      ex9 (dual-craft EKF), ex10 (raw-C++ EKF reference),
+                      ukf_smoke, connect_demo, sync_smoke, wire_debug
+tests/                doctest unit + integration tests (261 cases)
 ```
 
 ## Quick example
@@ -215,18 +216,19 @@ Three Target shapes are supported today:
 - **`drives=[World]`** — standard sim. Codegen emits the typed crafts +
   a Zenoh main that drives `w.update()` per tick.
 - **`drives=[EKF]`** or **`drives=[UKF]`** — pure estimator. The
-  filter wraps its own internal World; codegen emits a
-  `manta::estimation::WorldEKF<...>` (or `WorldUKFOf<...>`) main. EKF
-  uses a fused `begin_step` / `add_update` / `end_step` lifecycle (one
-  Jet world pass per tick covering both predict and every fresh
-  measurement); UKF uses the legacy `predict(dt, Q)` + per-sensor
-  `consume_fresh + update_n<N>` flow (Pattern C — real-data filter fed
-  from external Zenoh topics, see ex6).
+  filter wraps its own internal value-side World; codegen emits a
+  `manta::estimation::EKFGeneric<Spec, MeasDim, NoiseSlots>` (or
+  `UKFGeneric<Spec, MeasDim>`) main with `ekf.predict(dt, Q)` +
+  `ekf.run_pending_updates()` per tick (Pattern C — real-data filter
+  fed from external Zenoh topics; codegen wires each sensor to a
+  `reading_from_buffer<Dim>` against a Zenoh-subscribed buffer; see
+  ex6).
 - **`drives=[World, EKF/UKF]`** — sim + filter in one binary, the two
   worlds ticked from one wall clock. Cross-world `connect()` pipes
-  sim sensor outputs into the filter craft's `set_measurement` hooks;
-  the sim's commanded throttle mirrors onto the est-side thruster so
-  predict's force model matches (Pattern A — see ex5).
+  sim sensor outputs into the filter via `ekf.measure(&est.sensor.signal,
+  reading_from(sim.sensor.signal))`; the sim's commanded throttle
+  mirrors onto the est-side thruster so predict's force model matches
+  (Pattern A — see ex5).
 
 `Earth` automatically registers persistent ocean + atmosphere disturbances
 on its FluidField; optional `gravity_mu`, `include_j2`, and
@@ -245,78 +247,118 @@ world.add_craft(drone, on=earth, pos=from_wgs84_lla(37.4, -122.1, 100))
 The whole sim core is templated on `Scalar`:
 
 ```cpp
-template <class Scalar> class WorldT;        // World    = WorldT<Real>
-template <class Scalar> class SceneT;        // Scene    = SceneT<Real>
-template <class Scalar = Real> class CraftT; // Craft    = CraftT<Real>
-template <class Scalar = Real> class PartT;
+template <class Scalar> class WorldT;        // World    = WorldT<MFloat>
+template <class Scalar> class SceneT;        // Scene    = SceneT<MFloat>
+template <class Scalar = MFloat> class CraftT; // Craft = CraftT<MFloat>
+template <class Scalar = MFloat> class PartT;
 ```
 
-The `Real` instantiation (default `Real = float`) drives the sim. The
-Jet instantiation (`ceres::Jet<double, N>`) is what `WorldEKF` runs for
-the Jacobian step — the **same physics** is evaluated on Jet scalars,
-so the state-transition Jacobian falls out of autodiff for free. No
+The `MFloat` instantiation (default `float`; opt into `double` with
+`-DMANTA_DOUBLE_PRECISION=ON`) drives the sim. The Jet instantiation
+(`ceres::Jet<double, N>`) is what `EKFGeneric` runs for the Jacobian
+step — the **same physics** is evaluated on Jet scalars, so the
+state-transition Jacobian falls out of autodiff for free. No
 hand-written process model.
 
 This generalizes to inter-craft physics. Tethers, contacts, fluid
-coupling — anything correct in the Real World is automatically correct
-in the Jet World. Cross-craft Jacobian entries propagate naturally.
+coupling — anything correct in the value world is automatically correct
+in the Jet world. Cross-craft Jacobian entries propagate naturally.
 
 Wrapping a Craft in an `EKF(...)` or `UKF(...)` descriptor flips
 `scalar_templated = True` on it automatically — users don't need to
 think about codegen-shape details. The emitted craft becomes
-`FooCraftT<Scalar>` with a `using FooCraft = FooCraftT<Real>` alias so
-the codegen can instantiate it as `<double>` for the Real filter world
-and `<Jet>` for the Jet shadow.
+`FooCraftT<Scalar>` with a `using FooCraft = FooCraftT<MFloat>` alias
+so the codegen can instantiate it as `<double>` for the value-side
+filter world and `<ceres::Jet>` for the Jet shadow.
 
 For Jet-templated parts that query a Field, use
 `fields::state_at_templated<Scalar>(field, pos)` (already wired into
-`Mass`, `PointBuoy`, `Magnetometer`) — Real-Scalar takes the cast-only
+`Mass`, `PointBuoy`, `Magnetometer`) — value-Scalar takes the cast-only
 fast path; Jet-Scalar finite-diffs through the field's spatial gradient
 so EKF / system-ID Jacobians capture `∂g/∂pos` for orbital regimes.
 
 ### Estimators
 
-Two flavors share an API:
+Two flavors share a StateSpec-based API:
 
-- **`WorldEKF<NumCrafts, MeasDim>`** — autodiff EKF. Wraps a
-  `WorldT<double>` (the Real world the user feeds sensor measurements
-  into) plus a `WorldT<Jet>` shadow (built identically; runs the Jet
-  Jacobian step). State dim is `13 * NumCrafts` — the concat of every
-  craft's 13-DOF rigid-body state.
+- **`EKFGeneric<StateSpec, MeasDim, NumNoiseSlots>`** — manifold-aware
+  ESKF. Owns its own `WorldT<Jet>` shadow; the user-facing world stays
+  `WorldT<double>`. Jet width is `tangent_dim + NumNoiseSlots`.
+  Joseph-form measurement update.
 
-- **`WorldUKF<NumCrafts, MeasDim>`** — sigma-point UKF. No Jet
-  shadow — propagates each sigma point through the same Real
-  `WorldT<double>::update()`. Captures second-order nonlinearity;
-  `2*StateDim+1` World evaluations per predict.
+- **`UKFGeneric<StateSpec, MeasDim>`** — manifold-aware UKF; sigma
+  points live on the tangent space, retracted via the StateSpec's
+  boxplus. No Jet shadow — each sigma point propagates through the
+  same `WorldT<double>::step()`.
 
-Both expose per-craft slice accessors (`position(idx)`, `vel_linear(idx)`,
-etc.). Single-craft callers can omit the index — defaults to craft 0.
-
-The EKF uses a fused predict + update lifecycle that runs **one Jet
-world pass per tick**, regardless of how many sensors fire (PyPose-style
-linearize-at-`x_{k-1}` formulation; the chained `f` and `h` Jacobians
-fall out of one autodiff pass):
+Both work over a compile-time **`StateSpec`** built with
+`make_state().track(...).build()`. Tracked variables determine the
+state layout:
 
 ```cpp
-ekf.bind(w_jet, {&craft_real}, {&craft_jet});
-ekf.set_state(...);
-ekf.set_covariance(...);
-
-// Per tick:
-ekf.begin_step(dt, Q);                      // seed Jets at x_pre, evaluate
-if (sensor.consume_fresh())
-    ekf.add_update<N>(h_at_pre, z, R);      // read h(x_pre) + H from caches
-ekf.end_step();                             // advance, P_pre = F P F^T + Q,
-                                            // apply queued updates, mirror
+auto state = manta::estimation::make_state()
+    .track(craft0)                        // → RigidBody slice (13 / 12)
+    .track(craft0.imu().accel_bias())     // → BiasRandomWalk<3>
+    .track(craft0.imu().gyro_bias())
+    .build();
 ```
 
-For decoupled-craft swarms (no tether/contact/fluid coupling) flip
-`block_decomposed=True` on the EKF descriptor: the codegen instantiates
-`WorldEKFBlockDecomposed<...>` which runs `NumCrafts` smaller Jet passes
-(width 13 each instead of `13·NumCrafts`), giving linear scaling.
+`slice_for<T>` deduction maps `CraftT<S>` → `RigidBody` and
+`Noise<RandomWalk<N>>` → `BiasRandomWalk<N>` — users never type the
+slice names. Built-in primitives: `Euclidean<N>`, `SO3`, `RigidBody`,
+`BiasRandomWalk<N>`, `Compose<...>`.
 
-UKF keeps the legacy `predict(dt, Q)` + `update_n<N>(h, z, R)` API —
-no Jet shadow, no fused step.
+Each tracked craft gets a **`CraftView<Filter, SliceIdx>`** — a
+per-craft handle that exposes `position()`, `orientation()`,
+`vel_linear()`, `vel_angular()`, the matching `*_stddev()` accessors,
+plus setters that push through the filter's `set_state`. The factory
+constructor builds the Jet-side counterpart of the slice into the
+filter's internal Jet world; fields registered on the value world are
+mirrored automatically.
+
+```cpp
+EKFGeneric<decltype(state), MeasDim, NoiseSlots> ekf{state};
+
+CraftView<EkfT, 0> view0(ekf, [&](auto& w) {
+    using S = typename std::remove_reference_t<decltype(w)>::Scalar;
+    auto c = std::make_unique<MyCraftT<S>>("est");
+    w.create_scene().add_craft(*c);
+    return c;
+});
+
+view0.set_state_covariance(/*pos_var=*/1e-4, /*att_var=*/1e-4,
+                           /*vel_var=*/1e-2, /*angvel_var=*/1e-4);
+
+// Wire each sensor's value-side Measurement to a Reading.
+ekf.measure(&est_craft.imu().accel, reading_from(sim_craft.imu().accel));
+ekf.measure(&est_craft.imu().gyro,  reading_from(sim_craft.imu().gyro));
+ekf.measure(&est_craft.dvl().velocity,
+            reading_from(sim_craft.dvl().velocity));
+
+// Per tick:
+sim_world.step();
+ekf.predict(DT, Q_extra);          // seeds Jets, runs jet_world.step(),
+                                   //   extracts F + L, P = F P Fᵀ + Q + L Σ_dt Lᵀ
+ekf.run_pending_updates();         // walks bindings; for each fresh Reading,
+                                   //   reads h(x_pre) + H from the Jet
+                                   //   Measurement cache and applies the
+                                   //   Joseph-form update
+```
+
+`predict` runs **one Jet world pass per tick** — `f` Jacobian falls out
+of boxminus on the post-step ambient state. `run_pending_updates` runs
+a second Jet pass (kinematic+aggregate only) to populate Measurement
+caches, then applies any fresh sensor readings.
+
+White-noise sources (`Noise<WhiteGaussian>`) auto-register into
+`NumNoiseSlots` via `NoiseRegistry` and assemble `Q` automatically;
+RW biases (`Noise<RandomWalk<N>>`) are tracked as `BiasRandomWalk`
+slices in the StateSpec and contribute their drift via `σ_rw·√dt`
+diagonal entries on `L`. Kalibr 4-parameter IMU noise is fully
+modeled — see ex5 for the canonical example.
+
+The reference impl (no codegen, no Zenoh — just raw C++) is
+`examples/ex10_cpp_ekf/main.cpp`.
 
 ### Estimator codegen
 
@@ -329,20 +371,25 @@ ukf = UKF(est_world, measurements=[imu, dvl], alpha=1e-3, beta=2.0, kappa=0.0)
 
 Both shapes share the same emit pipeline. The codegen-emitted harness:
 
-- Builds the Real `WorldT<double>` + crafts + fields exactly like a sim
-  World harness.
-- For EKF, builds a Jet shadow `WorldT<Jet>` (identical setup; same
-  field instances shared by-pointer between Real and Jet).
-- Instantiates `WorldEKF<NumCrafts, MeasDim>` (or `WorldEKFBlockDecomposed`,
-  or `WorldUKF<...>`) and binds it to both worlds + per-craft pointer
-  arrays.
-- For EKF: emits `begin_step / per-sensor add_update / end_step` brackets
-  in `tick()`. For UKF: emits `predict + per-sensor update_n`.
+- Builds the value-side `WorldT<double>` + crafts + fields exactly like
+  a sim World harness.
+- Builds a `StateSpec` by emitting `make_state().track(craft0)...build()`
+  with one `track(...)` call per tracked craft, plus one per enabled
+  RW-bias channel.
+- Instantiates `EKFGeneric<Spec, MeasDim, NoiseSlots>` (or
+  `UKFGeneric<Spec, MeasDim>`) and constructs one `CraftView<F, I>` per
+  craft. The factory lambda inside each `CraftView` builds the Jet-side
+  (EKF) or value-side (UKF) counterpart of the tracked craft.
+- Emits `ekf.measure(&est.sensor.signal, reading_from_buffer<Dim>(...))`
+  (Pattern C, real-data) or `ekf.measure(&est.sensor.signal, reading_from(sim.sensor.signal))`
+  (Pattern A, sim+est in one binary) per sensor.
+- Emits `ekf.predict(dt, Q_extra); ekf.run_pending_updates();` in
+  `tick()`.
 
-Multi-craft worlds work natively. Each measurement part lives on a
-specific craft; the codegen routes the per-sensor measurement update
-through that craft's state slice (`13 * craft_idx + offset`). See
-ex9 for a two-craft EKF (block-decomposed).
+Multi-craft worlds work natively. Each tracked craft is its own
+StateSpec slice; the slice offsets pop straight out of the StateSpec at
+compile time, so per-craft routing has no runtime cost. See ex9 for a
+two-craft EKF.
 
 #### Per-craft initial state and variance
 
@@ -459,15 +506,16 @@ The codegen has two output modes:
 | Example | Workflow | Demonstrates |
 |--|--|--|
 | ex0 | none (pure C++) | Drag-comparison freefall — minimal "manta in a terminal" demo |
-| ex1 | binary  | 1 km circular orbit, point gravity (synced over Zenoh) |
-| ex2 | library | Quadcopter X-config, 4× Thruster1 with reaction torque |
+| ex1 | binary  | Apollo LM in lunar orbit — bang-bang controller, double-precision build |
+| ex2 | library | Quadcopter X-config — 4× Motor + 2× `Naca00xx` blades per rotor, blade-element aero, ground `Collider` + `CollisionField`, rate PIDs |
 | ex3 | library | TVC rocket hopper, yaw-motor → pitch-motor → engine stack |
 | ex4 | binary  | Reaction wheel — Motor + flywheel, conservation of L |
-| ex5 | binary  | Sim + EKF side-by-side, fully codegen — cross-world `connect()` |
+| ex5 | binary  | Sim + EKF side-by-side, fully codegen — Kalibr 4-parameter IMU noise (white + RW biases) |
 | ex6 | binary  | Real-data-only EKF, fed from external Zenoh topics (Pattern C) |
 | ex7 | binary  | Codegen-driven Tether between two crafts |
 | ex8 | binary  | Submarine — Mass + PointBuoy + Surface drag + 2× thruster + IMU/DVL/Mag, sim+EKF |
-| ex9 | binary  | Dual-craft EKF — block-decomposed `WorldEKFBlockDecomposed<2, 18>`, per-craft Jet width 13 |
+| ex9 | binary  | Dual-craft sim+EKF — two independent drones in one `EKFGeneric` |
+| ex10 | none (pure C++) | Hand-written reference impl of the StateSpec + EKFGeneric + Measurement + Reading API — no codegen, no Zenoh |
 | connect_demo | binary | Two-thruster `connect()` mirror — minimal in-process binding demo |
 | ukf_smoke | binary | Minimal UKF codegen smoke — Mass + IMU + DVL |
 | sync_smoke | — | Round-trips a GravityField disturbance through real Zenoh |
@@ -477,7 +525,7 @@ The codegen has two output modes:
 
 ```bash
 cmake -S . -B build && cmake --build build -j
-ctest --test-dir build       # 232 cases (231 doctest + sync_smoke)
+ctest --test-dir build       # 262 cases (261 doctest + sync_smoke)
 ```
 
 Each example has a CMake target named after its directory (e.g. `ex5`).
@@ -486,7 +534,7 @@ binary over Zenoh.
 
 ## Status
 
-Early/active development. The public API is stable enough for ex0..ex9
+Early/active development. The public API is stable enough for ex0..ex10
 to drive it without back-compat shims, but any of it can still move.
 Notable items not yet built:
 
@@ -497,6 +545,13 @@ Notable items not yet built:
   Magnetometer EKF update. Today the codegen captures B at update-time
   and treats it locally constant — fine for typical magnetometer use
   cases, lossy near steep field gradients (close-in dipoles).
+- **Block-decomposed EKF** for ≥5 decoupled-craft swarms. The
+  `block_decomposed=True` flag on the Python descriptor is reserved
+  but no emit code consumes it yet; the StateSpec-based design needs
+  per-slice Jet seeding to recover the linear-scaling perf characteristic.
+- **Quaternion P-projection** onto the S³ tangent space in `EKFGeneric`.
+  Revisit if attitude tracking becomes the bottleneck on a coupled
+  craft.
 
 ## Design docs
 

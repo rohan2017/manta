@@ -32,8 +32,16 @@ public:
     void set_rate (Scalar r) noexcept { rate_  = r; }
 
     // Build the kinematic link from mount frame to joint-output frame using
-    // current angle/rate. The kinematic pass composes this with the part's
-    // static mount transform to get parent_link → joint output.
+    // current angle/rate/accel. The kinematic pass composes this with the
+    // part's static mount transform to get parent_link → joint output.
+    //
+    // acc_angular carries the joint's angular acceleration (accel_ · axis,
+    // using last tick's accel since the current tick's accel_ is set inside
+    // aggregate_wrenches AFTER kinematic_pass). This propagates through the
+    // KinematicLink composition so downstream parts (Mass children, IMUs)
+    // pick up the joint's angular acceleration in their acc_linear /
+    // acc_angular caches. Same 1-tick-lag tradeoff as the rest of the
+    // explicit-Euler joint integrator.
     geom::KinematicLink<PartFrame, PartFrame, Scalar>
     joint_link() const noexcept override {
         using KL = geom::KinematicLink<PartFrame, PartFrame, Scalar>;
@@ -42,45 +50,70 @@ public:
         const auto orientation =
             geom::Ori<PartFrame, Scalar>::from_axis_angle(axis_, angle_);
 
-        // vel_angular lives in the To frame; since the joint rotates about its
-        // own axis at rate θ̇, the angular velocity vector is θ̇*axis in both
-        // frames component-wise.
-        const auto omega = V::from_raw(rate_ * axis_.raw());
+        // vel_angular and acc_angular live in the To frame; since the joint
+        // rotates about its own axis at rate θ̇ with acceleration θ̈, the
+        // vectors are θ̇·axis and θ̈·axis respectively (axis is invariant).
+        const auto omega = V::from_raw(rate_  * axis_.raw());
+        const auto alpha = V::from_raw(accel_ * axis_.raw());
         return KL{V::zero(), orientation, V::zero(), omega,
-                  V::zero(), V::zero()};
+                  V::zero(), alpha};
     }
     bool has_joint_link() const noexcept override { return true; }
 
-    // Subclass hook (Motor, FreeHinge, ...).
+    // Subclass hook (Motor, FreeHinge, ...). Inputs and outputs are all
+    // expressed in MOUNT-frame components (the parent's side of the
+    // joint, where the parent's compute_params rolled up COM/MOI).
+    // `omega_mount` is the absolute angular velocity of the mount frame
+    // (relative to scene), in mount components — used by subclasses that
+    // want to inject Coriolis/centrifugal coupling on the joint.
     virtual void resolve(const Wrench<PartFrame, Scalar>& child_total,
+                         const geom::Vec3<PartFrame, Scalar>& omega_mount,
                          Wrench<PartFrame, Scalar>&       parent_out,
                          Scalar&                          joint_accel_out) = 0;
 
     // aggregate_wrenches override. Composite gathers child wrenches into
-    // wrench_accum_; we then call resolve() to split that into a child
-    // total (consumed by the joint) and a parent reaction expressed in
-    // the joint-output frame, finally rotated into the mount frame.
+    // wrench_accum_ in the joint-output frame; we rotate to mount frame,
+    // compute the mount-frame absolute angular velocity, and call
+    // resolve() with everything in mount frame. The resolve's output
+    // parent_out is already in mount frame so it goes straight into
+    // wrench_accum_ for the upstream walk.
     void aggregate_wrenches() override {
         using V      = geom::Vec3<PartFrame, Scalar>;
         using EigenV = Eigen::Matrix<Scalar, 3, 1>;
 
         CompositePartT<Scalar>::aggregate_wrenches();
-        const Wrench<PartFrame, Scalar> child_total = this->wrench_accum_;
+
+        // q_jo_to_mount: rotate vectors from joint-output frame to mount frame.
+        auto q_jo_to_mount = Eigen::Quaternion<Scalar>{
+            Eigen::AngleAxis<Scalar>{angle_, axis_.raw()}};
+
+        // Rotate child_total (in joint-output) into mount frame.
+        const auto& jo = this->wrench_accum_;
+        EigenV F_child_mount = q_jo_to_mount * jo.force().raw();
+        EigenV T_child_mount = q_jo_to_mount * jo.torque().raw();
+        const Wrench<PartFrame, Scalar> child_total_mount{
+            V::from_raw(F_child_mount), V::from_raw(T_child_mount)
+        };
+
+        // Mount-frame absolute angular velocity. scene_to_part_.vel_angular()
+        // is ω of the joint-output frame relative to scene, in joint-output
+        // components. ω_mount = ω_part − rate·axis (axis is invariant under
+        // the joint rotation), then rotate to mount components.
+        EigenV omega_part_jo  = this->scene_to_part_.vel_angular().raw();
+        EigenV omega_mount_jo = omega_part_jo - rate_ * axis_.raw();
+        EigenV omega_mount_mount = q_jo_to_mount * omega_mount_jo;
 
         Wrench<PartFrame, Scalar> parent_reaction =
             Wrench<PartFrame, Scalar>::zero();
         Scalar joint_accel = Scalar(0);
-        resolve(child_total, parent_reaction, joint_accel);
+        resolve(child_total_mount,
+                V::from_raw(omega_mount_mount),
+                parent_reaction,
+                joint_accel);
         accel_ = joint_accel;
 
-        // Express parent_reaction in the mount frame: jo→mount is R(axis, +angle).
-        auto q_jo_to_mount = Eigen::Quaternion<Scalar>{
-            Eigen::AngleAxis<Scalar>{angle_, axis_.raw()}};
-        EigenV F_mount = q_jo_to_mount * parent_reaction.force().raw();
-        EigenV T_mount = q_jo_to_mount * parent_reaction.torque().raw();
-        this->wrench_accum_ = Wrench<PartFrame, Scalar>{
-            V::from_raw(F_mount), V::from_raw(T_mount)
-        };
+        // parent_reaction is already in mount frame; pass it up unmodified.
+        this->wrench_accum_ = parent_reaction;
     }
 
     // compute_params override. Composite leaves COM and MOI in the joint-
@@ -109,6 +142,25 @@ public:
 
     // PartT hook used by Craft's integrator pass.
     void integrate_joint_state(Scalar dt) noexcept override { integrate_joint(dt); }
+
+    // Angular momentum from the joint rotation: I_axial · rate · axis.
+    // I_axial is the rotor subtree's moment of inertia about the joint
+    // axis (computed via axis·I_com·axis + m·d_perp² parallel-axis shift,
+    // matching Motor::resolve). The Craft sums (rotated to CraftFrame)
+    // these across the tree to produce h_rotor for the body's
+    // gyroscopic torque correction.
+    geom::Vec3<PartFrame, Scalar>
+    rotor_angular_momentum_part_frame() const noexcept override {
+        using V      = geom::Vec3<PartFrame, Scalar>;
+        using EigenV = Eigen::Matrix<Scalar, 3, 1>;
+        EigenV axis = axis_.raw();
+        EigenV com  = this->com_.raw();
+        Scalar d_perp_sq = com.squaredNorm()
+                         - (com.dot(axis)) * (com.dot(axis));
+        Scalar I_axial = axis.dot(this->moi_.raw() * axis)
+                       + this->mass_ * d_perp_sq;
+        return V::from_raw(I_axial * rate_ * axis);
+    }
 
 protected:
     geom::Vec3<PartFrame, Scalar> axis_;

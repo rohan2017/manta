@@ -149,3 +149,14 @@ target_include_directories(ex10_cpp_ekf PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/ex10_cpp_ekf)
 target_compile_definitions(ex10_cpp_ekf PRIVATE
     MANTA_HAS_GRAVITY_FIELD=1)
+
+# ex11 — pure C++, no codegen, no Zenoh. Spinning-top precession demo
+# on a flat ground plane. Showcases the moving-COM and rotor-gyro
+# articulation patches: heavy flywheel on a Motor + thin stick with end
+# colliders, brief lateral kick at t=3 s makes the craft tilt and then
+# precess around vertical rather than falling straight over.
+add_executable(ex11_spinning_top ex11_spinning_top/ex11.cpp)
+target_link_libraries(ex11_spinning_top PRIVATE manta::manta)
+target_compile_definitions(ex11_spinning_top PRIVATE
+    MANTA_HAS_GRAVITY_FIELD=1
+    MANTA_HAS_COLLISION_FIELD=1)
