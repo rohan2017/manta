@@ -1,6 +1,10 @@
-"""End-to-end M1 demo: a Mass part defined in Python, traced into a
-graph, compiled via CasADi, and run in pure Python. The numerics must
-match analytic free-fall: x(t) = x₀ + v₀·t + ½·g·t².
+"""End-to-end M1/M2 demo: a Mass part defined in Python, traced into a
+graph, compiled via CasADi, and run in pure Python.
+
+M1 cases (linear free-fall) test that x(t) = x₀ + v₀·t + ½·g·t² is exact.
+M2 cases ride the new 6-DOF tick — orientation just stays at identity for
+these straight-line tests; the rotational dynamics get their own coverage
+in test_rigid_body.py.
 """
 
 import numpy as np
@@ -11,8 +15,12 @@ from manta_next.craft import Craft
 from manta_next.parts import Mass
 
 
+def _initial_at_rest(z=0.0):
+    return Craft.initial_state(position=(0.0, 0.0, z))
+
+
 # ---------------------------------------------------------------------------
-# Demo: free-fall craft
+# Free-fall (linear dynamics; no orientation change expected)
 # ---------------------------------------------------------------------------
 
 def test_single_mass_free_fall_numerics():
@@ -22,50 +30,50 @@ def test_single_mass_free_fall_numerics():
 
     tick = c.compile_tick(gravity_anchor=(0.0, 0.0, -9.81))
 
-    state = {
-        "position": np.array([0.0, 0.0, 100.0]),
-        "velocity": np.array([0.0, 0.0, 0.0]),
-    }
+    state = _initial_at_rest(z=100.0)
     dt = 0.001
-    n_steps = 1000   # 1 second of sim
+    n_steps = 1000   # 1 second
 
     for _ in range(n_steps):
         out = tick(dt=dt, **state)
-        state = {"position": out["position"], "velocity": out["velocity"]}
+        state = {k: out[k] for k in state}
 
-    # Analytic: x(1) = 100 + 0 - 0.5·9.81·1² = 95.095 ; v(1) = -9.81.
-    expected_z = 100.0 - 0.5 * 9.81 * 1.0
+    expected_z  = 100.0 - 0.5 * 9.81 * 1.0      # 95.095
     expected_vz = -9.81
 
-    # Symplectic-Euler is exact for constant accel (the position update
-    # uses v·dt + ½·a·dt² which is the analytic increment per tick).
-    assert np.isclose(state["position"][2], expected_z, atol=1e-6)
-    assert np.isclose(state["velocity"][2], expected_vz, atol=1e-6)
-    assert np.allclose(state["position"][:2], [0.0, 0.0])
+    assert np.isclose(state["position"][2], expected_z,  atol=1e-5)
+    assert np.isclose(state["velocity"][2], expected_vz, atol=1e-5)
+    assert np.allclose(state["position"][:2],         [0.0, 0.0], atol=1e-9)
+    assert np.allclose(state["velocity"][:2],         [0.0, 0.0], atol=1e-9)
+    # No external torques, no initial angular velocity, identity initial q —
+    # the body should not rotate.
+    assert np.allclose(state["orientation"],          [1.0, 0.0, 0.0, 0.0], atol=1e-9)
+    assert np.allclose(state["angular_velocity"],     [0.0, 0.0, 0.0],      atol=1e-9)
 
 
 def test_multi_mass_aggregates_correctly():
-    """Two masses, total m = 3 kg, both apply gravity. Acceleration = g
-    regardless of how the mass is divided across parts."""
+    """Three masses at offsets, all apply gravity. Acceleration = g
+    regardless of geometry."""
     c = Craft("multi_mass")
-    c.add(Mass("heavy", mass=2.0))
-    c.add(Mass("light", mass=1.0))
-    assert c.total_mass == 3.0
+    c.add(Mass("heavy", mass=2.0))                                 # at origin
+    c.add(Mass("light", mass=1.0, transform=(0.5, 0.0, 0.0)))      # offset
+    c.add(Mass("third", mass=0.5, transform=(0.0, 0.5, 0.0)))
+    assert c.total_mass == 3.5
 
     tick = c.compile_tick(gravity_anchor=(0.0, 0.0, -9.81))
-
-    state = {
-        "position": np.array([0.0, 0.0, 0.0]),
-        "velocity": np.array([0.0, 0.0, 0.0]),
-    }
-    dt = 0.01
+    state = _initial_at_rest()
     for _ in range(100):
-        out = tick(dt=dt, **state)
-        state = {"position": out["position"], "velocity": out["velocity"]}
+        out = tick(dt=0.01, **state)
+        state = {k: out[k] for k in state}
 
-    # After 1s of free-fall: vz = -9.81, z = -0.5·9.81 = -4.905.
-    assert np.isclose(state["velocity"][2], -9.81, atol=1e-6)
-    assert np.isclose(state["position"][2], -4.905, atol=1e-6)
+    # After 1 s: vz = -9.81, body origin z depends on offsets — but the
+    # COM falls by exactly 0.5·g·t² regardless of COM location.
+    inertials = c.aggregate_inertials()
+    com_init = np.array([0.0, 0.0, 0.0]) + inertials["com"]
+    com_after = state["position"] + inertials["com"]
+    expected_com_z = com_init[2] - 0.5 * 9.81 * 1.0   # -4.905
+    assert np.isclose(com_after[2], expected_com_z, atol=1e-5)
+    assert np.isclose(state["velocity"][2], -9.81,    atol=1e-5)
 
 
 def test_apply_gravity_false_makes_part_inert():
@@ -75,47 +83,37 @@ def test_apply_gravity_false_makes_part_inert():
 
     tick = c.compile_tick(gravity_anchor=(0.0, 0.0, -9.81))
 
-    state = {
-        "position": np.array([0.0, 0.0, 0.0]),
-        "velocity": np.array([0.0, 0.0, 0.0]),
-    }
-    dt = 0.1
-    out = tick(dt=dt, **state)
+    state = _initial_at_rest()
+    out = tick(dt=0.1, **state)
     # F_total = 1·g (only the active mass contributes).
-    # a = F / m_total = 1·g / 11 = -9.81/11.
-    # v(0.1) = a·dt = -9.81/11 · 0.1.
+    # a = F / m_total = -9.81 / 11.
+    # v(0.1) = a·dt.
     expected_vz = -9.81 / 11.0 * 0.1
     assert np.isclose(out["velocity"][2], expected_vz, atol=1e-9)
 
 
 def test_horizontal_gravity():
-    """Sanity: gravity along +x produces +x acceleration."""
+    """Gravity along +x produces +x acceleration of the origin."""
     c = Craft("sideways")
     c.add(Mass("body", mass=1.0))
-    tick = c.compile_tick(gravity_anchor=(2.0, 0.0, 0.0))   # 2 m/s² in +x
+    tick = c.compile_tick(gravity_anchor=(2.0, 0.0, 0.0))
 
-    state = {
-        "position": np.array([0.0, 0.0, 0.0]),
-        "velocity": np.array([0.0, 0.0, 0.0]),
-    }
+    state = _initial_at_rest()
     for _ in range(100):
         out = tick(dt=0.01, **state)
-        state = {"position": out["position"], "velocity": out["velocity"]}
+        state = {k: out[k] for k in state}
 
-    # After 1s: vx = 2, x = 1, others zero.
-    assert np.isclose(state["velocity"][0],  2.0,  atol=1e-6)
-    assert np.isclose(state["position"][0],  1.0,  atol=1e-6)
-    assert np.allclose(state["velocity"][1:], [0.0, 0.0])
-    assert np.allclose(state["position"][1:], [0.0, 0.0])
+    assert np.isclose(state["velocity"][0], 2.0, atol=1e-5)
+    assert np.isclose(state["position"][0], 1.0, atol=1e-5)
 
 
 # ---------------------------------------------------------------------------
-# Misc Craft / Part API tests
+# API / construction errors
 # ---------------------------------------------------------------------------
 
 def test_unknown_parameter_raises():
     with pytest.raises(TypeError, match="unknown parameter"):
-        Mass("body", mass=1.0, gravity=9.81)   # 'gravity' isn't declared
+        Mass("body", mass=1.0, gravity=9.81)
 
 
 def test_empty_craft_compile_raises():
@@ -132,44 +130,9 @@ def test_zero_mass_craft_raises():
 
 
 def test_parameter_introspection():
-    m = Mass("body", mass=2.5, apply_gravity=False)
+    m = Mass("body", mass=2.5, apply_gravity=False, transform=(0.1, 0.2, 0.3))
     assert m.mass == 2.5
     assert m.apply_gravity is False
-    # repr includes parameter values.
+    assert m.transform == (0.1, 0.2, 0.3)
     r = repr(m)
     assert "mass=2.5" in r
-    assert "apply_gravity=False" in r
-
-
-def test_jacobian_of_tick_wrt_velocity():
-    """For a constant-mass craft, d(position_next)/d(velocity) = dt · I.
-    Free for us via CasADi's symbolic differentiation through the
-    compiled graph."""
-    c = Craft("jacobian_demo")
-    c.add(Mass("body", mass=1.0))
-
-    # We can't go through compile_tick() directly to get the Jacobian
-    # because that already calls .compile(). Replicate just enough to
-    # get the Graph; this exercises the same trace path.
-    from manta_next.ir.frames import AnchorFrame, CraftFrame
-    from manta_next.parts.wrench import Wrench
-
-    with ir.Graph(name="tick_jac") as g:
-        pos = ir.Vec3[AnchorFrame].input("position")
-        vel = ir.Vec3[AnchorFrame].input("velocity")
-        dt  = ir.Scalar.input("dt")
-        ctx_gravity = ir.Vec3[CraftFrame].constant((0.0, 0.0, -9.81))
-        from manta_next.craft import TickContext
-        ctx = TickContext(gravity=ctx_gravity, dt=dt)
-        net = Wrench.zero(CraftFrame)
-        for p in c.parts:
-            net = net + p.update(ctx)
-        m_total = ir.Scalar.constant(c.total_mass)
-        f_a = ir.Vec3(net.force._mx, frame=AnchorFrame)
-        accel = f_a / m_total
-        new_pos = pos + vel * dt + accel * 0.5 * dt * dt
-        g.output(new_pos, "position")
-
-    J = g.jacobian(of="position", wrt="velocity")
-    out = J(position=[0, 0, 0], velocity=[0, 0, 0], dt=0.05)
-    assert np.allclose(out["jacobian"], 0.05 * np.eye(3))

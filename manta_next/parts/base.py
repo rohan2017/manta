@@ -77,17 +77,28 @@ class Part:
     (and later `Input`/`State`) entries, then implement `update(ctx)` to
     contribute a `Wrench` per tick.
 
+    Every Part has a `transform` parameter — a static (x, y, z) position
+    offset from its parent's frame. (Static orientation will land
+    alongside articulated joints in M3; for M2 the static rotation is
+    forced to identity.) The framework uses this transform to roll the
+    part's wrench up into its parent's frame (force-at-offset → torque
+    contribution at parent origin).
+
     Construction signature::
 
         class Mass(Part):
             mass: Scalar = Parameter(1.0)
 
-        Mass("body")                  # uses defaults
-        Mass("body", mass=2.0)        # overrides
+        Mass("body")                            # at origin
+        Mass("battery", mass=2.0,
+             transform=(0.0, 0.0, -0.5))        # 0.5 m below origin
     """
 
     # Subclasses MAY override these for static info / part-name dispatch.
     cpp_class: ClassVar[str] = ""           # filled in by future codegen backends
+
+    # Universal: every part has a static (parent → part) offset.
+    transform: "tuple[float, float, float]" = Parameter((0.0, 0.0, 0.0))
 
     def __init__(self, name: str, **overrides: Any) -> None:
         self.name = name
