@@ -13,11 +13,14 @@ from .structure.mass import Mass
 from .articulation.spinning_rotor import SpinningRotor
 from .articulation.flywheel_motor import FlywheelMotor
 from .sensor.imu import IMU
+from .sensor.position_sensor import PositionSensor
+from .actuation.thruster import Thruster
 
 __all__ = [
     "Part", "Parameter", "Input", "Output", "State", "PartUpdate",
     "Wrench",
     "Mass",
     "SpinningRotor", "FlywheelMotor",
-    "IMU",
+    "IMU", "PositionSensor",
+    "Thruster",
 ]

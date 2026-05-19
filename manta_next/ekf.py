@@ -62,16 +62,28 @@ class EKF:
         compiled_tick = craft.compile_tick(gravity_anchor=gravity_anchor)
         cf = compiled_tick.casadi_function
 
+        # Walk the tick's input names to enumerate part Inputs (order
+        # matches CompiledGraph input order — stable across compiles).
+        self._input_names: list[str] = self._discover_input_names(cf)
+        n_u = len(self._input_names)
+        # Defaults from each part's current attribute value at compile time.
+        self._u_defaults = np.array(
+            [self._input_default(name) for name in self._input_names],
+            dtype=float)
+
         x_sym  = ca.MX.sym("x",  n_ambient, 1)
+        u_sym  = ca.MX.sym("u",  n_u, 1) if n_u > 0 else ca.MX.zeros(0, 1)
         dt_sym = ca.MX.sym("dt", 1, 1)
-        x_new  = self._tick_on_flat(cf, x_sym, dt_sym)
+        x_new  = self._tick_on_flat(cf, x_sym, u_sym, dt_sym)
 
         # --- Tangent-space linearization -----------------------------------
-        # δ_out(δ_in) = boxminus( f( boxplus(x, δ_in) ), f(x) )
-        # F = ∂δ_out / ∂δ_in evaluated at δ_in = 0.
+        # δ_out(δ_in) = boxminus( f( boxplus(x, δ_in), u ), f(x, u) )
+        # F = ∂δ_out / ∂δ_in evaluated at δ_in = 0. F is independent of u
+        # in the linearization, but we keep u in the signature so callers
+        # don't have to track when it matters.
         delta_in = ca.MX.sym("delta_in", n_tangent, 1)
         x_pert    = self.spec.boxplus_sym(x_sym, delta_in)
-        x_pert_new = self._tick_on_flat(cf, x_pert, dt_sym)
+        x_pert_new = self._tick_on_flat(cf, x_pert, u_sym, dt_sym)
         delta_out = self.spec.boxminus_sym(x_pert_new, x_new)
         F_sym = ca.substitute(
             ca.jacobian(delta_out, delta_in),
@@ -79,10 +91,12 @@ class EKF:
             ca.MX.zeros(n_tangent, 1),
         )
 
-        self._f_fn = ca.Function("ekf_predict", [x_sym, dt_sym], [x_new],
-                                  ["x", "dt"], ["x_new"])
-        self._F_fn = ca.Function("ekf_F",       [x_sym, dt_sym], [F_sym],
-                                  ["x", "dt"], ["F"])
+        self._f_fn = ca.Function("ekf_predict",
+                                  [x_sym, u_sym, dt_sym], [x_new],
+                                  ["x", "u", "dt"], ["x_new"])
+        self._F_fn = ca.Function("ekf_F",
+                                  [x_sym, u_sym, dt_sym], [F_sym],
+                                  ["x", "u", "dt"], ["F"])
         # Cache for update-time use.
         self._x_sym = x_sym
         self._delta_zero_sym = ca.MX.sym("delta_zero", n_tangent, 1)
@@ -93,45 +107,65 @@ class EKF:
 
     # ----- helpers ----------------------------------------------------------
 
+    def _discover_input_names(self, cf: ca.Function) -> list[str]:
+        """Return the ordered list of part-Input names present in the
+        tick's CasADi-Function signature. Used at __init__ to size the u
+        vector and at predict() to route u-dict values into the call."""
+        out: list[str] = []
+        n_in = cf.n_in()
+        for i in range(n_in):
+            name = cf.name_in(i)
+            if name == "dt" or name in self.spec:
+                continue
+            if "." in name:
+                part_name, input_name = name.split(".", 1)
+                part = next(
+                    (p for p in self.craft.parts if p.name == part_name),
+                    None,
+                )
+                if part and input_name in part.input_declarations():
+                    out.append(name)
+                    continue
+            raise RuntimeError(
+                f"EKF: tick input {name!r} not in StateSpec and not "
+                f"recognized as a part Input.")
+        return out
+
+    def _input_default(self, full_name: str) -> float:
+        part_name, input_name = full_name.split(".", 1)
+        part = next(p for p in self.craft.parts if p.name == part_name)
+        return float(getattr(part, input_name))
+
     def _tick_on_flat(self,
                       cf: ca.Function,
                       x_sym: ca.MX,
+                      u_sym: ca.MX,
                       dt_sym: ca.MX) -> ca.MX:
         """Apply the Craft's compiled tick CasADi Function to a flat
-        ambient-state symbolic vector + dt, and concat the named outputs
-        back to a flat ambient vector in the StateSpec's slot order."""
+        ambient-state symbolic vector + flat input vector + dt, and concat
+        the named outputs back to a flat ambient vector in the StateSpec's
+        slot order. Part-Output slots in the tick result are ignored
+        (they're observables, not propagated state)."""
         n_in = cf.n_in()
         in_names  = [cf.name_in(i)  for i in range(n_in)]
-        in_sizes  = [cf.size_in(i)  for i in range(n_in)]
         n_out = cf.n_out()
         out_names = [cf.name_out(i) for i in range(n_out)]
 
+        # Build name → index in u_sym lookup once.
+        u_index = {name: i for i, name in enumerate(self._input_names)}
+
         sliced: list[ca.MX] = []
-        for name, _size in zip(in_names, in_sizes):
+        for name in in_names:
             if name == "dt":
                 sliced.append(dt_sym)
             elif name in self.spec:
                 slot = self.spec.slot(name)
                 sliced.append(x_sym[slot.offset : slot.offset + slot.dim])
+            elif name in u_index:
+                sliced.append(u_sym[u_index[name]])
             else:
-                # Treat unrecognized tick inputs as Inputs declared on a
-                # part: "<part>.<input>". The EKF doesn't take per-tick
-                # control inputs yet, so we bake each one in at its
-                # current default value (from the part instance). Future
-                # work: thread u as an additional argument to predict().
-                if "." in name:
-                    part_name, input_name = name.split(".", 1)
-                    part = next(
-                        (p for p in self.craft.parts if p.name == part_name),
-                        None,
-                    )
-                    if part and input_name in part.input_declarations():
-                        default_val = float(getattr(part, input_name))
-                        sliced.append(ca.MX(default_val))
-                        continue
                 raise RuntimeError(
-                    f"EKF: tick input {name!r} not in StateSpec and not "
-                    f"recognized as a part Input.")
+                    f"EKF: tick input {name!r} not handled.")
 
         result = cf(*sliced)
         result_by_name = (
@@ -188,14 +222,26 @@ class EKF:
 
     # ----- Predict ----------------------------------------------------------
 
-    def predict(self, dt: float, Q: np.ndarray | None = None) -> None:
+    def predict(self,
+                dt: float,
+                u: dict[str, float] | None = None,
+                Q: np.ndarray | None = None) -> None:
         """Advance the nominal state and tangent covariance by `dt`.
 
-        x       ← f(x, dt)                            (ambient)
+        x       ← f(x, u, dt)                         (ambient)
         P       ← F P Fᵀ + Q                          (tangent)
+
+        Args:
+            dt    integrator timestep.
+            u     dict of `"<part>.<input>"` → float for per-tick input
+                  values. Missing entries fall back to the part-instance
+                  default captured at construction time. With no Input
+                  slots in the craft, `u` is ignored.
+            Q     process-noise covariance (tangent-dim square).
         """
-        x_new = np.asarray(self._f_fn(self._x, dt)).reshape(-1)
-        F     = np.asarray(self._F_fn(self._x, dt))
+        u_vec = self._build_u(u)
+        x_new = np.asarray(self._f_fn(self._x, u_vec, dt)).reshape(-1)
+        F     = np.asarray(self._F_fn(self._x, u_vec, dt))
         n = self.spec.tangent_dim
         if Q is None:
             Q = np.zeros((n, n))
@@ -204,6 +250,22 @@ class EKF:
         self._P = 0.5 * (self._P + self._P.T)
         # No need to project the mean — the tick already runs through
         # SO3.boxplus in Craft's integrator and renormalizes the quat.
+
+    def _build_u(self, u: dict[str, float] | None) -> np.ndarray:
+        if not self._input_names:
+            return np.zeros(0)
+        if u is None:
+            return self._u_defaults.copy()
+        unknown = set(u) - set(self._input_names)
+        if unknown:
+            raise KeyError(
+                f"EKF.predict: unknown input name(s) {sorted(unknown)}. "
+                f"Available: {sorted(self._input_names)}")
+        out = self._u_defaults.copy()
+        for i, name in enumerate(self._input_names):
+            if name in u:
+                out[i] = float(u[name])
+        return out
 
     # ----- Update -----------------------------------------------------------
 

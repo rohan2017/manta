@@ -47,34 +47,47 @@ class TickContext:
     Exposes the symbolic craft body state + environment to part code so
     a Part's `update()` can read everything it physically depends on:
 
-      gravity          : Vec3[CraftFrame]   — world-frame gravity rotated
-                                              into craft frame each tick
-                                              (so a tilted craft sees
-                                              gravity tilt with it).
-      dt               : Scalar             — integrator timestep.
-      angular_velocity : Vec3[CraftFrame]   — body angular velocity ω,
-                                              from the input state. What
-                                              an onboard gyro reads.
-      velocity_body    : Vec3[CraftFrame]   — body linear velocity
-                                              (R^T · v_anchor), from the
-                                              input state. What an
-                                              onboard DVL reads.
+      gravity          : Vec3[CraftFrame]            — world-frame gravity
+                                                       rotated into craft
+                                                       frame each tick.
+      dt               : Scalar                      — integrator timestep.
+      position         : Vec3[AnchorFrame]           — craft origin in
+                                                       anchor frame. What a
+                                                       GPS / motion-capture
+                                                       sensor reads.
+      orientation      : Quat[AnchorFrame,CraftFrame]— craft attitude.
+      velocity         : Vec3[AnchorFrame]           — anchor-frame linear
+                                                       velocity.
+      angular_velocity : Vec3[CraftFrame]            — body angular velocity
+                                                       ω. What an onboard
+                                                       rate gyro reads.
+      velocity_body    : Vec3[CraftFrame]            — body linear velocity
+                                                       (R^T · v_anchor).
+                                                       What a DVL reads.
 
     Body-frame inertial acceleration is NOT here — it depends on the
     aggregated wrench, which is the very thing parts are contributing.
     A post-Newton-Euler sensor phase would expose it cleanly; deferred.
     """
 
-    __slots__ = ("gravity", "dt", "angular_velocity", "velocity_body")
+    __slots__ = ("gravity", "dt",
+                 "position", "orientation", "velocity",
+                 "angular_velocity", "velocity_body")
 
     def __init__(self,
                  *,
                  gravity: Vec3,
                  dt: Scalar,
+                 position: Vec3,
+                 orientation: Quat,
+                 velocity: Vec3,
                  angular_velocity: Vec3,
                  velocity_body: Vec3) -> None:
         self.gravity = gravity
         self.dt = dt
+        self.position = position
+        self.orientation = orientation
+        self.velocity = velocity
         self.angular_velocity = angular_velocity
         self.velocity_body = velocity_body
 
@@ -251,6 +264,9 @@ class Craft:
             ctx = TickContext(
                 gravity=g_craft,
                 dt=dt,
+                position=position,
+                orientation=orientation,
+                velocity=velocity,
                 angular_velocity=ang_vel,
                 velocity_body=v_body,
             )

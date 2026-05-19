@@ -256,7 +256,8 @@ def test_ekf_jacobian_for_constant_velocity_model_is_identity_plus_dt():
     ekf = EKF(c, gravity_anchor=(0.0, 0.0, -9.81))
 
     dt = 0.05
-    F = np.asarray(ekf._F_fn(ekf.x, dt))
+    u_vec = np.zeros(len(ekf._input_names))   # craft has no Inputs.
+    F = np.asarray(ekf._F_fn(ekf.x, u_vec, dt))
     # Tangent layout: position[0:3], orientation[3:6], velocity[6:9],
     # angular_velocity[9:12]. F is 12×12.
     assert F.shape == (12, 12)
