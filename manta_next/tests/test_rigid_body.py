@@ -70,7 +70,7 @@ def test_free_spinning_body_conserves_angular_momentum_z():
     tick = c.compile_tick(gravity_anchor=(0.0, 0.0, 0.0))  # no gravity
 
     omega_0 = 2.0  # rad/s about +z
-    state = Craft.initial_state(angular_velocity=(0.0, 0.0, omega_0))
+    state = c.initial_state(angular_velocity=(0.0, 0.0, omega_0))
     for _ in range(1000):
         out = tick(dt=0.001, **state)
         state = {k: out[k] for k in state}
@@ -94,7 +94,7 @@ def test_free_spinning_anisotropic_intermediate_axis():
 
     tick = c.compile_tick(gravity_anchor=(0.0, 0.0, 0.0))
 
-    state = Craft.initial_state(angular_velocity=(0.0, 0.0, 1.0))
+    state = c.initial_state(angular_velocity=(0.0, 0.0, 1.0))
     for _ in range(500):
         out = tick(dt=0.001, **state)
         state = {k: out[k] for k in state}
@@ -116,7 +116,7 @@ def test_no_position_drift_from_pure_rotation():
     c.add(Mass("b", mass=1.0, transform=(-r, 0.0, 0.0)))
 
     tick = c.compile_tick(gravity_anchor=(0.0, 0.0, 0.0))
-    state = Craft.initial_state(angular_velocity=(0.0, 0.0, 5.0))
+    state = c.initial_state(angular_velocity=(0.0, 0.0, 5.0))
     for _ in range(1000):
         out = tick(dt=0.001, **state)
         state = {k: out[k] for k in state}
@@ -136,7 +136,7 @@ def test_gravity_creates_no_torque_at_balanced_com():
     # COM = (0,0,0) by symmetry.
     tick = c.compile_tick(gravity_anchor=(0.0, 0.0, -9.81))
 
-    state = Craft.initial_state()
+    state = c.initial_state()
     for _ in range(100):
         out = tick(dt=0.01, **state)
         state = {k: out[k] for k in state}
@@ -155,7 +155,7 @@ def test_quaternion_normalization_holds_over_long_run():
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.2, 0.3)))
     tick = c.compile_tick(gravity_anchor=(0.0, 0.0, 0.0))
 
-    state = Craft.initial_state(angular_velocity=(0.3, 0.5, 0.7))
+    state = c.initial_state(angular_velocity=(0.3, 0.5, 0.7))
     for _ in range(10_000):
         out = tick(dt=0.001, **state)
         state = {k: out[k] for k in state}

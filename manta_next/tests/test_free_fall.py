@@ -15,8 +15,8 @@ from manta_next.craft import Craft
 from manta_next.parts import Mass
 
 
-def _initial_at_rest(z=0.0):
-    return Craft.initial_state(position=(0.0, 0.0, z))
+def _initial_at_rest(c: Craft, z=0.0):
+    return c.initial_state(position=(0.0, 0.0, z))
 
 
 # ---------------------------------------------------------------------------
@@ -30,7 +30,7 @@ def test_single_mass_free_fall_numerics():
 
     tick = c.compile_tick(gravity_anchor=(0.0, 0.0, -9.81))
 
-    state = _initial_at_rest(z=100.0)
+    state = _initial_at_rest(c, z=100.0)
     dt = 0.001
     n_steps = 1000   # 1 second
 
@@ -61,7 +61,7 @@ def test_multi_mass_aggregates_correctly():
     assert c.total_mass == 3.5
 
     tick = c.compile_tick(gravity_anchor=(0.0, 0.0, -9.81))
-    state = _initial_at_rest()
+    state = _initial_at_rest(c)
     for _ in range(100):
         out = tick(dt=0.01, **state)
         state = {k: out[k] for k in state}
@@ -83,7 +83,7 @@ def test_apply_gravity_false_makes_part_inert():
 
     tick = c.compile_tick(gravity_anchor=(0.0, 0.0, -9.81))
 
-    state = _initial_at_rest()
+    state = _initial_at_rest(c)
     out = tick(dt=0.1, **state)
     # F_total = 1·g (only the active mass contributes).
     # a = F / m_total = -9.81 / 11.
@@ -98,7 +98,7 @@ def test_horizontal_gravity():
     c.add(Mass("body", mass=1.0))
     tick = c.compile_tick(gravity_anchor=(2.0, 0.0, 0.0))
 
-    state = _initial_at_rest()
+    state = _initial_at_rest(c)
     for _ in range(100):
         out = tick(dt=0.01, **state)
         state = {k: out[k] for k in state}

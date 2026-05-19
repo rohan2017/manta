@@ -33,7 +33,7 @@ from . import ir
 from .ir.frames import AnchorFrame, CraftFrame
 from .ir.manifold import SO3
 from .ir.types import Mat3, Quat, Scalar, Vec3
-from .parts.base import Part
+from .parts.base import Part, PartUpdate, State
 from .parts.wrench import Wrench
 
 
@@ -228,14 +228,51 @@ class Craft:
 
             ctx = TickContext(gravity=g_craft, dt=dt)
 
-            # --- Aggregate wrenches --------------------------------------
-            net = Wrench.zero(CraftFrame)
+            # --- Per-part state plumbing ---------------------------------
+            # For each part with State declarations, create a graph input
+            # named "<part_name>.<state_name>" and rebind the attribute on
+            # the part to the symbolic node so `self.<state_name>` reads
+            # the current value inside update(). Saved Python defaults
+            # are restored after tracing so the part instance stays
+            # reusable across compiles.
+            state_input_nodes: dict[Part, dict[str, Any]] = {}
+            saved_state_attrs: dict[Part, dict[str, Any]] = {}
             for part in self._parts:
-                w_part = part.update(ctx)
-                if not isinstance(w_part, Wrench):
+                decls = part.state_declarations()
+                if not decls:
+                    continue
+                part_states: dict[str, Any] = {}
+                saved: dict[str, Any] = {}
+                for sname, sdecl in decls.items():
+                    input_name = f"{part.name}.{sname}"
+                    if sdecl.manifold != "R1":
+                        raise NotImplementedError(
+                            f"{type(part).__name__}('{part.name}'): "
+                            f"State manifold {sdecl.manifold!r} not supported "
+                            f"in M3.")
+                    sym = ir.Scalar.input(input_name)
+                    part_states[sname] = sym
+                    saved[sname] = getattr(part, sname)
+                    object.__setattr__(part, sname, sym)
+                state_input_nodes[part] = part_states
+                saved_state_attrs[part] = saved
+
+            # --- Aggregate wrenches + collect state updates --------------
+            net = Wrench.zero(CraftFrame)
+            new_state_outputs: list[tuple[str, Any]] = []
+            for part in self._parts:
+                result = part.update(ctx)
+                if isinstance(result, Wrench):
+                    w_part = result
+                    new_state = {}
+                elif isinstance(result, PartUpdate):
+                    w_part = result.wrench
+                    new_state = result.new_state
+                else:
                     raise TypeError(
                         f"{type(part).__name__}('{part.name}').update(): "
-                        f"must return a Wrench, got {type(w_part).__name__}")
+                        f"must return a Wrench or PartUpdate, got "
+                        f"{type(result).__name__}")
                 if w_part.frame is not CraftFrame:
                     from .ir.frames import FrameError, _capture_user_source
                     raise FrameError(
@@ -244,8 +281,28 @@ class Craft:
                         got=f"frame={w_part.frame.__name__}",
                         source=_capture_user_source(),
                     )
+
+                # Validate state writes against declarations + queue outputs.
+                decls = part.state_declarations()
+                unknown = set(new_state) - set(decls)
+                if unknown:
+                    raise KeyError(
+                        f"{type(part).__name__}('{part.name}').update(): "
+                        f"unknown state slot(s) in new_state: {sorted(unknown)}. "
+                        f"Declared: {sorted(decls)}")
+                for sname in decls:
+                    val = new_state.get(sname, state_input_nodes[part][sname])
+                    new_state_outputs.append((f"{part.name}.{sname}", val))
+
+                # Aggregate wrench (in CraftFrame, transformed for offset).
                 w_craft = _wrench_to_craft(w_part, part.transform)
                 net = net + w_craft
+
+            # Restore the part attributes to their Python defaults so the
+            # part instance is reusable across compiles.
+            for part, saved in saved_state_attrs.items():
+                for sname, sval in saved.items():
+                    object.__setattr__(part, sname, sval)
 
             # --- Newton-Euler --------------------------------------------
             F_craft   = net.force         # Vec3[CraftFrame]
@@ -298,24 +355,43 @@ class Craft:
             g.output(new_orientation, "orientation")
             g.output(new_velocity,    "velocity")
             g.output(new_ang_vel,     "angular_velocity")
+            # Per-part state outputs (names like "motor.angle").
+            for out_name, out_val in new_state_outputs:
+                g.output(out_val, out_name)
 
         return g.compile()
 
     # ----- Helpers --------------------------------------------------------
 
-    @staticmethod
-    def initial_state(*,
-                      position=(0.0, 0.0, 0.0),
-                      orientation=(1.0, 0.0, 0.0, 0.0),
-                      velocity=(0.0, 0.0, 0.0),
-                      angular_velocity=(0.0, 0.0, 0.0)) -> dict:
-        """Convenience builder for the state dict passed to the tick fn."""
-        return {
-            "position":         np.asarray(position, dtype=float),
-            "orientation":      np.asarray(orientation, dtype=float),
-            "velocity":         np.asarray(velocity, dtype=float),
-            "angular_velocity": np.asarray(angular_velocity, dtype=float),
+    def initial_state(self, **overrides) -> dict:
+        """Build the initial state dict for the compiled tick.
+
+        Returns a dict with the rigid-body slots (position, orientation,
+        velocity, angular_velocity) AND a `"<part_name>.<state_name>"`
+        entry for every part that declares state. Defaults come from each
+        State declaration's `init`; keyword overrides replace them by name.
+        """
+        state: dict[str, Any] = {
+            "position":         np.asarray((0.0, 0.0, 0.0), dtype=float),
+            "orientation":      np.asarray((1.0, 0.0, 0.0, 0.0), dtype=float),
+            "velocity":         np.asarray((0.0, 0.0, 0.0), dtype=float),
+            "angular_velocity": np.asarray((0.0, 0.0, 0.0), dtype=float),
         }
+        for part in self._parts:
+            for sname, sdecl in part.state_declarations().items():
+                state[f"{part.name}.{sname}"] = float(sdecl.init)
+        unknown = set(overrides) - set(state)
+        if unknown:
+            raise KeyError(
+                f"Craft.initial_state: unknown slot(s) {sorted(unknown)}. "
+                f"Available: {sorted(state)}")
+        for k, v in overrides.items():
+            current = state[k]
+            if isinstance(current, np.ndarray):
+                state[k] = np.asarray(v, dtype=float)
+            else:
+                state[k] = float(v)
+        return state
 
     # ----- Introspection --------------------------------------------------
 

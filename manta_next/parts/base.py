@@ -2,32 +2,43 @@
 
 A Part is a Python class that:
 
-  * Declares its parameters at class scope using `Parameter(default)`,
-    optionally typed via PEP-526 annotations (which are advisory only —
-    runtime behavior comes from the assignment value, not the annotation).
-  * Receives any per-tick external inputs via `Input(default)` declarations.
-  * Implements `update(ctx) -> Wrench[CraftFrame]` to contribute a wrench
-    each tick. (Future extensions: state declarations, multi-output, etc.)
+  * Declares its parameters at class scope using `Parameter(default)`.
+  * Declares mutable per-tick state via `State(init=..., manifold=...)`.
+  * Receives any per-tick external inputs via `Input(default)` (reserved
+    for M4 wiring).
+  * Implements `update(ctx) -> Wrench | PartUpdate` to contribute a wrench
+    each tick (and optionally write new state).
 
 Example::
 
-    class Mass(Part):
-        mass: ir.Scalar = Parameter(1.0)
-        apply_gravity: bool = Parameter(True)
+    class FlywheelMotor(Part):
+        I_axial:    float  = Parameter(0.01)
+        torque_cmd: float  = Parameter(0.0)
+        axis:       tuple  = Parameter((0.0, 0.0, 1.0))
+
+        angle: Scalar = State(init=0.0)
+        rate:  Scalar = State(init=0.0)
 
         def update(self, ctx):
-            force = ctx.gravity * self.mass if self.apply_gravity else 0
-            return Wrench.from_force_at(force, point_in_part=zero)
+            accel = self.torque_cmd / self.I_axial
+            new_rate  = self.rate + accel * ctx.dt
+            new_angle = self.angle + self.rate * ctx.dt
+            # Reaction torque on parent.
+            reaction = ir.Vec3[CraftFrame].constant(self.axis) * (-self.torque_cmd)
+            return PartUpdate(
+                wrench=Wrench(reaction, ...),
+                new_state={"angle": new_angle, "rate": new_rate},
+            )
+
+Inside `update`, `self.angle` and `self.rate` read the *current* tick's
+symbolic state nodes — the tracer rebinds them before calling update()
+and restores the Python defaults afterward. State omitted from
+`new_state` is passed through unchanged.
 
 The `_declarations()` walk collects everything subclasses contribute,
-including those inherited from parents. Construction-time overrides
-(`Mass("body", mass=2.0)`) replace defaults. Parameters end up as plain
-attributes on the instance — they're constants from the IR's perspective.
-
-`Input`s also become attributes, but the tracer (in M2+) will rewrap them
-as symbolic placeholders that the compiled tick function exposes as
-named inputs. For M1 we don't have Inputs yet — only Parameters — so
-the declaration class exists but isn't tracer-wired.
+including parents. Construction-time overrides (`Motor("m", I_axial=0.02)`)
+replace defaults; State() declarations also accept an init override so
+the initial value can vary per instance.
 """
 
 from __future__ import annotations
@@ -62,8 +73,66 @@ class Parameter(_Declaration):
 
 class Input(_Declaration):
     """Per-tick external value. Becomes a named input on the compiled tick.
-    M1 placeholder: not yet wired into the tracer.
+    Reserved for M4: Zenoh-fed and controller-fed inputs into the trace.
     """
+
+
+class State(_Declaration):
+    """Per-tick state slot.
+
+    Declared at class scope. The framework:
+      * Creates a graph input named "<part_name>.<state_name>" each compile.
+      * Rebinds the part attribute to that input node before calling
+        `update()`, so `self.<state_name>` reads the symbolic current value.
+      * Reads the new value from `PartUpdate.new_state["<state_name>"]`
+        and emits it as a graph output of the same name. Omitted states
+        pass through unchanged.
+
+    Args:
+        init      Python value (default initial value across compiles).
+        manifold  Tag describing how the state composes / what its tangent
+                  space looks like. M3 supports 'R1' (Scalar). 'R3', 'SO3',
+                  and 'RigidBody' will be added alongside the EKF
+                  integration in a later milestone.
+    """
+
+    __slots__ = ("init", "manifold")
+
+    def __init__(self, init, manifold: str = "R1") -> None:
+        if manifold not in ("R1",):
+            raise NotImplementedError(
+                f"State.manifold={manifold!r} not yet supported. "
+                f"M3 ships 'R1' only.")
+        super().__init__(default=init)
+        self.init = init
+        self.manifold = manifold
+
+
+# ---------------------------------------------------------------------------
+# PartUpdate — return type for Part.update()
+# ---------------------------------------------------------------------------
+
+class PartUpdate:
+    """Bundle returned by `Part.update(ctx)` describing this tick's
+    contributions: a wrench (force + torque on parent in CraftFrame) plus
+    new values for any declared `State` slots.
+
+    Construction is positional or keyword::
+
+        return PartUpdate(wrench, {"angle": new_angle})
+        return PartUpdate(wrench=w, new_state={"angle": a, "rate": r})
+
+    Stateless parts can return a bare `Wrench` instead — the framework
+    wraps it as `PartUpdate(wrench=w, new_state={})` automatically.
+    """
+
+    __slots__ = ("wrench", "new_state")
+
+    def __init__(self, wrench=None, new_state: dict | None = None) -> None:
+        if wrench is None:
+            raise TypeError("PartUpdate: wrench is required")
+        self.wrench = wrench
+        self.new_state = dict(new_state) if new_state else {}
 
 
 # ---------------------------------------------------------------------------
@@ -115,8 +184,10 @@ class Part:
                 f"{sorted(unknown)}. Declared: {sorted(decls)}")
         for attr_name, decl in decls.items():
             value = overrides.get(attr_name, decl.default)
-            # Just store as a plain attribute. Tracer reads attribute values
-            # at update() time; Parameter values stay constant.
+            # Plain attribute. For State, this is the init value used both
+            # as the seed in Craft.initial_state() and as the value the
+            # attribute holds OUTSIDE of a trace. Inside a trace, the
+            # framework rebinds it to the symbolic input node.
             setattr(self, attr_name, value)
 
     @classmethod
@@ -130,6 +201,12 @@ class Part:
                 if isinstance(value, _Declaration):
                     decls[name] = value
         return decls
+
+    @classmethod
+    def state_declarations(cls) -> dict[str, "State"]:
+        """Just the State entries (subset of _declarations)."""
+        return {n: d for n, d in cls._declarations().items()
+                if isinstance(d, State)}
 
     # --- Required override ------------------------------------------------
 
