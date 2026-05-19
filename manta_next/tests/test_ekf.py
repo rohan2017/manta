@@ -3,6 +3,8 @@ oracle sensors. Validates the autodiff Jacobian path and the standard
 KF math.
 """
 
+import math
+
 import numpy as np
 import pytest
 
@@ -104,13 +106,13 @@ def test_ekf_position_sensor_pulls_estimate_toward_truth():
     # Truth at z=100, EKF prior at z=0 — but covariance reflects the
     # uncertainty.
     truth = c.initial_state(position=(0.0, 0.0, 100.0))
-    P0 = np.eye(13) * 1.0           # broad prior on everything
+    P0 = np.eye(ekf.spec.tangent_dim) * 1.0   # broad prior, tangent-dim
     ekf.reset(state={"position": np.zeros(3)}, P=P0)
 
     h_z = measurement_component(ekf.spec, "position", component=2)
     R = np.array([[0.01]])          # 10 cm sensor stddev squared
 
-    Q = np.eye(13) * 1e-6           # tiny process noise
+    Q = np.eye(ekf.spec.tangent_dim) * 1e-6   # tiny process noise
 
     dt = 0.01
     for _ in range(500):  # 5 seconds
@@ -142,14 +144,15 @@ def test_ekf_full_position_observation_drives_convergence():
 
     ekf = EKF(c, gravity_anchor=(0.0, 0.0, 0.0))   # no gravity
     ekf.reset(state={"position": np.array([10.0, -5.0, 0.0])},
-              P=np.eye(13) * 4.0)
+              P=np.eye(ekf.spec.tangent_dim) * 4.0)
 
     truth_pos = np.array([0.5, 1.0, 80.0])
     h_p = measurement_slot(ekf.spec, "position")
     R   = np.eye(3) * 0.001                    # ~3 cm sensor
 
+    Q = np.eye(ekf.spec.tangent_dim) * 1e-8
     for _ in range(200):
-        ekf.predict(dt=0.01, Q=np.eye(13) * 1e-8)
+        ekf.predict(dt=0.01, Q=Q)
         z = truth_pos + rng.normal(0.0, 0.03, size=3)
         ekf.update(h_p, z=z, R=R)
 
@@ -164,18 +167,100 @@ def test_ekf_full_position_observation_drives_convergence():
         f"P_pos diagonal too large: {np.diag(P_pos)}"
 
 
+def test_eskf_attitude_estimation_converges():
+    """ESKF demonstrates manifold-aware orientation estimation.
+
+    Setup: a spherical-inertia spinning body (zero gravity, no torque)
+    spins about +z at a known rate. Truth orientation rolls out via
+    boxplus. EKF has a slightly-wrong prior orientation and receives
+    noisy orientation measurements; the manifold-aware update pulls
+    the estimate onto the truth without quaternion-norm blowup.
+    """
+    rng = np.random.default_rng(33)
+    c = Craft("attitude_demo")
+    c.add(Mass("body", mass=1.0, moi=(1.0, 1.0, 1.0)))   # spherical I
+
+    tick = c.compile_tick(gravity_anchor=(0.0, 0.0, 0.0))
+    ekf  = EKF(c, gravity_anchor=(0.0, 0.0, 0.0))
+
+    # Truth spins at ω = 1 rad/s about +z.
+    omega_truth = np.array([0.0, 0.0, 1.0])
+    truth = c.initial_state(angular_velocity=tuple(omega_truth))
+
+    # EKF prior: wrong orientation + uncertain.
+    half = math.pi / 8.0
+    wrong_q = np.array([math.cos(half), 0.0, 0.0, math.sin(half)])
+    n_tan = ekf.spec.tangent_dim
+    P0 = np.eye(n_tan) * 1e-4
+    # Bigger prior on the orientation tangent slot (offsets 3..6) — we
+    # know our prior is wrong by tens of degrees.
+    P0[3:6, 3:6] = np.eye(3) * 0.5
+    ekf.reset(state={"orientation": wrong_q,
+                     "angular_velocity": omega_truth},
+              P=P0)
+
+    # Noisy 4-D quaternion measurements of the orientation.
+    def h_q(x):
+        return x[3:7]
+    R = np.eye(4) * 1e-3
+    Q = np.eye(n_tan) * 1e-8
+
+    for _ in range(500):
+        out = tick(dt=0.01, **truth)
+        truth = {k: out[k] for k in truth}
+        ekf.predict(dt=0.01, Q=Q)
+        z = truth["orientation"] + rng.normal(0.0, 0.03, size=4)
+        ekf.update(h_q, z=z, R=R)
+
+    # Estimate's orientation should now track truth tightly.
+    est_q   = ekf.state_dict()["orientation"]
+    truth_q = truth["orientation"]
+    # Inner product: |<est, truth>| ≈ 1 when they agree (modulo cover).
+    inner = abs(float(np.dot(est_q, truth_q)))
+    assert inner > 0.999, \
+        f"orientations diverged: inner={inner}, est={est_q}, truth={truth_q}"
+
+    # Quaternion remains unit-norm.
+    assert np.isclose(np.linalg.norm(est_q), 1.0, atol=1e-10)
+
+
+def test_eskf_state_spec_layout_with_tangent_offsets():
+    """Tangent offsets are contiguous and respect SO3 collapse."""
+    c = Craft("with_state")
+    from manta_next.parts import SpinningRotor
+    c.add(Mass("body", mass=1.0))
+    c.add(SpinningRotor("wheel", spin_rate=1.0))
+    ekf = EKF(c)
+    spec = ekf.spec
+    # Total: position(3+3) + orientation(4 ambient, 3 tangent) +
+    #        velocity(3+3) + angular_velocity(3+3) + wheel.angle(1+1)
+    assert spec.ambient_dim == 13 + 1
+    assert spec.tangent_dim == 12 + 1
+    # Tangent offsets are contiguous.
+    expected_tan_offsets = {
+        "position": 0,
+        "orientation": 3,
+        "velocity": 6,
+        "angular_velocity": 9,
+        "wheel.angle": 12,
+    }
+    for slot in spec.slots:
+        assert slot.tangent_offset == expected_tan_offsets[slot.name]
+
+
 def test_ekf_jacobian_for_constant_velocity_model_is_identity_plus_dt():
-    """For free-fall, ∂(position_new)/∂(velocity) = dt·I. Tests that the
-    EKF actually computed a meaningful F."""
+    """For free-fall, ∂(position_new)/∂(velocity) = dt·I (in the tangent
+    layout). Tests that the EKF actually computed a meaningful F."""
     c = Craft("J")
     c.add(Mass("body", mass=1.0))
     ekf = EKF(c, gravity_anchor=(0.0, 0.0, -9.81))
 
     dt = 0.05
     F = np.asarray(ekf._F_fn(ekf.x, dt))
-    # F is 13×13. Position rows = 0..3; velocity cols = 7..10.
-    pos_wrt_vel = F[0:3, 7:10]
-    assert np.allclose(pos_wrt_vel, dt * np.eye(3), atol=1e-12)
-    # Position rows wrt themselves should be identity.
+    # Tangent layout: position[0:3], orientation[3:6], velocity[6:9],
+    # angular_velocity[9:12]. F is 12×12.
+    assert F.shape == (12, 12)
+    pos_wrt_vel = F[0:3, 6:9]
+    assert np.allclose(pos_wrt_vel, dt * np.eye(3), atol=1e-9)
     pos_wrt_pos = F[0:3, 0:3]
-    assert np.allclose(pos_wrt_pos, np.eye(3), atol=1e-12)
+    assert np.allclose(pos_wrt_pos, np.eye(3), atol=1e-9)

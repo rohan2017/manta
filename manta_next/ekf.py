@@ -1,32 +1,31 @@
-"""EKF — Extended Kalman Filter operating on a manta_next Craft.
+"""EKF — Error-state (manifold-aware) Extended Kalman Filter on a Craft.
 
 Design intent:
 
-  * The user defines a Craft as usual (parts + state).
+  * The user defines a Craft as usual.
   * They wrap it: `ekf = EKF(craft)`.
-  * Internally the EKF compiles two things via CasADi:
-      - the predict function f(x, dt) → x_new from the Craft's tick;
-      - the Jacobian F(x, dt) = ∂f/∂x, symbolically differentiated.
-    Compilation happens once at construction; the resulting CasADi
-    Functions are reused for every predict/update step.
-  * User loop:
+  * Internally the EKF compiles three CasADi Functions:
+      - the nominal predict f(x_ambient, dt) → x_new_ambient;
+      - the tangent-space F(x, dt) = ∂δ_out / ∂δ_in evaluated at δ_in=0,
+        where δ_out = boxminus(f(boxplus(x, δ_in)), f(x));
+      - the tangent layout's dimensions for sizing P / Q.
+  * State is held in two parts:
+      - mean `x` lives on the manifold (ambient form, e.g. q stays unit).
+      - covariance `P` lives on the tangent (no redundant radial direction
+        on SO(3); 12-D rigid-body block instead of 13-D).
+  * Per step:
         ekf.predict(dt, Q)
-        ekf.update(measurement_fn, z, R)
-        ...
-    `measurement_fn` is a Python callable that takes a StateSpec and a
-    state dict and returns (z_pred_callable, h_jacobian_callable). For
-    M4 we provide a helper `state_slot_measurement(name)` that picks a
-    scalar/vector slot directly out of state (e.g., "z position").
+        ekf.update(h_sym, z, R)
+    `h_sym` is `MX → MX` returning the symbolic measurement vector h(x).
+    The EKF builds the tangent-space H = ∂h_pert/∂δ at δ=0 internally,
+    so user h doesn't need to know about tangents.
+  * Update applies via `x ← boxplus(x, K · y)` — keeps q on the unit
+    sphere by construction; no defensive renormalization needed.
 
 Scope notes:
-  * The ambient state vector includes the orientation quaternion as 4
-    floats; covariance is sized to the AMBIENT dim. That's the simple-but-
-    imperfect formulation; manifold-aware ESKF (with 3-dim tangent for
-    SO3) is M5.
-  * Single-craft only for M4. Multi-craft via concatenated StateSpec
-    arrives with the World/Coupling layer.
-  * No external inputs (no Input declarations yet); the predict function
-    ingests only (state, dt).
+  * Single craft only. Multi-craft via concatenated StateSpec lands with
+    the World/Coupling layer.
+  * No external Inputs into the predict yet (no Input declarations).
 """
 
 from __future__ import annotations
@@ -41,7 +40,12 @@ from .state_spec import StateSpec
 
 
 class EKF:
-    """A simple ambient-state EKF over a manta_next Craft."""
+    """Error-state EKF over a manta_next Craft.
+
+    Constructor compiles the predict + F functions once; per-step
+    measurement updates re-build h's symbolic Jacobian on the fly
+    (cheap since the graph is small).
+    """
 
     def __init__(self,
                  craft,
@@ -51,88 +55,95 @@ class EKF:
         self.craft = craft
         self.spec  = StateSpec.from_craft(craft)
 
-        # The Craft's tick is a CompiledGraph that takes named inputs.
-        # For the EKF we want it as a flat-vector function:
-        #     f(x_flat, dt) → x_flat_new
-        # Build that on top of the craft's compiled tick.
+        n_ambient = self.spec.ambient_dim
+        n_tangent = self.spec.tangent_dim
+
+        # --- Lift the Craft's tick to a flat ambient → ambient function -----
         compiled_tick = craft.compile_tick(gravity_anchor=gravity_anchor)
         cf = compiled_tick.casadi_function
-        # cf input order: as registered on the graph. We rely on the fact
-        # that compile_tick declares them in the same order StateSpec uses
-        # for the rigid-body block, followed by per-part states in declaration
-        # order. dt is also an input.
-        n_in  = cf.n_in()
-        in_names  = [cf.name_in(i)  for i in range(n_in)]
-        in_sizes  = [cf.size_in(i)  for i in range(n_in)]
-        n_out = cf.n_out()
-        out_names = [cf.name_out(i) for i in range(n_out)]
 
-        # Build a symbolic flat state vector x, plus dt.
-        x_sym  = ca.MX.sym("x",  self.spec.ambient_dim, 1)
+        x_sym  = ca.MX.sym("x",  n_ambient, 1)
         dt_sym = ca.MX.sym("dt", 1, 1)
+        x_new  = self._tick_on_flat(cf, x_sym, dt_sym)
 
-        # Slice x_sym into the input order the compiled tick expects.
-        sliced_args: list[ca.MX] = []
-        for name, size in zip(in_names, in_sizes):
-            if name == "dt":
-                sliced_args.append(dt_sym)
-                continue
-            if name in self.spec:
-                slot = self.spec.slot(name)
-                chunk = x_sym[slot.offset : slot.offset + slot.dim]
-                sliced_args.append(chunk)
-            else:
-                raise RuntimeError(
-                    f"EKF: tick input {name!r} not found in StateSpec.")
-
-        result = cf(*sliced_args)
-        # Concat outputs in StateSpec order to get the new flat state.
-        result_by_name = (
-            {out_names[0]: result}
-            if n_out == 1
-            else {n: result[i] for i, n in enumerate(out_names)}
+        # --- Tangent-space linearization -----------------------------------
+        # δ_out(δ_in) = boxminus( f( boxplus(x, δ_in) ), f(x) )
+        # F = ∂δ_out / ∂δ_in evaluated at δ_in = 0.
+        delta_in = ca.MX.sym("delta_in", n_tangent, 1)
+        x_pert    = self.spec.boxplus_sym(x_sym, delta_in)
+        x_pert_new = self._tick_on_flat(cf, x_pert, dt_sym)
+        delta_out = self.spec.boxminus_sym(x_pert_new, x_new)
+        F_sym = ca.substitute(
+            ca.jacobian(delta_out, delta_in),
+            delta_in,
+            ca.MX.zeros(n_tangent, 1),
         )
-        new_chunks = []
-        for slot in self.spec.slots:
-            if slot.name not in result_by_name:
-                raise RuntimeError(
-                    f"EKF: tick output {slot.name!r} missing.")
-            chunk = result_by_name[slot.name]
-            # Ensure column vector.
-            if chunk.shape == (1, 1):
-                new_chunks.append(chunk)
-            elif chunk.shape == (1,):
-                new_chunks.append(chunk)
-            else:
-                new_chunks.append(ca.reshape(chunk, slot.dim, 1))
-        x_new = ca.vertcat(*new_chunks)
-
-        # F = ∂x_new/∂x evaluated symbolically — sparse-aware via CasADi.
-        F_sym = ca.jacobian(x_new, x_sym)
 
         self._f_fn = ca.Function("ekf_predict", [x_sym, dt_sym], [x_new],
                                   ["x", "dt"], ["x_new"])
         self._F_fn = ca.Function("ekf_F",       [x_sym, dt_sym], [F_sym],
                                   ["x", "dt"], ["F"])
-        # Cache the symbolic state vector so update() can build h(x) easily.
+        # Cache for update-time use.
         self._x_sym = x_sym
+        self._delta_zero_sym = ca.MX.sym("delta_zero", n_tangent, 1)
 
-        # State + covariance, initialized at compile time. The user can
-        # overwrite via reset(...).
+        # --- Initial state + covariance ------------------------------------
         self._x = self.spec.pack(craft.initial_state())
-        self._P = np.eye(self.spec.ambient_dim) * 1e-2
+        self._P = np.eye(n_tangent) * 1e-2
 
-    # ---- Accessors ------------------------------------------------------
+    # ----- helpers ----------------------------------------------------------
+
+    def _tick_on_flat(self,
+                      cf: ca.Function,
+                      x_sym: ca.MX,
+                      dt_sym: ca.MX) -> ca.MX:
+        """Apply the Craft's compiled tick CasADi Function to a flat
+        ambient-state symbolic vector + dt, and concat the named outputs
+        back to a flat ambient vector in the StateSpec's slot order."""
+        n_in = cf.n_in()
+        in_names  = [cf.name_in(i)  for i in range(n_in)]
+        in_sizes  = [cf.size_in(i)  for i in range(n_in)]
+        n_out = cf.n_out()
+        out_names = [cf.name_out(i) for i in range(n_out)]
+
+        sliced: list[ca.MX] = []
+        for name, _size in zip(in_names, in_sizes):
+            if name == "dt":
+                sliced.append(dt_sym)
+            elif name in self.spec:
+                slot = self.spec.slot(name)
+                sliced.append(x_sym[slot.offset : slot.offset + slot.dim])
+            else:
+                raise RuntimeError(f"EKF: tick input {name!r} not in StateSpec")
+
+        result = cf(*sliced)
+        result_by_name = (
+            {out_names[0]: result}
+            if n_out == 1
+            else {n: result[i] for i, n in enumerate(out_names)}
+        )
+
+        chunks: list[ca.MX] = []
+        for slot in self.spec.slots:
+            if slot.name not in result_by_name:
+                raise RuntimeError(f"EKF: tick output {slot.name!r} missing")
+            chunk = result_by_name[slot.name]
+            if chunk.shape != (slot.dim, 1):
+                chunk = ca.reshape(chunk, slot.dim, 1)
+            chunks.append(chunk)
+        return ca.vertcat(*chunks)
+
+    # ----- Accessors --------------------------------------------------------
 
     @property
     def x(self) -> np.ndarray:
-        """The current (ambient) state vector. Use `state_dict()` for the
+        """The current ambient state vector. Use `state_dict()` for the
         per-slot keyed view."""
         return self._x.copy()
 
     @property
     def P(self) -> np.ndarray:
-        """The current covariance matrix (ambient × ambient)."""
+        """The current tangent-space covariance matrix."""
         return self._P.copy()
 
     def state_dict(self) -> dict[str, Any]:
@@ -141,38 +152,43 @@ class EKF:
     def reset(self, *,
               state: dict | None = None,
               P: np.ndarray | None = None) -> None:
-        """Reset the EKF state and/or covariance."""
+        """Reset the EKF state and/or covariance.
+
+        `P` must be tangent-dimensioned (spec.tangent_dim × spec.tangent_dim).
+        """
         if state is not None:
             full = self.craft.initial_state()
             full.update(state)
             self._x = self.spec.pack(full)
         if P is not None:
             P = np.asarray(P, dtype=float)
-            assert P.shape == (self.spec.ambient_dim, self.spec.ambient_dim)
+            expected = (self.spec.tangent_dim, self.spec.tangent_dim)
+            if P.shape != expected:
+                raise ValueError(
+                    f"EKF.reset: P shape {P.shape} doesn't match tangent "
+                    f"dim {expected}")
             self._P = P.copy()
 
-    # ---- Predict --------------------------------------------------------
+    # ----- Predict ----------------------------------------------------------
 
     def predict(self, dt: float, Q: np.ndarray | None = None) -> None:
-        """Advance the state and covariance by `dt`.
+        """Advance the nominal state and tangent covariance by `dt`.
 
-        State: x ← f(x, dt).
-        Covariance: P ← F P Fᵀ + Q.
+        x       ← f(x, dt)                            (ambient)
+        P       ← F P Fᵀ + Q                          (tangent)
         """
         x_new = np.asarray(self._f_fn(self._x, dt)).reshape(-1)
         F     = np.asarray(self._F_fn(self._x, dt))
+        n = self.spec.tangent_dim
         if Q is None:
-            Q = np.zeros((self.spec.ambient_dim, self.spec.ambient_dim))
+            Q = np.zeros((n, n))
         self._x = x_new
         self._P = F @ self._P @ F.T + Q
-        # Symmetrize.
         self._P = 0.5 * (self._P + self._P.T)
-        # Ambient EKF: renormalize any SO3 slots so the quaternion stays on
-        # the unit sphere despite floating-point drift in the tick + the
-        # additive structure of P·Fᵀ·F that doesn't preserve unit norm.
-        self._renormalize_manifold_slots()
+        # No need to project the mean — the tick already runs through
+        # SO3.boxplus in Craft's integrator and renormalizes the quat.
 
-    # ---- Update --------------------------------------------------------
+    # ----- Update -----------------------------------------------------------
 
     def update(self,
                h_sym: Callable[[ca.MX], ca.MX],
@@ -181,20 +197,15 @@ class EKF:
         """Apply a measurement.
 
         Args:
-            h_sym  — a function `MX → MX` that, given the symbolic state
-                     vector x, returns a symbolic measurement vector
-                     h(x). Used to extract a CasADi Function for the
-                     measurement and its Jacobian.
+            h_sym  — a function `MX → MX` that, given the symbolic ambient
+                     state vector x, returns h(x) (the model prediction).
             z      — the observed measurement (numpy 1-D).
-            R      — measurement noise covariance (numpy 2-D).
+            R      — measurement noise covariance.
 
-        Updates state and covariance via the standard EKF gain formula::
-
-            y = z - h(x)
-            S = H P Hᵀ + R
-            K = P Hᵀ S⁻¹
-            x ← x + K y
-            P ← (I - K H) P (I - K H)ᵀ + K R Kᵀ      (Joseph form)
+        The EKF builds the tangent-space H = ∂h_pert/∂δ at δ=0 internally,
+        applies the standard Kalman gain on the tangent, and projects the
+        correction back through `boxplus(x, K·y)`. Joseph form keeps P
+        PSD over long runs.
         """
         z = np.asarray(z, dtype=float).reshape(-1)
         R = np.asarray(R, dtype=float)
@@ -203,12 +214,22 @@ class EKF:
                 f"EKF.update: R shape {R.shape} doesn't match z size {z.size}")
 
         h_mx = h_sym(self._x_sym)
-        # Allow callers to return a scalar or 1-D MX; reshape to column.
         h_mx = ca.reshape(h_mx, h_mx.numel(), 1)
-        H_mx = ca.jacobian(h_mx, self._x_sym)
+
+        # Tangent-space H: how does h change in response to a δ-perturbation
+        # of x?  H = ∂h(boxplus(x, δ))/∂δ at δ=0.
+        delta = ca.MX.sym("delta_h", self.spec.tangent_dim, 1)
+        x_pert = self.spec.boxplus_sym(self._x_sym, delta)
+        h_pert = h_sym(x_pert)
+        h_pert = ca.reshape(h_pert, h_pert.numel(), 1)
+        H_sym = ca.substitute(
+            ca.jacobian(h_pert, delta),
+            delta,
+            ca.MX.zeros(self.spec.tangent_dim, 1),
+        )
 
         h_fn = ca.Function("h_fn", [self._x_sym], [h_mx])
-        H_fn = ca.Function("H_fn", [self._x_sym], [H_mx])
+        H_fn = ca.Function("H_fn", [self._x_sym], [H_sym])
 
         h_x = np.asarray(h_fn(self._x)).reshape(-1)
         H   = np.asarray(H_fn(self._x))
@@ -222,37 +243,15 @@ class EKF:
         # K = P Hᵀ S⁻¹ via solve for numerical stability.
         K = np.linalg.solve(S.T, (self._P @ H.T).T).T
 
-        self._x = self._x + K @ y
+        # Apply tangent correction to the manifold-valued mean.
+        delta_x = K @ y
+        self._x = self.spec.boxplus(self._x, delta_x)
 
         # Joseph form: P = (I − KH) P (I − KH)ᵀ + K R Kᵀ.
-        I = np.eye(self.spec.ambient_dim)
+        I = np.eye(self.spec.tangent_dim)
         IKH = I - K @ H
         self._P = IKH @ self._P @ IKH.T + K @ R @ K.T
         self._P = 0.5 * (self._P + self._P.T)
-        self._renormalize_manifold_slots()
-
-    # ---- Manifold maintenance ------------------------------------------
-
-    def _renormalize_manifold_slots(self) -> None:
-        """Project SO(3) slot back onto the unit-norm quaternion manifold.
-
-        Pure ambient-EKF formulation: the Kalman update can pull q off the
-        unit sphere; we renormalize to recover. The covariance keeps its
-        ambient form (a 4×4 block on the quaternion); a proper ESKF would
-        carry a 3-DOF tangent covariance instead. M5 work.
-        """
-        for slot in self.spec.slots:
-            if slot.manifold != "SO3":
-                continue
-            chunk = self._x[slot.offset : slot.offset + slot.dim]
-            n = float(np.linalg.norm(chunk))
-            if n > 1e-12:
-                self._x[slot.offset : slot.offset + slot.dim] = chunk / n
-            else:
-                # Degenerate — reset to identity rotation. Shouldn't happen
-                # in practice but avoids NaN propagation.
-                self._x[slot.offset : slot.offset + slot.dim] = np.array(
-                    [1.0, 0.0, 0.0, 0.0])
 
 
 # ---------------------------------------------------------------------------
@@ -264,8 +263,7 @@ def measurement_slot(spec: StateSpec, name: str):
 
     Equivalent to:  h(x) = x[slot.offset : slot.offset + slot.dim].
     Useful for synthetic / oracle sensors that observe a single state
-    slot — typically only realistic for testing, but lets the EKF
-    plumbing be exercised before fully realistic sensor parts arrive.
+    slot — primarily for testing the EKF plumbing.
     """
     slot = spec.slot(name)
     def h_sym(x):
