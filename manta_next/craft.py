@@ -257,6 +257,23 @@ class Craft:
                 state_input_nodes[part] = part_states
                 saved_state_attrs[part] = saved
 
+            # --- Per-part Input plumbing ---------------------------------
+            # Same rebind trick as State, but inputs don't get an output
+            # in the tick — they're read-only from the part's perspective,
+            # and the user supplies values each step.
+            saved_input_attrs: dict[Part, dict[str, Any]] = {}
+            for part in self._parts:
+                idecls = part.input_declarations()
+                if not idecls:
+                    continue
+                saved: dict[str, Any] = {}
+                for iname, idecl in idecls.items():
+                    input_name = f"{part.name}.{iname}"
+                    sym = ir.Scalar.input(input_name)
+                    saved[iname] = getattr(part, iname)
+                    object.__setattr__(part, iname, sym)
+                saved_input_attrs[part] = saved
+
             # --- Aggregate wrenches + collect state updates --------------
             net = Wrench.zero(CraftFrame)
             new_state_outputs: list[tuple[str, Any]] = []
@@ -303,6 +320,9 @@ class Craft:
             for part, saved in saved_state_attrs.items():
                 for sname, sval in saved.items():
                     object.__setattr__(part, sname, sval)
+            for part, saved in saved_input_attrs.items():
+                for iname, ival in saved.items():
+                    object.__setattr__(part, iname, ival)
 
             # --- Newton-Euler --------------------------------------------
             F_craft   = net.force         # Vec3[CraftFrame]
@@ -380,6 +400,12 @@ class Craft:
         for part in self._parts:
             for sname, sdecl in part.state_declarations().items():
                 state[f"{part.name}.{sname}"] = float(sdecl.init)
+            # Input slots: seed from the part's current attribute (which
+            # is either the constructor-time override or the declaration
+            # default). These pass through CompiledWorld.step's merge so
+            # the user can update them per-tick or leave them alone.
+            for iname in part.input_declarations():
+                state[f"{part.name}.{iname}"] = float(getattr(part, iname))
         unknown = set(overrides) - set(state)
         if unknown:
             raise KeyError(

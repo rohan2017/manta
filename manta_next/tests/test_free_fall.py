@@ -36,7 +36,7 @@ def test_single_mass_free_fall_numerics():
 
     for _ in range(n_steps):
         out = tick(dt=dt, **state)
-        state = {k: out[k] for k in state}
+        state = {**state, **out}
 
     expected_z  = 100.0 - 0.5 * 9.81 * 1.0      # 95.095
     expected_vz = -9.81
@@ -64,7 +64,7 @@ def test_multi_mass_aggregates_correctly():
     state = _initial_at_rest(c)
     for _ in range(100):
         out = tick(dt=0.01, **state)
-        state = {k: out[k] for k in state}
+        state = {**state, **out}
 
     # After 1 s: vz = -9.81, body origin z depends on offsets — but the
     # COM falls by exactly 0.5·g·t² regardless of COM location.
@@ -101,7 +101,7 @@ def test_horizontal_gravity():
     state = _initial_at_rest(c)
     for _ in range(100):
         out = tick(dt=0.01, **state)
-        state = {k: out[k] for k in state}
+        state = {**state, **out}
 
     assert np.isclose(state["velocity"][0], 2.0, atol=1e-5)
     assert np.isclose(state["position"][0], 1.0, atol=1e-5)

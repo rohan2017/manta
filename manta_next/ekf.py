@@ -114,7 +114,24 @@ class EKF:
                 slot = self.spec.slot(name)
                 sliced.append(x_sym[slot.offset : slot.offset + slot.dim])
             else:
-                raise RuntimeError(f"EKF: tick input {name!r} not in StateSpec")
+                # Treat unrecognized tick inputs as Inputs declared on a
+                # part: "<part>.<input>". The EKF doesn't take per-tick
+                # control inputs yet, so we bake each one in at its
+                # current default value (from the part instance). Future
+                # work: thread u as an additional argument to predict().
+                if "." in name:
+                    part_name, input_name = name.split(".", 1)
+                    part = next(
+                        (p for p in self.craft.parts if p.name == part_name),
+                        None,
+                    )
+                    if part and input_name in part.input_declarations():
+                        default_val = float(getattr(part, input_name))
+                        sliced.append(ca.MX(default_val))
+                        continue
+                raise RuntimeError(
+                    f"EKF: tick input {name!r} not in StateSpec and not "
+                    f"recognized as a part Input.")
 
         result = cf(*sliced)
         result_by_name = (

@@ -72,8 +72,28 @@ class Parameter(_Declaration):
 
 
 class Input(_Declaration):
-    """Per-tick external value. Becomes a named input on the compiled tick.
-    Reserved for M4: Zenoh-fed and controller-fed inputs into the trace.
+    """Per-tick external value.
+
+    Declared at class scope on a Part. The framework:
+      * Creates a graph input named "<part_name>.<input_name>" each compile.
+      * Rebinds the part attribute to the symbolic node before calling
+        `update()`, so `self.<input_name>` reads the current value.
+      * Initial state from Craft.initial_state() includes the input slot
+        seeded with the declaration's `default` (or the construction-time
+        override if the user passed one).
+      * Inputs pass through CompiledWorld.step's merge — they persist
+        between steps until the user overrides. This makes per-tick
+        commands ergonomic: set once, tick repeatedly, change when you
+        want.
+
+    Args:
+        default — Python value used to seed the initial state. May be
+                  overridden at construction (`Motor("m", torque_cmd=0.5)`)
+                  in which case the override becomes the seed.
+
+    The semantic distinction from `Parameter`: Parameter values are
+    frozen into the compiled graph as constants; Input values are
+    re-evaluated each tick from the state dict.
     """
 
 
@@ -207,6 +227,12 @@ class Part:
         """Just the State entries (subset of _declarations)."""
         return {n: d for n, d in cls._declarations().items()
                 if isinstance(d, State)}
+
+    @classmethod
+    def input_declarations(cls) -> dict[str, "Input"]:
+        """Just the Input entries (subset of _declarations)."""
+        return {n: d for n, d in cls._declarations().items()
+                if isinstance(d, Input)}
 
     # --- Required override ------------------------------------------------
 

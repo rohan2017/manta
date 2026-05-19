@@ -33,14 +33,14 @@ from __future__ import annotations
 
 from ...ir.frames import CraftFrame
 from ...ir.types import Vec3
-from ..base import Part, Parameter, PartUpdate, State
+from ..base import Input, Part, Parameter, PartUpdate, State
 from ..wrench import Wrench
 
 
 class FlywheelMotor(Part):
     I_axial:    float                       = Parameter(0.01)
     axis:       "tuple[float, float, float]" = Parameter((0.0, 0.0, 1.0))
-    torque_cmd: float                       = Parameter(0.0)
+    torque_cmd: float                       = Input(default=0.0)
 
     angle = State(init=0.0, manifold="R1")
     rate  = State(init=0.0, manifold="R1")

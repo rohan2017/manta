@@ -73,7 +73,7 @@ def test_free_spinning_body_conserves_angular_momentum_z():
     state = c.initial_state(angular_velocity=(0.0, 0.0, omega_0))
     for _ in range(1000):
         out = tick(dt=0.001, **state)
-        state = {k: out[k] for k in state}
+        state = {**state, **out}
 
     # ω should still be ~(0, 0, 2.0) after 1 s.
     assert np.allclose(state["angular_velocity"], [0.0, 0.0, omega_0], atol=1e-6)
@@ -97,7 +97,7 @@ def test_free_spinning_anisotropic_intermediate_axis():
     state = c.initial_state(angular_velocity=(0.0, 0.0, 1.0))
     for _ in range(500):
         out = tick(dt=0.001, **state)
-        state = {k: out[k] for k in state}
+        state = {**state, **out}
 
     # Rotation about the largest-MOI axis is stable: ω stays at (0,0,1).
     assert np.allclose(state["angular_velocity"], [0.0, 0.0, 1.0], atol=1e-6)
@@ -119,7 +119,7 @@ def test_no_position_drift_from_pure_rotation():
     state = c.initial_state(angular_velocity=(0.0, 0.0, 5.0))
     for _ in range(1000):
         out = tick(dt=0.001, **state)
-        state = {k: out[k] for k in state}
+        state = {**state, **out}
 
     # No external forces, COM at origin → origin shouldn't move.
     assert np.allclose(state["position"], [0.0, 0.0, 0.0], atol=1e-6)
@@ -139,7 +139,7 @@ def test_gravity_creates_no_torque_at_balanced_com():
     state = c.initial_state()
     for _ in range(100):
         out = tick(dt=0.01, **state)
-        state = {k: out[k] for k in state}
+        state = {**state, **out}
 
     # Free-fall: vz = -9.81 after 1 s.
     assert np.isclose(state["velocity"][2], -9.81, atol=1e-5)
@@ -158,7 +158,7 @@ def test_quaternion_normalization_holds_over_long_run():
     state = c.initial_state(angular_velocity=(0.3, 0.5, 0.7))
     for _ in range(10_000):
         out = tick(dt=0.001, **state)
-        state = {k: out[k] for k in state}
+        state = {**state, **out}
 
     q = state["orientation"]
     assert np.isclose(np.linalg.norm(q), 1.0, atol=1e-9)

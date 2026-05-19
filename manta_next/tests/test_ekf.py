@@ -84,7 +84,7 @@ def test_ekf_predict_alone_matches_tick():
     for _ in range(100):
         # Direct tick
         out = tick(dt=dt, **state)
-        state = {k: out[k] for k in state}
+        state = {**state, **out}
         # EKF predict (with no process noise)
         ekf.predict(dt=dt)
 

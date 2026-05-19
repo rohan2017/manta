@@ -33,7 +33,7 @@ def test_spinning_rotor_advances_angle_at_constant_rate():
 
     for _ in range(1000):
         out = tick(dt=0.001, **state)
-        state = {k: out[k] for k in state}
+        state = {**state, **out}
 
     assert np.isclose(state["wheel.angle"], 1.0, atol=1e-9)
 
@@ -50,7 +50,7 @@ def test_spinning_rotor_initial_angle_override():
 
     for _ in range(500):
         out = tick(dt=0.001, **state)
-        state = {k: out[k] for k in state}
+        state = {**state, **out}
 
     # 0.5 + 2.0 * 0.5 s = 1.5
     assert np.isclose(state["wheel.angle"], 1.5, atol=1e-9)
@@ -67,7 +67,7 @@ def test_multiple_rotors_have_independent_state():
     state = c.initial_state()
     for _ in range(1000):
         out = tick(dt=0.001, **state)
-        state = {k: out[k] for k in state}
+        state = {**state, **out}
 
     assert np.isclose(state["fast.angle"], 5.0, atol=1e-9)
     assert np.isclose(state["slow.angle"], 1.0, atol=1e-9)
@@ -89,7 +89,7 @@ def test_flywheel_under_torque_accelerates():
     state = c.initial_state()
     for _ in range(1000):
         out = tick(dt=0.001, **state)
-        state = {k: out[k] for k in state}
+        state = {**state, **out}
 
     # α = 0.5 / 0.05 = 10 rad/s² → ω(1s) = 10, θ(1s) = 5.
     assert np.isclose(state["wheel.rate"],  10.0, atol=1e-6)
@@ -116,7 +116,7 @@ def test_flywheel_reaction_spins_body_counter():
     state = c.initial_state()
     for _ in range(1000):
         out = tick(dt=0.001, **state)
-        state = {k: out[k] for k in state}
+        state = {**state, **out}
 
     # Flywheel: ω_wheel = 0.5/0.05 · 1 = 10.0 rad/s.
     assert np.isclose(state["wheel.rate"], 10.0, atol=1e-6)
@@ -139,7 +139,7 @@ def test_rotor_doesnt_break_free_fall():
     state = c.initial_state(position=(0.0, 0.0, 100.0))
     for _ in range(1000):
         out = tick(dt=0.001, **state)
-        state = {k: out[k] for k in state}
+        state = {**state, **out}
 
     assert np.isclose(state["position"][2],   95.095, atol=1e-5)
     assert np.isclose(state["velocity"][2],   -9.81,  atol=1e-5)
