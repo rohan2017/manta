@@ -44,18 +44,39 @@ from .parts.wrench import Wrench
 class TickContext:
     """The per-tick context passed to each `Part.update(ctx)` call.
 
-    M2 fields:
-      gravity   : Vec3[CraftFrame]   — world-frame gravity rotated into
-                                       craft frame each tick (so a tilted
-                                       craft sees gravity tilt with it).
-      dt        : Scalar             — integrator timestep.
+    Exposes the symbolic craft body state + environment to part code so
+    a Part's `update()` can read everything it physically depends on:
+
+      gravity          : Vec3[CraftFrame]   — world-frame gravity rotated
+                                              into craft frame each tick
+                                              (so a tilted craft sees
+                                              gravity tilt with it).
+      dt               : Scalar             — integrator timestep.
+      angular_velocity : Vec3[CraftFrame]   — body angular velocity ω,
+                                              from the input state. What
+                                              an onboard gyro reads.
+      velocity_body    : Vec3[CraftFrame]   — body linear velocity
+                                              (R^T · v_anchor), from the
+                                              input state. What an
+                                              onboard DVL reads.
+
+    Body-frame inertial acceleration is NOT here — it depends on the
+    aggregated wrench, which is the very thing parts are contributing.
+    A post-Newton-Euler sensor phase would expose it cleanly; deferred.
     """
 
-    __slots__ = ("gravity", "dt")
+    __slots__ = ("gravity", "dt", "angular_velocity", "velocity_body")
 
-    def __init__(self, *, gravity: Vec3, dt: Scalar) -> None:
+    def __init__(self,
+                 *,
+                 gravity: Vec3,
+                 dt: Scalar,
+                 angular_velocity: Vec3,
+                 velocity_body: Vec3) -> None:
         self.gravity = gravity
         self.dt = dt
+        self.angular_velocity = angular_velocity
+        self.velocity_body = velocity_body
 
 
 # ---------------------------------------------------------------------------
@@ -225,8 +246,14 @@ class Craft:
             # → anchor relationship is identity in M2).
             g_anchor = ir.Vec3[AnchorFrame].constant(tuple(gravity_anchor))
             g_craft  = orientation.conjugate().apply(g_anchor)
+            v_body   = orientation.conjugate().apply(velocity)
 
-            ctx = TickContext(gravity=g_craft, dt=dt)
+            ctx = TickContext(
+                gravity=g_craft,
+                dt=dt,
+                angular_velocity=ang_vel,
+                velocity_body=v_body,
+            )
 
             # --- Per-part state plumbing ---------------------------------
             # For each part with State declarations, create a graph input
@@ -277,14 +304,17 @@ class Craft:
             # --- Aggregate wrenches + collect state updates --------------
             net = Wrench.zero(CraftFrame)
             new_state_outputs: list[tuple[str, Any]] = []
+            sensor_outputs:    list[tuple[str, Any]] = []
             for part in self._parts:
                 result = part.update(ctx)
                 if isinstance(result, Wrench):
                     w_part = result
                     new_state = {}
+                    outputs   = {}
                 elif isinstance(result, PartUpdate):
-                    w_part = result.wrench
+                    w_part    = result.wrench
                     new_state = result.new_state
+                    outputs   = result.outputs
                 else:
                     raise TypeError(
                         f"{type(part).__name__}('{part.name}').update(): "
@@ -310,6 +340,25 @@ class Craft:
                 for sname in decls:
                     val = new_state.get(sname, state_input_nodes[part][sname])
                     new_state_outputs.append((f"{part.name}.{sname}", val))
+
+                # Validate + queue Output writes.
+                out_decls = part.output_declarations()
+                unknown_out = set(outputs) - set(out_decls)
+                if unknown_out:
+                    raise KeyError(
+                        f"{type(part).__name__}('{part.name}').update(): "
+                        f"unknown output slot(s): {sorted(unknown_out)}. "
+                        f"Declared: {sorted(out_decls)}")
+                # Each declared output must be written (we don't bake in a
+                # default — a sensor that didn't compute its value is a bug).
+                missing_out = set(out_decls) - set(outputs)
+                if missing_out:
+                    raise KeyError(
+                        f"{type(part).__name__}('{part.name}').update(): "
+                        f"output slot(s) declared but not written: "
+                        f"{sorted(missing_out)}.")
+                for oname, oval in outputs.items():
+                    sensor_outputs.append((f"{part.name}.{oname}", oval))
 
                 # Aggregate wrench (in CraftFrame, transformed for offset).
                 w_craft = _wrench_to_craft(w_part, part.transform)
@@ -377,6 +426,14 @@ class Craft:
             g.output(new_ang_vel,     "angular_velocity")
             # Per-part state outputs (names like "motor.angle").
             for out_name, out_val in new_state_outputs:
+                g.output(out_val, out_name)
+            # Per-part sensor outputs (names like "imu.gyro").
+            from .ir.types import _IRValue
+            for out_name, out_val in sensor_outputs:
+                if not isinstance(out_val, _IRValue):
+                    raise TypeError(
+                        f"Output '{out_name}': must be an IR value (Vec3, "
+                        f"Scalar, Quat); got {type(out_val).__name__}")
                 g.output(out_val, out_name)
 
         return g.compile()

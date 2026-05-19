@@ -7,15 +7,17 @@ Public surface re-exports the part classes for ergonomic imports::
     from manta_next.parts import Part, Parameter, Mass
 """
 
-from .base import Part, Parameter, Input, State, PartUpdate
+from .base import Part, Parameter, Input, Output, State, PartUpdate
 from .wrench import Wrench
 from .structure.mass import Mass
 from .articulation.spinning_rotor import SpinningRotor
 from .articulation.flywheel_motor import FlywheelMotor
+from .sensor.imu import IMU
 
 __all__ = [
-    "Part", "Parameter", "Input", "State", "PartUpdate",
+    "Part", "Parameter", "Input", "Output", "State", "PartUpdate",
     "Wrench",
     "Mass",
     "SpinningRotor", "FlywheelMotor",
+    "IMU",
 ]

@@ -195,10 +195,19 @@ class CompiledGraph:
         self.casadi_function = fn
         self._input_specs  = input_specs
         self._output_specs = output_specs
+        # Output-only names (i.e. graph outputs that aren't also inputs).
+        # These appear in tick(...) results but the next-tick state is
+        # expected to carry them via the `{**state, **out}` merge pattern;
+        # passing them back into __call__ is benign and silently dropped.
+        # Other unknown keys still raise — typo protection.
+        self._output_only = set(output_specs) - set(input_specs)
 
     # ----- Call -----------------------------------------------------------
 
     def __call__(self, **kwargs):
+        # Drop output-only keys carried via the {**state, **out} merge.
+        kwargs = {k: v for k, v in kwargs.items()
+                  if k not in self._output_only}
         # Validate input set.
         provided = set(kwargs)
         expected = set(self._input_specs)

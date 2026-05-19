@@ -71,6 +71,34 @@ class Parameter(_Declaration):
     """
 
 
+class Output(_Declaration):
+    """Per-tick value produced by a part (sensor reading, derived quantity,
+    telemetry signal).
+
+    Declared at class scope. The part writes its computed value via
+    `PartUpdate.outputs["<name>"] = <Vec3 | Scalar | …>`. The framework
+    emits the value as a graph output named "<part_name>.<name>"; tick
+    callers read it from the result dict (read-only, doesn't round-trip
+    back as next-tick state).
+
+    Args:
+        shape    — "scalar" or "vec3" or "vec4" (= quaternion). Optional;
+                   the framework picks up the actual shape from what the
+                   part writes. Provided here so future codegen / EKF
+                   plumbing can introspect output kinds without tracing.
+    """
+
+    __slots__ = ("shape",)
+
+    def __init__(self, shape: str = "vec3") -> None:
+        super().__init__(default=None)
+        if shape not in ("scalar", "vec3", "vec4"):
+            raise ValueError(
+                f"Output: shape must be one of 'scalar', 'vec3', 'vec4'; "
+                f"got {shape!r}")
+        self.shape = shape
+
+
 class Input(_Declaration):
     """Per-tick external value.
 
@@ -134,25 +162,31 @@ class State(_Declaration):
 
 class PartUpdate:
     """Bundle returned by `Part.update(ctx)` describing this tick's
-    contributions: a wrench (force + torque on parent in CraftFrame) plus
-    new values for any declared `State` slots.
+    contributions: a wrench (force + torque on parent in CraftFrame), new
+    values for any declared State slots, and any declared Output values
+    the part produces.
 
-    Construction is positional or keyword::
+    Construction::
 
-        return PartUpdate(wrench, {"angle": new_angle})
+        return PartUpdate(wrench, {"angle": a})
         return PartUpdate(wrench=w, new_state={"angle": a, "rate": r})
+        return PartUpdate(wrench=w, outputs={"gyro": gyro_vec})
 
     Stateless parts can return a bare `Wrench` instead — the framework
-    wraps it as `PartUpdate(wrench=w, new_state={})` automatically.
+    wraps it as `PartUpdate(wrench=w)` automatically.
     """
 
-    __slots__ = ("wrench", "new_state")
+    __slots__ = ("wrench", "new_state", "outputs")
 
-    def __init__(self, wrench=None, new_state: dict | None = None) -> None:
+    def __init__(self,
+                 wrench=None,
+                 new_state: dict | None = None,
+                 outputs: dict | None = None) -> None:
         if wrench is None:
             raise TypeError("PartUpdate: wrench is required")
         self.wrench = wrench
         self.new_state = dict(new_state) if new_state else {}
+        self.outputs   = dict(outputs)   if outputs   else {}
 
 
 # ---------------------------------------------------------------------------
@@ -233,6 +267,12 @@ class Part:
         """Just the Input entries (subset of _declarations)."""
         return {n: d for n, d in cls._declarations().items()
                 if isinstance(d, Input)}
+
+    @classmethod
+    def output_declarations(cls) -> dict[str, "Output"]:
+        """Just the Output entries (subset of _declarations)."""
+        return {n: d for n, d in cls._declarations().items()
+                if isinstance(d, Output)}
 
     # --- Required override ------------------------------------------------
 
