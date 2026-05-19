@@ -1,0 +1,257 @@
+"""Per-function CasADi extraction from a Craft.
+
+Given a Craft, we want exportable ca.Function objects:
+
+  * predict(x_flat, u_flat, dt) → x_flat_new
+  * predict_jacobian(x_flat, u_flat, dt) → F (tangent_dim × tangent_dim)
+  * For every Part Output named "<part>.<name>":
+      h_<part>_<name>(x_flat, u_flat, dt) → output value (flat)
+      H_<part>_<name>(x_flat, u_flat, dt) → ∂h/∂δ at δ=0 (out_dim × tangent_dim)
+
+Why flat? CasADi's codegen is row-major flat C; the C++ wrapper handles
+typed pack/unpack. Why include dt in the measurement Jacobian arg list?
+For uniformity — most Outputs don't actually use dt, but a few might (an
+integrating sensor, a difference operator). CasADi prunes unused args
+from the generated code automatically.
+
+Mirrors EKF._tick_on_flat / EKF.__init__ but exports more functions and
+doesn't carry a runtime _x / _P. The shared bits (StateSpec walking,
+input enumeration) live here so EKF can grow to use this module later.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import casadi as ca
+
+from ..state_spec import StateSpec
+
+
+@dataclass(frozen=True)
+class OutputSpec:
+    """One Part Output, ready to codegen."""
+    part_name: str
+    output_name: str
+    out_dim: int       # ambient dim of the value (vec3 → 3, scalar → 1)
+    h_fn:  ca.Function  # h(x, u, dt) → value
+    H_fn:  ca.Function  # H(x, u, dt) → ∂h/∂δ at δ=0  (out_dim × tangent_dim)
+
+    @property
+    def flat_name(self) -> str:
+        """C-identifier-safe name used by codegen (`gps_position`, `imu_gyro`)."""
+        return f"{self.part_name}_{self.output_name}"
+
+    @property
+    def full_name(self) -> str:
+        """Dotted name as used in state dicts (`gps.position`)."""
+        return f"{self.part_name}.{self.output_name}"
+
+
+@dataclass
+class CraftFunctions:
+    """The complete set of exportable ca.Functions for one Craft."""
+    craft_name: str
+    spec: StateSpec
+    input_names: list[str]                  # ordered as the u vector
+    predict_fn:          ca.Function        # x, u, dt → x_new
+    predict_jacobian_fn: ca.Function        # x, u, dt → F
+    outputs:             list[OutputSpec]
+
+    @property
+    def ambient_dim(self) -> int:
+        return self.spec.ambient_dim
+
+    @property
+    def tangent_dim(self) -> int:
+        return self.spec.tangent_dim
+
+    @property
+    def n_inputs(self) -> int:
+        return len(self.input_names)
+
+
+def extract(craft,
+            *,
+            gravity_anchor: tuple[float, float, float] = (0.0, 0.0, -9.81),
+            ) -> CraftFunctions:
+    """Extract per-function ca.Functions from a Craft.
+
+    The compiled tick is built once; all extracted functions reference
+    the same set of MX symbols so they can be evaluated/codegen'd
+    consistently.
+
+    Args:
+        craft           — the manta_next Craft to extract from.
+        gravity_anchor  — anchor-frame gravity used during the compile.
+
+    Returns:
+        A `CraftFunctions` bundle.
+    """
+    spec = StateSpec.from_craft(craft)
+    n_ambient = spec.ambient_dim
+    n_tangent = spec.tangent_dim
+
+    compiled_tick = craft.compile_tick(gravity_anchor=gravity_anchor)
+    cf = compiled_tick.casadi_function
+
+    # Enumerate part Inputs from the tick's input signature.
+    input_names = _discover_input_names(cf, craft, spec)
+    n_u = len(input_names)
+
+    # Top-level MX symbols.
+    x_sym  = ca.MX.sym("x",  n_ambient, 1)
+    u_sym  = ca.MX.sym("u",  n_u, 1) if n_u > 0 else ca.MX.zeros(0, 1)
+    dt_sym = ca.MX.sym("dt", 1, 1)
+
+    # Group tick outputs by name (state slots + sensor outputs).
+    tick_outputs_by_name = _evaluate_tick_flat(
+        cf, x_sym, u_sym, dt_sym, spec, input_names)
+
+    # --- predict_fn -------------------------------------------------------
+    state_chunks = []
+    for slot in spec.slots:
+        chunk = tick_outputs_by_name[slot.name]
+        if chunk.shape != (slot.dim, 1):
+            chunk = ca.reshape(chunk, slot.dim, 1)
+        state_chunks.append(chunk)
+    x_new = ca.vertcat(*state_chunks)
+
+    predict_fn = ca.Function(
+        f"{craft.name}_predict",
+        [x_sym, u_sym, dt_sym], [x_new],
+        ["x", "u", "dt"], ["x_new"],
+    )
+
+    # --- predict_jacobian_fn ---------------------------------------------
+    delta = ca.MX.sym("delta", n_tangent, 1)
+    x_pert = spec.boxplus_sym(x_sym, delta)
+    pert_outputs_by_name = _evaluate_tick_flat(
+        cf, x_pert, u_sym, dt_sym, spec, input_names)
+    pert_chunks = []
+    for slot in spec.slots:
+        chunk = pert_outputs_by_name[slot.name]
+        if chunk.shape != (slot.dim, 1):
+            chunk = ca.reshape(chunk, slot.dim, 1)
+        pert_chunks.append(chunk)
+    x_pert_new = ca.vertcat(*pert_chunks)
+    delta_out = spec.boxminus_sym(x_pert_new, x_new)
+    F_sym = ca.substitute(
+        ca.jacobian(delta_out, delta),
+        delta,
+        ca.MX.zeros(n_tangent, 1),
+    )
+    # densify so codegen writes a dense column-major matrix to res[0]
+    # instead of CasADi's packed sparse storage.
+    F_sym = ca.densify(F_sym)
+    predict_jacobian_fn = ca.Function(
+        f"{craft.name}_predict_jacobian",
+        [x_sym, u_sym, dt_sym], [F_sym],
+        ["x", "u", "dt"], ["F"],
+    )
+
+    # --- per-Output (h, H) -----------------------------------------------
+    outputs: list[OutputSpec] = []
+    for part in craft.parts:
+        for out_name in part.output_declarations():
+            full = f"{part.name}.{out_name}"
+            if full not in tick_outputs_by_name:
+                raise RuntimeError(
+                    f"extract: output {full!r} declared on part but missing "
+                    f"from compiled tick outputs (compile_tick bug?)")
+            h_mx = tick_outputs_by_name[full]
+            out_dim = int(h_mx.numel())
+            h_mx_flat = ca.reshape(h_mx, out_dim, 1)
+
+            # H = ∂h(boxplus(x, δ))/∂δ at δ=0.
+            h_pert_mx = pert_outputs_by_name[full]
+            h_pert_flat = ca.reshape(h_pert_mx, out_dim, 1)
+            H_sym = ca.substitute(
+                ca.jacobian(h_pert_flat, delta),
+                delta,
+                ca.MX.zeros(n_tangent, 1),
+            )
+            H_sym = ca.densify(H_sym)
+            cname = f"{craft.name}_h_{part.name}_{out_name}"
+            h_fn = ca.Function(
+                cname, [x_sym, u_sym, dt_sym], [h_mx_flat],
+                ["x", "u", "dt"], ["h"],
+            )
+            H_fn = ca.Function(
+                cname + "_jacobian",
+                [x_sym, u_sym, dt_sym], [H_sym],
+                ["x", "u", "dt"], ["H"],
+            )
+            outputs.append(OutputSpec(
+                part_name=part.name,
+                output_name=out_name,
+                out_dim=out_dim,
+                h_fn=h_fn,
+                H_fn=H_fn,
+            ))
+
+    return CraftFunctions(
+        craft_name=craft.name,
+        spec=spec,
+        input_names=input_names,
+        predict_fn=predict_fn,
+        predict_jacobian_fn=predict_jacobian_fn,
+        outputs=outputs,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _discover_input_names(cf: ca.Function,
+                          craft,
+                          spec: StateSpec) -> list[str]:
+    """Return the ordered list of part-Input names found in the tick
+    Function's input signature (skipping state slots + dt)."""
+    out: list[str] = []
+    for i in range(cf.n_in()):
+        name = cf.name_in(i)
+        if name == "dt" or name in spec:
+            continue
+        if "." in name:
+            part_name, input_name = name.split(".", 1)
+            part = next((p for p in craft.parts if p.name == part_name), None)
+            if part and input_name in part.input_declarations():
+                out.append(name)
+                continue
+        raise RuntimeError(
+            f"extract: tick input {name!r} not in StateSpec and not a "
+            f"recognized part Input.")
+    return out
+
+
+def _evaluate_tick_flat(cf: ca.Function,
+                        x_sym,
+                        u_sym,
+                        dt_sym,
+                        spec: StateSpec,
+                        input_names: list[str]) -> dict:
+    """Apply the compiled tick CasADi Function to a flat ambient-state
+    symbolic vector + flat input vector + dt, returning a dict mapping
+    every output name (state slots + sensor outputs) → its symbolic MX."""
+    in_names  = [cf.name_in(i)  for i in range(cf.n_in())]
+    out_names = [cf.name_out(i) for i in range(cf.n_out())]
+    u_index = {name: i for i, name in enumerate(input_names)}
+
+    sliced = []
+    for name in in_names:
+        if name == "dt":
+            sliced.append(dt_sym)
+        elif name in spec:
+            slot = spec.slot(name)
+            sliced.append(x_sym[slot.offset : slot.offset + slot.dim])
+        elif name in u_index:
+            sliced.append(u_sym[u_index[name]])
+        else:
+            raise RuntimeError(f"extract: tick input {name!r} not handled.")
+
+    result = cf(*sliced)
+    if len(out_names) == 1:
+        return {out_names[0]: result}
+    return {n: result[i] for i, n in enumerate(out_names)}
