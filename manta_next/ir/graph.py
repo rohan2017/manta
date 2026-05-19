@@ -79,13 +79,16 @@ class Graph:
         if name in self._inputs:
             raise ValueError(
                 f"Graph '{self._name}': duplicate input name '{name}'.")
-        if name in self._outputs:
-            raise ValueError(
-                f"Graph '{self._name}': name '{name}' already used for an output.")
         self._inputs[name] = value
 
     def output(self, value, name: str) -> None:
-        """Record `value` as a named output of this graph."""
+        """Record `value` as a named output of this graph.
+
+        It is intentionally allowed for a name to appear as BOTH an input
+        and an output — that's the natural pattern for state-update
+        functions where the input is the current state and the output is
+        the new state at the same slot.
+        """
         from .types import _IRValue   # local import to break the cycle
         if not isinstance(value, _IRValue):
             raise TypeError(
@@ -93,9 +96,6 @@ class Graph:
         if name in self._outputs:
             raise ValueError(
                 f"Graph '{self._name}': duplicate output name '{name}'.")
-        if name in self._inputs:
-            raise ValueError(
-                f"Graph '{self._name}': name '{name}' already used for an input.")
         self._outputs[name] = value
 
     # ----- Introspection ---------------------------------------------------
@@ -124,7 +124,12 @@ class Graph:
         out_names = list(self._outputs.keys())
         in_mxs    = [v._mx for v in self._inputs.values()]
         out_mxs   = [v._mx for v in self._outputs.values()]
-        fn = ca.Function(self._name, in_mxs, out_mxs, in_names, out_names)
+        # Allow input/output names to overlap — that's the natural pattern
+        # for state-update tick functions (current state vs. new state at
+        # the same slot name).
+        opts = {"allow_duplicate_io_names": True}
+        fn = ca.Function(self._name, in_mxs, out_mxs,
+                         in_names, out_names, opts)
         return CompiledGraph(fn, dict(self._inputs), dict(self._outputs))
 
     def jacobian(self, of: str, wrt: str) -> "CompiledGraph":
