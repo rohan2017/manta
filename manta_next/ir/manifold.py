@@ -140,46 +140,45 @@ class SO3:
 
 def _so3_exp(omega_mx) -> ca.MX:
     """Map a 3-vector to a unit quaternion via the SO(3) exponential.
-    Numerically stable near zero via Taylor expansion of (sin θ/2)/θ.
+
+    Branch-free, smooth everywhere. The trick: add a tiny epsilon under
+    the sqrt so the denominator never hits zero. For ω=0 the formula
+    `sin(eps/2) / eps` evaluates to ~0.5 (since sin(x) ≈ x for tiny x);
+    for nonzero ω the eps is dominated by |ω|² and the result is exact
+    to roundoff.
+
+    Avoids `ca.if_else` because CasADi's autodiff evaluates BOTH
+    branches; the non-Taylor branch had `d(sin(0)/0)/dω` = NaN, which
+    poisoned every EKF Jacobian we tried to extract from a tick using
+    boxplus.
     """
-    half_theta_sq = ca.dot(omega_mx, omega_mx) * 0.25
-    # cos(θ/2) and sinc(θ/2) via Taylor for stability near 0.
-    #   cos(θ/2)   ≈ 1 - θ²/8                (= 1 - half_theta_sq/2)
-    #   sin(θ/2)/θ ≈ 0.5 - θ²/48
-    # Below threshold, use Taylor; above, use the closed form. We use
-    # CasADi `if_else` so the symbolic graph can still differentiate.
-    threshold = 1e-12   # ‖ω‖² threshold to swap formulas
-    theta = ca.sqrt(half_theta_sq * 4)
+    eps_sq = 1.0e-30
+    theta = ca.sqrt(ca.dot(omega_mx, omega_mx) + eps_sq)
     half_theta = theta * 0.5
-    c = ca.cos(half_theta)
-    s_over_theta = ca.if_else(
-        half_theta_sq < threshold,
-        0.5 - half_theta_sq / 12.0,    # Taylor near zero
-        ca.sin(half_theta) / theta,     # exact otherwise
-    )
-    w = c
+    w = ca.cos(half_theta)
+    s_over_theta = ca.sin(half_theta) / theta     # → 0.5 at ω=0 (smooth)
     v = omega_mx * s_over_theta
     return ca.vertcat(w, v[0], v[1], v[2])
 
 
 def _so3_log(q_mx) -> ca.MX:
-    """Map a unit quaternion to its 3-vector tangent. Stable near identity
-    via the Taylor expansion of (atan2(|v|, w)) / |v|."""
+    """Map a unit quaternion to its 3-vector tangent.
+
+    Branch-free via the same eps-regularization as _so3_exp. The
+    composite `2·atan2(|v|, w) / |v|` is smooth at the identity
+    quaternion (q = (1, 0, 0, 0)): both numerator and denominator scale
+    as |v| there, so the ratio approaches the well-defined limit 2.
+    """
+    eps_sq = 1.0e-30
     w = q_mx[0]
     v = ca.vertcat(q_mx[1], q_mx[2], q_mx[3])
-    v_norm_sq = ca.dot(v, v)
-    v_norm = ca.sqrt(v_norm_sq)
-    # Always go through positive-w hemisphere to avoid the cover.
-    sign = ca.sign(w + 1e-30)  # avoid sign(0)=0
+    v_norm = ca.sqrt(ca.dot(v, v) + eps_sq)
+    # Always use the positive-w hemisphere to avoid the double cover.
+    # sign(0) returns 0 in CasADi; offset slightly so sign(w=0) = +1.
+    sign = ca.sign(w + 1.0e-30)
     w_pos = w * sign
     v_pos = v * sign
-    # 2 * atan2(|v|, w) / |v|, with Taylor near |v|=0.
-    threshold = 1e-12
-    coeff = ca.if_else(
-        v_norm_sq < threshold,
-        2.0 / (w_pos + 1e-30),   # Taylor: 2 * atan2(|v|, w) / |v| ≈ 2/w
-        2.0 * ca.atan2(v_norm, w_pos) / (v_norm + 1e-30),
-    )
+    coeff = 2.0 * ca.atan2(v_norm, w_pos) / v_norm
     return v_pos * coeff
 
 
