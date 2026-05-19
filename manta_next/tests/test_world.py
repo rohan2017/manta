@@ -14,13 +14,7 @@ from manta_next.parts import Mass, SpinningRotor
 def test_anchor_basic():
     a = Anchor("lab_floor")
     assert a.name == "lab_floor"
-    assert a.gravity is None
     assert "lab_floor" in repr(a)
-
-
-def test_anchor_gravity_override():
-    moon = Anchor("moon_surface", gravity=(0.0, 0.0, -1.62))
-    assert moon.gravity == (0.0, 0.0, -1.62)
 
 
 # ---------------------------------------------------------------------------
@@ -36,7 +30,7 @@ def test_single_craft_world_matches_direct_compile():
 
     c2 = Craft("solo_b")
     c2.add(Mass("body", mass=1.0))
-    w = World().set_gravity((0.0, 0.0, -9.81))
+    w = World().add_uniform_gravity((0.0, 0.0, -9.81))
     w.add_craft(c2, position=(0.0, 0.0, 100.0))
     cw = w.compile()
 
@@ -64,7 +58,7 @@ def test_single_craft_world_matches_direct_compile():
 def test_two_crafts_fall_independently():
     """Two crafts at different starting positions with different masses,
     both fall under gravity. State stays separate per craft."""
-    w = World().set_gravity((0.0, 0.0, -9.81))
+    w = World().add_uniform_gravity((0.0, 0.0, -9.81))
 
     a = Craft("alice")
     a.add(Mass("body", mass=1.0))
@@ -93,46 +87,13 @@ def test_two_crafts_fall_independently():
 
 
 # ---------------------------------------------------------------------------
-# Per-anchor gravity override
-# ---------------------------------------------------------------------------
-
-def test_per_anchor_gravity_override():
-    """A craft on a Moon-gravity anchor falls slower than one on the
-    world-default anchor."""
-    w = World().set_gravity((0.0, 0.0, -9.81))
-
-    moon = Anchor("moon", gravity=(0.0, 0.0, -1.62))
-    w.add_anchor(moon)
-
-    earth_drone = Craft("earth_drone")
-    earth_drone.add(Mass("body", mass=1.0))
-    w.add_craft(earth_drone, position=(0.0, 0.0, 100.0))
-
-    moon_drone = Craft("moon_drone")
-    moon_drone.add(Mass("body", mass=1.0))
-    w.add_craft(moon_drone, anchor="moon", position=(0.0, 0.0, 100.0))
-
-    cw = w.compile()
-    state = cw.initial_state()
-    for _ in range(100):
-        state = cw.step(state, dt=0.01)
-
-    earth_dz = 100.0 - state["earth_drone"]["position"][2]
-    moon_dz  = 100.0 - state["moon_drone"]["position"][2]
-    assert np.isclose(earth_dz, 4.905,  atol=1e-6)
-    assert np.isclose(moon_dz,  0.810,  atol=1e-6)
-    # Moon drone falls ~6x slower (g_moon / g_earth = 0.165).
-    assert moon_dz / earth_dz == pytest.approx(1.62 / 9.81, rel=1e-9)
-
-
-# ---------------------------------------------------------------------------
 # Per-craft state with extra slots
 # ---------------------------------------------------------------------------
 
 def test_world_carries_part_state_through_step():
     """Part-state slots (e.g. SpinningRotor.angle) propagate through
     World.step like any other state."""
-    w = World().set_gravity((0.0, 0.0, 0.0))   # zero gravity for clarity
+    w = World().add_uniform_gravity((0.0, 0.0, 0.0))   # zero gravity for clarity
     c = Craft("with_rotor")
     c.add(Mass("body", mass=1.0))
     c.add(SpinningRotor("wheel", spin_rate=2.0))

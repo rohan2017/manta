@@ -223,9 +223,28 @@ class Craft:
 
     def compile_tick(self,
                      *,
-                     gravity_anchor: tuple[float, float, float] = (0.0, 0.0, -9.81)
+                     gravity_field: "Field | None" = None,
+                     gravity_anchor: tuple[float, float, float] | None = None,
                      ) -> "ir.graph.CompiledGraph":
         """Trace the 6-DOF rigid-body tick into a callable function.
+
+        Args:
+            gravity_field   — registered GravityField to query for the
+                              craft's instantaneous gravity. Per tick the
+                              anchor-frame gravity is `field.state_at_sym(
+                              position)`, which becomes a position-
+                              dependent symbolic expression when non-
+                              uniform disturbances are present.
+            gravity_anchor  — escape hatch for direct use without a
+                              field: pass a (gx, gy, gz) tuple and the
+                              compile creates an internal one-shot
+                              GravityField with one UniformGravity
+                              disturbance. Convenient for tests and
+                              codegen extract.
+
+        Exactly one of `gravity_field` / `gravity_anchor` must be
+        provided (or neither, in which case gravity defaults to zero
+        — useful for in-vacuum scenarios).
 
         State (both input and output):
             position         : Vec3[AnchorFrame]            (3,)
@@ -234,6 +253,18 @@ class Craft:
             angular_velocity : Vec3[CraftFrame]             (3,)
         Other input: dt (scalar).
         """
+        # Resolve gravity source.
+        from .fields import GravityField as _GravityField, UniformGravity as _UniformGravity
+        if gravity_field is not None and gravity_anchor is not None:
+            raise ValueError(
+                "Craft.compile_tick: pass `gravity_field` OR "
+                "`gravity_anchor`, not both.")
+        if gravity_field is None and gravity_anchor is not None:
+            gravity_field = _GravityField()
+            gravity_field.add(_UniformGravity(gravity_anchor))
+        if gravity_field is None:
+            # No gravity specified → zero field (in-vacuum).
+            gravity_field = _GravityField()
         if not self._parts:
             raise ValueError(f"Craft '{self.name}': no parts added.")
 
@@ -255,9 +286,10 @@ class Craft:
             dt          = ir.Scalar.input("dt")
 
             # --- Per-tick context (gravity rotated to CraftFrame) --------
-            # World-frame gravity (= AnchorFrame for now, since the world
-            # → anchor relationship is identity in M2).
-            g_anchor = ir.Vec3[AnchorFrame].constant(tuple(gravity_anchor))
+            # Query the registered GravityField at the craft's anchor
+            # position. For a uniform field this folds to a constant; for
+            # a point-mass field it becomes a position-dependent MX.
+            g_anchor = gravity_field.state_at_sym(position)
             g_craft  = orientation.conjugate().apply(g_anchor)
             v_body   = orientation.conjugate().apply(velocity)
 

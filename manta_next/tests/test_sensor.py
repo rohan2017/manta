@@ -151,7 +151,7 @@ def test_gyro_tracks_motor_reaction_spin():
 # ---------------------------------------------------------------------------
 
 def test_imu_output_appears_in_world_step():
-    w = World().set_gravity((0.0, 0.0, 0.0))
+    w = World().add_uniform_gravity((0.0, 0.0, 0.0))
     c = Craft("imu_craft")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(IMU("g"))

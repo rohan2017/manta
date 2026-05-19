@@ -116,7 +116,7 @@ def test_input_value_can_change_each_tick():
 
 def test_world_carries_inputs_through_step():
     """CompiledWorld.step's merge pattern carries Inputs across ticks."""
-    w = World().set_gravity((0.0, 0.0, 0.0))
+    w = World().add_uniform_gravity((0.0, 0.0, 0.0))
     c = Craft("driven")
     c.add(Mass("body", mass=100.0, moi=(1000.0, 1000.0, 1000.0)))
     c.add(FlywheelMotor("motor", I_axial=0.05))

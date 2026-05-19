@@ -18,7 +18,7 @@ in place so that adding a Tether later just slots in.
 User-facing API::
 
     w = World()
-    w.set_gravity((0, 0, -9.81))
+    w.add_uniform_gravity((0, 0, -9.81))
 
     drone = Craft("drone")
     drone.add(Mass("body", mass=1.0))
@@ -41,6 +41,7 @@ from typing import Any
 import numpy as np
 
 from .craft import Craft
+from .fields import Field, GravityField, UniformGravity
 
 
 # ---------------------------------------------------------------------------
@@ -52,22 +53,23 @@ class Anchor:
 
     Anchors are floating origins: they're meant to drift with the
     cluster they hold so float32 stays precise. Today an Anchor is
-    primarily a label — it has a name and an optional gravity override.
-    Its physical meaning expands when planets land:
+    primarily a label — it has a name. Its physical meaning expands
+    when planets land:
       * `parent=None` ⇒ rooted in the world's inertial frame.
       * `parent=<planet>` ⇒ rooted in a rotating planet frame.
 
     The Anchor type at IR level is `manta_next.ir.frames.AnchorFrame`;
     that's the type tag used in `Vec3[AnchorFrame]`. `Anchor` here is
     the runtime instance that carries metadata.
+
+    Per-anchor field overrides aren't supported in M11 — every craft
+    sees the world's registered fields. When planets land, an Anchor
+    may carry a Planet pointer that contributes additional Disturbances
+    to the world's fields.
     """
 
-    def __init__(self,
-                 name: str,
-                 *,
-                 gravity: tuple[float, float, float] | None = None) -> None:
+    def __init__(self, name: str) -> None:
         self.name = name
-        self.gravity = tuple(gravity) if gravity is not None else None
 
     def __repr__(self) -> str:
         return f"<Anchor '{self.name}'>"
@@ -109,23 +111,52 @@ class World:
 
     def __init__(self, name: str = "world") -> None:
         self.name = name
-        self._gravity_world: tuple[float, float, float] = (0.0, 0.0, -9.81)
         self._anchors: dict[str, Anchor] = {}
         # _crafts: list of dicts with craft, anchor, initial_state_overrides.
         self._crafts: list[dict[str, Any]] = []
         self._couplings: list[Coupling] = []
+        # Fields keyed by exact subclass (one GravityField per world, one
+        # FluidField, …). Concrete subclasses query by class.
+        self._fields: dict[type, Field] = {}
 
-    # ---- Configuration ---------------------------------------------------
+    # ---- Fields ----------------------------------------------------------
 
-    def set_gravity(self, g_world: tuple[float, float, float]) -> "World":
-        """Set the world-frame gravity vector. M6 simplification: a single
-        constant gravity used by every anchor that doesn't override it."""
-        self._gravity_world = tuple(float(x) for x in g_world)
+    def add_field(self, field: Field) -> "World":
+        """Register a Field with this world. One instance per Field
+        subclass is allowed — call `field.add(disturbance)` on the
+        registered instance to attach more sources.
+
+        Returns self for chaining.
+        """
+        if not isinstance(field, Field):
+            raise TypeError(
+                f"World.add_field: expected a Field, got "
+                f"{type(field).__name__}")
+        cls = type(field)
+        if cls in self._fields:
+            raise ValueError(
+                f"World '{self.name}': field of type {cls.__name__} already "
+                f"registered. Use `world.get_field({cls.__name__}).add(...)` "
+                f"to attach additional disturbances to it.")
+        self._fields[cls] = field
         return self
 
+    def add_uniform_gravity(self,
+                            g_vec: tuple[float, float, float]) -> "World":
+        """Shortcut: register a GravityField containing one UniformGravity
+        disturbance. The common case for sims that don't care about
+        position-dependent gravity. Returns self for chaining."""
+        gf = GravityField()
+        gf.add(UniformGravity(g_vec))
+        return self.add_field(gf)
+
+    def get_field(self, cls: type) -> Field | None:
+        """Return the registered field of type `cls`, or None."""
+        return self._fields.get(cls)
+
     @property
-    def gravity(self) -> tuple[float, float, float]:
-        return self._gravity_world
+    def fields(self) -> tuple[Field, ...]:
+        return tuple(self._fields.values())
 
     @property
     def anchors(self) -> dict[str, Anchor]:
@@ -250,9 +281,10 @@ class World:
             entry = comp_crafts[0]
             craft  = entry["craft"]
             anchor = entry["anchor"]
-            # Resolve gravity: anchor override → world default.
-            g = anchor.gravity if anchor.gravity is not None else self._gravity_world
-            tick = craft.compile_tick(gravity_anchor=g)
+            # GravityField lookup — if unregistered, gravity is zero
+            # (the field's _zero_value).
+            gravity_field = self._fields.get(GravityField)
+            tick = craft.compile_tick(gravity_field=gravity_field)
             init = craft.initial_state(**entry["initial_state_overrides"])
             compiled[comp_id] = {
                 "craft":   craft,

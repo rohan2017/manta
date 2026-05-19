@@ -30,7 +30,7 @@ def main() -> None:
     c.add(PositionSensor("gps"))
 
     # Sim — through the public World/CompiledWorld surface.
-    w = World().set_gravity(g_world)
+    w = World().add_uniform_gravity(g_world)
     w.add_craft(c, position=(0.0, 0.0, 5.0))
     cw = w.compile()
     sim = cw.initial_state()

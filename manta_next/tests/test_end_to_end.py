@@ -124,7 +124,7 @@ def test_hover_with_eskf_tracks_ground_truth():
 
     # Sim path: use World/CompiledWorld so the demo exercises the public
     # surface used by user code.
-    w = World().set_gravity(g_world)
+    w = World().add_uniform_gravity(g_world)
     w.add_craft(c, position=(0.0, 0.0, 5.0))
     cw = w.compile()
     sim = cw.initial_state()
@@ -243,7 +243,7 @@ def test_eskf_nees_consistency_over_seeds():
     for seed in range(5):
         rng = np.random.default_rng(seed=seed)
         c = make_craft()
-        w = World().set_gravity(g_world)
+        w = World().add_uniform_gravity(g_world)
         w.add_craft(c, position=(0, 0, 5))
         cw = w.compile()
         sim = cw.initial_state()
