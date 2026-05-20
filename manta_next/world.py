@@ -41,7 +41,9 @@ from typing import Any
 import numpy as np
 
 from .craft import Craft
-from .fields import Field, GravityField, UniformGravity
+from .fields import (
+    Field, FluidField, GravityField, UniformFluid, UniformGravity,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +151,23 @@ class World:
         gf = GravityField()
         gf.add(UniformGravity(g_vec))
         return self.add_field(gf)
+
+    def add_uniform_fluid(self,
+                          density: float,
+                          velocity: tuple[float, float, float] = (0.0, 0.0, 0.0)
+                          ) -> "World":
+        """Shortcut: register a FluidField with one UniformFluid disturbance.
+
+        Common values:
+          * density=1.225, velocity=(0,0,0)  — standard sea-level air
+          * density=1025                       — seawater
+          * density=1000                       — fresh water
+
+        Returns self for chaining.
+        """
+        ff = FluidField()
+        ff.add(UniformFluid(density, velocity))
+        return self.add_field(ff)
 
     def get_field(self, cls: type) -> Field | None:
         """Return the registered field of type `cls`, or None."""
@@ -281,10 +300,13 @@ class World:
             entry = comp_crafts[0]
             craft  = entry["craft"]
             anchor = entry["anchor"]
-            # GravityField lookup — if unregistered, gravity is zero
-            # (the field's _zero_value).
+            # Field lookups — if unregistered, the field defaults to its
+            # zero value (zero gravity / zero density), so parts that
+            # depend on them produce zero contribution.
             gravity_field = self._fields.get(GravityField)
-            tick = craft.compile_tick(gravity_field=gravity_field)
+            fluid_field   = self._fields.get(FluidField)
+            tick = craft.compile_tick(gravity_field=gravity_field,
+                                       fluid_field=fluid_field)
             init = craft.initial_state(**entry["initial_state_overrides"])
             compiled[comp_id] = {
                 "craft":   craft,

@@ -47,20 +47,37 @@ class TickContext:
     Exposes the symbolic craft body state + environment to part code so
     a Part's `update()` can read everything it physically depends on:
 
-      gravity          : Vec3[CraftFrame]            — world-frame gravity
+      gravity          : Vec3[CraftFrame]            — gravity at the
+                                                       craft origin,
                                                        rotated into craft
-                                                       frame each tick.
+                                                       frame. Convenience
+                                                       for Mass-like parts
+                                                       that don't care
+                                                       about field spatial
+                                                       variation across
+                                                       the body.
+      gravity_field    : GravityField                — registered field
+                                                       instance. Use for
+                                                       position-sensitive
+                                                       queries (e.g.
+                                                       point-mass-gravity
+                                                       sampled at a
+                                                       buoyancy point).
+                                                       Always non-None —
+                                                       empty when
+                                                       unregistered.
+      fluid_field      : FluidField                  — registered fluid
+                                                       field. Same idiom
+                                                       as gravity_field.
       dt               : Scalar                      — integrator timestep.
       position         : Vec3[AnchorFrame]           — craft origin in
-                                                       anchor frame. What a
-                                                       GPS / motion-capture
-                                                       sensor reads.
+                                                       anchor frame.
       orientation      : Quat[AnchorFrame,CraftFrame]— craft attitude.
       velocity         : Vec3[AnchorFrame]           — anchor-frame linear
                                                        velocity.
       angular_velocity : Vec3[CraftFrame]            — body angular velocity
-                                                       ω. What an onboard
-                                                       rate gyro reads.
+                                                       ω. What a rate gyro
+                                                       reads.
       velocity_body    : Vec3[CraftFrame]            — body linear velocity
                                                        (R^T · v_anchor).
                                                        What a DVL reads.
@@ -70,13 +87,15 @@ class TickContext:
     A post-Newton-Euler sensor phase would expose it cleanly; deferred.
     """
 
-    __slots__ = ("gravity", "dt",
+    __slots__ = ("gravity", "gravity_field", "fluid_field", "dt",
                  "position", "orientation", "velocity",
                  "angular_velocity", "velocity_body")
 
     def __init__(self,
                  *,
                  gravity: Vec3,
+                 gravity_field,
+                 fluid_field,
                  dt: Scalar,
                  position: Vec3,
                  orientation: Quat,
@@ -84,6 +103,8 @@ class TickContext:
                  angular_velocity: Vec3,
                  velocity_body: Vec3) -> None:
         self.gravity = gravity
+        self.gravity_field = gravity_field
+        self.fluid_field = fluid_field
         self.dt = dt
         self.position = position
         self.orientation = orientation
@@ -224,6 +245,7 @@ class Craft:
     def compile_tick(self,
                      *,
                      gravity_field: "Field | None" = None,
+                     fluid_field:   "Field | None" = None,
                      gravity_anchor: tuple[float, float, float] | None = None,
                      ) -> "ir.graph.CompiledGraph":
         """Trace the 6-DOF rigid-body tick into a callable function.
@@ -254,7 +276,11 @@ class Craft:
         Other input: dt (scalar).
         """
         # Resolve gravity source.
-        from .fields import GravityField as _GravityField, UniformGravity as _UniformGravity
+        from .fields import (
+            FluidField as _FluidField,
+            GravityField as _GravityField,
+            UniformGravity as _UniformGravity,
+        )
         if gravity_field is not None and gravity_anchor is not None:
             raise ValueError(
                 "Craft.compile_tick: pass `gravity_field` OR "
@@ -265,6 +291,10 @@ class Craft:
         if gravity_field is None:
             # No gravity specified → zero field (in-vacuum).
             gravity_field = _GravityField()
+        if fluid_field is None:
+            # No fluid specified → zero density / zero velocity. Parts
+            # like PointBuoy will produce zero contribution.
+            fluid_field = _FluidField()
         if not self._parts:
             raise ValueError(f"Craft '{self.name}': no parts added.")
 
@@ -295,6 +325,8 @@ class Craft:
 
             ctx = TickContext(
                 gravity=g_craft,
+                gravity_field=gravity_field,
+                fluid_field=fluid_field,
                 dt=dt,
                 position=position,
                 orientation=orientation,
