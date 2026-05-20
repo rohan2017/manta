@@ -42,7 +42,7 @@ import numpy as np
 
 from .craft import Craft
 from .fields import (
-    Field, FluidField, GravityField, MagField,
+    CollisionField, Field, FluidField, GravityField, MagField,
     UniformFluid, UniformGravity, UniformMag,
 )
 
@@ -312,9 +312,10 @@ class World:
         components = self._compute_components()
         compiled: dict[str, dict] = {}
         # Field lookups (shared across components).
-        gravity_field = self._fields.get(GravityField)
-        fluid_field   = self._fields.get(FluidField)
-        mag_field     = self._fields.get(MagField)
+        gravity_field   = self._fields.get(GravityField)
+        fluid_field     = self._fields.get(FluidField)
+        mag_field       = self._fields.get(MagField)
+        collision_field = self._fields.get(CollisionField)
 
         for comp_id, comp_entries in components.items():
             comp_crafts = [e["craft"] for e in comp_entries]
@@ -324,7 +325,8 @@ class World:
                 tick = craft.compile_tick(
                     gravity_field=gravity_field,
                     fluid_field=fluid_field,
-                    mag_field=mag_field)
+                    mag_field=mag_field,
+                    collision_field=collision_field)
                 init = craft.initial_state(
                     **comp_entries[0]["initial_state_overrides"])
                 compiled[comp_id] = {

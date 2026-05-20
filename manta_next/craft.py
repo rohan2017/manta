@@ -88,6 +88,7 @@ class TickContext:
     """
 
     __slots__ = ("gravity", "gravity_field", "fluid_field", "mag_field",
+                 "collision_field",
                  "dt", "position", "orientation", "velocity",
                  "angular_velocity", "velocity_body")
 
@@ -97,6 +98,7 @@ class TickContext:
                  gravity_field,
                  fluid_field,
                  mag_field,
+                 collision_field,
                  dt: Scalar,
                  position: Vec3,
                  orientation: Quat,
@@ -107,6 +109,7 @@ class TickContext:
         self.gravity_field = gravity_field
         self.fluid_field = fluid_field
         self.mag_field = mag_field
+        self.collision_field = collision_field
         self.dt = dt
         self.position = position
         self.orientation = orientation
@@ -246,9 +249,10 @@ class Craft:
 
     def compile_tick(self,
                      *,
-                     gravity_field: "Field | None" = None,
-                     fluid_field:   "Field | None" = None,
-                     mag_field:     "Field | None" = None,
+                     gravity_field:   "Field | None" = None,
+                     fluid_field:     "Field | None" = None,
+                     mag_field:       "Field | None" = None,
+                     collision_field: "Field | None" = None,
                      gravity_anchor: tuple[float, float, float] | None = None,
                      ) -> "ir.graph.CompiledGraph":
         """Trace the 6-DOF rigid-body tick into a callable function.
@@ -280,6 +284,7 @@ class Craft:
         """
         # Resolve gravity source.
         from .fields import (
+            CollisionField as _CollisionField,
             FluidField as _FluidField,
             GravityField as _GravityField,
             MagField as _MagField,
@@ -302,6 +307,10 @@ class Craft:
         if mag_field is None:
             # No magnetic field specified → zero B everywhere.
             mag_field = _MagField()
+        if collision_field is None:
+            # No obstacles → zero penetration vector everywhere. Collider
+            # parts contribute zero contact force.
+            collision_field = _CollisionField()
         if not self._parts:
             raise ValueError(f"Craft '{self.name}': no parts added.")
 
@@ -335,6 +344,7 @@ class Craft:
                 gravity_field=gravity_field,
                 fluid_field=fluid_field,
                 mag_field=mag_field,
+                collision_field=collision_field,
                 dt=dt,
                 position=position,
                 orientation=orientation,

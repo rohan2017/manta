@@ -29,10 +29,12 @@ from .base import Disturbance, Field
 from .gravity import GravityField, PointMassGravity, UniformGravity
 from .fluid   import CurrentFlow, FluidField, FluidState, UniformFluid
 from .mag     import DipoleMag, MagField, UniformMag
+from .collision import CollisionField, HalfSpace
 
 __all__ = [
     "Disturbance", "Field",
     "GravityField", "UniformGravity", "PointMassGravity",
     "FluidField", "FluidState", "UniformFluid", "CurrentFlow",
     "MagField", "UniformMag", "DipoleMag",
+    "CollisionField", "HalfSpace",
 ]

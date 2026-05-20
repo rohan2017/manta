@@ -62,6 +62,7 @@ def compile_coupled_tick(crafts: list,
     """
     # Resolve field defaults.
     from .fields import (
+        CollisionField as _CollisionField,
         FluidField as _FluidField,
         GravityField as _GravityField,
         MagField as _MagField,
@@ -72,6 +73,9 @@ def compile_coupled_tick(crafts: list,
         fluid_field = _FluidField()
     if mag_field is None:
         mag_field = _MagField()
+    # Coupled-tick callers don't currently expose collision_field —
+    # default to empty. Wiring it through is a small follow-up.
+    collision_field = _CollisionField()
 
     if not crafts:
         raise ValueError("compile_coupled_tick: needs at least one craft.")
@@ -107,7 +111,8 @@ def compile_coupled_tick(crafts: list,
         per_craft: dict[int, dict[str, Any]] = {}
         for craft in crafts:
             per_craft[id(craft)] = _trace_craft_pass1(
-                g, craft, gravity_field, fluid_field, mag_field, dt)
+                g, craft, gravity_field, fluid_field, mag_field, dt,
+                collision_field=collision_field)
 
         # Pass 2: coupling wrench injection.
         for cp in couplings:
@@ -137,7 +142,8 @@ def _trace_craft_pass1(g_ctx,
                        gravity_field,
                        fluid_field,
                        mag_field,
-                       dt) -> dict[str, Any]:
+                       dt,
+                       collision_field=None) -> dict[str, Any]:
     """Set up one craft's state inputs, part rebinds, TickContext, run
     all parts' update(), and collect their wrench contributions + state
     outputs + sensor outputs. Returns a dict carrying everything the
@@ -154,11 +160,15 @@ def _trace_craft_pass1(g_ctx,
     g_anchor = gravity_field.state_at_sym(position)
     g_craft  = orientation.conjugate().apply(g_anchor)
     v_body   = orientation.conjugate().apply(velocity)
+    if collision_field is None:
+        from .fields import CollisionField as _CF
+        collision_field = _CF()
     ctx = TickContext(
         gravity=g_craft,
         gravity_field=gravity_field,
         fluid_field=fluid_field,
         mag_field=mag_field,
+        collision_field=collision_field,
         dt=dt,
         position=position,
         orientation=orientation,
