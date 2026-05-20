@@ -87,8 +87,8 @@ class TickContext:
     A post-Newton-Euler sensor phase would expose it cleanly; deferred.
     """
 
-    __slots__ = ("gravity", "gravity_field", "fluid_field", "dt",
-                 "position", "orientation", "velocity",
+    __slots__ = ("gravity", "gravity_field", "fluid_field", "mag_field",
+                 "dt", "position", "orientation", "velocity",
                  "angular_velocity", "velocity_body")
 
     def __init__(self,
@@ -96,6 +96,7 @@ class TickContext:
                  gravity: Vec3,
                  gravity_field,
                  fluid_field,
+                 mag_field,
                  dt: Scalar,
                  position: Vec3,
                  orientation: Quat,
@@ -105,6 +106,7 @@ class TickContext:
         self.gravity = gravity
         self.gravity_field = gravity_field
         self.fluid_field = fluid_field
+        self.mag_field = mag_field
         self.dt = dt
         self.position = position
         self.orientation = orientation
@@ -246,6 +248,7 @@ class Craft:
                      *,
                      gravity_field: "Field | None" = None,
                      fluid_field:   "Field | None" = None,
+                     mag_field:     "Field | None" = None,
                      gravity_anchor: tuple[float, float, float] | None = None,
                      ) -> "ir.graph.CompiledGraph":
         """Trace the 6-DOF rigid-body tick into a callable function.
@@ -279,6 +282,7 @@ class Craft:
         from .fields import (
             FluidField as _FluidField,
             GravityField as _GravityField,
+            MagField as _MagField,
             UniformGravity as _UniformGravity,
         )
         if gravity_field is not None and gravity_anchor is not None:
@@ -295,6 +299,9 @@ class Craft:
             # No fluid specified → zero density / zero velocity. Parts
             # like PointBuoy will produce zero contribution.
             fluid_field = _FluidField()
+        if mag_field is None:
+            # No magnetic field specified → zero B everywhere.
+            mag_field = _MagField()
         if not self._parts:
             raise ValueError(f"Craft '{self.name}': no parts added.")
 
@@ -327,6 +334,7 @@ class Craft:
                 gravity=g_craft,
                 gravity_field=gravity_field,
                 fluid_field=fluid_field,
+                mag_field=mag_field,
                 dt=dt,
                 position=position,
                 orientation=orientation,

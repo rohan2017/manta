@@ -42,7 +42,8 @@ import numpy as np
 
 from .craft import Craft
 from .fields import (
-    Field, FluidField, GravityField, UniformFluid, UniformGravity,
+    Field, FluidField, GravityField, MagField,
+    UniformFluid, UniformGravity, UniformMag,
 )
 
 
@@ -168,6 +169,21 @@ class World:
         ff = FluidField()
         ff.add(UniformFluid(density, velocity))
         return self.add_field(ff)
+
+    def add_uniform_mag(self,
+                        B_vec: tuple[float, float, float]) -> "World":
+        """Shortcut: register a MagField with one UniformMag disturbance.
+
+        Common Earth-field first-order approximations (Tesla):
+          * Equator:   (3e-5, 0, 0)       — ~30 µT horizontal
+          * Mid-lat:   (2e-5, 0, -4.5e-5) — ~50 µT inclined
+          * Pole:      (0, 0, -6e-5)      — ~60 µT vertical
+
+        Returns self for chaining.
+        """
+        mf = MagField()
+        mf.add(UniformMag(B_vec))
+        return self.add_field(mf)
 
     def get_field(self, cls: type) -> Field | None:
         """Return the registered field of type `cls`, or None."""
@@ -301,12 +317,14 @@ class World:
             craft  = entry["craft"]
             anchor = entry["anchor"]
             # Field lookups — if unregistered, the field defaults to its
-            # zero value (zero gravity / zero density), so parts that
-            # depend on them produce zero contribution.
+            # zero value (zero gravity / zero density / zero B), so parts
+            # that depend on them produce zero contribution.
             gravity_field = self._fields.get(GravityField)
             fluid_field   = self._fields.get(FluidField)
+            mag_field     = self._fields.get(MagField)
             tick = craft.compile_tick(gravity_field=gravity_field,
-                                       fluid_field=fluid_field)
+                                       fluid_field=fluid_field,
+                                       mag_field=mag_field)
             init = craft.initial_state(**entry["initial_state_overrides"])
             compiled[comp_id] = {
                 "craft":   craft,

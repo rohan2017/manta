@@ -13,7 +13,9 @@ from .structure.mass import Mass
 from .structure.point_buoy import PointBuoy
 from .articulation.spinning_rotor import SpinningRotor
 from .articulation.flywheel_motor import FlywheelMotor
+from .sensor.dvl import DVL
 from .sensor.imu import IMU
+from .sensor.magnetometer import Magnetometer
 from .sensor.position_sensor import PositionSensor
 from .actuation.thruster import Thruster
 
@@ -22,6 +24,6 @@ __all__ = [
     "Wrench",
     "Mass", "PointBuoy",
     "SpinningRotor", "FlywheelMotor",
-    "IMU", "PositionSensor",
+    "IMU", "DVL", "Magnetometer", "PositionSensor",
     "Thruster",
 ]
