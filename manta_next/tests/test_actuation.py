@@ -15,11 +15,11 @@ def test_hover_thrust_cancels_gravity():
     m = 2.0
     c = Craft("hover")
     c.add(Mass("body", mass=m, moi=(0.1, 0.1, 0.1)))
-    c.add(Thruster("t", axis=(0.0, 0.0, 1.0)))
+    c.add(Thruster.linear("t", max_thrust=1.0, axis=(0.0, 0.0, 1.0)))
 
     tick = c.compile_tick(gravity_anchor=g_world)
     state = c.initial_state()
-    state["t.thrust_cmd"] = m * 9.81           # exactly counters gravity
+    state["t.throttle"] = m * 9.81           # exactly counters gravity
 
     for _ in range(1000):
         out = tick(dt=0.001, **state)
@@ -40,11 +40,11 @@ def test_excess_thrust_accelerates_up():
     m = 1.0
     c = Craft("ascent")
     c.add(Mass("body", mass=m, moi=(0.1, 0.1, 0.1)))
-    c.add(Thruster("t"))
+    c.add(Thruster.linear("t", max_thrust=1.0))
 
     tick = c.compile_tick(gravity_anchor=g_world)
     state = c.initial_state()
-    state["t.thrust_cmd"] = m * 9.81 + 1.0     # net = +1 N upward → a = 1 m/s²
+    state["t.throttle"] = m * 9.81 + 1.0     # net = +1 N upward → a = 1 m/s²
 
     for _ in range(1000):
         out = tick(dt=0.001, **state)
@@ -65,11 +65,11 @@ def test_offset_thruster_produces_torque():
     c = Craft("rolling")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     # Thruster mounted at (+1, 0, 0), pointing +z → torque about body y.
-    c.add(Thruster("t", axis=(0.0, 0.0, 1.0), transform=(1.0, 0.0, 0.0)))
+    c.add(Thruster.linear("t", max_thrust=1.0, axis=(0.0, 0.0, 1.0), transform=(1.0, 0.0, 0.0)))
 
     tick = c.compile_tick(gravity_anchor=(0.0, 0.0, 0.0))
     state = c.initial_state()
-    state["t.thrust_cmd"] = 1.0     # 1 N at 1 m → τ = +1 N·m about body y.
+    state["t.throttle"] = 1.0     # 1 N at 1 m → τ = +1 N·m about body y.
 
     for _ in range(100):
         out = tick(dt=0.001, **state)

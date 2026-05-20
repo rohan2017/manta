@@ -15,7 +15,7 @@ from manta_next.parts import IMU, Mass, PositionSensor, Thruster
 def _hover_craft():
     c = Craft("drone")
     c.add(Mass("body", mass=1.5, moi=(0.05, 0.05, 0.08)))
-    c.add(Thruster("t"))
+    c.add(Thruster.linear("t", max_thrust=1.0))
     c.add(IMU("g"))
     c.add(PositionSensor("gps"))
     return c
@@ -32,7 +32,7 @@ def test_extract_returns_complete_function_set():
     assert cf.ambient_dim == 13   # pos(3) + ori(4) + vel(3) + omega(3)
     assert cf.tangent_dim == 12
 
-    assert cf.input_names == ["t.thrust_cmd"]
+    assert cf.input_names == ["t.throttle"]
     assert cf.n_inputs == 1
 
     # predict: in (x, u, dt), out x_new
@@ -66,11 +66,11 @@ def test_predict_fn_matches_compile_tick():
     tick = c.compile_tick(gravity_anchor=(0.0, 0.0, -9.81))
     state = c.initial_state()
     state["position"] = np.array([0.0, 0.0, 5.0])
-    state["t.thrust_cmd"] = 1.5 * 9.81
+    state["t.throttle"] = 1.5 * 9.81
 
     # Pack into flat ambient + flat u.
     x_flat = cf.spec.pack(state)
-    u_flat = np.array([state["t.thrust_cmd"]])
+    u_flat = np.array([state["t.throttle"]])
 
     # Through extracted predict.
     x_new_extract = np.asarray(cf.predict_fn(x_flat, u_flat, 0.005)).ravel()

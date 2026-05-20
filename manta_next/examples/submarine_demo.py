@@ -46,10 +46,10 @@ def main() -> None:
     sub.add(PointBuoy("buoy", volume=V_disp))
     sub.add(DragSurface("hull_drag", area=A_drag, drag_coefficient=Cd_hull))
     # Stern thruster along +x.
-    sub.add(Thruster("propulsion", axis=(1.0, 0.0, 0.0),
+    sub.add(Thruster.linear("propulsion", max_thrust=1.0, axis=(1.0, 0.0, 0.0),
                      transform=(-L/2, 0.0, 0.0)))
     # Vertical thruster for diving.
-    sub.add(Thruster("dive", axis=(0.0, 0.0, -1.0)))
+    sub.add(Thruster.linear("dive", max_thrust=1.0, axis=(0.0, 0.0, -1.0)))
     # Sensors.
     sub.add(IMU("imu"))
     sub.add(DVL("dvl"))
@@ -74,8 +74,8 @@ def main() -> None:
         # Dive thrust on after t=5s: 200 N downward (in body frame).
         thrust_z = 200.0 if t > 5.0 else 0.0
 
-        state["nautilus"]["propulsion.thrust_cmd"] = thrust_x
-        state["nautilus"]["dive.thrust_cmd"]       = thrust_z
+        state["nautilus"]["propulsion.throttle"] = thrust_x
+        state["nautilus"]["dive.throttle"]       = thrust_z
         state = cw.step(state, dt=dt)
 
         if (i + 1) % 150 == 0:

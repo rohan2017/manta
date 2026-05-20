@@ -38,7 +38,7 @@ def test_ekf_predict_with_per_tick_input():
     m = 1.0
     c = Craft("hover_ekf")
     c.add(Mass("body", mass=m, moi=(0.1, 0.1, 0.1)))
-    c.add(Thruster("t"))
+    c.add(Thruster.linear("t", max_thrust=1.0))
 
     # Sim
     tick = c.compile_tick(gravity_anchor=g)
@@ -59,12 +59,12 @@ def test_ekf_predict_with_per_tick_input():
             thrust = 2.0 * m * 9.81
 
         # Sim step.
-        sim_state["t.thrust_cmd"] = thrust
+        sim_state["t.throttle"] = thrust
         out = tick(dt=dt, **sim_state)
         sim_state = {**sim_state, **out}
 
         # EKF predict step.
-        ekf.predict(dt=dt, u={"t.thrust_cmd": thrust})
+        ekf.predict(dt=dt, u={"t.throttle": thrust})
 
     # No measurements, no noise — should agree to round-off.
     est = ekf.state_dict()
@@ -82,8 +82,8 @@ def test_ekf_predict_input_default_fallback():
     g = (0.0, 0.0, -9.81)
     c = Craft("default_thrust")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
-    # Thruster default thrust_cmd=0 — craft should free-fall.
-    c.add(Thruster("t"))
+    # Thruster default throttle=0 — craft should free-fall.
+    c.add(Thruster.linear("t", max_thrust=1.0))
     ekf = EKF(c, gravity_anchor=g)
     for _ in range(200):
         ekf.predict(dt=0.005)
@@ -96,7 +96,7 @@ def test_ekf_predict_input_default_fallback():
 def test_ekf_predict_unknown_input_raises():
     c = Craft("any")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
-    c.add(Thruster("t"))
+    c.add(Thruster.linear("t", max_thrust=1.0))
     ekf = EKF(c, gravity_anchor=(0.0, 0.0, 0.0))
     with pytest.raises(KeyError, match="unknown input"):
         ekf.predict(dt=0.01, u={"nope.bad": 1.0})
@@ -118,7 +118,7 @@ def test_hover_with_eskf_tracks_ground_truth():
     # Build the craft once; sim and EKF share the same instance.
     c = Craft("drone")
     c.add(Mass("body", mass=m, moi=(0.05, 0.05, 0.08)))
-    c.add(Thruster("t"))
+    c.add(Thruster.linear("t", max_thrust=1.0))
     c.add(IMU("g"))
     c.add(PositionSensor("gps"))
 
@@ -128,7 +128,7 @@ def test_hover_with_eskf_tracks_ground_truth():
     w.add_craft(c, position=(0.0, 0.0, 5.0))
     cw = w.compile()
     sim = cw.initial_state()
-    sim["drone"]["t.thrust_cmd"] = m * 9.81   # hover
+    sim["drone"]["t.throttle"] = m * 9.81   # hover
 
     # EKF path. Initial estimate offset from truth so we can watch it pull
     # in via measurement updates.
@@ -163,7 +163,7 @@ def test_hover_with_eskf_tracks_ground_truth():
 
     for i in range(n_steps):
         # Sim step.
-        sim["drone"]["t.thrust_cmd"] = thrust
+        sim["drone"]["t.throttle"] = thrust
         sim = cw.step(sim, dt=dt)
 
         # Read noisy sensor outputs from the sim tick result.
@@ -173,7 +173,7 @@ def test_hover_with_eskf_tracks_ground_truth():
         pos_meas  = pos_clean  + rng.normal(0.0, sigma_pos,  3)
 
         # EKF predict with the SAME commanded thrust as the sim.
-        ekf.predict(dt=dt, u={"t.thrust_cmd": thrust}, Q=Q)
+        ekf.predict(dt=dt, u={"t.throttle": thrust}, Q=Q)
 
         # Gyro update every tick.
         ekf.update(h_gyro, gyro_meas, R_gyro)
@@ -229,7 +229,7 @@ def test_eskf_nees_consistency_over_seeds():
     def make_craft():
         c = Craft("drone")
         c.add(Mass("body", mass=m, moi=(0.05, 0.05, 0.08)))
-        c.add(Thruster("t"))
+        c.add(Thruster.linear("t", max_thrust=1.0))
         c.add(IMU("g"))
         c.add(PositionSensor("gps"))
         return c
@@ -262,13 +262,13 @@ def test_eskf_nees_consistency_over_seeds():
                                  [ekf.spec.boxminus_sym(xa, xb)])
 
         for i in range(n):
-            sim["drone"]["t.thrust_cmd"] = thrust
+            sim["drone"]["t.throttle"] = thrust
             sim = cw.step(sim, dt=dt)
             gyro_meas = (np.array(sim["drone"]["g.gyro"]).ravel()
                          + rng.normal(0.0, sigma_gyro, 3))
             pos_meas  = (np.array(sim["drone"]["gps.position"]).ravel()
                          + rng.normal(0.0, sigma_pos,  3))
-            ekf.predict(dt=dt, u={"t.thrust_cmd": thrust}, Q=Q)
+            ekf.predict(dt=dt, u={"t.throttle": thrust}, Q=Q)
             ekf.update(h_gyro, gyro_meas, R_gyro)
             if i % 4 == 0:
                 ekf.update(h_pos, pos_meas, R_pos)

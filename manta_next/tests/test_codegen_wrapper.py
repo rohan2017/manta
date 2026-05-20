@@ -17,7 +17,7 @@ from manta_next.parts import IMU, Mass, PositionSensor, Thruster
 def _hover_craft():
     c = Craft("drone")
     c.add(Mass("body", mass=1.5, moi=(0.05, 0.05, 0.08)))
-    c.add(Thruster("t"))
+    c.add(Thruster.linear("t", max_thrust=1.0))
     c.add(IMU("g"))
     c.add(PositionSensor("gps"))
     return c
@@ -52,7 +52,7 @@ def test_wrapper_hpp_declares_typed_state_and_methods(tmp_path: Path):
             f"missing {ty} {fld} in:\n{hpp}")
 
     # Thrust input.
-    assert "double t_thrust_cmd" in hpp
+    assert "double t_throttle" in hpp
 
     # Methods.
     assert "predict(const State&" in hpp

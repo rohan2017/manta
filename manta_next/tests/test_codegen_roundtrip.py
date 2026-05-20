@@ -31,7 +31,7 @@ from manta_next.parts import IMU, Mass, PositionSensor, Thruster
 def _hover_craft():
     c = Craft("drone")
     c.add(Mass("body", mass=1.5, moi=(0.05, 0.05, 0.08)))
-    c.add(Thruster("t"))
+    c.add(Thruster.linear("t", max_thrust=1.0))
     c.add(IMU("g"))
     c.add(PositionSensor("gps"))
     return c
@@ -48,7 +48,7 @@ int main() {
     x.velocity << 0.5, 0.0, 0.0;
 
     manta_next_gen::Drone::Inputs u;
-    u.t_thrust_cmd = 1.5 * 9.81;
+    u.t_throttle = 1.5 * 9.81;
 
     const int N = 200;
     const double dt = 0.005;
@@ -140,7 +140,7 @@ def test_python_cpp_roundtrip(tmp_path: Path):
     state = craft.initial_state()
     state["position"] = np.array([0.0, 0.0, 5.0])
     state["velocity"] = np.array([0.5, 0.0, 0.0])
-    state["t.thrust_cmd"] = 1.5 * 9.81
+    state["t.throttle"] = 1.5 * 9.81
     for _ in range(200):
         out = tick(dt=0.005, **state)
         state = {**state, **out}
@@ -152,7 +152,7 @@ def test_python_cpp_roundtrip(tmp_path: Path):
     # Jacobian sanity checks via extract.
     funcs = result.funcs
     x_flat = funcs.spec.pack(state)
-    u_flat = np.array([state["t.thrust_cmd"]])
+    u_flat = np.array([state["t.throttle"]])
     F_py = np.asarray(funcs.predict_jacobian_fn(x_flat, u_flat, 0.005))
     H_pos_py = np.asarray(
         next(o for o in funcs.outputs if o.full_name == "gps.position"

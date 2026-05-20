@@ -25,7 +25,7 @@ def main() -> None:
     # Build the craft.
     c = Craft("drone")
     c.add(Mass("body", mass=m, moi=(0.05, 0.05, 0.08)))
-    c.add(Thruster("t"))
+    c.add(Thruster.linear("t", max_thrust=1.0))
     c.add(IMU("g"))
     c.add(PositionSensor("gps"))
 
@@ -65,7 +65,7 @@ def main() -> None:
     print(f"{'t (s)':>6}  {'truth_z (m)':>11}  {'est_z (m)':>10}  "
           f"{'pos err (m)':>11}  {'vel err (m/s)':>13}  {'tr(P)':>8}")
     for i in range(n):
-        sim["drone"]["t.thrust_cmd"] = thrust
+        sim["drone"]["t.throttle"] = thrust
         sim = cw.step(sim, dt=dt)
 
         gyro = np.array(sim["drone"]["g.gyro"]).ravel()
@@ -73,7 +73,7 @@ def main() -> None:
         gyro_meas = gyro + rng.normal(0.0, sigma_gyro, 3)
         pos_meas  = pos  + rng.normal(0.0, sigma_pos,  3)
 
-        ekf.predict(dt=dt, u={"t.thrust_cmd": thrust}, Q=Q)
+        ekf.predict(dt=dt, u={"t.throttle": thrust}, Q=Q)
         ekf.update(h_gyro, gyro_meas, R_gyro)
         if i % 4 == 0:
             ekf.update(h_pos, pos_meas, R_pos)

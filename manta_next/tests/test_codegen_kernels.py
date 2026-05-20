@@ -15,7 +15,7 @@ from manta_next.parts import IMU, Mass, PositionSensor, Thruster
 def _hover_craft():
     c = Craft("drone")
     c.add(Mass("body", mass=1.5, moi=(0.05, 0.05, 0.08)))
-    c.add(Thruster("t"))
+    c.add(Thruster.linear("t", max_thrust=1.0))
     c.add(IMU("g"))
     c.add(PositionSensor("gps"))
     return c

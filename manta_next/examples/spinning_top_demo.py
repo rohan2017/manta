@@ -33,7 +33,7 @@ def _build_top(rotor_rate: float) -> Craft:
     c = Craft("top")
     c.add(Mass("body", mass=0.2, moi=(0.005, 0.005, 0.001)))
     c.add(FlywheelMotor("rotor", I_axial=0.001, axis=(0.0, 0.0, 1.0)))
-    c.add(Thruster("kick", axis=(0.0, 0.0, 1.0), transform=(0.0, 0.1, 0.0)))
+    c.add(Thruster.linear("kick", max_thrust=1.0, axis=(0.0, 0.0, 1.0), transform=(0.0, 0.1, 0.0)))
     return c
 
 
@@ -56,7 +56,7 @@ def _run_scenario(label: str, rotor_rate: float) -> None:
     for i in range(n):
         t = i * dt
         thrust = 0.5 if 0.1 <= t < 0.2 else 0.0
-        state["top"]["kick.thrust_cmd"] = thrust
+        state["top"]["kick.throttle"] = thrust
         state = cw.step(state, dt=dt)
 
         if i in (99, 199, 499, 999, 1999, 2999):
