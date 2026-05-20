@@ -17,6 +17,7 @@
 
 #include <Eigen/Core>
 #include <Eigen/Geometry>
+#include <zenoh.hxx>
 
 namespace manta_gen::ex5_est {
 
@@ -43,6 +44,12 @@ using EkfT    = manta_gen::ex5_est::EkfT;
 
 EkfT::StateCov g_Q = EkfT::StateCov::Zero();
 
+std::optional<zenoh::Session> g_session;
+// ---- Out-bindings: estimate publishers ----
+std::optional<zenoh::Publisher> est_pub_0;
+constexpr int kEstPubEvery = 20;  // ~50 Hz
+int g_est_pub_decim = 0;
+
 }  // namespace
 
 namespace manta_gen::ex5_est {
@@ -51,10 +58,13 @@ void setup() {
     w.clock().set_dt(DT);
     scene = &w.create_scene();
     w.register_field(field_0);
-    scene->add_craft(craft);
+    scene->add_craft(craft, manta::InitialState{});
 
-    // Initial state.
-    view_0.reset_to_rest();
+    g_session.emplace(zenoh::Session::open(zenoh::Config::create_default()));
+    est_pub_0.emplace(g_session->declare_publisher(zenoh::KeyExpr("manta/ex5/estimate")));
+
+    // Initial state — mirror World.add_craft's spawn pose.
+    view_0.set_state(Eigen::Vector3d{0.0f, 0.0f, 0.0f}, Eigen::Vector4d{1.0f, 0.0f, 0.0f, 0.0f}, Eigen::Vector3d{0.0f, 0.0f, 0.0f}, Eigen::Vector3d{0.0f, 0.0f, 0.0f});
     view_0.set_state_covariance(0.0001f, 0.0001f, 0.01f, 0.0001f);
 
     // Measurement registrations.
@@ -68,9 +78,42 @@ void tick() {
     view_0.template jet_craft<Ex5EstCraftT<JetType>>().thrust().set_throttle(JetType(manta_gen::ex5_sim::craft.thrust().throttle()));
     ekf_0.predict(DT, g_Q);
     ekf_0.run_pending_updates();
+    if (++g_est_pub_decim >= kEstPubEvery) {
+        g_est_pub_decim = 0;
+        { std::string _json = "{";
+          _json += "\"p\":[";
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", "", double(view_0.position()(0))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(view_0.position()(1))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(view_0.position()(2))); _json += _b; }
+          _json += "]";
+          _json += ",";
+          _json += "\"v\":[";
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", "", double(view_0.vel_linear()(0))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(view_0.vel_linear()(1))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(view_0.vel_linear()(2))); _json += _b; }
+          _json += "]";
+          _json += ",";
+          _json += "\"p_stddev\":[";
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", "", double(view_0.position_stddev()(0))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(view_0.position_stddev()(1))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(view_0.position_stddev()(2))); _json += _b; }
+          _json += "]";
+          _json += ",";
+          _json += "\"v_stddev\":[";
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", "", double(view_0.vel_linear_stddev()(0))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(view_0.vel_linear_stddev()(1))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(view_0.vel_linear_stddev()(2))); _json += _b; }
+          _json += "]";
+          _json += "}";
+          est_pub_0->put(zenoh::Bytes(_json));
+        }
+    }
 }
 
-void shutdown() {}
+void shutdown() {
+    est_pub_0.reset();
+    g_session.reset();
+}
 
 Harness harness{};
 void Harness::setup()    { manta_gen::ex5_est::setup(); }

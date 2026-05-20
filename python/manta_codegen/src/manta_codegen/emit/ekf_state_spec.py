@@ -21,8 +21,73 @@ multi-craft EKFs are migrated in subsequent passes.
 
 from __future__ import annotations
 
+import re
+
 from .._format import cpp_float as _f, cpp_mfloat as _mf
 from ._util import GENERATED_BANNER, CPP_INCLUDE_GUARD, class_name_for_craft
+
+
+# ---- EKF estimate publishers ------------------------------------------
+#
+# For each `publish({"p": ekf.position, ...}, "manta/.../estimate")` on
+# the filter's world, emit a Zenoh publisher whose put() body serializes
+# the bundled signals to JSON.
+#
+# The signal's cpp_read_exprs come from the Python EKF descriptor in the
+# legacy `{accessor}.<method>(craft_idx)(i)` form, which targeted the
+# now-retired `WorldEKF<NumCrafts, MeasDim>` C++ class. The current C++
+# API exposes per-craft state through `CraftView` instances — `view_0`,
+# `view_1`, … — with no-argument `.position()`, `.position_stddev()`,
+# etc. We rewrite each expression on emit to `view_<idx>.<method>()(i)`
+# so it compiles against the up-to-date StateSpec/CraftView API.
+_EKF_EXPR_RE = re.compile(r'^\{accessor\}\.(\w+)\((\d+)\)(\(.*\))?$')
+
+
+def _rewrite_ekf_expr(cpp_expr_raw: str, filter_var: str) -> str:
+    m = _EKF_EXPR_RE.match(cpp_expr_raw)
+    if m:
+        method, craft_idx, tail = m.groups()
+        return f"view_{craft_idx}.{method}(){tail or ''}"
+    # Fallback: signals that don't match the per-craft slice pattern fall
+    # through to a plain {accessor} substitution with the filter var.
+    return cpp_expr_raw.format(accessor=filter_var)
+
+
+def _emit_ekf_publish_struct(lines: list, i: int, b, filter_var: str) -> None:
+    if b.encoding != "json":
+        raise NotImplementedError(
+            f"EKF out-binding {b.topic!r}: encoding {b.encoding!r} not "
+            f"supported (only 'json' for now).")
+
+    lines.append('        { std::string _json = "{";')
+    first_member = True
+    for member_name, sig in b.members.items():
+        n = sig.signal.n_floats
+        if not first_member:
+            lines.append('          _json += ",";')
+        first_member = False
+        if n == 1:
+            cpp_expr = _rewrite_ekf_expr(sig.signal.cpp_read_exprs[0], filter_var)
+            lines.append(f'          _json += "\\"{member_name}\\":";')
+            lines.append(
+                f"          {{ char _b[32]; std::snprintf(_b, sizeof(_b), \"%.17g\", "
+                f"double({cpp_expr})); _json += _b; }}"
+            )
+        else:
+            lines.append(f'          _json += "\\"{member_name}\\":[";')
+            for k, expr in enumerate(sig.signal.cpp_read_exprs):
+                cpp_expr = _rewrite_ekf_expr(expr, filter_var)
+                sep = '","' if k > 0 else '""'
+                lines.append(
+                    f"          {{ char _b[32]; std::snprintf(_b, sizeof(_b), \"%s%.17g\", "
+                    f"{sep}, double({cpp_expr})); _json += _b; }}"
+                )
+            lines.append('          _json += "]";')
+    lines += [
+        '          _json += "}";',
+        f"          est_pub_{i}->put(zenoh::Bytes(_json));",
+        "        }",
+    ]
 
 
 # ---- Per-part-type measurement field map -----------------------------
@@ -384,7 +449,15 @@ def emit_filter_cpp(target, filter_obj) -> str:
         "#include <Eigen/Core>",
         "#include <Eigen/Geometry>",
     ]
-    if reading_topics:
+    # Out-direction bindings on the filter's own world (e.g.
+    # `publish({"p": ekf.position, ...}, "manta/.../estimate")`). The
+    # codegen emits a Zenoh publisher per binding so the EKF's state
+    # estimate is observable to a viewer/external consumer. EKF signals'
+    # `{accessor}` resolves to `filter_var` (e.g. `ekf_0`) — see
+    # `_emit_ekf_publish_struct` below.
+    out_bindings: list = [b for b in world.bindings if b.direction == "out"]
+    needs_zenoh = bool(reading_topics) or bool(out_bindings)
+    if needs_zenoh:
         lines.append("#include <zenoh.hxx>")
     lines += [
         "",
@@ -448,10 +521,25 @@ def emit_filter_cpp(target, filter_obj) -> str:
         "",
     ]
 
-    # Pattern C reading buffers + atomics + Zenoh handles.
+    # Shared Zenoh session for both reading subs (Pattern C) and the
+    # estimate publishers (out-bindings). One session per filter target;
+    # opened in setup() if either feature is in use.
+    if needs_zenoh:
+        lines.append("std::optional<zenoh::Session> g_session;")
+
+    # Out-binding publisher slots.
+    if out_bindings:
+        lines.append("// ---- Out-bindings: estimate publishers ----")
+        for i, _b in enumerate(out_bindings):
+            lines.append(
+                f"std::optional<zenoh::Publisher> est_pub_{i};")
+        lines.append("constexpr int kEstPubEvery = 20;  // ~50 Hz")
+        lines.append("int g_est_pub_decim = 0;")
+        lines.append("")
+
+    # Pattern C reading buffers + atomics + Zenoh subscriber handles.
     if reading_topics:
         lines.append("// ---- Pattern C reading sources (Zenoh-fed buffers) ----")
-        lines.append("std::optional<zenoh::Session> g_reading_session;")
         for ci, part, _topic in reading_topics:
             for field_name, dim in _meas_fields_for(part):
                 lines.append(
@@ -508,8 +596,25 @@ def emit_filter_cpp(target, filter_obj) -> str:
     # Register fields on the est world.
     for i, f in enumerate(world.fields):
         lines.append(f"    w.register_field(field_{i});")
-    for i in range(num):
-        lines.append(f"    scene->add_craft({craft_var_for(i)});")
+
+    # Add est crafts with the same initial pose the user passed to
+    # `world.add_craft(c, pos=..., orientation=..., ...)`. This keeps
+    # the est-side craft state consistent with the sim's spawn pose;
+    # the CraftView's `set_state(...)` below mirrors it into the EKF's
+    # tracked state vector so the filter starts at the right place.
+    from .main import _initial_state_literal
+    # Index the world's per-craft entries by craft identity, since
+    # `crafts` was deduplicated (`_world_unique_crafts`) and we need
+    # to look up each one's CraftEntry to get the initial pose.
+    entry_by_craft_id = {id(entry.craft): entry for entry in world.crafts}
+    init_entries = [entry_by_craft_id.get(id(c)) for c in crafts]
+    for i, entry in enumerate(init_entries):
+        if entry is None:
+            lines.append(f"    scene->add_craft({craft_var_for(i)});")
+        else:
+            lines.append(
+                f"    scene->add_craft({craft_var_for(i)}, "
+                f"{_initial_state_literal(entry)});")
 
     # Sim worlds: their own modules' setup() builds them. Nothing for
     # us to do here — the orchestrator (<target>.cpp) will call each
@@ -519,18 +624,22 @@ def emit_filter_cpp(target, filter_obj) -> str:
     # by the CraftViews above; the EKF lazy-finalizes on first predict().
     lines.append("")
 
+    # Open the Zenoh session once if either reading-topic subs or
+    # estimate publishers are in use.
+    if needs_zenoh:
+        lines.append("    g_session.emplace("
+                     "zenoh::Session::open(zenoh::Config::create_default()));")
+
     # Pattern C subscribers — one Zenoh sub per part with reading_topics.
     # Each subscriber's lambda decodes the float payload and writes to
     # this part's per-field buffers + sets the per-field fresh atomics.
     if reading_topics:
-        lines.append("    g_reading_session.emplace("
-                     "zenoh::Session::open(zenoh::Config::create_default()));")
         for ci, part, topic in reading_topics:
             fields = _meas_fields_for(part)
             total_dim = sum(d for _, d in fields)
             lines.append(
                 f"    {reading_sub_var(ci, part.name)}.emplace("
-                f"g_reading_session->declare_subscriber(")
+                f"g_session->declare_subscriber(")
             lines.append(f'        zenoh::KeyExpr("{topic}"),')
             lines.append(f"        [](const zenoh::Sample& s) {{")
             lines.append(
@@ -551,6 +660,15 @@ def emit_filter_cpp(target, filter_obj) -> str:
                 offset += dim
             lines.append(f"        }},")
             lines.append(f"        zenoh::closures::none));")
+        lines.append("")
+
+    # Out-binding publishers — one Zenoh publisher per out-direction
+    # binding on the filter's world (e.g. estimate p/q/v/stddev).
+    if out_bindings:
+        for i, b in enumerate(out_bindings):
+            lines.append(
+                f"    est_pub_{i}.emplace(g_session->declare_publisher("
+                f'zenoh::KeyExpr("{b.topic}")));')
         lines.append("")
 
     # Initial state via CraftView — per-craft. The EKF descriptor's
@@ -578,9 +696,21 @@ def emit_filter_cpp(target, filter_obj) -> str:
     att_var    = _resolve_var("initial_attitude_var")
     vel_var    = _resolve_var("initial_velocity_var")
     angvel_var = _resolve_var("initial_angular_velocity_var")
-    lines.append("    // Initial state.")
-    for i in range(num):
-        lines.append(f"    view_{i}.reset_to_rest();")
+    lines.append("    // Initial state — mirror World.add_craft's spawn pose.")
+    for i, entry in enumerate(init_entries):
+        if entry is None:
+            lines.append(f"    view_{i}.reset_to_rest();")
+        else:
+            px, py, pz = entry.position
+            ow, ox, oy, oz = entry.orientation
+            vx, vy, vz = entry.vel_linear
+            wx, wy, wz = entry.vel_angular
+            lines.append(
+                f"    view_{i}.set_state("
+                f"Eigen::Vector3d{{{_f(px)}, {_f(py)}, {_f(pz)}}}, "
+                f"Eigen::Vector4d{{{_f(ow)}, {_f(ox)}, {_f(oy)}, {_f(oz)}}}, "
+                f"Eigen::Vector3d{{{_f(vx)}, {_f(vy)}, {_f(vz)}}}, "
+                f"Eigen::Vector3d{{{_f(wx)}, {_f(wy)}, {_f(wz)}}});")
         lines.append(
             f"    view_{i}.set_state_covariance("
             f"{_f(pos_var)}, {_f(att_var)}, "
@@ -690,9 +820,32 @@ def emit_filter_cpp(target, filter_obj) -> str:
     lines += [
         f"    {filter_var}.predict(DT, g_Q);",
         f"    {filter_var}.run_pending_updates();",
+    ]
+
+    # Estimate-publish block. Decimated to ~50 Hz like the sim-side
+    # publishers. Each binding member's `cpp_read_exprs` uses
+    # `{accessor}` which for EKF signals resolves to `filter_var`.
+    if out_bindings:
+        lines += [
+            "    if (++g_est_pub_decim >= kEstPubEvery) {",
+            "        g_est_pub_decim = 0;",
+        ]
+        for i, b in enumerate(out_bindings):
+            _emit_ekf_publish_struct(lines, i, b, filter_var)
+        lines.append("    }")
+
+    lines += [
         "}",
         "",
-        "void shutdown() {}",
+        "void shutdown() {",
+    ]
+    if out_bindings:
+        for i in range(len(out_bindings)):
+            lines.append(f"    est_pub_{i}.reset();")
+    if needs_zenoh:
+        lines.append("    g_session.reset();")
+    lines += [
+        "}",
         "",
         f"Harness harness{{}};",
         f"void Harness::setup()    {{ manta_gen::{name}::setup(); }}",

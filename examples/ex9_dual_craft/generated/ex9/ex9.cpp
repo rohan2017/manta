@@ -50,8 +50,13 @@ using EkfT    = manta_gen::ex9::EkfT;
 
 EkfT::StateCov g_Q = EkfT::StateCov::Zero();
 
+std::optional<zenoh::Session> g_session;
+// ---- Out-bindings: estimate publishers ----
+std::optional<zenoh::Publisher> est_pub_0;
+constexpr int kEstPubEvery = 20;  // ~50 Hz
+int g_est_pub_decim = 0;
+
 // ---- Pattern C reading sources (Zenoh-fed buffers) ----
-std::optional<zenoh::Session> g_reading_session;
 Eigen::Matrix<double, 3, 1> reading_c0_imu_accel_buf{};
 std::atomic<bool> reading_c0_imu_accel_fresh{false};
 Eigen::Matrix<double, 3, 1> reading_c0_imu_gyro_buf{};
@@ -98,11 +103,11 @@ namespace manta_gen::ex9 {
 void setup() {
     w.clock().set_dt(DT);
     scene = &w.create_scene();
-    scene->add_craft(craft_0);
-    scene->add_craft(craft_1);
+    scene->add_craft(craft_0, manta::InitialState{});
+    scene->add_craft(craft_1, manta::InitialState{manta::geom::Vec3<manta::SceneFrame>{manta::MFloat(5.0), manta::MFloat(0.0), manta::MFloat(0.0)}, manta::geom::Ori<manta::SceneFrame>{Eigen::Quaternion<manta::MFloat>{manta::MFloat(1.0), manta::MFloat(0.0), manta::MFloat(0.0), manta::MFloat(0.0)}}, manta::geom::Vec3<manta::SceneFrame>{manta::MFloat(0.0), manta::MFloat(0.0), manta::MFloat(0.0)}, manta::geom::Vec3<manta::CraftFrame>{manta::MFloat(0.0), manta::MFloat(0.0), manta::MFloat(0.0)}});
 
-    g_reading_session.emplace(zenoh::Session::open(zenoh::Config::create_default()));
-    reading_c0_imu_sub.emplace(g_reading_session->declare_subscriber(
+    g_session.emplace(zenoh::Session::open(zenoh::Config::create_default()));
+    reading_c0_imu_sub.emplace(g_session->declare_subscriber(
         zenoh::KeyExpr("manta/ex9/imu/0"),
         [](const zenoh::Sample& s) {
             std::vector<double> v;
@@ -119,7 +124,7 @@ void setup() {
             reading_c0_imu_gyro_fresh.store(true);
         },
         zenoh::closures::none));
-    reading_c0_dvl_sub.emplace(g_reading_session->declare_subscriber(
+    reading_c0_dvl_sub.emplace(g_session->declare_subscriber(
         zenoh::KeyExpr("manta/ex9/dvl/0"),
         [](const zenoh::Sample& s) {
             std::vector<double> v;
@@ -132,7 +137,7 @@ void setup() {
             reading_c0_dvl_velocity_fresh.store(true);
         },
         zenoh::closures::none));
-    reading_c1_imu_sub.emplace(g_reading_session->declare_subscriber(
+    reading_c1_imu_sub.emplace(g_session->declare_subscriber(
         zenoh::KeyExpr("manta/ex9/imu/1"),
         [](const zenoh::Sample& s) {
             std::vector<double> v;
@@ -149,7 +154,7 @@ void setup() {
             reading_c1_imu_gyro_fresh.store(true);
         },
         zenoh::closures::none));
-    reading_c1_dvl_sub.emplace(g_reading_session->declare_subscriber(
+    reading_c1_dvl_sub.emplace(g_session->declare_subscriber(
         zenoh::KeyExpr("manta/ex9/dvl/1"),
         [](const zenoh::Sample& s) {
             std::vector<double> v;
@@ -163,10 +168,12 @@ void setup() {
         },
         zenoh::closures::none));
 
-    // Initial state.
-    view_0.reset_to_rest();
+    est_pub_0.emplace(g_session->declare_publisher(zenoh::KeyExpr("manta/ex9/estimate")));
+
+    // Initial state — mirror World.add_craft's spawn pose.
+    view_0.set_state(Eigen::Vector3d{0.0f, 0.0f, 0.0f}, Eigen::Vector4d{1.0f, 0.0f, 0.0f, 0.0f}, Eigen::Vector3d{0.0f, 0.0f, 0.0f}, Eigen::Vector3d{0.0f, 0.0f, 0.0f});
     view_0.set_state_covariance(0.0001f, 0.0001f, 0.01f, 1.0f);
-    view_1.reset_to_rest();
+    view_1.set_state(Eigen::Vector3d{5.0f, 0.0f, 0.0f}, Eigen::Vector4d{1.0f, 0.0f, 0.0f, 0.0f}, Eigen::Vector3d{0.0f, 0.0f, 0.0f}, Eigen::Vector3d{0.0f, 0.0f, 0.0f});
     view_1.set_state_covariance(0.0001f, 0.0001f, 0.01f, 1.0f);
 
     // Measurement registrations.
@@ -181,9 +188,66 @@ void setup() {
 void tick() {
     ekf_0.predict(DT, g_Q);
     ekf_0.run_pending_updates();
+    if (++g_est_pub_decim >= kEstPubEvery) {
+        g_est_pub_decim = 0;
+        { std::string _json = "{";
+          _json += "\"p0\":[";
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", "", double(view_0.position()(0))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(view_0.position()(1))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(view_0.position()(2))); _json += _b; }
+          _json += "]";
+          _json += ",";
+          _json += "\"v0\":[";
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", "", double(view_0.vel_linear()(0))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(view_0.vel_linear()(1))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(view_0.vel_linear()(2))); _json += _b; }
+          _json += "]";
+          _json += ",";
+          _json += "\"p0_stddev\":[";
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", "", double(view_0.position_stddev()(0))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(view_0.position_stddev()(1))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(view_0.position_stddev()(2))); _json += _b; }
+          _json += "]";
+          _json += ",";
+          _json += "\"v0_stddev\":[";
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", "", double(view_0.vel_linear_stddev()(0))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(view_0.vel_linear_stddev()(1))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(view_0.vel_linear_stddev()(2))); _json += _b; }
+          _json += "]";
+          _json += ",";
+          _json += "\"p1\":[";
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", "", double(view_1.position()(0))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(view_1.position()(1))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(view_1.position()(2))); _json += _b; }
+          _json += "]";
+          _json += ",";
+          _json += "\"v1\":[";
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", "", double(view_1.vel_linear()(0))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(view_1.vel_linear()(1))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(view_1.vel_linear()(2))); _json += _b; }
+          _json += "]";
+          _json += ",";
+          _json += "\"p1_stddev\":[";
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", "", double(view_1.position_stddev()(0))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(view_1.position_stddev()(1))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(view_1.position_stddev()(2))); _json += _b; }
+          _json += "]";
+          _json += ",";
+          _json += "\"v1_stddev\":[";
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", "", double(view_1.vel_linear_stddev()(0))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(view_1.vel_linear_stddev()(1))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(view_1.vel_linear_stddev()(2))); _json += _b; }
+          _json += "]";
+          _json += "}";
+          est_pub_0->put(zenoh::Bytes(_json));
+        }
+    }
 }
 
-void shutdown() {}
+void shutdown() {
+    est_pub_0.reset();
+    g_session.reset();
+}
 
 Harness harness{};
 void Harness::setup()    { manta_gen::ex9::setup(); }

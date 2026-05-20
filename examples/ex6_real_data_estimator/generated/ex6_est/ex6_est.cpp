@@ -42,8 +42,13 @@ using EkfT    = manta_gen::ex6_est::EkfT;
 
 EkfT::StateCov g_Q = EkfT::StateCov::Zero();
 
+std::optional<zenoh::Session> g_session;
+// ---- Out-bindings: estimate publishers ----
+std::optional<zenoh::Publisher> est_pub_0;
+constexpr int kEstPubEvery = 20;  // ~50 Hz
+int g_est_pub_decim = 0;
+
 // ---- Pattern C reading sources (Zenoh-fed buffers) ----
-std::optional<zenoh::Session> g_reading_session;
 Eigen::Matrix<double, 3, 1> reading_c0_imu_accel_buf{};
 std::atomic<bool> reading_c0_imu_accel_fresh{false};
 Eigen::Matrix<double, 3, 1> reading_c0_imu_gyro_buf{};
@@ -82,10 +87,10 @@ namespace manta_gen::ex6_est {
 void setup() {
     w.clock().set_dt(DT);
     scene = &w.create_scene();
-    scene->add_craft(craft);
+    scene->add_craft(craft, manta::InitialState{});
 
-    g_reading_session.emplace(zenoh::Session::open(zenoh::Config::create_default()));
-    reading_c0_imu_sub.emplace(g_reading_session->declare_subscriber(
+    g_session.emplace(zenoh::Session::open(zenoh::Config::create_default()));
+    reading_c0_imu_sub.emplace(g_session->declare_subscriber(
         zenoh::KeyExpr("manta/ex6/imu"),
         [](const zenoh::Sample& s) {
             std::vector<double> v;
@@ -102,7 +107,7 @@ void setup() {
             reading_c0_imu_gyro_fresh.store(true);
         },
         zenoh::closures::none));
-    reading_c0_dvl_sub.emplace(g_reading_session->declare_subscriber(
+    reading_c0_dvl_sub.emplace(g_session->declare_subscriber(
         zenoh::KeyExpr("manta/ex6/dvl"),
         [](const zenoh::Sample& s) {
             std::vector<double> v;
@@ -116,8 +121,10 @@ void setup() {
         },
         zenoh::closures::none));
 
-    // Initial state.
-    view_0.reset_to_rest();
+    est_pub_0.emplace(g_session->declare_publisher(zenoh::KeyExpr("manta/ex6/estimate")));
+
+    // Initial state — mirror World.add_craft's spawn pose.
+    view_0.set_state(Eigen::Vector3d{0.0f, 0.0f, 0.0f}, Eigen::Vector4d{1.0f, 0.0f, 0.0f, 0.0f}, Eigen::Vector3d{0.0f, 0.0f, 0.0f}, Eigen::Vector3d{0.0f, 0.0f, 0.0f});
     view_0.set_state_covariance(1.0f, 1.0f, 1.0f, 1.0f);
 
     // Measurement registrations.
@@ -129,9 +136,42 @@ void setup() {
 void tick() {
     ekf_0.predict(DT, g_Q);
     ekf_0.run_pending_updates();
+    if (++g_est_pub_decim >= kEstPubEvery) {
+        g_est_pub_decim = 0;
+        { std::string _json = "{";
+          _json += "\"p\":[";
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", "", double(view_0.position()(0))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(view_0.position()(1))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(view_0.position()(2))); _json += _b; }
+          _json += "]";
+          _json += ",";
+          _json += "\"v\":[";
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", "", double(view_0.vel_linear()(0))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(view_0.vel_linear()(1))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(view_0.vel_linear()(2))); _json += _b; }
+          _json += "]";
+          _json += ",";
+          _json += "\"p_stddev\":[";
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", "", double(view_0.position_stddev()(0))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(view_0.position_stddev()(1))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(view_0.position_stddev()(2))); _json += _b; }
+          _json += "]";
+          _json += ",";
+          _json += "\"v_stddev\":[";
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", "", double(view_0.vel_linear_stddev()(0))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(view_0.vel_linear_stddev()(1))); _json += _b; }
+          { char _b[32]; std::snprintf(_b, sizeof(_b), "%s%.17g", ",", double(view_0.vel_linear_stddev()(2))); _json += _b; }
+          _json += "]";
+          _json += "}";
+          est_pub_0->put(zenoh::Bytes(_json));
+        }
+    }
 }
 
-void shutdown() {}
+void shutdown() {
+    est_pub_0.reset();
+    g_session.reset();
+}
 
 Harness harness{};
 void Harness::setup()    { manta_gen::ex6_est::setup(); }
