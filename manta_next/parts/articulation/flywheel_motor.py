@@ -20,13 +20,13 @@ State:
 
 Limitations vs. legacy Motor:
     * No saturating torque clamp (no stall_torque parameter — defer).
-    * Reaction torque on the body is treated as -torque_cmd along the
-      axis, NOT the resolved axial torque accounting for the rotor's
-      own dynamics (legacy Motor's resolve()). For M3 that's fine: with
-      a stationary rotor and a commanded torque, the reaction is exactly
-      -torque_cmd by Newton's 3rd. As soon as the rotor accelerates this
-      stays valid (the rotor's I·α is what consumes the actuator torque;
-      the parent feels equal-and-opposite by definition).
+    * Reaction torque on the body covers the commanded-torque reaction
+      AND the gyroscopic correction `-ω_body × L_rotor` where L_rotor
+      is the rotor's internal spin angular momentum. Without that
+      correction a spinning rotor doesn't impart its angular momentum
+      to the body, so no gyroscopic precession appears in the demo
+      examples. This matches the legacy fictitious-force correction
+      `rotor gyro torque on body`.
 """
 
 from __future__ import annotations
@@ -59,9 +59,19 @@ class FlywheelMotor(Part):
         # Reaction torque on the craft body in CraftFrame: -τ_cmd along axis.
         axis_vec = Vec3[CraftFrame].constant(tuple(self.axis))
         reaction = axis_vec * (-self.torque_cmd)
+
+        # Gyroscopic torque the spinning rotor exerts on the body. The
+        # rotor carries internal angular momentum L = I·rate·axis (in
+        # body frame). When the body rotates at ω, the rotor "wants" to
+        # keep its momentum vector fixed in space → it pushes back on
+        # the body with -ω × L. This term is what makes a spinning top
+        # precess instead of toppling.
+        L_rotor   = axis_vec * (self.I_axial * self.rate)
+        tau_gyro  = ctx.angular_velocity.cross(L_rotor) * (-1.0)
+        torque    = reaction + tau_gyro
         zero_force = Vec3[CraftFrame].constant((0.0, 0.0, 0.0))
 
         return PartUpdate(
-            wrench=Wrench(force=zero_force, torque=reaction),
+            wrench=Wrench(force=zero_force, torque=torque),
             new_state={"angle": new_angle, "rate": new_rate},
         )
