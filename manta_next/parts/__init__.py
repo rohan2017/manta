@@ -19,6 +19,7 @@ from .sensor.magnetometer import Magnetometer
 from .sensor.position_sensor import PositionSensor
 from .actuation.thruster import Thruster
 from .aero.drag_surface import DragSurface
+from .aero.naca_airfoil import Naca00xx
 from .coupling.tether_endpoint import TetherEndpoint
 
 __all__ = [
@@ -28,6 +29,6 @@ __all__ = [
     "SpinningRotor", "FlywheelMotor",
     "IMU", "DVL", "Magnetometer", "PositionSensor",
     "Thruster",
-    "DragSurface",
+    "DragSurface", "Naca00xx",
     "TetherEndpoint",
 ]
