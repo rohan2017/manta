@@ -142,11 +142,12 @@ def test_add_craft_unknown_anchor_name_raises():
         w.add_craft(c, anchor="missing")
 
 
-def test_add_coupling_not_yet_supported():
+def test_add_coupling_rejects_unregistered_craft():
+    """add_coupling requires both endpoint crafts to be registered."""
     w = World()
     a = Craft("a"); a.add(Mass("body", mass=1.0))
     b = Craft("b"); b.add(Mass("body", mass=1.0))
-    w.add_craft(a); w.add_craft(b)
+    w.add_craft(a)   # only `a` registered
 
     class FakeCoupling(Coupling):
         def __init__(self, ca, cb):
@@ -156,7 +157,7 @@ def test_add_coupling_not_yet_supported():
         @property
         def craft_b(self): return self._b
 
-    with pytest.raises(NotImplementedError, match="Coupling"):
+    with pytest.raises(ValueError, match="not registered"):
         w.add_coupling(FakeCoupling(a, b))
 
 

@@ -279,16 +279,23 @@ class World:
         return craft
 
     def add_coupling(self, coupling: Coupling) -> Coupling:
-        """Add an inter-craft coupling. Forces the two endpoint crafts
-        into the same coupling component at compile time.
-
-        M6 stub: raises NotImplementedError until a concrete Coupling
-        subclass ships. The API is in place; the math isn't.
-        """
-        raise NotImplementedError(
-            "World.add_coupling: Coupling subclasses not yet shipped. "
-            "Concrete couplings (Tether, ContactConstraint, …) land in a "
-            "future milestone alongside the constraint-solver work.")
+        """Add an inter-craft coupling. Both endpoint crafts must already
+        be registered via `add_craft`. The coupling forces them into the
+        same connected component at compile time → one shared compiled
+        tick over both."""
+        if not isinstance(coupling, Coupling):
+            raise TypeError(
+                f"World.add_coupling: expected Coupling, got "
+                f"{type(coupling).__name__}")
+        registered = {id(e["craft"]) for e in self._crafts}
+        for c, label in ((coupling.craft_a, "craft_a"),
+                          (coupling.craft_b, "craft_b")):
+            if id(c) not in registered:
+                raise ValueError(
+                    f"World.add_coupling: coupling.{label} '{c.name}' is "
+                    f"not registered with this World. Call add_craft first.")
+        self._couplings.append(coupling)
+        return coupling
 
     # ---- Compile --------------------------------------------------------
 
@@ -304,34 +311,56 @@ class World:
         """
         components = self._compute_components()
         compiled: dict[str, dict] = {}
-        for comp_id, comp_crafts in components.items():
-            if len(comp_crafts) != 1:
-                # Defensive: with the M6 Coupling stub, every component
-                # is size 1. If something changes upstream we want a
-                # clear error here.
-                raise NotImplementedError(
-                    f"World.compile: component '{comp_id}' has {len(comp_crafts)} "
-                    f"crafts but multi-craft coupled components aren't "
-                    f"supported yet.")
-            entry = comp_crafts[0]
-            craft  = entry["craft"]
-            anchor = entry["anchor"]
-            # Field lookups — if unregistered, the field defaults to its
-            # zero value (zero gravity / zero density / zero B), so parts
-            # that depend on them produce zero contribution.
-            gravity_field = self._fields.get(GravityField)
-            fluid_field   = self._fields.get(FluidField)
-            mag_field     = self._fields.get(MagField)
-            tick = craft.compile_tick(gravity_field=gravity_field,
-                                       fluid_field=fluid_field,
-                                       mag_field=mag_field)
-            init = craft.initial_state(**entry["initial_state_overrides"])
-            compiled[comp_id] = {
-                "craft":   craft,
-                "anchor":  anchor,
-                "tick":    tick,
-                "initial": init,
-            }
+        # Field lookups (shared across components).
+        gravity_field = self._fields.get(GravityField)
+        fluid_field   = self._fields.get(FluidField)
+        mag_field     = self._fields.get(MagField)
+
+        for comp_id, comp_entries in components.items():
+            comp_crafts = [e["craft"] for e in comp_entries]
+            if len(comp_crafts) == 1:
+                craft  = comp_crafts[0]
+                anchor = comp_entries[0]["anchor"]
+                tick = craft.compile_tick(
+                    gravity_field=gravity_field,
+                    fluid_field=fluid_field,
+                    mag_field=mag_field)
+                init = craft.initial_state(
+                    **comp_entries[0]["initial_state_overrides"])
+                compiled[comp_id] = {
+                    "crafts":  [craft],
+                    "anchor":  anchor,
+                    "tick":    tick,
+                    "initial": init,
+                }
+            else:
+                # Multi-craft component — coupled tick over all of them.
+                from .coupled_tick import compile_coupled_tick
+                # Couplings restricted to this component.
+                comp_craft_ids = {id(c) for c in comp_crafts}
+                comp_couplings = [
+                    cp for cp in self._couplings
+                    if id(cp.craft_a) in comp_craft_ids
+                    and id(cp.craft_b) in comp_craft_ids
+                ]
+                tick = compile_coupled_tick(
+                    comp_crafts, comp_couplings,
+                    gravity_field=gravity_field,
+                    fluid_field=fluid_field,
+                    mag_field=mag_field)
+                # Build the prefixed initial state.
+                init: dict[str, Any] = {}
+                for entry in comp_entries:
+                    sub = entry["craft"].initial_state(
+                        **entry["initial_state_overrides"])
+                    for k, v in sub.items():
+                        init[f"{entry['craft'].name}.{k}"] = v
+                compiled[comp_id] = {
+                    "crafts":  comp_crafts,
+                    "anchor":  comp_entries[0]["anchor"],
+                    "tick":    tick,
+                    "initial": init,
+                }
         return CompiledWorld(compiled, self)
 
     def _compute_components(self) -> dict[str, list[dict]]:
@@ -418,7 +447,16 @@ class CompiledWorld:
         return tuple(self._components.keys())
 
     def craft(self, component_id: str) -> Craft:
-        return self._components[component_id]["craft"]
+        crafts = self._components[component_id]["crafts"]
+        if len(crafts) != 1:
+            raise ValueError(
+                f"CompiledWorld.craft: component '{component_id}' has "
+                f"{len(crafts)} crafts (coupled). Use `.crafts(component_id)` "
+                f"to get the list.")
+        return crafts[0]
+
+    def crafts(self, component_id: str) -> list:
+        return list(self._components[component_id]["crafts"])
 
     def tick(self, component_id: str):
         """Return the CompiledGraph for a component (advanced use)."""

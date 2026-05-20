@@ -19,6 +19,7 @@ from .sensor.magnetometer import Magnetometer
 from .sensor.position_sensor import PositionSensor
 from .actuation.thruster import Thruster
 from .aero.drag_surface import DragSurface
+from .coupling.tether_endpoint import TetherEndpoint
 
 __all__ = [
     "Part", "Parameter", "Input", "Output", "State", "PartUpdate",
@@ -28,4 +29,5 @@ __all__ = [
     "IMU", "DVL", "Magnetometer", "PositionSensor",
     "Thruster",
     "DragSurface",
+    "TetherEndpoint",
 ]
