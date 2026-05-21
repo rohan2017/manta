@@ -295,6 +295,13 @@ def _wrench_to_craft(wrench_part: Wrench, transform: tuple) -> Wrench:
 class Craft:
     """A collection of parts with shared rigid-body dynamics.
 
+    Internally a craft is a tree of parts rooted at `Craft.root` (a
+    `RootPart`). `craft.add(part)` is sugar for `craft.root.add(part)`;
+    `craft.parts` returns a flat tuple of all parts in the tree (DFS
+    order). Nested composition (e.g. `Joint` hosting another `Joint`
+    for a pan-tilt gimbal) is supported via the standard composite
+    `add()` chain on individual parts.
+
     State (13 DOF):
         position         : Vec3[AnchorFrame]
         orientation      : Quat[AnchorFrame, CraftFrame]
@@ -304,27 +311,35 @@ class Craft:
     """
 
     def __init__(self, name: str) -> None:
+        from .parts.base import RootPart
         self.name = name
-        self._parts: list[Part] = []
+        self.root = RootPart(f"{name}_root")
 
     def add(self, part: Part) -> Part:
-        if not isinstance(part, Part):
-            raise TypeError(f"Craft.add: expected Part, got {type(part).__name__}")
-        self._parts.append(part)
-        return part
+        """Attach a part to the craft's root. Equivalent to
+        `craft.root.add(part)`."""
+        return self.root.add(part)
 
     @property
     def parts(self) -> tuple[Part, ...]:
-        return tuple(self._parts)
+        """Flat tuple of every part in the tree, root first (DFS order).
+        Excludes the root itself."""
+        return tuple(p for p in self.root.walk() if p is not self.root)
+
+    @property
+    def _parts(self) -> list[Part]:
+        """Backwards-compatible alias used by compile_tick / _aggregate
+        helpers that haven't yet been refactored to walk the tree."""
+        return list(self.parts)
 
     @property
     def total_mass(self) -> float:
-        return sum(float(getattr(p, "mass", 0.0)) for p in self._parts)
+        return sum(float(getattr(p, "mass", 0.0)) for p in self.parts)
 
     def aggregate_inertials(self) -> dict[str, Any]:
         """Public-facing accessor: see `_aggregate_inertials`. Useful for
         external inspection and tests."""
-        return _aggregate_inertials(self._parts)
+        return _aggregate_inertials(list(self.parts))
 
     # ----- Tick compilation ------------------------------------------------
 

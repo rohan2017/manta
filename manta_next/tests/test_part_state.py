@@ -235,10 +235,12 @@ def test_joint_state_declarations_introspection():
 # ---------------------------------------------------------------------------
 
 def test_joint_add_rejects_nested_joint_child():
-    """A Joint can't host another Joint; raised at construction time."""
+    """A Joint can't host another Joint yet (v1 of the new hierarchy);
+    raised at construction time. Lifted in M20.2 when the symbolic
+    kinematic pass lands."""
     outer = Joint("outer", mode="passive")
     inner = Joint("inner", mode="passive")
-    with pytest.raises(TypeError, match="nested Joints aren't supported"):
+    with pytest.raises(TypeError, match="nested Joints not supported yet"):
         outer.add(inner)
 
 

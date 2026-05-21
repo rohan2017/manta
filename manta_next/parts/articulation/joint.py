@@ -36,7 +36,7 @@ import numpy as np
 
 from ...ir.frames import CraftFrame
 from ...ir.types import Scalar, Vec3
-from ..base import Input, Parameter, Part, PartUpdate, State
+from ..base import CompositePart, Input, Parameter, Part, PartUpdate, State
 from ...math.wrench import Wrench
 
 
@@ -45,7 +45,7 @@ _SATURATING = "saturating"
 _MODES      = (_PASSIVE, _SATURATING)
 
 
-class Joint(Part):
+class Joint(CompositePart):
     """1-DOF revolute joint with an axial rotor (set of Mass children).
 
     Parameters:
@@ -80,30 +80,26 @@ class Joint(Part):
             raise ValueError(
                 f"Joint {name!r}: mode must be one of {_MODES}, got {mode!r}")
         super().__init__(name, **overrides)
-        self._children: list = []
 
     # ----- Child Masses ----------------------------------------------------
 
-    def add(self, child) -> "Joint":
-        """Attach a `Mass` child to the rotor. The child's mass and MOI
-        contribute to the joint's `I_axial` and to the body's aggregated
-        inertia. v1 requires `child.transform == (0, 0, 0)`.
+    def add(self, child) -> Part:
+        """Attach a Part to the rotor. v1 of the new hierarchy still
+        restricts children to balanced Mass parts (zero transform); the
+        full symbolic kinematics that lifts these restrictions lands in
+        M20.2–M20.4.
 
-        Nested `Joint` children are explicitly rejected — see the
-        compile-time check in Craft.compile_tick / compile_coupled_tick
-        for the rationale. Nested articulation (a Joint mounted on
-        another Joint) would feed the inner joint's gyroscopic term
-        the wrong reference ω; multi-DOF support would need to plumb
-        a parent_angular_velocity into the post-update path.
+        Returns the child (so chained construction reads naturally,
+        matching CompositePart.add).
         """
         # Lazy-import to avoid a circular dependency at module load time.
         from ..structure.mass import Mass
         if isinstance(child, Joint):
             raise TypeError(
-                f"Joint('{self.name}').add: nested Joints aren't "
-                f"supported. A Joint must mount directly on a Craft. "
-                f"For multi-DOF articulation, mount each Joint on the "
-                f"craft and compose their motion via the body state.")
+                f"Joint('{self.name}').add: nested Joints not supported "
+                f"yet — the symbolic kinematic pass that handles them "
+                f"lands in M20.2. The hierarchy primitives are in place "
+                f"so this restriction is temporary.")
         if not isinstance(child, Mass):
             raise TypeError(
                 f"Joint.add: only Mass children supported in v1, got "
@@ -113,43 +109,31 @@ class Joint(Part):
                 f"Joint('{self.name}'): child Mass '{child.name}' has "
                 f"nonzero transform {child.transform}. v1 requires children "
                 f"at the joint origin; offset the Joint's transform instead.")
-        self._children.append(child)
-        return self
+        return super().add(child)
 
-    @property
-    def children(self) -> tuple:
-        return tuple(self._children)
-
-    # ----- Body aggregation: expose mass + moi like a regular Mass ---------
-
-    @property
-    def mass(self) -> float:
-        """Sum of children masses. Read by Craft._aggregate_inertials."""
-        return float(sum(float(c.mass) for c in self._children))
-
-    @property
-    def moi(self) -> tuple:
-        """Children's combined diagonal MOI about the joint origin.
-        Children must be at the joint origin (enforced in add()), so
-        this is just the sum of their own MOIs."""
-        Ixx = Iyy = Izz = 0.0
-        for c in self._children:
-            mi = c.moi
-            Ixx += float(mi[0])
-            Iyy += float(mi[1])
-            Izz += float(mi[2])
-        return (Ixx, Iyy, Izz)
+    # ----- Rotor I_axial computed from children ---------------------------
 
     @property
     def I_axial(self) -> float:
-        """Children's MOI about the joint axis, derived from `moi` + axis."""
+        """Children's combined MOI about the joint's spin axis.
+
+        Computed directly from each child Mass's diagonal `moi` tuple.
+        v1 children are required to sit at the joint origin (enforced
+        in `add()`), so no parallel-axis lift is needed yet. The body's
+        inertia tensor is computed separately by Craft's aggregation
+        walker, which sees the same child Mass parts directly — Joint
+        itself contributes no mass/MOI to that walk."""
         axis = np.array(self.axis, dtype=float)
         n = float(np.linalg.norm(axis))
         if n <= 0.0:
             return 0.0
         axis_unit = axis / n
-        Ixx, Iyy, Izz = self.moi
-        I_diag = np.diag([Ixx, Iyy, Izz])
+        I_diag = np.zeros((3, 3))
+        for c in self._children:
+            moi_diag = getattr(c, "moi", (0.0, 0.0, 0.0))
+            I_diag += np.diag([float(moi_diag[0]),
+                                float(moi_diag[1]),
+                                float(moi_diag[2])])
         return float(axis_unit @ I_diag @ axis_unit)
 
     # ----- update() --------------------------------------------------------
@@ -195,16 +179,14 @@ class Joint(Part):
         torque_mx = reaction_mx + tau_gyro_mx
         torque = Vec3[CraftFrame].from_mx(torque_mx)
 
-        # Gravity on rotor children (each Mass would emit m·g via update,
-        # but they're not in craft._parts — so the Joint applies it
-        # collectively here, at the joint origin).
-        total_grav_mass = sum(
-            float(c.mass) for c in self._children
-            if getattr(c, "apply_gravity", True))
-        force = ctx.gravity * total_grav_mass
+        # The Joint itself contributes no translational force: children
+        # are in the craft's part walk and each Mass child applies its
+        # own gravity via Mass.update(). Joint only emits the reaction
+        # torque on the body plus the rotor's gyroscopic correction.
+        zero_force = Vec3[CraftFrame].constant((0.0, 0.0, 0.0))
 
         return PartUpdate(
-            wrench=Wrench(force=force, torque=torque),
+            wrench=Wrench(force=zero_force, torque=torque),
             new_state={"angle": Scalar(new_angle_mx),
                        "rate":  Scalar(new_rate_mx)},
         )

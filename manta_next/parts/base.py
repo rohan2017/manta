@@ -199,20 +199,26 @@ class Part:
     contribute a `Wrench` per tick.
 
     Every Part has a `transform` parameter — a static (x, y, z) position
-    offset from its parent's frame. Static orientation between part and
-    parent is currently fixed at identity; non-identity static rotations
-    would be a future extension. The framework uses this transform to
-    roll the part's wrench up into its parent's frame (force-at-offset
-    → torque contribution at parent origin).
+    offset from its parent's output frame. Static orientation between
+    part and parent is currently fixed at identity; non-identity static
+    rotations would be a future extension. The framework uses this
+    transform to roll the part's wrench up into its parent's frame
+    (force-at-offset → torque contribution at parent origin).
+
+    Every Part also has a `parent` attribute — either another Part
+    (typically a CompositePart like the craft's RootPart or a Joint)
+    or `None` for the unattached state. Parents are set by
+    `CompositePart.add(child)` when a child is attached. The craft's
+    part tree is rooted at `Craft.root`.
 
     Construction signature::
 
         class Mass(Part):
             mass: Scalar = Parameter(1.0)
 
-        Mass("body")                            # at origin
+        Mass("body")                            # at origin of parent
         Mass("battery", mass=2.0,
-             transform=(0.0, 0.0, -0.5))        # 0.5 m below origin
+             transform=(0.0, 0.0, -0.5))        # 0.5 m below parent origin
     """
 
     # Subclasses MAY override these for static info / part-name dispatch.
@@ -223,6 +229,7 @@ class Part:
 
     def __init__(self, name: str, **overrides: Any) -> None:
         self.name = name
+        self.parent: "Part | None" = None
         self._apply_declarations(overrides)
 
     # --- Declaration resolution -------------------------------------------
@@ -300,6 +307,83 @@ class Part:
         params = ", ".join(f"{n}={getattr(self, n)!r}"
                            for n in self._declarations())
         return f"<{type(self).__name__}('{self.name}', {params})>"
+
+
+# ---------------------------------------------------------------------------
+# CompositePart — a Part that has children
+# ---------------------------------------------------------------------------
+
+class CompositePart(Part):
+    """A Part that hosts other Parts as children.
+
+    Children mount on this part's *output frame*. For a non-Joint
+    CompositePart the output frame is identical to the part's own
+    frame (translation only, via `transform`). A `Joint` overrides
+    this — its output frame additionally rotates by the joint angle.
+
+    `add(child)` appends a child Part, sets its `parent` to self, and
+    returns the child (so chained construction reads naturally):
+
+        gimbal = pan.add(Joint("tilt", axis=(0, 1, 0)))
+        gimbal.add(Mass("camera", mass=0.05, transform=(0.1, 0, 0)))
+    """
+
+    def __init__(self, name: str, **overrides: Any) -> None:
+        super().__init__(name, **overrides)
+        self._children: list[Part] = []
+
+    def add(self, child: Part) -> Part:
+        if not isinstance(child, Part):
+            raise TypeError(
+                f"{type(self).__name__}('{self.name}').add: expected Part, "
+                f"got {type(child).__name__}")
+        if child.parent is not None:
+            raise ValueError(
+                f"{type(self).__name__}('{self.name}').add: child "
+                f"'{child.name}' is already attached to "
+                f"'{child.parent.name}'.")
+        child.parent = self
+        self._children.append(child)
+        return child
+
+    @property
+    def children(self) -> tuple[Part, ...]:
+        return tuple(self._children)
+
+    def walk(self):
+        """DFS over this part's subtree, yielding self then each descendant."""
+        yield self
+        for child in self._children:
+            if isinstance(child, CompositePart):
+                yield from child.walk()
+            else:
+                yield child
+
+    def update(self, ctx):
+        """CompositePart has no intrinsic wrench contribution by default —
+        subclasses (RootPart, Joint, etc.) override if they need to."""
+        from ..math.wrench import Wrench
+        from ..ir.frames import CraftFrame
+        return Wrench.zero(CraftFrame)
+
+
+# ---------------------------------------------------------------------------
+# RootPart — the implicit root of every Craft's part tree
+# ---------------------------------------------------------------------------
+
+class RootPart(CompositePart):
+    """The root of a Craft's part tree. Defines CraftFrame at the body
+    origin; all other parts are descendants. RootPart itself has no
+    mass or inertia — the body's mass distribution comes from explicit
+    Mass children added under it.
+    """
+
+    # RootPart's transform is necessarily (0,0,0): it IS the craft frame
+    # origin. Override the inherited Parameter to lock it.
+    transform: "tuple[float, float, float]" = Parameter((0.0, 0.0, 0.0))
+
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
 
 
 # NOTE: documentation-only stubs.
