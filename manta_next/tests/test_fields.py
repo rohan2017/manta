@@ -167,3 +167,87 @@ def test_world_no_field_is_in_vacuum():
     # No gravity → x advances at 1 m/s; z stays at 100.
     assert np.isclose(state["floater"]["position"][0], 1.0,   atol=1e-6)
     assert np.isclose(state["floater"]["position"][2], 100.0, atol=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# Mass queries gravity at its own mount offset (audit E)
+# ---------------------------------------------------------------------------
+
+def test_offset_mass_under_point_mass_gravity_feels_local_g():
+    """A Mass with a large body-frame transform under a PointMassGravity
+    field should feel g at its actual location, not at the craft origin.
+
+    Setup: craft origin at distance r0 from the point mass; a Mass
+    mounted at offset r0 (along the same axis) in the body so its
+    anchor-frame position is 2·r0 from the source. The Mass should
+    feel g(2·r0) = -GM/(2·r0)² = ¼ · g(r0), not g(r0).
+    """
+    GM = 1.0e10
+    r0 = 1.0e3
+    gf = GravityField()
+    gf.add(PointMassGravity(position=(0, 0, 0), GM=GM, eps=0.0))
+
+    c = Craft("offset_mass")
+    # Use apply_gravity=False on a placeholder body Mass so we isolate
+    # the offset Mass's contribution. The placeholder still provides
+    # mass for N-E (need m > 0 for the integrator).
+    c.add(Mass("hub", mass=1.0, apply_gravity=False,
+               moi=(0.0, 0.0, 0.0)))
+    # The Mass whose gravity behaviour we measure: m=1 kg, mounted at
+    # craft-frame offset (+r0, 0, 0).
+    c.add(Mass("probe", mass=1.0, apply_gravity=True,
+               transform=(r0, 0.0, 0.0)))
+
+    w = World().add_field(gf)
+    # Craft origin at anchor (r0, 0, 0) → "probe" sits at anchor (2·r0, 0, 0).
+    w.add_craft(c, position=(r0, 0.0, 0.0))
+    cw = w.compile()
+    state = cw.initial_state()
+
+    # One short tick — extract the net body force from the velocity
+    # change. m_total = 2 kg, so a = F_net / 2.
+    dt = 1e-4
+    state = cw.step(state, dt=dt)
+
+    # Expected: ONLY "probe" contributes gravity, at its actual location
+    # (anchor 2·r0). g_probe = -GM/(2·r0)² along the -x direction at that
+    # position; the body experiences F = m_probe · g_probe applied at
+    # the offset. Per-axis force-and-torque arithmetic in Craft does the
+    # right rolling, so the net body acceleration in the -x direction
+    # equals (1 kg · g_probe) / 2 kg.
+    g_at_probe = -GM / (2 * r0) ** 2
+    expected_ax = (1.0 * g_at_probe) / 2.0
+    vx = float(np.array(state["offset_mass"]["velocity"]).ravel()[0])
+    expected_vx = expected_ax * dt
+    np.testing.assert_allclose(vx, expected_vx, rtol=1e-3)
+
+
+def test_uniform_gravity_unchanged_after_offset_fix():
+    """Sanity: with a uniform GravityField, an offset Mass feels the
+    same g as one at the craft origin — bit-identical to pre-fix behavior."""
+    g = (0.0, 0.0, -9.81)
+
+    # Setup A: Mass at origin.
+    cA = Craft("a")
+    cA.add(Mass("body", mass=1.0))
+    wA = World().add_uniform_gravity(g)
+    wA.add_craft(cA, position=(0, 0, 10))
+    cwA = wA.compile()
+    sA = cwA.initial_state()
+
+    # Setup B: Mass at non-zero transform on a zero-mass hub.
+    cB = Craft("b")
+    cB.add(Mass("hub", mass=1e-12, apply_gravity=False))
+    cB.add(Mass("body", mass=1.0, transform=(5.0, -3.0, 2.0)))
+    wB = World().add_uniform_gravity(g)
+    wB.add_craft(cB, position=(0, 0, 10))
+    cwB = wB.compile()
+    sB = cwB.initial_state()
+
+    for _ in range(100):
+        sA = cwA.step(sA, dt=0.001)
+        sB = cwB.step(sB, dt=0.001)
+
+    # Both crafts should fall identically in z (same g, same total mass).
+    np.testing.assert_allclose(sA["a"]["velocity"][2],
+                               sB["b"]["velocity"][2], rtol=1e-9)
