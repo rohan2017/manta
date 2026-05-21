@@ -31,19 +31,25 @@ def test_state_spec_rigid_body_layout():
 
 
 def test_state_spec_with_parts():
-    from manta_next.parts import FlywheelMotor, SpinningRotor
+    from manta_next.parts import Joint
 
     c = Craft("with_state")
     c.add(Mass("body", mass=1.0))
-    c.add(SpinningRotor("wheel", spin_rate=1.0))      # 1 state slot
-    c.add(FlywheelMotor("motor", I_axial=0.05))       # 2 state slots
+    wheel = Joint("wheel", mode="passive")
+    wheel.add(Mass("wheel_disk", mass=0.05, moi=(0.001, 0.001, 0.005)))
+    c.add(wheel)
+    motor = Joint("motor", mode="saturating", stall_torque=1e6)
+    motor.add(Mass("motor_rotor", mass=0.05, moi=(0.001, 0.001, 0.005)))
+    c.add(motor)
 
     spec = StateSpec.from_craft(c)
-    assert spec.ambient_dim == 13 + 1 + 2   # rigid + rotor + motor
+    # Each Joint contributes 2 state slots (angle, rate) → 13 + 2 + 2 = 17.
+    assert spec.ambient_dim == 13 + 2 + 2
     names = [s.name for s in spec.slots]
-    assert "wheel.angle"  in names
-    assert "motor.angle"  in names
-    assert "motor.rate"   in names
+    assert "wheel.angle" in names
+    assert "wheel.rate"  in names
+    assert "motor.angle" in names
+    assert "motor.rate"  in names
 
 
 def test_state_spec_pack_unpack_roundtrip():
@@ -226,23 +232,25 @@ def test_eskf_attitude_estimation_converges():
 
 def test_eskf_state_spec_layout_with_tangent_offsets():
     """Tangent offsets are contiguous and respect SO3 collapse."""
+    from manta_next.parts import Joint
     c = Craft("with_state")
-    from manta_next.parts import SpinningRotor
     c.add(Mass("body", mass=1.0))
-    c.add(SpinningRotor("wheel", spin_rate=1.0))
+    wheel = Joint("wheel", mode="passive")
+    wheel.add(Mass("wheel_disk", mass=0.01, moi=(0.0001, 0.0001, 0.0005)))
+    c.add(wheel)
     ekf = EKF(c)
     spec = ekf.spec
-    # Total: position(3+3) + orientation(4 ambient, 3 tangent) +
-    #        velocity(3+3) + angular_velocity(3+3) + wheel.angle(1+1)
-    assert spec.ambient_dim == 13 + 1
-    assert spec.tangent_dim == 12 + 1
-    # Tangent offsets are contiguous.
+    # Total: rigid-body(13/12) + wheel.angle (1/1) + wheel.rate (1/1)
+    assert spec.ambient_dim == 13 + 2
+    assert spec.tangent_dim == 12 + 2
+    # Tangent offsets are contiguous in slot order.
     expected_tan_offsets = {
         "position": 0,
         "orientation": 3,
         "velocity": 6,
         "angular_velocity": 9,
         "wheel.angle": 12,
+        "wheel.rate":  13,
     }
     for slot in spec.slots:
         assert slot.tangent_offset == expected_tan_offsets[slot.name]

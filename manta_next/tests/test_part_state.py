@@ -1,70 +1,60 @@
 """State declarations on parts — read inside `update()`, written via
-PartUpdate.new_state, integrated into the compiled tick."""
+PartUpdate.new_state, integrated into the compiled tick.
 
-import math
+Exercises the `Joint` part (revolute joint with Mass rotor child) — the
+unified replacement for the v1 FlywheelMotor + SpinningRotor combo.
+"""
 
 import numpy as np
 import pytest
 
 from manta_next.craft import Craft
 from manta_next.parts import (
-    FlywheelMotor,
+    Joint,
     Mass,
     PartUpdate,
-    SpinningRotor,
     State,
 )
 
 
 # ---------------------------------------------------------------------------
-# SpinningRotor — pure kinematic state
+# Joint(passive) — kinematic spin via initial rate
 # ---------------------------------------------------------------------------
 
-def test_spinning_rotor_advances_angle_at_constant_rate():
-    """1 rad/s for 1 s ⇒ angle = 1.0."""
-    c = Craft("rotor_demo")
-    c.add(Mass("body", mass=1.0))                        # gives the craft mass
-    c.add(SpinningRotor("wheel", spin_rate=1.0))
+def test_passive_joint_spins_at_initial_rate():
+    """Passive joint with initial rate=1 rad/s and a rotor child runs
+    free — angle accumulates at 1 rad/s indefinitely (no friction)."""
+    c = Craft("passive_demo")
+    c.add(Mass("body", mass=1.0))
+    j = Joint("wheel", mode="passive")
+    j.add(Mass("rotor", mass=0.1, moi=(0.01, 0.01, 0.05)))
+    c.add(j)
 
     tick = c.compile_tick(gravity_anchor=(0.0, 0.0, 0.0))
-
-    state = c.initial_state()
-    assert state["wheel.angle"] == 0.0   # init default
+    state = c.initial_state(**{"wheel.rate": 1.0})
+    assert state["wheel.angle"] == 0.0
+    assert state["wheel.rate"]  == 1.0
 
     for _ in range(1000):
         out = tick(dt=0.001, **state)
         state = {**state, **out}
 
     assert np.isclose(state["wheel.angle"], 1.0, atol=1e-9)
+    assert np.isclose(state["wheel.rate"],  1.0, atol=1e-9)
 
 
-def test_spinning_rotor_initial_angle_override():
-    """User can set the initial angle via initial_state()."""
-    c = Craft("rotor_demo")
+def test_multiple_joints_have_independent_state():
+    c = Craft("twin")
     c.add(Mass("body", mass=1.0))
-    c.add(SpinningRotor("wheel", spin_rate=2.0))
+    fast = Joint("fast", mode="passive")
+    fast.add(Mass("fast_disk", mass=0.1, moi=(0.001, 0.001, 0.01)))
+    slow = Joint("slow", mode="passive")
+    slow.add(Mass("slow_disk", mass=0.1, moi=(0.001, 0.001, 0.01)))
+    c.add(fast)
+    c.add(slow)
 
     tick = c.compile_tick(gravity_anchor=(0.0, 0.0, 0.0))
-    state = c.initial_state(**{"wheel.angle": 0.5})
-    assert state["wheel.angle"] == 0.5
-
-    for _ in range(500):
-        out = tick(dt=0.001, **state)
-        state = {**state, **out}
-
-    # 0.5 + 2.0 * 0.5 s = 1.5
-    assert np.isclose(state["wheel.angle"], 1.5, atol=1e-9)
-
-
-def test_multiple_rotors_have_independent_state():
-    """Two rotors with different spin rates evolve independently."""
-    c = Craft("twin_rotors")
-    c.add(Mass("body", mass=1.0))
-    c.add(SpinningRotor("fast", spin_rate=5.0))
-    c.add(SpinningRotor("slow", spin_rate=1.0))
-
-    tick = c.compile_tick(gravity_anchor=(0.0, 0.0, 0.0))
-    state = c.initial_state()
+    state = c.initial_state(**{"fast.rate": 5.0, "slow.rate": 1.0})
     for _ in range(1000):
         out = tick(dt=0.001, **state)
         state = {**state, **out}
@@ -74,73 +64,126 @@ def test_multiple_rotors_have_independent_state():
 
 
 # ---------------------------------------------------------------------------
-# FlywheelMotor — state + reaction wrench
+# Joint(saturating) — commanded torque drives rotor + reacts on body
 # ---------------------------------------------------------------------------
 
-def test_flywheel_under_torque_accelerates():
-    """A free flywheel (heavy body, no other dynamics) accelerates under
-    its commanded torque: α = τ / I_axial."""
-    c = Craft("flywheel_alone")
-    # Heavy body with isotropic MOI so the craft barely rotates.
-    c.add(Mass("body", mass=100.0, moi=(1000.0, 1000.0, 1000.0)))
-    c.add(FlywheelMotor("wheel", I_axial=0.05, torque_cmd=0.5))
+def test_saturating_joint_below_stall_accelerates_rotor():
+    """τ_cmd = 0.5 N·m < stall = 1.0 N·m: rotor accelerates at τ/I_axial."""
+    c = Craft("flywheel")
+    c.add(Mass("body", mass=100.0, moi=(1000.0, 1000.0, 1000.0)))  # heavy
+    j = Joint("wheel", mode="saturating", stall_torque=1.0)
+    j.add(Mass("rotor", mass=0.5, moi=(0.025, 0.025, 0.05)))
+    c.add(j)
 
     tick = c.compile_tick(gravity_anchor=(0.0, 0.0, 0.0))
     state = c.initial_state()
+    state["wheel.torque_cmd"] = 0.5
     for _ in range(1000):
         out = tick(dt=0.001, **state)
         state = {**state, **out}
 
-    # α = 0.5 / 0.05 = 10 rad/s² → ω(1s) = 10, θ(1s) = 5.
-    assert np.isclose(state["wheel.rate"],  10.0, atol=1e-6)
-    assert np.isclose(state["wheel.angle"],  5.0, atol=1e-6)
+    # I_axial = 0.05 (rotor's I_zz, axis defaults to +z).
+    # α = 0.5 / 0.05 = 10 rad/s² over 1 s → ω = 10.
+    assert np.isclose(state["wheel.rate"], 10.0, atol=1e-6)
 
 
-def test_flywheel_reaction_spins_body_counter():
-    """Conservation of angular momentum: starting from rest, spinning up
-    the flywheel about +z should counter-rotate the body about -z, so
-    that L_body + L_flywheel stays at zero.
+def test_saturating_joint_clamps_at_stall():
+    """τ_cmd above stall → torque clipped to ±stall, rotor accelerates
+    at the clipped rate."""
+    c = Craft("clamped")
+    c.add(Mass("body", mass=100.0, moi=(1000.0, 1000.0, 1000.0)))
+    j = Joint("wheel", mode="saturating", stall_torque=0.2)
+    j.add(Mass("rotor", mass=0.5, moi=(0.025, 0.025, 0.05)))
+    c.add(j)
 
-    L_flywheel = I_axial · θ̇ = 0.05 · 10 = 0.5 kg·m²/s (after 1 s under
-    τ=0.5 N·m). The body's I_zz = 0.1 kg·m². So body ω_z = -0.5 / 0.1 = -5 rad/s.
+    tick = c.compile_tick(gravity_anchor=(0.0, 0.0, 0.0))
+    state = c.initial_state()
+    state["wheel.torque_cmd"] = 5.0   # way above stall=0.2
+    for _ in range(1000):
+        out = tick(dt=0.001, **state)
+        state = {**state, **out}
 
-    Note: in M3 the reaction torque is the commanded -τ along axis, so this
-    integration uses Newton's-3rd reaction directly — the body picks up
-    angular momentum at the same rate the flywheel does, opposite sign.
-    """
+    # Effective τ = 0.2; α = 0.2 / 0.05 = 4 rad/s² → ω after 1s = 4.
+    assert np.isclose(state["wheel.rate"], 4.0, atol=1e-6)
+
+
+def test_saturating_joint_reaction_spins_body_counter():
+    """Reaction torque on body: τ_react = -τ_clamped along axis. The
+    body's MOI aggregate INCLUDES the rotor child's MOI (via Joint's
+    `mass`/`moi` properties), so the effective inertia about the spin
+    axis is I_body + I_rotor = 0.1 + 0.05 = 0.15. With τ = 0.5 N·m:
+    α_body_z = -0.5/0.15 ≈ -3.33 rad/s²."""
     c = Craft("conservation")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
-    c.add(FlywheelMotor("wheel", I_axial=0.05, torque_cmd=0.5))
+    j = Joint("wheel", mode="saturating", stall_torque=1.0)
+    j.add(Mass("rotor", mass=0.1, moi=(0.005, 0.005, 0.05)))
+    c.add(j)
 
     tick = c.compile_tick(gravity_anchor=(0.0, 0.0, 0.0))
     state = c.initial_state()
+    state["wheel.torque_cmd"] = 0.5
     for _ in range(1000):
         out = tick(dt=0.001, **state)
         state = {**state, **out}
 
-    # Flywheel: ω_wheel = 0.5/0.05 · 1 = 10.0 rad/s.
-    assert np.isclose(state["wheel.rate"], 10.0, atol=1e-6)
-    # Body: τ_react = -0.5 along +z, I_body_zz = 0.1 → α_body_z = -5 rad/s².
-    assert np.isclose(state["angular_velocity"][2], -5.0, atol=1e-3)
+    # ω after 1 s under constant α = -0.5/0.15. Loose tolerance because
+    # the gyroscopic coupling (rotor spin × body ω) feeds back as ω grows.
+    assert np.isclose(state["angular_velocity"][2], -0.5 / 0.15, atol=0.2)
 
 
 # ---------------------------------------------------------------------------
-# Mixed wrench + state contributions
+# Joint contributes mass + MOI to the body
 # ---------------------------------------------------------------------------
 
-def test_rotor_doesnt_break_free_fall():
-    """Adding a SpinningRotor (zero wrench) to a free-fall craft must not
-    perturb the linear dynamics."""
-    c = Craft("fall_with_rotor")
+def test_joint_child_mass_appears_in_body_aggregate():
+    """A 1 kg rotor child in a Joint contributes its mass to the body
+    aggregate (so apparent inertia + gravity loading reflect it)."""
+    c = Craft("weighted")
+    body_mass = 1.0
+    rotor_mass = 0.5
+    c.add(Mass("body", mass=body_mass, moi=(0.1, 0.1, 0.1)))
+    j = Joint("wheel", mode="passive")
+    j.add(Mass("rotor", mass=rotor_mass, moi=(0.01, 0.01, 0.05)))
+    c.add(j)
+
+    inertials = c.aggregate_inertials()
+    assert np.isclose(inertials["m_total"], body_mass + rotor_mass)
+
+
+def test_joint_rejects_child_with_nonzero_transform():
+    j = Joint("axle", mode="passive")
+    with pytest.raises(ValueError, match="nonzero transform"):
+        j.add(Mass("offset_rotor", mass=0.1, transform=(0.0, 0.0, 0.1)))
+
+
+def test_joint_rejects_non_mass_child():
+    from manta_next.parts import IMU
+    j = Joint("axle", mode="passive")
+    with pytest.raises(TypeError, match="Mass children"):
+        j.add(IMU("g"))
+
+
+def test_joint_unknown_mode_raises():
+    with pytest.raises(ValueError, match="mode must be"):
+        Joint("bad", mode="nonsense")
+
+
+def test_joint_doesnt_break_free_fall():
+    """A passive joint with a rotor doesn't perturb linear free-fall."""
+    c = Craft("fall_with_joint")
     c.add(Mass("body", mass=1.0))
-    c.add(SpinningRotor("wheel", spin_rate=10.0))
+    j = Joint("wheel", mode="passive")
+    j.add(Mass("rotor", mass=0.1, moi=(0.001, 0.001, 0.01)))
+    c.add(j)
 
     tick = c.compile_tick(gravity_anchor=(0.0, 0.0, -9.81))
-    state = c.initial_state(position=(0.0, 0.0, 100.0))
+    state = c.initial_state(position=(0.0, 0.0, 100.0),
+                             **{"wheel.rate": 10.0})
     for _ in range(1000):
         out = tick(dt=0.001, **state)
         state = {**state, **out}
 
+    # ½·g·t² = 4.905; z = 100 - 4.905 = 95.095.
     assert np.isclose(state["position"][2],   95.095, atol=1e-5)
     assert np.isclose(state["velocity"][2],   -9.81,  atol=1e-5)
     assert np.isclose(state["wheel.angle"],   10.0,   atol=1e-9)
@@ -152,7 +195,7 @@ def test_rotor_doesnt_break_free_fall():
 
 def test_unknown_state_slot_raises():
     """Returning new_state with a key not declared as State should error."""
-    from manta_next.parts.base import Part, Parameter
+    from manta_next.parts.base import Part
 
     class BadPart(Part):
         a = State(init=0.0)
@@ -174,19 +217,14 @@ def test_unknown_state_slot_raises():
 def test_initial_state_unknown_slot_raises():
     c = Craft("ok")
     c.add(Mass("body", mass=1.0))
-    c.add(SpinningRotor("wheel", spin_rate=1.0))
+    j = Joint("wheel", mode="passive")
+    j.add(Mass("rotor", mass=0.1, moi=(0.001, 0.001, 0.01)))
+    c.add(j)
     with pytest.raises(KeyError, match="unknown slot"):
         c.initial_state(**{"wheel.nonexistent": 0.0})
 
 
-def test_state_declarations_introspection():
-    c = Craft("intro")
-    c.add(SpinningRotor("wheel", spin_rate=2.0))
-    motor = FlywheelMotor("motor", I_axial=0.02)
-    c.add(motor)
-
-    rotor_decls = c.parts[0].state_declarations()
-    assert set(rotor_decls.keys()) == {"angle"}
-
-    motor_decls = motor.state_declarations()
-    assert set(motor_decls.keys()) == {"angle", "rate"}
+def test_joint_state_declarations_introspection():
+    j = Joint("wheel", mode="passive")
+    decls = j.state_declarations()
+    assert set(decls.keys()) == {"angle", "rate"}

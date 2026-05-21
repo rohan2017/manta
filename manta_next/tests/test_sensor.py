@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from manta_next import World, Craft
-from manta_next.parts import IMU, FlywheelMotor, Mass, Output, Part, PartUpdate, Wrench
+from manta_next.parts import IMU, Joint, Mass, Output, Part, PartUpdate, Wrench
 from manta_next.ir.frames import CraftFrame
 from manta_next.ir.types import Vec3
 
@@ -120,18 +120,19 @@ def test_imu_adds_no_wrench():
 # ---------------------------------------------------------------------------
 
 def test_gyro_tracks_motor_reaction_spin():
-    """Apply a motor torque; the body counter-rotates by conservation of
-    angular momentum. The IMU gyro tracks the time-evolving ω."""
+    """Apply a joint torque; the body counter-rotates. The IMU gyro
+    tracks the time-evolving ω."""
     c = Craft("reactive")
     c.add(Mass("body", mass=1.0, moi=(0.05, 0.05, 0.05)))
-    c.add(FlywheelMotor("m", I_axial=0.01, axis=(0.0, 0.0, 1.0)))
+    j = Joint("m", mode="saturating", stall_torque=1e9, axis=(0.0, 0.0, 1.0))
+    j.add(Mass("m_rotor", mass=1e-6, moi=(0.0, 0.0, 0.01)))
+    c.add(j)
     c.add(IMU("g"))
 
     tick = c.compile_tick(gravity_anchor=(0.0, 0.0, 0.0))
     state = c.initial_state()
     state["m.torque_cmd"] = 0.1   # τ = 0.1 N·m about body z
 
-    # ω_z grows ≈ -τ/I_body = -2.0 rad/s² (body counter-rotates).
     gyro_history = []
     for _ in range(500):
         out = tick(dt=0.001, **state)
@@ -140,10 +141,11 @@ def test_gyro_tracks_motor_reaction_spin():
 
     # First sample is near zero (ω was 0 at t=0, gyro reads ω at start).
     assert abs(gyro_history[0][2]) < 1e-9
-    # x and y must remain zero for a pure-z torque.
+    # x and y stay zero for a pure-z torque.
     np.testing.assert_allclose(gyro_history[-1][:2], np.zeros(2), atol=1e-9)
-    # Final ω_z ≈ -τ/I · t = -0.1/0.05 · 0.5 = -1.0 rad/s.
-    assert np.isclose(gyro_history[-1][2], -1.0, atol=2e-3)
+    # Body I_zz now includes the rotor's MOI (0.05 + 0.01 = 0.06).
+    # α_body = -0.1 / 0.06 ≈ -1.667 → ω(0.5s) ≈ -0.833.
+    assert np.isclose(gyro_history[-1][2], -0.1 / 0.06 * 0.5, atol=2e-3)
 
 
 # ---------------------------------------------------------------------------

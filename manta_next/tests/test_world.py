@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from manta_next import World, Anchor, Coupling, Craft, CompiledWorld
-from manta_next.parts import Mass, SpinningRotor
+from manta_next.parts import Joint, Mass
 
 
 # ---------------------------------------------------------------------------
@@ -91,23 +91,28 @@ def test_two_crafts_fall_independently():
 # ---------------------------------------------------------------------------
 
 def test_world_carries_part_state_through_step():
-    """Part-state slots (e.g. SpinningRotor.angle) propagate through
-    World.step like any other state."""
+    """Part-state slots (e.g. a passive Joint's angle/rate) propagate
+    through World.step like any other state."""
     w = World().add_uniform_gravity((0.0, 0.0, 0.0))   # zero gravity for clarity
     c = Craft("with_rotor")
     c.add(Mass("body", mass=1.0))
-    c.add(SpinningRotor("wheel", spin_rate=2.0))
-    w.add_craft(c, **{"wheel.angle": 0.5})       # initial angle override
+    j = Joint("wheel", mode="passive")
+    j.add(Mass("wheel_disk", mass=0.1, moi=(0.001, 0.001, 0.005)))
+    c.add(j)
+    w.add_craft(c, **{"wheel.angle": 0.5, "wheel.rate": 2.0})
 
     cw = w.compile()
     state = cw.initial_state()
     assert state["with_rotor"]["wheel.angle"] == 0.5
+    assert state["with_rotor"]["wheel.rate"]  == 2.0
 
     for _ in range(500):
         state = cw.step(state, dt=0.001)
 
-    # 0.5 + 2.0 · 0.5 s = 1.5
+    # Free-spinning passive joint: angle = 0.5 + 2.0 · 0.5 s = 1.5; rate
+    # stays at 2.0 (no friction in v1).
     assert np.isclose(state["with_rotor"]["wheel.angle"], 1.5, atol=1e-9)
+    assert np.isclose(state["with_rotor"]["wheel.rate"],  2.0, atol=1e-9)
 
 
 # ---------------------------------------------------------------------------

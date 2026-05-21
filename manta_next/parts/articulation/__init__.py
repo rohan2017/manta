@@ -1,4 +1,3 @@
-from .spinning_rotor import SpinningRotor
-from .flywheel_motor import FlywheelMotor
+from .joint import Joint
 
-__all__ = ["SpinningRotor", "FlywheelMotor"]
+__all__ = ["Joint"]
