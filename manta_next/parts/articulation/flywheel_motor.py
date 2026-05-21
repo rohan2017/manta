@@ -34,7 +34,7 @@ from __future__ import annotations
 from ...ir.frames import CraftFrame
 from ...ir.types import Vec3
 from ..base import Input, Part, Parameter, PartUpdate, State
-from ..wrench import Wrench
+from ...math.wrench import Wrench
 
 
 class FlywheelMotor(Part):

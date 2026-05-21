@@ -23,7 +23,7 @@ import casadi as ca
 
 from ..ir.frames import AnchorFrame, CraftFrame
 from ..ir.types import Vec3
-from ..parts.wrench import Wrench
+from ..math.wrench import Wrench
 from .base import Coupling
 
 

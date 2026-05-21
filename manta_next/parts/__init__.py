@@ -8,7 +8,7 @@ Public surface re-exports the part classes for ergonomic imports::
 """
 
 from .base import Part, Parameter, Input, Output, State, PartUpdate
-from .wrench import Wrench
+from ..math.wrench import Wrench
 from .structure.mass import Mass
 from .structure.point_buoy import PointBuoy
 from .structure.collider import Collider

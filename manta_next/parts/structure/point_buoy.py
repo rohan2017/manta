@@ -24,7 +24,7 @@ from __future__ import annotations
 from ...ir.frames import AnchorFrame, CraftFrame
 from ...ir.types import Vec3
 from ..base import Parameter, Part, PartUpdate
-from ..wrench import Wrench
+from ...math.wrench import Wrench
 
 
 class PointBuoy(Part):

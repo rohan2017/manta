@@ -38,7 +38,7 @@ import casadi as ca
 from ...ir.frames import CraftFrame
 from ...ir.types import Vec3
 from ..base import Input, Parameter, Part
-from ..wrench import Wrench
+from ...math.wrench import Wrench
 
 
 _MAX_ORDER = 4

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from ...ir.frames import CraftFrame
 from ..base import Part, Parameter, PartUpdate, State
-from ..wrench import Wrench
+from ...math.wrench import Wrench
 
 
 class SpinningRotor(Part):

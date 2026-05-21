@@ -13,5 +13,6 @@ beyond `Quat`/`Vec3` — they're pure math on those typed wrappers.
 """
 
 from .manifold import SO3, R3, RigidBody, _so3_exp, _so3_log
+from .wrench import Wrench
 
-__all__ = ["SO3", "R3", "RigidBody", "_so3_exp", "_so3_log"]
+__all__ = ["SO3", "R3", "RigidBody", "_so3_exp", "_so3_log", "Wrench"]
