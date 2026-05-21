@@ -80,13 +80,10 @@ class Anchor:
         return f"<Anchor '{self.name}'>"
 
 
-# ---------------------------------------------------------------------------
-# Coupling ABC — canonical home is couplings/base.py; re-exported here so
-# the long-standing `from manta_next.world import Coupling` import path
-# keeps working.
-# ---------------------------------------------------------------------------
-
-from .couplings.base import Coupling   # noqa: E402,F401
+# Coupling is referenced below as a type and via isinstance; the ABC
+# itself lives in couplings/base.py. External callers should import it
+# from `manta_next.couplings` (or `manta_next`).
+from .couplings.base import Coupling   # noqa: E402
 
 
 # ---------------------------------------------------------------------------

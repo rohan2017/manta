@@ -5,8 +5,9 @@ same compiled tick. Concrete subclasses (e.g. `Tether`) implement
 `compute_wrenches_sym(ctx_a, ctx_b)` and World.compile routes coupled
 components through `compile_coupled_tick`.
 
-This module is the canonical home of the ABC; `world.py` re-exports
-it so legacy `from manta_next.world import Coupling` keeps working.
+This module is the canonical home of the ABC. Import via:
+    from manta_next.couplings import Coupling   # or
+    from manta_next import Coupling
 """
 
 from __future__ import annotations

@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from manta_next import ir
-from manta_next.ir.frames import CraftFrame, SceneFrame
+from manta_next.ir.frames import CraftFrame, AnchorFrame
 from manta_next.math.manifold import R3, SO3
 
 

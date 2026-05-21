@@ -3,12 +3,12 @@
 Authoring API at the top level:
 
     from manta_next import ir
-    from manta_next.ir.frames import SceneFrame, CraftFrame
+    from manta_next.ir.frames import AnchorFrame, CraftFrame
 
     with ir.Graph() as g:
-        p = ir.Vec3[SceneFrame].input("p")
+        p = ir.Vec3[AnchorFrame].input("p")
         v = ir.Vec3[CraftFrame].input("v")
-        q = ir.Quat[SceneFrame, CraftFrame].input("q")
+        q = ir.Quat[AnchorFrame, CraftFrame].input("q")
         dt = ir.Scalar.input("dt")
 
         p_next = p + q.apply(v) * dt
@@ -24,6 +24,7 @@ the graph to a different backend (C++/Eigen, C/embedded).
 
 from . import ir
 from .craft import Craft
-from .world import World, Anchor, Coupling, CompiledWorld
+from .world import World, Anchor, CompiledWorld
+from .couplings import Coupling
 
 __all__ = ["ir", "Craft", "World", "Anchor", "Coupling", "CompiledWorld"]

@@ -5,9 +5,9 @@ operators dispatch to CasADi while preserving and checking frame tags.
 
 Type parameterization uses `__class_getitem__` so the syntax reads cleanly:
 
-    Vec3[SceneFrame]
+    Vec3[AnchorFrame]
     Mat3[CraftFrame, PartFrame]
-    Quat[SceneFrame, CraftFrame]
+    Quat[AnchorFrame, CraftFrame]
 
 `Cls[args]` returns a small typed-constructor object (not the bare class).
 Its `.input(name)` and `.constant(value)` factories produce instances of the
@@ -414,7 +414,7 @@ class Mat3(_IRValue):
 class Quat(_IRValue):
     """Unit quaternion representing a rotation from one frame to another.
 
-    Convention matches legacy manta `Ori<From, To>`: a `Quat[From, To]`,
+    Convention: a `Quat[From, To]`,
     when applied to a vector in `To`, returns the vector expressed in `From`
     components::
 
@@ -571,7 +571,3 @@ class Quat(_IRValue):
             ca.horzcat(r10, r11, r12),
             ca.horzcat(r20, r21, r22),
         )
-
-
-# Backwards-compatible alias matching legacy manta naming.
-Ori = Quat

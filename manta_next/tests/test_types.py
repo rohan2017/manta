@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from manta_next import ir
-from manta_next.ir.frames import CraftFrame, PartFrame, SceneFrame
+from manta_next.ir.frames import CraftFrame, PartFrame, AnchorFrame
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +104,7 @@ def test_vec3_components():
 
 def test_mat3_apply_vec3():
     with ir.Graph() as g:
-        R = ir.Mat3[SceneFrame, CraftFrame].input("R")
+        R = ir.Mat3[AnchorFrame, CraftFrame].input("R")
         v = ir.Vec3[CraftFrame].input("v")
         g.output(R @ v, "u")
 
@@ -117,7 +117,7 @@ def test_mat3_apply_vec3():
 
 def test_mat3_matmul():
     with ir.Graph() as g:
-        A = ir.Mat3[SceneFrame, CraftFrame].input("A")
+        A = ir.Mat3[AnchorFrame, CraftFrame].input("A")
         B = ir.Mat3[CraftFrame, PartFrame].input("B")
         g.output(A @ B, "C")
     R_z = np.array([[0.0, -1.0, 0.0],
@@ -149,7 +149,7 @@ def test_mat3_transpose_and_inverse():
 
 def test_quat_identity_apply():
     with ir.Graph() as g:
-        q = ir.Quat[SceneFrame, CraftFrame].input("q")
+        q = ir.Quat[AnchorFrame, CraftFrame].input("q")
         v = ir.Vec3[CraftFrame].input("v")
         g.output(q.apply(v), "u")
     out = g.compile()(q=[1.0, 0.0, 0.0, 0.0], v=[1.0, 2.0, 3.0])
@@ -159,7 +159,7 @@ def test_quat_identity_apply():
 def test_quat_apply_z_axis():
     """90° rotation about +z: (1,0,0) → (0,1,0)."""
     with ir.Graph() as g:
-        q = ir.Quat[SceneFrame, CraftFrame].input("q")
+        q = ir.Quat[AnchorFrame, CraftFrame].input("q")
         v = ir.Vec3[CraftFrame].input("v")
         g.output(q.apply(v), "u")
 
@@ -172,7 +172,7 @@ def test_quat_apply_z_axis():
 def test_quat_compose():
     """Composing two 90° rotations about +z = 180° about +z."""
     with ir.Graph() as g:
-        q = ir.Quat[SceneFrame, CraftFrame].input("q")
+        q = ir.Quat[AnchorFrame, CraftFrame].input("q")
         # Apply (q * q) to v.
         g.output((q * ir.Quat[CraftFrame, CraftFrame].constant(
                     [math.cos(math.pi/4), 0.0, 0.0, math.sin(math.pi/4)])).apply(
@@ -187,7 +187,7 @@ def test_quat_compose():
 
 def test_quat_conjugate_inverts_rotation():
     with ir.Graph() as g:
-        q = ir.Quat[SceneFrame, CraftFrame].input("q")
+        q = ir.Quat[AnchorFrame, CraftFrame].input("q")
         v = ir.Vec3[CraftFrame].input("v")
         rotated   = q.apply(v)
         unrotated = q.conjugate().apply(rotated)
@@ -205,7 +205,7 @@ def test_quat_conjugate_inverts_rotation():
 
 def test_quat_to_rotmat_matches_apply():
     with ir.Graph() as g:
-        q = ir.Quat[SceneFrame, CraftFrame].input("q")
+        q = ir.Quat[AnchorFrame, CraftFrame].input("q")
         v = ir.Vec3[CraftFrame].input("v")
         R = q.to_rotmat()
         g.output(q.apply(v), "via_apply")

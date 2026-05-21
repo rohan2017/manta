@@ -12,7 +12,7 @@ from manta_next.ir.frames import (
     FrameError,
     PartFrame,
     PlanetFrame,
-    SceneFrame,
+    AnchorFrame,
     WorldFrame,
 )
 
@@ -46,7 +46,7 @@ def test_vec3_add_different_frames_raises():
 
 def test_vec3_cross_different_frames_raises():
     with ir.Graph() as g:
-        a = ir.Vec3[SceneFrame].input("a")
+        a = ir.Vec3[AnchorFrame].input("a")
         b = ir.Vec3[CraftFrame].input("b")
         with pytest.raises(FrameError):
             _ = a.cross(b)
@@ -54,7 +54,7 @@ def test_vec3_cross_different_frames_raises():
 
 def test_vec3_dot_different_frames_raises():
     with ir.Graph() as g:
-        a = ir.Vec3[SceneFrame].input("a")
+        a = ir.Vec3[AnchorFrame].input("a")
         b = ir.Vec3[CraftFrame].input("b")
         with pytest.raises(FrameError):
             _ = a.dot(b)
@@ -82,18 +82,18 @@ def test_frame_error_includes_source_location():
 
 def test_mat3_matmul_compatible_frames_ok():
     with ir.Graph() as g:
-        A = ir.Mat3[SceneFrame, CraftFrame].input("A")
+        A = ir.Mat3[AnchorFrame, CraftFrame].input("A")
         B = ir.Mat3[CraftFrame, PartFrame].input("B")
         C = A @ B
         g.output(C, "out")
-        # Result frames: from=SceneFrame, to=PartFrame
-        assert C.from_frame is AnchorFrame   # SceneFrame == AnchorFrame
+        # Result frames: from=AnchorFrame, to=PartFrame
+        assert C.from_frame is AnchorFrame   # AnchorFrame == AnchorFrame
         assert C.to_frame is PartFrame
 
 
 def test_mat3_matmul_incompatible_frames_raises():
     with ir.Graph() as g:
-        A = ir.Mat3[SceneFrame, CraftFrame].input("A")
+        A = ir.Mat3[AnchorFrame, CraftFrame].input("A")
         B = ir.Mat3[PartFrame,  WorldFrame].input("B")  # middle mismatch
         with pytest.raises(FrameError):
             _ = A @ B
@@ -101,7 +101,7 @@ def test_mat3_matmul_incompatible_frames_raises():
 
 def test_mat3_apply_vec3_correct_frame_ok():
     with ir.Graph() as g:
-        A = ir.Mat3[SceneFrame, CraftFrame].input("A")
+        A = ir.Mat3[AnchorFrame, CraftFrame].input("A")
         v = ir.Vec3[CraftFrame].input("v")
         u = A @ v
         g.output(u, "out")
@@ -110,7 +110,7 @@ def test_mat3_apply_vec3_correct_frame_ok():
 
 def test_mat3_apply_vec3_wrong_frame_raises():
     with ir.Graph() as g:
-        A = ir.Mat3[SceneFrame, CraftFrame].input("A")
+        A = ir.Mat3[AnchorFrame, CraftFrame].input("A")
         v = ir.Vec3[PartFrame].input("v")
         with pytest.raises(FrameError):
             _ = A @ v
@@ -118,7 +118,7 @@ def test_mat3_apply_vec3_wrong_frame_raises():
 
 def test_quat_compose_ok():
     with ir.Graph() as g:
-        q1 = ir.Quat[SceneFrame, CraftFrame].input("q1")
+        q1 = ir.Quat[AnchorFrame, CraftFrame].input("q1")
         q2 = ir.Quat[CraftFrame, PartFrame].input("q2")
         q3 = q1 * q2
         g.output(q3, "out")
@@ -128,7 +128,7 @@ def test_quat_compose_ok():
 
 def test_quat_compose_mismatch_raises():
     with ir.Graph() as g:
-        q1 = ir.Quat[SceneFrame, CraftFrame].input("q1")
+        q1 = ir.Quat[AnchorFrame, CraftFrame].input("q1")
         q2 = ir.Quat[PartFrame,  WorldFrame].input("q2")
         with pytest.raises(FrameError):
             _ = q1 * q2
@@ -136,7 +136,7 @@ def test_quat_compose_mismatch_raises():
 
 def test_quat_apply_correct_frame_ok():
     with ir.Graph() as g:
-        q = ir.Quat[SceneFrame, CraftFrame].input("q")
+        q = ir.Quat[AnchorFrame, CraftFrame].input("q")
         v = ir.Vec3[CraftFrame].input("v")
         u = q.apply(v)
         g.output(u, "out")
@@ -145,7 +145,7 @@ def test_quat_apply_correct_frame_ok():
 
 def test_quat_apply_wrong_frame_raises():
     with ir.Graph() as g:
-        q = ir.Quat[SceneFrame, CraftFrame].input("q")
+        q = ir.Quat[AnchorFrame, CraftFrame].input("q")
         v = ir.Vec3[PartFrame].input("v")
         with pytest.raises(FrameError):
             _ = q.apply(v)
@@ -153,7 +153,7 @@ def test_quat_apply_wrong_frame_raises():
 
 def test_quat_conjugate_swaps_frames():
     with ir.Graph() as g:
-        q = ir.Quat[SceneFrame, CraftFrame].input("q")
+        q = ir.Quat[AnchorFrame, CraftFrame].input("q")
         qc = q.conjugate()
         g.output(qc, "out")
         assert qc.from_frame is CraftFrame
@@ -162,7 +162,7 @@ def test_quat_conjugate_swaps_frames():
 
 def test_mat3_transpose_swaps_frames():
     with ir.Graph() as g:
-        A = ir.Mat3[SceneFrame, CraftFrame].input("A")
+        A = ir.Mat3[AnchorFrame, CraftFrame].input("A")
         At = A.transpose()
         g.output(At, "out")
         assert At.from_frame is CraftFrame
@@ -171,7 +171,7 @@ def test_mat3_transpose_swaps_frames():
 
 def test_mat3_inv_requires_endomorphism():
     with ir.Graph() as g:
-        A = ir.Mat3[SceneFrame, CraftFrame].input("A")  # not endomorphism
+        A = ir.Mat3[AnchorFrame, CraftFrame].input("A")  # not endomorphism
         with pytest.raises(FrameError):
             _ = A.inv()
 

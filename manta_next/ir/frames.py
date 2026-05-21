@@ -1,9 +1,9 @@
 """Frame tags.
 
 A Frame is a static type-marker. It carries no runtime data — its identity is
-its class. Frame tags participate in IR type checking: a `Vec3[SceneFrame]`
+its class. Frame tags participate in IR type checking: a `Vec3[AnchorFrame]`
 cannot be cross-producted with a `Vec3[CraftFrame]` without rotating one of
-them through a `Quat[SceneFrame, CraftFrame]` first.
+them through a `Quat[AnchorFrame, CraftFrame]` first.
 
 Stock frames cover the manta hierarchy `World → Planet → Anchor → Craft →
 Part`. Users declaring their own frames just subclass `Frame`:
@@ -48,13 +48,9 @@ class PlanetFrame(Frame):
 
 class AnchorFrame(Frame):
     """A floating-origin coordinate root for a coupling component. One per
-    connected (craft + coupling) group at compile time. Replaces the
-    legacy `SceneFrame`. Use this as the parent for craft-local frames."""
+    connected (craft + coupling) group at compile time. Use this as the
+    parent for craft-local frames."""
 
-# Backwards-compatible alias: legacy manta used SceneFrame for this role.
-# Kept so M0 example code reads naturally; AnchorFrame is preferred going
-# forward.
-SceneFrame = AnchorFrame
 
 class CraftFrame(Frame):
     """A single craft's body frame. Rotates and translates relative to its
