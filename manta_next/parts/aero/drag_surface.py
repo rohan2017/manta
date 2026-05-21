@@ -118,6 +118,10 @@ class DragSurface(Part):
         torque=(x,y,z)  — sets B_1 = diag(x, y, z) (per-axis linear torque).
     """
 
+    # `force_tensors` / `torque_tensors` carry a zero-3×3 default so the
+    # declaration machinery sees a well-typed slot at class scope; the
+    # actual value is always set by __init__ from `force`/`force_tensors`
+    # (resp. torque variants), so this default never reaches update().
     force_tensors:  tuple = Parameter((np.zeros((3, 3)),))
     torque_tensors: tuple = Parameter((np.zeros((3, 3)),))
 

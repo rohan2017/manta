@@ -102,6 +102,10 @@ class Thruster(Part):
                    chose.
     """
 
+    # `forces` and `torques` Parameters carry a zero-tuple default so the
+    # declaration machinery sees a well-typed slot at class scope; the
+    # actual value is always set by __init__ from `force`/`forces` (and
+    # `torque`/`torques`), so this default is never the final value.
     forces:   tuple = Parameter(((0.0, 0.0, 0.0),))
     torques:  tuple = Parameter(((0.0, 0.0, 0.0),))
     throttle: float = Input(default=0.0)

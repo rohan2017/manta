@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import casadi as ca
 
-from ...ir.frames import AnchorFrame, CraftFrame
+from ...ir.frames import CraftFrame
 from ...ir.types import Vec3
 from ..base import Parameter, Part, PartUpdate
 from ...math.wrench import Wrench

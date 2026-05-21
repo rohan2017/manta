@@ -21,7 +21,7 @@ samples + a smooth water/air boundary, surface-crossing torques (the
 
 from __future__ import annotations
 
-from ...ir.frames import AnchorFrame, CraftFrame
+from ...ir.frames import CraftFrame
 from ...ir.types import Vec3
 from ..base import Parameter, Part, PartUpdate
 from ...math.wrench import Wrench

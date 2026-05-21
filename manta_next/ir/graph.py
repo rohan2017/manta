@@ -255,17 +255,14 @@ class CompiledGraph:
 
 
 def _to_numpy(val):
-    """Best-effort numpy conversion for a CasADi DM result.
+    """Numpy-ergonomic shape coercion for a CasADi DM result.
 
     Conversions:
       (1, 1)  → Python float            (scalar)
       (n, 1)  → 1-D ndarray of length n (column vector)
       other   → 2-D ndarray             (matrices etc.)
     """
-    try:
-        import numpy as np
-    except ImportError:
-        return val
+    import numpy as np
     arr = np.array(val)
     if arr.shape == (1, 1):
         return float(arr[0, 0])
