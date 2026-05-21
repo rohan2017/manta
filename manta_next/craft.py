@@ -220,6 +220,36 @@ def _aggregate_inertials(parts: list[Part]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Joint composition guard
+# ---------------------------------------------------------------------------
+
+def _check_joints_have_only_mass_children(craft_name: str,
+                                          parts: list) -> None:
+    """Reject Joint-on-Joint compositions at compile time.
+
+    The current `Joint.update()` reads `ctx.angular_velocity` (the body
+    ω) for its gyroscopic-correction term `-ω × L_rotor`. That's the
+    parent's ω as long as a Joint mounts directly on the Craft. A
+    Joint mounted on another Joint would see the inner joint's parent
+    as the body itself, not as the outer joint — wrong gyro reference.
+    The constructor-side `Joint.add(...)` already refuses nested
+    Joints; this is a defense-in-depth check at compile time in case
+    a future Joint subclass bypasses that path.
+    """
+    # Lazy-import to dodge circular module init.
+    from .parts.articulation.joint import Joint
+    for part in parts:
+        if not isinstance(part, Joint):
+            continue
+        for child in part.children:
+            if isinstance(child, Joint):
+                raise TypeError(
+                    f"Craft '{craft_name}': Joint '{part.name}' has a "
+                    f"nested Joint child '{child.name}'. Mount each Joint "
+                    f"directly on the Craft.")
+
+
+# ---------------------------------------------------------------------------
 # Wrench transformation (part frame → craft frame)
 # ---------------------------------------------------------------------------
 
@@ -364,6 +394,8 @@ class Craft:
             collision_field = _CollisionField()
         if not self._parts:
             raise ValueError(f"Craft '{self.name}': no parts added.")
+
+        _check_joints_have_only_mass_children(self.name, self._parts)
 
         inertials = _aggregate_inertials(self._parts)
         m_total = inertials["m_total"]

@@ -228,3 +228,37 @@ def test_joint_state_declarations_introspection():
     j = Joint("wheel", mode="passive")
     decls = j.state_declarations()
     assert set(decls.keys()) == {"angle", "rate"}
+
+
+# ---------------------------------------------------------------------------
+# Nested-Joint guard (correctness fix #6)
+# ---------------------------------------------------------------------------
+
+def test_joint_add_rejects_nested_joint_child():
+    """A Joint can't host another Joint; raised at construction time."""
+    outer = Joint("outer", mode="passive")
+    inner = Joint("inner", mode="passive")
+    with pytest.raises(TypeError, match="nested Joints aren't supported"):
+        outer.add(inner)
+
+
+def test_craft_compile_rejects_nested_joint_via_back_door():
+    """Defense-in-depth: even if a Joint subclass somehow bypasses
+    `add`'s type check and ends up with a Joint child, the
+    Craft.compile_tick guard catches it."""
+    outer = Joint("outer", mode="passive")
+    inner = Joint("inner", mode="passive")
+    inner.add(Mass("inner_rotor", mass=0.1, moi=(0.001, 0.001, 0.001)))
+    # Bypass the public API and shove a nested Joint into the children
+    # list directly; this is what a future subclass with a custom add()
+    # might do.
+    outer._children.append(inner)
+    outer._children.append(Mass("outer_rotor", mass=0.1,
+                                 moi=(0.001, 0.001, 0.001)))
+
+    c = Craft("with_nested_joint")
+    c.add(Mass("body", mass=1.0))
+    c.add(outer)
+
+    with pytest.raises(TypeError, match="nested Joint"):
+        c.compile_tick(gravity_anchor=(0.0, 0.0, 0.0))

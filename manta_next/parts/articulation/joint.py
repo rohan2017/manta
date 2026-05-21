@@ -87,9 +87,23 @@ class Joint(Part):
     def add(self, child) -> "Joint":
         """Attach a `Mass` child to the rotor. The child's mass and MOI
         contribute to the joint's `I_axial` and to the body's aggregated
-        inertia. v1 requires `child.transform == (0, 0, 0)`."""
+        inertia. v1 requires `child.transform == (0, 0, 0)`.
+
+        Nested `Joint` children are explicitly rejected — see the
+        compile-time check in Craft.compile_tick / compile_coupled_tick
+        for the rationale. Nested articulation (a Joint mounted on
+        another Joint) would feed the inner joint's gyroscopic term
+        the wrong reference ω; multi-DOF support would need to plumb
+        a parent_angular_velocity into the post-update path.
+        """
         # Lazy-import to avoid a circular dependency at module load time.
         from ..structure.mass import Mass
+        if isinstance(child, Joint):
+            raise TypeError(
+                f"Joint('{self.name}').add: nested Joints aren't "
+                f"supported. A Joint must mount directly on a Craft. "
+                f"For multi-DOF articulation, mount each Joint on the "
+                f"craft and compose their motion via the body state.")
         if not isinstance(child, Mass):
             raise TypeError(
                 f"Joint.add: only Mass children supported in v1, got "

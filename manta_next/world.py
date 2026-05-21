@@ -329,7 +329,8 @@ class World:
                     comp_crafts, comp_couplings,
                     gravity_field=gravity_field,
                     fluid_field=fluid_field,
-                    mag_field=mag_field)
+                    mag_field=mag_field,
+                    collision_field=collision_field)
                 # Build the prefixed initial state.
                 init: dict[str, Any] = {}
                 for entry in comp_entries:

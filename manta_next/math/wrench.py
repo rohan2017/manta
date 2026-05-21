@@ -19,7 +19,7 @@ class Wrench:
 
         w = Wrench(force=Vec3[F](...), torque=Vec3[F](...))
         w = Wrench.zero(F)
-        w = Wrench.from_force_at(force=..., point_in_frame=...)
+        w = Wrench.from_force_at(force=..., point=...)   # both in frame F
     """
 
     __slots__ = ("force", "torque", "_frame")

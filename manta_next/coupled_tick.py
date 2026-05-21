@@ -39,6 +39,7 @@ def compile_coupled_tick(crafts: list,
                           gravity_field=None,
                           fluid_field=None,
                           mag_field=None,
+                          collision_field=None,
                           ) -> "ir.graph.CompiledGraph":
     """Compile a CasADi-MX tick over multiple coupled crafts.
 
@@ -47,9 +48,11 @@ def compile_coupled_tick(crafts: list,
                     referenced by `couplings`.
         couplings — list of Coupling instances (subclasses with
                     compute_wrenches_sym(ctx_a, ctx_b) → (Wrench, Wrench)).
-        gravity_field, fluid_field, mag_field — same semantics as
-                    Craft.compile_tick. Shared across all crafts in this
-                    component.
+        gravity_field, fluid_field, mag_field, collision_field — same
+                    semantics as Craft.compile_tick. Shared across all
+                    crafts in this component. Any unset field defaults
+                    to its empty form (zero gravity / zero density /
+                    zero B / zero penetration).
 
     State layout (input + output):
         <craft_name>.position
@@ -73,9 +76,8 @@ def compile_coupled_tick(crafts: list,
         fluid_field = _FluidField()
     if mag_field is None:
         mag_field = _MagField()
-    # Coupled-tick callers don't currently expose collision_field —
-    # default to empty. Wiring it through is a small follow-up.
-    collision_field = _CollisionField()
+    if collision_field is None:
+        collision_field = _CollisionField()
 
     if not crafts:
         raise ValueError("compile_coupled_tick: needs at least one craft.")
@@ -88,9 +90,12 @@ def compile_coupled_tick(crafts: list,
                 "compile_coupled_tick: coupling references a craft not in "
                 "the given crafts list.")
 
-    # Compute inertials per craft (numpy).
+    # Compute inertials per craft (numpy). Same nested-Joint guard as
+    # the single-craft path.
+    from .craft import _check_joints_have_only_mass_children
     inertials = {}
     for craft in crafts:
+        _check_joints_have_only_mass_children(craft.name, craft._parts)
         ai = _aggregate_inertials(craft._parts)
         if ai["m_total"] <= 0.0:
             raise ValueError(

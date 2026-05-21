@@ -175,3 +175,51 @@ def test_offset_collider_produces_tip_over_torque():
     assert abs(omega[1]) > 1e-6
     assert abs(omega[0]) < 1e-9
     assert abs(omega[2]) < 1e-9
+
+
+# ---------------------------------------------------------------------------
+# Collision in a coupled (multi-craft) component
+# ---------------------------------------------------------------------------
+
+def test_collision_field_reaches_coupled_tick():
+    """A Collider on one craft of a tethered pair should see the
+    ground plane the World registers. Before the coupled_tick fix this
+    silently dropped the CollisionField and the body free-fell through
+    the floor."""
+    from manta_next.couplings import Tether
+    from manta_next.parts import TetherEndpoint
+
+    g  = 9.81
+    cf = CollisionField()
+    cf.add(HalfSpace(origin=(0, 0, 0), normal=(0, 0, 1)))
+    w = (World()
+         .add_uniform_gravity((0.0, 0.0, -g))
+         .add_field(cf))
+
+    a = Craft("a")
+    a.add(Mass("body", mass=1.0, moi=(0.01, 0.01, 0.01)))
+    a.add(TetherEndpoint("hook"))
+    a.add(Collider("foot", stiffness=1e5, damping=100.0))
+
+    b = Craft("b")
+    b.add(Mass("body", mass=1.0, moi=(0.01, 0.01, 0.01)))
+    b.add(TetherEndpoint("hook"))
+
+    w.add_craft(a, position=(0.0, 0.0, 1.0))
+    w.add_craft(b, position=(2.0, 0.0, 1.0))
+    w.add_coupling(Tether(a, "hook", b, "hook",
+                          stiffness=10.0, damping=0.5, rest_length=2.0))
+
+    cw = w.compile()
+    state = cw.initial_state()
+    comp = list(cw.components)[0]
+
+    for _ in range(3000):
+        state = cw.step(state, dt=0.001)
+
+    # Craft `a` rests at the ground-compression equilibrium z = -m·g/k.
+    z_a = float(state[comp]["a.position"][2])
+    expected = -1.0 * g / 1e5
+    assert np.isclose(z_a, expected, atol=2e-4), (
+        f"a.z={z_a}, expected≈{expected}; the coupled_tick path is "
+        f"probably dropping the CollisionField again.")
