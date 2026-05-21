@@ -157,6 +157,13 @@ def _trace_craft_pass1(g_ctx,
     orientation = ir.Quat[AnchorFrame, CraftFrame].input(prefix + "orientation")
     velocity    = ir.Vec3[AnchorFrame].input(prefix + "velocity")
     ang_vel     = ir.Vec3[CraftFrame].input(prefix + "angular_velocity")
+    # Placeholder MX symbols for current-tick body acceleration / α
+    # (substituted with the real Newton-Euler outputs after the wrench
+    # sum is known — see Craft.compile_tick for the rationale).
+    a_anchor_sym = ca.MX.sym(f"{craft.name}_a_anchor", 3, 1)
+    alpha_sym    = ca.MX.sym(f"{craft.name}_alpha", 3, 1)
+    a_anchor_placeholder = ir.Vec3[AnchorFrame].from_mx(a_anchor_sym)
+    alpha_placeholder    = ir.Vec3[CraftFrame].from_mx(alpha_sym)
 
     if collision_field is None:
         from .fields import CollisionField as _CF
@@ -196,7 +203,9 @@ def _trace_craft_pass1(g_ctx,
 
     # Symbolic kinematic + inertia passes over the part tree.
     kin_states = kinematic_pass(
-        craft.root, position, orientation, velocity, ang_vel, gravity_field)
+        craft.root, position, orientation, velocity, ang_vel, gravity_field,
+        body_acceleration_anchor=a_anchor_placeholder,
+        body_angular_acceleration=alpha_placeholder)
     inertia = symbolic_inertia_rollup(craft.root)
 
     # Per-craft TickContext (root-body view) for couplings to read. Per-
@@ -215,6 +224,9 @@ def _trace_craft_pass1(g_ctx,
         angular_velocity=ang_vel,
         velocity_body=root_kin.velocity_body_in_craft,
         R_craft_from_input=root_kin.R_craft_from_input,
+        acceleration_anchor=root_kin.acceleration_anchor,
+        acceleration_body=root_kin.acceleration_body,
+        angular_acceleration=root_kin.angular_acceleration,
     )
 
     # Aggregate wrenches + collect state/sensor outputs.
@@ -236,6 +248,9 @@ def _trace_craft_pass1(g_ctx,
             angular_velocity=kin.angular_velocity_input,
             velocity_body=kin.velocity_body_in_craft,
             R_craft_from_input=kin.R_craft_from_input,
+            acceleration_anchor=kin.acceleration_anchor,
+            acceleration_body=kin.acceleration_body,
+            angular_acceleration=kin.angular_acceleration,
         )
         result = part.update(ctx_part)
         if isinstance(result, Wrench):
@@ -297,6 +312,8 @@ def _trace_craft_pass1(g_ctx,
         "sensor_outputs":    sensor_outputs,
         "saved_state_attrs": saved_state_attrs,
         "saved_input_attrs": saved_input_attrs,
+        "a_anchor_sym":      a_anchor_sym,
+        "alpha_sym":         alpha_sym,
     }
 
 
@@ -348,6 +365,41 @@ def _emit_per_craft_dynamics(g_ctx, craft, pc, dt) -> None:
     offset_term = alpha.cross(r_OC) + ang_vel.cross(ang_vel.cross(r_OC))
     a_origin_anchor = a_com_anchor + orientation.apply(offset_term)
 
+    # --- Validate wrench independence from placeholder dynamics ----------
+    a_anchor_sym = pc["a_anchor_sym"]
+    alpha_sym    = pc["alpha_sym"]
+    for sym_name, sym_mx in (("acceleration_anchor", a_anchor_sym),
+                              ("acceleration_body", a_anchor_sym),
+                              ("angular_acceleration", alpha_sym)):
+        if (ca.depends_on(net.force._mx, sym_mx)
+                or ca.depends_on(net.torque._mx, sym_mx)):
+            raise ValueError(
+                f"Craft '{craft.name}': a part's wrench or a coupling "
+                f"depends on ctx.{sym_name}. Wrenches must be a function "
+                f"of state only.")
+
+    # --- Substitute placeholders → real dynamics in emitted outputs -----
+    placeholders = ca.vertcat(a_anchor_sym, alpha_sym)
+    real_values  = ca.vertcat(a_origin_anchor._mx, alpha._mx)
+    from .ir.types import _IRValue
+
+    def _resolve(val):
+        if not isinstance(val, _IRValue):
+            return val
+        new_mx = ca.substitute(val._mx, placeholders, real_values)
+        if isinstance(val, ir.Vec3):
+            return type(val)._from_mx(new_mx, frame=val._frame)
+        if isinstance(val, (ir.Mat3, ir.Quat)):
+            return type(val)._from_mx(new_mx,
+                                       from_frame=val._from_frame,
+                                       to_frame=val._to_frame)
+        return type(val)._from_mx(new_mx)
+
+    new_state_outputs = [(n, _resolve(v))
+                          for n, v in pc["new_state_outputs"]]
+    sensor_outputs    = [(n, _resolve(v))
+                          for n, v in pc["sensor_outputs"]]
+
     new_velocity = velocity + a_origin_anchor * dt
     new_position = position + velocity * dt + a_origin_anchor * (0.5 * dt * dt)
     new_ang_vel  = ang_vel + alpha * dt
@@ -360,10 +412,9 @@ def _emit_per_craft_dynamics(g_ctx, craft, pc, dt) -> None:
     g_ctx.output(new_orientation, prefix + "orientation")
     g_ctx.output(new_velocity,    prefix + "velocity")
     g_ctx.output(new_ang_vel,     prefix + "angular_velocity")
-    for out_name, out_val in pc["new_state_outputs"]:
+    for out_name, out_val in new_state_outputs:
         g_ctx.output(out_val, out_name)
-    from .ir.types import _IRValue
-    for out_name, out_val in pc["sensor_outputs"]:
+    for out_name, out_val in sensor_outputs:
         if not isinstance(out_val, _IRValue):
             raise TypeError(
                 f"Output '{out_name}': must be an IR value; got "

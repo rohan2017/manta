@@ -6,9 +6,8 @@ A Part is a Python class that:
   * Declares mutable per-tick state via `State(init=..., manifold=...)`.
   * Receives any per-tick external inputs via `Input(default)`.
   * Emits per-tick observables via `Output(shape=...)`.
-  * Implements `update(ctx) -> Wrench | PartUpdate` (and optionally
-    `post_update(ctx_post) -> dict`) to contribute a wrench, write
-    new state, and/or emit Output values each tick.
+  * Implements `update(ctx) -> Wrench | PartUpdate` to contribute a
+    wrench, write new state, and/or emit Output values each tick.
 
 Example::
 
@@ -287,20 +286,6 @@ class Part:
         raise NotImplementedError(
             f"{type(self).__name__}: must override update(self, ctx)")
 
-    def post_update(self, ctx_post: "PostUpdateContext") -> dict:
-        """Optional second-phase hook called AFTER Newton-Euler runs.
-
-        Override to emit `Output` values that depend on the just-computed
-        body-frame acceleration / angular acceleration (e.g. an IMU
-        accelerometer). Returns a dict of `{output_name: ir_value}`.
-        Default: no extra outputs.
-
-        The dict's keys are validated against the Part's declared
-        `Output` slots, same as the main `update`. An Output slot may
-        be filled by EITHER `update` OR `post_update`, but at most one.
-        """
-        return {}
-
     # --- Introspection ----------------------------------------------------
 
     def __repr__(self) -> str:
@@ -386,29 +371,22 @@ class RootPart(CompositePart):
         super().__init__(name)
 
 
-# NOTE: documentation-only stubs.
+# NOTE: documentation-only stub.
 #
-# The real `TickContext` and `PostUpdateContext` classes live in
-# `manta_next/craft.py`. We can't import them here at runtime because
-# that would create a circular import (craft imports parts.base).
-# The stubs below exist purely as forward-references so user docstrings
-# / IDE tooling have something to point at when they say "the Part's
-# update receives a TickContext". Do NOT `isinstance(ctx, TickContext)`
-# against these — that check would always pass against the placeholder
-# regardless of what `ctx` actually is. The compile_tick loop in
-# craft.py constructs and dispatches the concrete contexts directly.
+# The real `TickContext` class lives in `manta_next/craft.py`. We
+# can't import it here at runtime because that would create a circular
+# import (craft imports parts.base). The stub below exists purely as
+# a forward-reference so user docstrings / IDE tooling have something
+# to point at when they say "the Part's update receives a TickContext".
+# Do NOT `isinstance(ctx, TickContext)` against this — that check
+# would always pass against the placeholder regardless of what `ctx`
+# actually is. The compile_tick loop in craft.py constructs and
+# dispatches the concrete context directly.
 
 class TickContext:   # noqa: D401  (docstring is the API doc)
     """Forward-reference stub. See `manta_next.craft.TickContext` for
     the concrete class with fields gravity, gravity_field, fluid_field,
     mag_field, collision_field, dt, position, orientation, velocity,
-    angular_velocity, velocity_body."""
-    __slots__ = ()
-
-
-class PostUpdateContext:   # noqa: D401
-    """Forward-reference stub. See `manta_next.craft.PostUpdateContext`
-    for the concrete class with fields gravity, acceleration_anchor,
-    angular_acceleration, orientation, position, velocity,
-    angular_velocity, dt."""
+    angular_velocity, velocity_body, R_craft_from_input,
+    acceleration_anchor, acceleration_body, angular_acceleration."""
     __slots__ = ()

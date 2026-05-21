@@ -1,14 +1,25 @@
 """Symbolic kinematic pass over a Craft's part tree.
 
 Given the body's rigid-body state (position, orientation, velocity,
-angular velocity) and every Joint's (angle, rate), compute for each
-part its effective kinematic state — origin position, linear velocity
-at the origin, angular velocity, the part's body-frame position, and
-the rotation matrices that take its input/output frames into body
-coords — all as CasADi MX expressions composed through the joint
-chain. A flat craft (no nested joints) reduces to "everything is the
-body's state offset by `part.transform`" with identity rotations; deep
-nesting (gimbal: pan → tilt → camera) composes naturally.
+angular velocity), the body's symbolic acceleration / angular
+acceleration, and every Joint's (angle, rate), compute for each part
+its effective kinematic state — origin position, linear velocity at
+the origin, angular velocity, lever-arm-lifted acceleration, the
+part's body-frame position, and the rotation matrices that take its
+input/output frames into body coords — all as CasADi MX expressions
+composed through the joint chain. A flat craft (no nested joints)
+reduces to "everything is the body's state offset by `part.transform`"
+with identity rotations; deep nesting (gimbal: pan → tilt → camera)
+composes naturally.
+
+Body acceleration handling: an accelerometer's reading depends on
+body a/α, which is the OUTPUT of Newton-Euler — reading them inside
+`update()` (the wrench-collection phase, which feeds N-E) is
+circular. The framework passes MX **placeholder** symbols for a/α
+into this pass, lets parts emit outputs referencing them, then
+substitutes the real Newton-Euler expressions into those outputs
+after the wrench sum is known. Wrenches that would themselves depend
+on a/α are rejected at compile time (no implicit-equation solver).
 
 **Frame convention**:
   * Anchor-frame fields (`origin_in_anchor`, `velocity_origin`,
@@ -102,6 +113,9 @@ class KinematicState:
     r_in_craft:                     Any   # Vec3[CraftFrame]
     R_craft_from_input:             Any   # Mat3[CraftFrame, CraftFrame]
     R_craft_from_output:            Any   # Mat3[CraftFrame, CraftFrame]
+    acceleration_anchor:            Any   # Vec3[AnchorFrame]
+    acceleration_body:              Any   # Vec3[CraftFrame]
+    angular_acceleration:           Any   # Vec3[CraftFrame]
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +157,10 @@ def kinematic_pass(root_part,
                    body_orientation,
                    body_velocity,
                    body_angular_velocity,
-                   gravity_field) -> dict:
+                   gravity_field,
+                   *,
+                   body_acceleration_anchor,
+                   body_angular_acceleration) -> dict:
     """Walk `root_part`'s subtree, returning `{part: KinematicState}`.
 
     Joint angle/rate values are read directly off each Joint instance
@@ -170,6 +187,13 @@ def kinematic_pass(root_part,
     eye3_mat = Mat3[CraftFrame, CraftFrame].from_mx(ca.MX.eye(3))
     zero_r   = Vec3[CraftFrame].from_mx(ca.MX.zeros(3, 1))
 
+    # Root sees the body's own acceleration directly (no lever arm).
+    # Body-frame version via R^T. Caller passes a / α as MX placeholder
+    # symbols that get substituted to the real Newton-Euler outputs
+    # after the wrench-collection phase.
+    body_acceleration_body = body_orientation.conjugate().apply(
+        body_acceleration_anchor)
+
     root_state = KinematicState(
         origin_in_anchor=body_position,
         velocity_origin=body_velocity,
@@ -182,6 +206,9 @@ def kinematic_pass(root_part,
         r_in_craft=zero_r,
         R_craft_from_input=eye3_mat,
         R_craft_from_output=eye3_mat,
+        acceleration_anchor=body_acceleration_anchor,
+        acceleration_body=body_acceleration_body,
+        angular_acceleration=body_angular_acceleration,
     )
 
     states: dict = {root_part: root_state}
@@ -191,7 +218,10 @@ def kinematic_pass(root_part,
             return
         for child in parent.children:
             child_state = _compute_child_state(
-                parent_state, child, body_orientation, gravity_field)
+                parent_state, child, body_orientation, gravity_field,
+                body_acceleration_anchor=body_acceleration_anchor,
+                body_angular_acceleration=body_angular_acceleration,
+                body_angular_velocity=body_angular_velocity)
             states[child] = child_state
             visit_children(child, child_state)
 
@@ -200,7 +230,11 @@ def kinematic_pass(root_part,
 
 
 def _compute_child_state(parent_state: KinematicState, child,
-                         body_orientation, gravity_field) -> KinematicState:
+                         body_orientation, gravity_field,
+                         *,
+                         body_acceleration_anchor,
+                         body_angular_acceleration,
+                         body_angular_velocity) -> KinematicState:
     from .parts.articulation.joint import Joint
 
     # Child's `transform` lives in parent's OUTPUT frame coords.
@@ -297,6 +331,19 @@ def _compute_child_state(parent_state: KinematicState, child,
     g_anchor_at_child = gravity_field.state_at_sym(child_origin_in_anchor)
     g_at_child_in_craft = body_orientation.conjugate().apply(g_anchor_at_child)
 
+    # ----- acceleration at the child's mount point ---------------------
+    # Body a / α come in as compile-time placeholder MX symbols (or
+    # any caller-supplied expression). After the wrench-collection
+    # phase the framework substitutes them with the real Newton-Euler
+    # outputs, so a Part reading `ctx.acceleration_body` ends up
+    # reading the current-tick lever-arm-lifted value.
+    lever_craft  = (body_angular_acceleration.cross(child_r_in_craft)
+                    + body_angular_velocity.cross(
+                        body_angular_velocity.cross(child_r_in_craft)))
+    lever_anchor = body_orientation.apply(lever_craft)
+    child_a_anchor = body_acceleration_anchor + lever_anchor
+    child_a_body   = body_orientation.conjugate().apply(child_a_anchor)
+
     return KinematicState(
         origin_in_anchor=child_origin_in_anchor,
         velocity_origin=child_velocity_origin,
@@ -309,6 +356,9 @@ def _compute_child_state(parent_state: KinematicState, child,
         r_in_craft=child_r_in_craft,
         R_craft_from_input=R_craft_from_child_input,
         R_craft_from_output=R_craft_from_child_output,
+        acceleration_anchor=child_a_anchor,
+        acceleration_body=child_a_body,
+        angular_acceleration=body_angular_acceleration,
     )
 
 

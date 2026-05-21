@@ -16,9 +16,14 @@ Scope:
   where r_OC = -r_com (origin minus COM in craft frame).
 - Integration: position via symplectic-flavored Euler; orientation via
   SO3 boxplus on ω·dt; velocities via Euler.
-- Sensor outputs that depend on the just-computed body acceleration
-  (e.g. IMU accelerometer) are emitted in the post-Newton-Euler
-  `post_update()` phase.
+- Single-phase parts: each Part implements exactly one `update(ctx)`
+  function. `ctx.acceleration_anchor` / `ctx.acceleration_body` /
+  `ctx.angular_acceleration` reflect **current-tick** dynamics — the
+  framework runs `update()` against MX placeholders, then substitutes
+  the real Newton-Euler outputs into the emitted sensor expressions
+  before compiling the graph. Wrenches must not depend on those
+  placeholders (the substitution would create an unsolved fixpoint);
+  the compile step validates this and raises otherwise.
 
 Articulation: nested `Joint` chains compose symbolically through the
 kinematic pass; `r_com`, `I_com`, and per-part offsets pick up joint-
@@ -49,51 +54,6 @@ from .ir.wrench import Wrench
 # ---------------------------------------------------------------------------
 # TickContext
 # ---------------------------------------------------------------------------
-
-class PostUpdateContext:
-    """Per-tick context for the second phase that runs AFTER Newton-Euler.
-
-    Exposes the just-computed body-frame inertial state so sensor parts
-    can emit readings that depend on dynamics — accelerometers, body-
-    rate-of-change probes, etc. Fields:
-
-      gravity              : Vec3[CraftFrame]   — gravity at craft origin
-                                                  in body frame (same as
-                                                  TickContext.gravity).
-      acceleration_anchor  : Vec3[AnchorFrame]  — anchor-frame inertial
-                                                  acceleration of the craft
-                                                  origin (output of N-E).
-      angular_acceleration : Vec3[CraftFrame]   — body-frame angular accel α.
-      orientation          : Quat               — pass-through of the input.
-      position             : Vec3[AnchorFrame]  — input state.
-      velocity             : Vec3[AnchorFrame]  — input state.
-      angular_velocity     : Vec3[CraftFrame]   — input state.
-      dt                   : Scalar             — integrator timestep.
-    """
-
-    __slots__ = ("gravity", "acceleration_anchor", "angular_acceleration",
-                 "orientation", "position", "velocity", "angular_velocity",
-                 "dt")
-
-    def __init__(self,
-                 *,
-                 gravity: "Vec3",
-                 acceleration_anchor: "Vec3",
-                 angular_acceleration: "Vec3",
-                 orientation: "Quat",
-                 position: "Vec3",
-                 velocity: "Vec3",
-                 angular_velocity: "Vec3",
-                 dt: "Scalar") -> None:
-        self.gravity = gravity
-        self.acceleration_anchor = acceleration_anchor
-        self.angular_acceleration = angular_acceleration
-        self.orientation = orientation
-        self.position = position
-        self.velocity = velocity
-        self.angular_velocity = angular_velocity
-        self.dt = dt
-
 
 class TickContext:
     """The per-tick context passed to each `Part.update(ctx)` call.
@@ -150,16 +110,36 @@ class TickContext:
                                                        the outer joint's
                                                        angle.
 
-    Body-frame inertial acceleration is NOT here — it depends on the
-    aggregated wrench, which is the very thing parts are contributing.
-    Sensors that need it read it off `PostUpdateContext` instead.
+      acceleration_anchor  : Vec3[AnchorFrame]      — anchor-frame
+                                                       inertial accel
+                                                       at the part's
+                                                       mount point.
+      acceleration_body    : Vec3[CraftFrame]        — same, in body-
+                                                       frame coords.
+                                                       Specific force
+                                                       (accelerometer
+                                                       reading) is
+                                                       `acceleration_body
+                                                       - gravity`.
+      angular_acceleration : Vec3[CraftFrame]        — body α.
+
+    Note on the acceleration fields: these reflect the **current**
+    tick's Newton-Euler output (`α`, `a_origin`) with the lever-arm
+    contribution lifted to this part's mount point using current-tick
+    ω and `r_in_craft`. At compile time the framework hands `update()`
+    MX placeholder symbols for a/α and substitutes the real
+    expressions after Newton-Euler. Wrenches must not depend on these
+    fields (the substitute pass doesn't solve fixpoints); the compile
+    step validates and raises otherwise.
     """
 
     __slots__ = ("gravity", "gravity_field", "fluid_field", "mag_field",
                  "collision_field",
                  "dt", "position", "orientation", "velocity",
                  "angular_velocity", "velocity_body",
-                 "R_craft_from_input")
+                 "R_craft_from_input",
+                 "acceleration_anchor", "acceleration_body",
+                 "angular_acceleration")
 
     def __init__(self,
                  *,
@@ -174,7 +154,10 @@ class TickContext:
                  velocity: Vec3,
                  angular_velocity: Vec3,
                  velocity_body: Vec3,
-                 R_craft_from_input: Mat3) -> None:
+                 R_craft_from_input: Mat3,
+                 acceleration_anchor: Vec3,
+                 acceleration_body: Vec3,
+                 angular_acceleration: Vec3) -> None:
         self.gravity = gravity
         self.gravity_field = gravity_field
         self.fluid_field = fluid_field
@@ -192,6 +175,9 @@ class TickContext:
         # Articulated parts use this to express their input-frame axes
         # (e.g., a Joint's spin axis) in body-frame coords.
         self.R_craft_from_input = R_craft_from_input
+        self.acceleration_anchor  = acceleration_anchor
+        self.acceleration_body    = acceleration_body
+        self.angular_acceleration = angular_acceleration
 
 
 # ---------------------------------------------------------------------------
@@ -422,6 +408,15 @@ class Craft:
             velocity    = ir.Vec3[AnchorFrame].input("velocity")
             ang_vel     = ir.Vec3[CraftFrame].input("angular_velocity")
             dt          = ir.Scalar.input("dt")
+            # Compile-time placeholder symbols for current-tick body
+            # acceleration / angular acceleration. update() reads these
+            # via TickContext; after Newton-Euler builds the real MX
+            # expressions, ca.substitute replaces the placeholders. No
+            # runtime state — purely a compile-time wiring trick.
+            a_anchor_sym = ca.MX.sym(f"{self.name}_a_anchor", 3, 1)
+            alpha_sym    = ca.MX.sym(f"{self.name}_alpha", 3, 1)
+            a_anchor_placeholder = ir.Vec3[AnchorFrame].from_mx(a_anchor_sym)
+            alpha_placeholder    = ir.Vec3[CraftFrame].from_mx(alpha_sym)
 
             # --- Per-part state plumbing ---------------------------------
             # For each part with State declarations, create a graph input
@@ -480,7 +475,9 @@ class Craft:
             from .kinematics import kinematic_pass
             kin_states = kinematic_pass(
                 self.root, position, orientation, velocity, ang_vel,
-                gravity_field)
+                gravity_field,
+                body_acceleration_anchor=a_anchor_placeholder,
+                body_angular_acceleration=alpha_placeholder)
 
             # --- Symbolic inertia rollup --------------------------------
             # Build (m_total, com, I_com) as MX expressions in joint
@@ -522,6 +519,9 @@ class Craft:
                     angular_velocity=kin.angular_velocity_input,
                     velocity_body=kin.velocity_body_in_craft,
                     R_craft_from_input=kin.R_craft_from_input,
+                    acceleration_anchor=kin.acceleration_anchor,
+                    acceleration_body=kin.acceleration_body,
+                    angular_acceleration=kin.angular_acceleration,
                 )
                 result = part.update(ctx)
                 if isinstance(result, Wrench):
@@ -561,13 +561,17 @@ class Craft:
                 # Validate + queue Output writes.
                 out_decls = part.output_declarations()
                 unknown_out = set(outputs) - set(out_decls)
+                missing_out = set(out_decls) - set(outputs)
                 if unknown_out:
                     raise KeyError(
                         f"{type(part).__name__}('{part.name}').update(): "
                         f"unknown output slot(s): {sorted(unknown_out)}. "
                         f"Declared: {sorted(out_decls)}")
-                # (Missing-output enforcement happens after post_update —
-                # an Output slot may be filled by update OR post_update.)
+                if missing_out:
+                    raise KeyError(
+                        f"{type(part).__name__}('{part.name}').update(): "
+                        f"output slot(s) declared but not written: "
+                        f"{sorted(missing_out)}.")
                 for oname, oval in outputs.items():
                     sensor_outputs.append((f"{part.name}.{oname}", oval))
 
@@ -576,8 +580,23 @@ class Craft:
                 w_craft = _wrench_to_craft(w_part, kin.r_in_craft)
                 net = net + w_craft
 
-            # Hold off on restoring part attrs — `post_update` runs
-            # after Newton-Euler and may read State / Input values.
+            # --- Validate wrench independence from placeholder dynamics --
+            # Wrenches must be a function of state only — if one
+            # depends on the placeholder a/α, the substitution below
+            # creates an unsolved fixpoint (would need added-mass-style
+            # inertia augmentation). Raise so the part author rewrites
+            # the dependency explicitly.
+            for sym_name, sym_mx in (("acceleration_anchor", a_anchor_sym),
+                                      ("acceleration_body", a_anchor_sym),
+                                      ("angular_acceleration", alpha_sym)):
+                if (ca.depends_on(net.force._mx, sym_mx)
+                        or ca.depends_on(net.torque._mx, sym_mx)):
+                    raise ValueError(
+                        f"Craft '{self.name}': a part's wrench depends "
+                        f"on ctx.{sym_name}. Wrenches must be a function "
+                        f"of state only; reading current-tick dynamics "
+                        f"in the wrench creates an implicit equation "
+                        f"this compiler doesn't solve.")
 
             # --- Newton-Euler --------------------------------------------
             F_craft   = net.force         # Vec3[CraftFrame]
@@ -612,62 +631,35 @@ class Craft:
             offset_term = alpha.cross(r_OC) + ang_vel.cross(ang_vel.cross(r_OC))
             a_origin_anchor = a_com_anchor + orientation.apply(offset_term)
 
-            # --- Post-Newton-Euler sensor phase -------------------------
-            # Body-frame acceleration at the craft origin, plus α: parts
-            # like the IMU's accelerometer need these.
-            a_origin_body = orientation.conjugate().apply(a_origin_anchor)
-            # Post-NE context is currently tied to the body (root)
-            # kinematic state — per-part post_update contexts that walk
-            # the joint chain would let a rotor-mounted accelerometer
-            # read its own lever-arm contribution. Open follow-up.
-            root_kin = kin_states[self.root]
-            ctx_post = PostUpdateContext(
-                gravity=root_kin.gravity_in_craft,
-                acceleration_anchor=a_origin_anchor,
-                angular_acceleration=alpha,
-                orientation=orientation,
-                position=position,
-                velocity=velocity,
-                angular_velocity=ang_vel,
-                dt=dt,
-            )
-            for part in self._parts:
-                extra = part.post_update(ctx_post)
-                if not extra:
-                    continue
-                out_decls = part.output_declarations()
-                # Allow keys that match declared Outputs and aren't already
-                # filled by the main update phase.
-                already_filled = {
-                    name.split(".", 1)[1] for (name, _) in sensor_outputs
-                    if name.startswith(f"{part.name}.")
-                }
-                for oname, oval in extra.items():
-                    if oname not in out_decls:
-                        raise KeyError(
-                            f"{type(part).__name__}('{part.name}')."
-                            f"post_update: unknown output slot {oname!r}. "
-                            f"Declared: {sorted(out_decls)}")
-                    if oname in already_filled:
-                        raise KeyError(
-                            f"{type(part).__name__}('{part.name}'): output "
-                            f"{oname!r} was filled by both update() and "
-                            f"post_update(); pick one.")
-                    sensor_outputs.append(
-                        (f"{part.name}.{oname}", oval))
+            # --- Substitute placeholders → real dynamics ----------------
+            # Every output and per-part state-update expression that
+            # referenced `ctx.acceleration_anchor` /
+            # `ctx.acceleration_body` / `ctx.angular_acceleration` now
+            # gets the actual Newton-Euler result wired in.
+            placeholders = ca.vertcat(a_anchor_sym, alpha_sym)
+            real_values  = ca.vertcat(a_origin_anchor._mx, alpha._mx)
+            from .ir.types import _IRValue
 
-            # Verify every declared Output got filled by SOME phase.
-            for part in self._parts:
-                filled = {
-                    name.split(".", 1)[1] for (name, _) in sensor_outputs
-                    if name.startswith(f"{part.name}.")
-                }
-                missing = set(part.output_declarations()) - filled
-                if missing:
-                    raise KeyError(
-                        f"{type(part).__name__}('{part.name}'): output "
-                        f"slot(s) declared but not written by either "
-                        f"update() or post_update(): {sorted(missing)}.")
+            def _resolve(val):
+                if not isinstance(val, _IRValue):
+                    return val
+                new_mx = ca.substitute(val._mx, placeholders, real_values)
+                # Reconstruct the typed wrapper around the substituted MX,
+                # preserving frame tags. Each IR type carries its frame
+                # info in private attributes that match its constructor
+                # kwargs — pull them out and re-build.
+                cls = type(val)
+                if isinstance(val, ir.Vec3):
+                    return cls._from_mx(new_mx, frame=val._frame)
+                if isinstance(val, (ir.Mat3, ir.Quat)):
+                    return cls._from_mx(new_mx,
+                                         from_frame=val._from_frame,
+                                         to_frame=val._to_frame)
+                # Scalar / fallback.
+                return cls._from_mx(new_mx)
+
+            new_state_outputs = [(n, _resolve(v)) for n, v in new_state_outputs]
+            sensor_outputs    = [(n, _resolve(v)) for n, v in sensor_outputs]
 
             # Now restore part attrs.
             for part, saved in saved_state_attrs.items():
@@ -703,7 +695,6 @@ class Craft:
             for out_name, out_val in new_state_outputs:
                 g.output(out_val, out_name)
             # Per-part sensor outputs (names like "imu.gyro").
-            from .ir.types import _IRValue
             for out_name, out_val in sensor_outputs:
                 if not isinstance(out_val, _IRValue):
                     raise TypeError(

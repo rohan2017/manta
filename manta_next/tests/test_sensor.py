@@ -208,20 +208,16 @@ def test_unknown_output_write_raises():
 # IMU accelerometer (post-Newton-Euler phase)
 # ---------------------------------------------------------------------------
 
-def test_accel_stationary_craft_reads_one_g_up():
-    """A stationary craft on the ground reads specific force = -g_body.
-    With +z up and g = (0,0,-9.81), the specific force is (0,0,+9.81)
-    (the support force per unit mass)."""
-    c = Craft("sitting")
+def test_accel_in_free_fall_reads_zero():
+    """A free-falling body's accelerometer reads zero specific force —
+    body is accelerating at g, so a_body - g_body = 0. Single tick is
+    enough: `ctx.acceleration_body` is the current tick's N-E output
+    (placeholder-substituted at compile time), no lag."""
+    c = Craft("falling")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(IMU("g"))
     tick = c.compile_tick(gravity_anchor=(0.0, 0.0, -9.81))
     state = c.initial_state()
-    # The body would accelerate at g if free; to force "stationary":
-    # apply a constant non-gravitational force = +m·g via a Mass without
-    # gravity. Simpler: just test that with apply_gravity=True, the body
-    # accelerates at g → accel = a_body - g_body = g_body - g_body = 0.
-    # That's the free-fall reading: 0g.
     out = tick(dt=0.001, **state)
     accel = np.array(out["g.accel"]).ravel()
     np.testing.assert_allclose(accel, np.zeros(3), atol=1e-6)
@@ -242,7 +238,8 @@ def test_accel_zero_gravity_zero_acceleration_reads_zero():
 
 def test_accel_picks_up_thruster_acceleration():
     """A thruster pushing the body produces non-zero specific force on
-    the accelerometer: F/m in the thrust direction, in body frame."""
+    the accelerometer: F/m in the thrust direction, in body frame.
+    Single tick — the IMU reads the same-tick a, not a prev-tick echo."""
     c = Craft("powered")
     c.add(Mass("body", mass=2.0, moi=(0.1, 0.1, 0.1), apply_gravity=False))
     c.add(Thruster("t", force=(10.0, 0.0, 0.0)))   # 10 N along +x at throttle=1
@@ -254,6 +251,28 @@ def test_accel_picks_up_thruster_acceleration():
     # F = 10 N, m = 2 kg → a = 5 m/s² along +x in body frame.
     accel = np.array(out["g.accel"]).ravel()
     np.testing.assert_allclose(accel, (5.0, 0.0, 0.0), atol=1e-6)
+
+
+def test_accel_offset_imu_reads_centripetal_under_rotation():
+    """Spinning body, IMU mounted off-axis: framework lifts the
+    a_origin lever-arm contribution to the IMU's mount point, so
+    the accelerometer reads ω × (ω × r) in body frame. With no
+    other forces (no gravity, no thrust), `accel` IS the lever-arm
+    term — proves the framework does the lift, not the IMU."""
+    c = Craft("spinner")
+    c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1), apply_gravity=False))
+    c.add(IMU("imu", transform=(1.0, 0.0, 0.0)))
+    tick = c.compile_tick(gravity_anchor=(0.0, 0.0, 0.0))
+    state = c.initial_state()
+    omega_z = 2.0   # rad/s about +z
+    state["angular_velocity"] = np.array([0.0, 0.0, omega_z])
+    out = tick(dt=0.001, **state)
+    # Centripetal acceleration: ω × (ω × r) with r=(1,0,0), ω=(0,0,2):
+    #   ω × r = (0,0,2) × (1,0,0) = (0, 2, 0)
+    #   ω × (ω × r) = (0,0,2) × (0,2,0) = (-4, 0, 0)
+    # Specific force = a_body - g_body = (-4, 0, 0) - 0 = (-4, 0, 0).
+    accel = np.array(out["imu.accel"]).ravel()
+    np.testing.assert_allclose(accel, (-omega_z ** 2, 0.0, 0.0), atol=1e-6)
 
 
 def test_imu_noise_sigmas_default_to_zero():
