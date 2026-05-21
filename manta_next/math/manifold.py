@@ -207,9 +207,32 @@ class R3:
         return self._v.frame
 
     def boxplus(self, delta: Vec3) -> "R3":
+        if not isinstance(delta, Vec3):
+            raise TypeError(
+                f"R3.boxplus: delta must be a Vec3, got {type(delta).__name__}")
+        if delta._frame is not self._v.frame:
+            from ..ir.frames import FrameError, _capture_user_source
+            raise FrameError(
+                "R3.boxplus",
+                expected=f"delta frame matches R3.frame "
+                         f"({self._v.frame.__name__})",
+                got=f"delta_frame={delta._frame.__name__}",
+                source=_capture_user_source(),
+            )
         return R3(self._v + delta)
 
     def boxminus(self, other: "R3") -> Vec3:
+        if not isinstance(other, R3):
+            raise TypeError(
+                f"R3.boxminus: other must be an R3, got {type(other).__name__}")
+        if other.frame is not self._v.frame:
+            from ..ir.frames import FrameError, _capture_user_source
+            raise FrameError(
+                "R3.boxminus",
+                expected=f"matching R3.frame ({self._v.frame.__name__})",
+                got=f"other_frame={other.frame.__name__}",
+                source=_capture_user_source(),
+            )
         return self._v - other._v
 
 
@@ -241,6 +264,29 @@ class RigidBody:
                 d_theta:    Vec3,
                 d_vlinear:  Vec3,
                 d_vangular: Vec3) -> "RigidBody":
+        # Frame checks: each delta must match the frame of the
+        # corresponding ambient slot. SO3.boxplus does its own check on
+        # d_theta; the three Vec3 additions below need explicit checks
+        # because Vec3.__add__ relies on its operand frames matching but
+        # the wrong-frame failure mode is a TypeError in CasADi land,
+        # not a FrameError. So we validate here for a clearer message.
+        for label, ref, delta in (
+            ("d_position",  self.position,    d_position),
+            ("d_vlinear",   self.vel_linear,  d_vlinear),
+            ("d_vangular",  self.vel_angular, d_vangular),
+        ):
+            if not isinstance(delta, Vec3):
+                raise TypeError(
+                    f"RigidBody.boxplus: {label} must be a Vec3, got "
+                    f"{type(delta).__name__}")
+            if delta._frame is not ref._frame:
+                from ..ir.frames import FrameError, _capture_user_source
+                raise FrameError(
+                    f"RigidBody.boxplus[{label}]",
+                    expected=f"frame {ref._frame.__name__}",
+                    got=f"{delta._frame.__name__}",
+                    source=_capture_user_source(),
+                )
         return RigidBody(
             position    = self.position + d_position,
             orientation = self.orientation.boxplus(d_theta),
@@ -249,6 +295,25 @@ class RigidBody:
         )
 
     def boxminus(self, other: "RigidBody") -> tuple[Vec3, Vec3, Vec3, Vec3]:
+        if not isinstance(other, RigidBody):
+            raise TypeError(
+                f"RigidBody.boxminus: other must be a RigidBody, got "
+                f"{type(other).__name__}")
+        # SO3.boxminus does its own frame check; same per-slot pattern
+        # as boxplus for the three Vec3 differences.
+        for label, ref, oth in (
+            ("position",    self.position,    other.position),
+            ("vel_linear",  self.vel_linear,  other.vel_linear),
+            ("vel_angular", self.vel_angular, other.vel_angular),
+        ):
+            if oth._frame is not ref._frame:
+                from ..ir.frames import FrameError, _capture_user_source
+                raise FrameError(
+                    f"RigidBody.boxminus[{label}]",
+                    expected=f"frame {ref._frame.__name__}",
+                    got=f"{oth._frame.__name__}",
+                    source=_capture_user_source(),
+                )
         return (
             self.position - other.position,
             self.orientation.boxminus(other.orientation),

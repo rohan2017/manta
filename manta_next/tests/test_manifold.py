@@ -125,3 +125,48 @@ def test_r3_trivial_boxplus_boxminus():
     out = g.compile()(a=[1.0, 2.0, 3.0], b=[4.0, 7.0, 11.0])
     assert np.allclose(out["delta"], [3.0, 5.0, 8.0])
     assert np.allclose(out["rc"],    [4.0, 7.0, 11.0])
+
+
+# ---------------------------------------------------------------------------
+# Frame validation on R3 / RigidBody boxplus/boxminus
+# ---------------------------------------------------------------------------
+
+def test_r3_boxplus_rejects_mismatched_delta_frame():
+    from manta_next.math.manifold import R3
+    from manta_next.ir.frames import FrameError
+    with ir.Graph() as g:
+        v = ir.Vec3[CraftFrame].input("v")
+        d = ir.Vec3[AnchorFrame].input("d")     # wrong frame
+        r = R3(v)
+        with pytest.raises(FrameError, match="R3.boxplus"):
+            r.boxplus(d)
+
+
+def test_r3_boxminus_rejects_mismatched_other_frame():
+    from manta_next.math.manifold import R3
+    from manta_next.ir.frames import FrameError
+    with ir.Graph() as g:
+        v1 = ir.Vec3[CraftFrame].input("v1")
+        v2 = ir.Vec3[AnchorFrame].input("v2")
+        r1 = R3(v1); r2 = R3(v2)
+        with pytest.raises(FrameError, match="R3.boxminus"):
+            r1.boxminus(r2)
+
+
+def test_rigid_body_boxplus_rejects_mismatched_position_delta():
+    from manta_next.math.manifold import R3, SO3, RigidBody
+    from manta_next.ir.frames import FrameError
+    with ir.Graph() as g:
+        p   = ir.Vec3[AnchorFrame].input("p")
+        ori = ir.Quat[AnchorFrame, CraftFrame].input("ori")
+        vL  = ir.Vec3[AnchorFrame].input("vL")
+        vA  = ir.Vec3[CraftFrame].input("vA")
+        rb  = RigidBody(position=p, orientation=SO3(ori),
+                        vel_linear=vL, vel_angular=vA)
+        # δp must be in AnchorFrame; pass CraftFrame to trigger the check.
+        bad_dp = ir.Vec3[CraftFrame].input("bad_dp")
+        dθ     = ir.Vec3[AnchorFrame].input("dθ")
+        dvL    = ir.Vec3[AnchorFrame].input("dvL")
+        dvA    = ir.Vec3[CraftFrame].input("dvA")
+        with pytest.raises(FrameError, match="d_position"):
+            rb.boxplus(bad_dp, dθ, dvL, dvA)

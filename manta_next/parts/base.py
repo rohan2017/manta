@@ -302,16 +302,29 @@ class Part:
         return f"<{type(self).__name__}('{self.name}', {params})>"
 
 
-# Forward declarations to avoid a circular import — both live in
-# manta_next/craft.py and are bound when craft.py imports.
-class TickContext:
-    """Per-tick context passed to `Part.update`. See `manta_next/craft.py`
-    for the concrete fields."""
-    pass
+# NOTE: documentation-only stubs.
+#
+# The real `TickContext` and `PostUpdateContext` classes live in
+# `manta_next/craft.py`. We can't import them here at runtime because
+# that would create a circular import (craft imports parts.base).
+# The stubs below exist purely as forward-references so user docstrings
+# / IDE tooling have something to point at when they say "the Part's
+# update receives a TickContext". Do NOT `isinstance(ctx, TickContext)`
+# against these — that check would always pass against the placeholder
+# regardless of what `ctx` actually is. The compile_tick loop in
+# craft.py constructs and dispatches the concrete contexts directly.
+
+class TickContext:   # noqa: D401  (docstring is the API doc)
+    """Forward-reference stub. See `manta_next.craft.TickContext` for
+    the concrete class with fields gravity, gravity_field, fluid_field,
+    mag_field, collision_field, dt, position, orientation, velocity,
+    angular_velocity, velocity_body."""
+    __slots__ = ()
 
 
-class PostUpdateContext:
-    """Post-Newton-Euler context passed to `Part.post_update`. Exposes
-    the just-computed body-frame acceleration and angular acceleration
-    alongside the standard kinematic state. See `manta_next/craft.py`."""
-    pass
+class PostUpdateContext:   # noqa: D401
+    """Forward-reference stub. See `manta_next.craft.PostUpdateContext`
+    for the concrete class with fields gravity, acceleration_anchor,
+    angular_acceleration, orientation, position, velocity,
+    angular_velocity, dt."""
+    __slots__ = ()
