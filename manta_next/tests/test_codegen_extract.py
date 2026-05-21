@@ -44,11 +44,12 @@ def test_extract_returns_complete_function_set():
     # predict_jacobian: F is tangent×tangent
     assert cf.predict_jacobian_fn.size_out("F") == (12, 12)
 
-    # Outputs: gps.position (3) and g.gyro (3)
+    # Outputs: gps.position (3), g.gyro (3), g.accel (3)
     by_name = {o.full_name: o for o in cf.outputs}
-    assert set(by_name) == {"gps.position", "g.gyro"}
+    assert set(by_name) == {"gps.position", "g.gyro", "g.accel"}
     assert by_name["gps.position"].out_dim == 3
     assert by_name["g.gyro"].out_dim       == 3
+    assert by_name["g.accel"].out_dim      == 3
 
     # Each Output's H has shape (out_dim, tangent_dim).
     for o in cf.outputs:

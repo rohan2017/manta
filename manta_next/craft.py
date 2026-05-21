@@ -41,6 +41,51 @@ from .math.wrench import Wrench
 # TickContext
 # ---------------------------------------------------------------------------
 
+class PostUpdateContext:
+    """Per-tick context for the second phase that runs AFTER Newton-Euler.
+
+    Exposes the just-computed body-frame inertial state so sensor parts
+    can emit readings that depend on dynamics — accelerometers, body-
+    rate-of-change probes, etc. Fields:
+
+      gravity              : Vec3[CraftFrame]   — gravity at craft origin
+                                                  in body frame (same as
+                                                  TickContext.gravity).
+      acceleration_anchor  : Vec3[AnchorFrame]  — anchor-frame inertial
+                                                  acceleration of the craft
+                                                  origin (output of N-E).
+      angular_acceleration : Vec3[CraftFrame]   — body-frame angular accel α.
+      orientation          : Quat               — pass-through of the input.
+      position             : Vec3[AnchorFrame]  — input state.
+      velocity             : Vec3[AnchorFrame]  — input state.
+      angular_velocity     : Vec3[CraftFrame]   — input state.
+      dt                   : Scalar             — integrator timestep.
+    """
+
+    __slots__ = ("gravity", "acceleration_anchor", "angular_acceleration",
+                 "orientation", "position", "velocity", "angular_velocity",
+                 "dt")
+
+    def __init__(self,
+                 *,
+                 gravity: "Vec3",
+                 acceleration_anchor: "Vec3",
+                 angular_acceleration: "Vec3",
+                 orientation: "Quat",
+                 position: "Vec3",
+                 velocity: "Vec3",
+                 angular_velocity: "Vec3",
+                 dt: "Scalar") -> None:
+        self.gravity = gravity
+        self.acceleration_anchor = acceleration_anchor
+        self.angular_acceleration = angular_acceleration
+        self.orientation = orientation
+        self.position = position
+        self.velocity = velocity
+        self.angular_velocity = angular_velocity
+        self.dt = dt
+
+
 class TickContext:
     """The per-tick context passed to each `Part.update(ctx)` call.
 
@@ -447,14 +492,8 @@ class Craft:
                         f"{type(part).__name__}('{part.name}').update(): "
                         f"unknown output slot(s): {sorted(unknown_out)}. "
                         f"Declared: {sorted(out_decls)}")
-                # Each declared output must be written (we don't bake in a
-                # default — a sensor that didn't compute its value is a bug).
-                missing_out = set(out_decls) - set(outputs)
-                if missing_out:
-                    raise KeyError(
-                        f"{type(part).__name__}('{part.name}').update(): "
-                        f"output slot(s) declared but not written: "
-                        f"{sorted(missing_out)}.")
+                # (Missing-output enforcement happens after post_update —
+                # an Output slot may be filled by update OR post_update.)
                 for oname, oval in outputs.items():
                     sensor_outputs.append((f"{part.name}.{oname}", oval))
 
@@ -462,14 +501,8 @@ class Craft:
                 w_craft = _wrench_to_craft(w_part, part.transform)
                 net = net + w_craft
 
-            # Restore the part attributes to their Python defaults so the
-            # part instance is reusable across compiles.
-            for part, saved in saved_state_attrs.items():
-                for sname, sval in saved.items():
-                    object.__setattr__(part, sname, sval)
-            for part, saved in saved_input_attrs.items():
-                for iname, ival in saved.items():
-                    object.__setattr__(part, iname, ival)
+            # Hold off on restoring part attrs — `post_update` runs
+            # after Newton-Euler and may read State / Input values.
 
             # --- Newton-Euler --------------------------------------------
             F_craft   = net.force         # Vec3[CraftFrame]
@@ -499,6 +532,66 @@ class Craft:
             r_OC = -r_com   # origin − COM, in CraftFrame
             offset_term = alpha.cross(r_OC) + ang_vel.cross(ang_vel.cross(r_OC))
             a_origin_anchor = a_com_anchor + orientation.apply(offset_term)
+
+            # --- Post-Newton-Euler sensor phase -------------------------
+            # Body-frame acceleration at the craft origin, plus α: parts
+            # like the IMU's accelerometer need these.
+            a_origin_body = orientation.conjugate().apply(a_origin_anchor)
+            ctx_post = PostUpdateContext(
+                gravity=g_craft,
+                acceleration_anchor=a_origin_anchor,
+                angular_acceleration=alpha,
+                orientation=orientation,
+                position=position,
+                velocity=velocity,
+                angular_velocity=ang_vel,
+                dt=dt,
+            )
+            for part in self._parts:
+                extra = part.post_update(ctx_post)
+                if not extra:
+                    continue
+                out_decls = part.output_declarations()
+                # Allow keys that match declared Outputs and aren't already
+                # filled by the main update phase.
+                already_filled = {
+                    name.split(".", 1)[1] for (name, _) in sensor_outputs
+                    if name.startswith(f"{part.name}.")
+                }
+                for oname, oval in extra.items():
+                    if oname not in out_decls:
+                        raise KeyError(
+                            f"{type(part).__name__}('{part.name}')."
+                            f"post_update: unknown output slot {oname!r}. "
+                            f"Declared: {sorted(out_decls)}")
+                    if oname in already_filled:
+                        raise KeyError(
+                            f"{type(part).__name__}('{part.name}'): output "
+                            f"{oname!r} was filled by both update() and "
+                            f"post_update(); pick one.")
+                    sensor_outputs.append(
+                        (f"{part.name}.{oname}", oval))
+
+            # Verify every declared Output got filled by SOME phase.
+            for part in self._parts:
+                filled = {
+                    name.split(".", 1)[1] for (name, _) in sensor_outputs
+                    if name.startswith(f"{part.name}.")
+                }
+                missing = set(part.output_declarations()) - filled
+                if missing:
+                    raise KeyError(
+                        f"{type(part).__name__}('{part.name}'): output "
+                        f"slot(s) declared but not written by either "
+                        f"update() or post_update(): {sorted(missing)}.")
+
+            # Now restore part attrs.
+            for part, saved in saved_state_attrs.items():
+                for sname, sval in saved.items():
+                    object.__setattr__(part, sname, sval)
+            for part, saved in saved_input_attrs.items():
+                for iname, ival in saved.items():
+                    object.__setattr__(part, iname, ival)
 
             # --- Symplectic-flavored Euler integration -------------------
             # Linear: position += v·dt + ½·a·dt²;  velocity += a·dt.

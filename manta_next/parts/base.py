@@ -274,13 +274,27 @@ class Part:
         return {n: d for n, d in cls._declarations().items()
                 if isinstance(d, Output)}
 
-    # --- Required override ------------------------------------------------
+    # --- Required + optional overrides ------------------------------------
 
     def update(self, ctx: "TickContext"):
         """Compute this part's wrench contribution for the current tick.
-        Subclasses must override and return a `Wrench`."""
+        Subclasses must override and return a `Wrench` or `PartUpdate`."""
         raise NotImplementedError(
             f"{type(self).__name__}: must override update(self, ctx)")
+
+    def post_update(self, ctx_post: "PostUpdateContext") -> dict:
+        """Optional second-phase hook called AFTER Newton-Euler runs.
+
+        Override to emit `Output` values that depend on the just-computed
+        body-frame acceleration / angular acceleration (e.g. an IMU
+        accelerometer). Returns a dict of `{output_name: ir_value}`.
+        Default: no extra outputs.
+
+        The dict's keys are validated against the Part's declared
+        `Output` slots, same as the main `update`. An Output slot may
+        be filled by EITHER `update` OR `post_update`, but at most one.
+        """
+        return {}
 
     # --- Introspection ----------------------------------------------------
 
@@ -290,10 +304,16 @@ class Part:
         return f"<{type(self).__name__}('{self.name}', {params})>"
 
 
-# Forward declaration to avoid a circular import: TickContext lives in
-# manta_next/craft.py and is bound when craft.py imports.
+# Forward declarations to avoid a circular import — both live in
+# manta_next/craft.py and are bound when craft.py imports.
 class TickContext:
-    """Per-tick context passed to `Part.update`. The Craft populates it
-    with the active gravity vector, current state queries, dt, etc. See
-    `manta_next/craft.py` for the concrete fields."""
+    """Per-tick context passed to `Part.update`. See `manta_next/craft.py`
+    for the concrete fields."""
+    pass
+
+
+class PostUpdateContext:
+    """Post-Newton-Euler context passed to `Part.post_update`. Exposes
+    the just-computed body-frame acceleration and angular acceleration
+    alongside the standard kinematic state. See `manta_next/craft.py`."""
     pass

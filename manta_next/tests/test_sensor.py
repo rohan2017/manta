@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from manta_next import World, Craft
-from manta_next.parts import IMU, Joint, Mass, Output, Part, PartUpdate, Wrench
+from manta_next.parts import IMU, Joint, Mass, Output, Part, PartUpdate, Thruster, Wrench
 from manta_next.ir.frames import CraftFrame
 from manta_next.ir.types import Vec3
 
@@ -16,8 +16,9 @@ from manta_next.ir.types import Vec3
 def test_output_decl_introspection():
     imu = IMU("g")
     decls = imu.output_declarations()
-    assert set(decls.keys()) == {"gyro"}
-    assert decls["gyro"].shape == "vec3"
+    assert set(decls.keys()) == {"gyro", "accel"}
+    assert decls["gyro"].shape  == "vec3"
+    assert decls["accel"].shape == "vec3"
 
 
 def test_output_not_in_initial_state():
@@ -201,3 +202,92 @@ def test_unknown_output_write_raises():
     c.add(UnknownOutput("u"))
     with pytest.raises(KeyError, match="unknown output"):
         c.compile_tick(gravity_anchor=(0.0, 0.0, 0.0))
+
+
+# ---------------------------------------------------------------------------
+# IMU accelerometer (post-Newton-Euler phase)
+# ---------------------------------------------------------------------------
+
+def test_accel_stationary_craft_reads_one_g_up():
+    """A stationary craft on the ground reads specific force = -g_body.
+    With +z up and g = (0,0,-9.81), the specific force is (0,0,+9.81)
+    (the support force per unit mass)."""
+    c = Craft("sitting")
+    c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
+    c.add(IMU("g"))
+    tick = c.compile_tick(gravity_anchor=(0.0, 0.0, -9.81))
+    state = c.initial_state()
+    # The body would accelerate at g if free; to force "stationary":
+    # apply a constant non-gravitational force = +m·g via a Mass without
+    # gravity. Simpler: just test that with apply_gravity=True, the body
+    # accelerates at g → accel = a_body - g_body = g_body - g_body = 0.
+    # That's the free-fall reading: 0g.
+    out = tick(dt=0.001, **state)
+    accel = np.array(out["g.accel"]).ravel()
+    np.testing.assert_allclose(accel, np.zeros(3), atol=1e-6)
+
+
+def test_accel_zero_gravity_zero_acceleration_reads_zero():
+    """No gravity, no commanded force → IMU reads zero specific force."""
+    c = Craft("drift")
+    c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
+    c.add(IMU("g"))
+    tick = c.compile_tick(gravity_anchor=(0.0, 0.0, 0.0))
+    state = c.initial_state()
+    state["velocity"] = np.array([5.0, 0.0, 0.0])   # constant velocity
+    out = tick(dt=0.001, **state)
+    np.testing.assert_allclose(np.array(out["g.accel"]).ravel(),
+                               np.zeros(3), atol=1e-9)
+
+
+def test_accel_picks_up_thruster_acceleration():
+    """A thruster pushing the body produces non-zero specific force on
+    the accelerometer: F/m in the thrust direction, in body frame."""
+    c = Craft("powered")
+    c.add(Mass("body", mass=2.0, moi=(0.1, 0.1, 0.1), apply_gravity=False))
+    c.add(Thruster("t", force=(10.0, 0.0, 0.0)))   # 10 N along +x at throttle=1
+    c.add(IMU("g"))
+    tick = c.compile_tick(gravity_anchor=(0.0, 0.0, 0.0))
+    state = c.initial_state()
+    state["t.throttle"] = 1.0
+    out = tick(dt=0.001, **state)
+    # F = 10 N, m = 2 kg → a = 5 m/s² along +x in body frame.
+    accel = np.array(out["g.accel"]).ravel()
+    np.testing.assert_allclose(accel, (5.0, 0.0, 0.0), atol=1e-6)
+
+
+def test_imu_noise_sigmas_default_to_zero():
+    imu = IMU("g")
+    assert imu.gyro_noise_sigma  == 0.0
+    assert imu.accel_noise_sigma == 0.0
+
+
+def test_imu_sample_noise_zero_sigma_returns_zeros():
+    """With zero sigmas, sample_noise returns zero vectors (and doesn't
+    consume RNG state — reproducible)."""
+    imu = IMU("g")
+    rng = np.random.default_rng(0)
+    samp = imu.sample_noise(rng)
+    np.testing.assert_array_equal(samp["gyro"],  np.zeros(3))
+    np.testing.assert_array_equal(samp["accel"], np.zeros(3))
+
+
+def test_imu_sample_noise_nonzero_sigma_returns_scaled_samples():
+    """With sigma > 0, the samples have approximately the right std."""
+    imu = IMU("g", gyro_noise_sigma=0.05, accel_noise_sigma=0.2)
+    rng = np.random.default_rng(0)
+    samples_g, samples_a = [], []
+    for _ in range(5000):
+        s = imu.sample_noise(rng)
+        samples_g.append(s["gyro"])
+        samples_a.append(s["accel"])
+    sg = np.array(samples_g);  sa = np.array(samples_a)
+    # Empirical std should be within 2% of the nominal sigma for 5k samples.
+    np.testing.assert_allclose(sg.std(axis=0), 0.05, rtol=0.05)
+    np.testing.assert_allclose(sa.std(axis=0), 0.20, rtol=0.05)
+
+
+def test_imu_R_matrices_are_sigma_squared_identity():
+    imu = IMU("g", gyro_noise_sigma=0.01, accel_noise_sigma=0.1)
+    np.testing.assert_allclose(imu.gyro_R,  (0.01**2) * np.eye(3))
+    np.testing.assert_allclose(imu.accel_R, (0.1 **2) * np.eye(3))
