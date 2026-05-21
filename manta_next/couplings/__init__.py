@@ -10,6 +10,7 @@ The base `Coupling` ABC lives in `manta_next.world`; concrete couplings
 live here.
 """
 
+from .base import Coupling
 from .tether import Tether
 
-__all__ = ["Tether"]
+__all__ = ["Coupling", "Tether"]

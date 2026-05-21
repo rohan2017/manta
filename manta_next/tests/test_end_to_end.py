@@ -23,7 +23,7 @@ import numpy as np
 import pytest
 
 from manta_next import Craft, World
-from manta_next.ekf import EKF, measurement_slot
+from manta_next.estimation.ekf import EKF, measurement_slot
 from manta_next.parts import IMU, Mass, PositionSensor, Thruster
 
 

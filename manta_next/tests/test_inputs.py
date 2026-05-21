@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from manta_next import World, Craft
-from manta_next.ekf import EKF
+from manta_next.estimation.ekf import EKF
 from manta_next.parts import (
     FlywheelMotor, Input, Mass, Parameter, Part, PartUpdate, State, Wrench,
 )

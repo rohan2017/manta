@@ -7,7 +7,7 @@ import pytest
 
 from manta_next import ir
 from manta_next.ir.frames import CraftFrame, SceneFrame
-from manta_next.ir.manifold import R3, SO3
+from manta_next.math.manifold import R3, SO3
 
 
 def test_so3_identity_log_is_zero():

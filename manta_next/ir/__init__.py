@@ -19,7 +19,6 @@ from .frames import (
 )
 from .types import Scalar, Vec3, Mat3, Quat, Ori
 from .graph import Graph
-from . import manifold
 
 __all__ = [
     "Frame",
@@ -27,5 +26,4 @@ __all__ = [
     "FrameError",
     "Scalar", "Vec3", "Mat3", "Quat", "Ori",
     "Graph",
-    "manifold",
 ]

@@ -24,7 +24,7 @@ import casadi as ca
 from ..ir.frames import AnchorFrame, CraftFrame
 from ..ir.types import Vec3
 from ..parts.wrench import Wrench
-from ..world import Coupling
+from .base import Coupling
 
 
 class Tether(Coupling):

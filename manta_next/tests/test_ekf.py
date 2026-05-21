@@ -9,9 +9,9 @@ import numpy as np
 import pytest
 
 from manta_next.craft import Craft
-from manta_next.ekf import EKF, measurement_component, measurement_slot
+from manta_next.estimation.ekf import EKF, measurement_component, measurement_slot
 from manta_next.parts import Mass
-from manta_next.state_spec import StateSpec
+from manta_next.estimation.state_spec import StateSpec
 
 
 # ---------------------------------------------------------------------------

@@ -79,30 +79,12 @@ class Anchor:
 
 
 # ---------------------------------------------------------------------------
-# Coupling (placeholder ABC)
+# Coupling ABC — canonical home is couplings/base.py; re-exported here so
+# the long-standing `from manta_next.world import Coupling` import path
+# keeps working.
 # ---------------------------------------------------------------------------
 
-class Coupling:
-    """Abstract base for inter-craft constraints.
-
-    Concrete subclasses (Tether, ContactConstraint, RigidLatch, …)
-    declare two craft endpoints and produce extra wrench/state terms in
-    the tick graph for the connected component. The presence of a
-    Coupling forces both crafts into the same compile unit.
-
-    M6 ships only the ABC — `world.add_coupling(...)` raises
-    NotImplementedError until a concrete subclass lands. The shape of
-    the API is in place so the W/A/C surface area is committed now and
-    the actual constraint math fills in later.
-    """
-
-    @property
-    def craft_a(self) -> Craft:
-        raise NotImplementedError
-
-    @property
-    def craft_b(self) -> Craft:
-        raise NotImplementedError
+from .couplings.base import Coupling   # noqa: E402,F401
 
 
 # ---------------------------------------------------------------------------

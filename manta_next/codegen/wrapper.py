@@ -17,7 +17,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterator
 
-from ..state_spec import StateSlot, StateSpec
+from ..estimation.state_spec import StateSlot, StateSpec
 from .extract import CraftFunctions, OutputSpec
 
 

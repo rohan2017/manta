@@ -35,7 +35,7 @@ from typing import Any, Callable
 import casadi as ca
 import numpy as np
 
-from . import ir
+from .. import ir
 from .state_spec import StateSpec
 
 

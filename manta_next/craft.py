@@ -31,7 +31,7 @@ import numpy as np
 
 from . import ir
 from .ir.frames import AnchorFrame, CraftFrame
-from .ir.manifold import SO3
+from .math.manifold import SO3
 from .ir.types import Mat3, Quat, Scalar, Vec3
 from .parts.base import Part, PartUpdate, State
 from .parts.wrench import Wrench

@@ -23,8 +23,8 @@ from __future__ import annotations
 
 import casadi as ca
 
-from .frames import Frame, _validate_frame
-from .types import Quat, Scalar, Vec3, _as_mx
+from ..ir.frames import Frame, _validate_frame
+from ..ir.types import Quat, Scalar, Vec3, _as_mx
 
 
 # ---------------------------------------------------------------------------
@@ -102,7 +102,7 @@ class SO3:
         # Note: the tangent frame is by convention the rotation's
         # from_frame in our left-trivialization convention.
         if delta._frame is not self.from_frame:
-            from .frames import FrameError, _capture_user_source
+            from ..ir.frames import FrameError, _capture_user_source
             raise FrameError(
                 "SO3.boxplus",
                 expected=f"delta frame matches SO3.from_frame "
@@ -126,7 +126,7 @@ class SO3:
                 f"SO3.boxminus: other must be an SO3, got {type(other).__name__}")
         if (other.from_frame is not self.from_frame
                 or other.to_frame is not self.to_frame):
-            from .frames import FrameError, _capture_user_source
+            from ..ir.frames import FrameError, _capture_user_source
             raise FrameError(
                 "SO3.boxminus",
                 expected=f"matching SO3 frames "
