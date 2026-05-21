@@ -1,6 +1,7 @@
 """DragSurface — quadratic drag tests."""
 
 import numpy as np
+import pytest
 
 from manta_next import Craft, World
 from manta_next.parts import DragSurface, Mass, Thruster
@@ -22,7 +23,7 @@ def test_terminal_velocity_from_drag_balances_gravity():
          .add_uniform_fluid(density=rho))
     c = Craft("sphere")
     c.add(Mass("body", mass=m, moi=(0.1, 0.1, 0.1)))
-    c.add(DragSurface("hull", area=A, drag_coefficient=Cd))
+    c.add(DragSurface.isotropic_quadratic("hull", area=A, drag_coefficient=Cd))
     w.add_craft(c, position=(0, 0, 0))
     cw = w.compile()
 
@@ -44,7 +45,7 @@ def test_drag_opposes_motion_through_still_fluid():
          .add_uniform_fluid(density=1000.0))
     c = Craft("slug")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
-    c.add(DragSurface("hull", area=0.01, drag_coefficient=1.0))
+    c.add(DragSurface.isotropic_quadratic("hull", area=0.01, drag_coefficient=1.0))
     w.add_craft(c, velocity=(2.0, 0.0, 0.0))
     cw = w.compile()
     state = cw.initial_state()
@@ -66,7 +67,7 @@ def test_drag_with_following_current_reduces_force():
                .add_uniform_fluid(density=1000.0))
     c_still = Craft("still")
     c_still.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
-    c_still.add(DragSurface("hull", area=0.01, drag_coefficient=1.0))
+    c_still.add(DragSurface.isotropic_quadratic("hull", area=0.01, drag_coefficient=1.0))
     w_still.add_craft(c_still, velocity=(2.0, 0.0, 0.0))
 
     w_curr = (World()
@@ -74,7 +75,7 @@ def test_drag_with_following_current_reduces_force():
               .add_uniform_fluid(density=1000.0, velocity=(1.0, 0.0, 0.0)))
     c_curr = Craft("curr")
     c_curr.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
-    c_curr.add(DragSurface("hull", area=0.01, drag_coefficient=1.0))
+    c_curr.add(DragSurface.isotropic_quadratic("hull", area=0.01, drag_coefficient=1.0))
     w_curr.add_craft(c_curr, velocity=(2.0, 0.0, 0.0))
 
     cw_s = w_still.compile(); s = cw_s.initial_state()
@@ -99,9 +100,9 @@ def test_offset_drag_surface_produces_torque():
          .add_uniform_fluid(density=1000.0))
     c = Craft("offset")
     c.add(Mass("body", mass=1.0, moi=(0.05, 0.05, 0.05)))
-    c.add(DragSurface("drogue",
-                      area=0.1, drag_coefficient=1.0,
-                      transform=(0.5, 0.0, 0.0)))   # +x offset
+    c.add(DragSurface.isotropic_quadratic("drogue",
+                                           area=0.1, drag_coefficient=1.0,
+                                           transform=(0.5, 0.0, 0.0)))   # +x offset
     # Craft moving in +y → drag at +x offset → moment about +z (yaw).
     w.add_craft(c, velocity=(0.0, 1.0, 0.0))
     cw = w.compile()
@@ -121,7 +122,7 @@ def test_no_fluid_field_means_no_drag():
     w = World().add_uniform_gravity((0, 0, 0))    # no fluid
     c = Craft("cruise")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
-    c.add(DragSurface("hull", area=1.0, drag_coefficient=10.0))   # massive A·Cd
+    c.add(DragSurface.isotropic_quadratic("hull", area=1.0, drag_coefficient=10.0))   # massive A·Cd
     w.add_craft(c, velocity=(1.0, 0.0, 0.0))
     cw = w.compile()
     state = cw.initial_state()
@@ -129,3 +130,72 @@ def test_no_fluid_field_means_no_drag():
         state = cw.step(state, dt=0.001)
     vx = float(np.array(state["cruise"]["velocity"]).ravel()[0])
     assert np.isclose(vx, 1.0, atol=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# Polynomial drag (tensor form)
+# ---------------------------------------------------------------------------
+
+def test_polynomial_drag_quadratic_per_axis_matches_isotropic_helper():
+    """A diagonal A_2 = -½·A·Cd·I3 reproduces the isotropic-quadratic
+    behavior — both expressions of the same physics, just different
+    constructor surfaces."""
+    A, Cd, rho = 0.05, 0.7, 1000.0
+    g = (0.0, 0.0, 0.0)
+
+    # Setup A: helper-built craft.
+    w1 = World().add_uniform_gravity(g).add_uniform_fluid(density=rho)
+    c1 = Craft("helper")
+    c1.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
+    c1.add(DragSurface.isotropic_quadratic("d", area=A, drag_coefficient=Cd))
+    w1.add_craft(c1, velocity=(3.0, 0.0, 0.0))
+    cw1 = w1.compile()
+    s1 = cw1.initial_state()
+
+    # Setup B: hand-built diagonal A_2.
+    w2 = World().add_uniform_gravity(g).add_uniform_fluid(density=rho)
+    c2 = Craft("hand")
+    c2.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
+    A_2 = -0.5 * A * Cd * np.eye(3)
+    c2.add(DragSurface("d", force_tensors=[np.zeros((3, 3)), A_2]))
+    w2.add_craft(c2, velocity=(3.0, 0.0, 0.0))
+    cw2 = w2.compile()
+    s2 = cw2.initial_state()
+
+    for _ in range(200):
+        s1 = cw1.step(s1, dt=0.001)
+        s2 = cw2.step(s2, dt=0.001)
+
+    np.testing.assert_allclose(s1["helper"]["velocity"],
+                               s2["hand"]["velocity"], atol=1e-9)
+
+
+def test_anisotropic_drag_via_diagonal_A1_decelerates_only_x():
+    """A purely-x linear-drag tensor decelerates the x velocity component
+    but leaves y and z untouched."""
+    rho = 1000.0
+    w = World().add_uniform_gravity((0, 0, 0)).add_uniform_fluid(density=rho)
+    c = Craft("strip")
+    c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
+    c.add(DragSurface("d", force=(-0.5, 0.0, 0.0)))   # A_1 = diag(-0.5, 0, 0)
+    w.add_craft(c, velocity=(2.0, 1.0, 0.5))
+    cw = w.compile()
+    state = cw.initial_state()
+    for _ in range(200):
+        state = cw.step(state, dt=0.001)
+    v = np.array(state["strip"]["velocity"]).ravel()
+    # x has decayed, y and z untouched.
+    assert v[0] < 2.0
+    assert np.isclose(v[1], 1.0, atol=1e-9)
+    assert np.isclose(v[2], 0.5, atol=1e-9)
+
+
+def test_drag_force_vs_force_tensors_mutually_exclusive():
+    with pytest.raises(ValueError, match="not both"):
+        DragSurface("d", force=(0.1, 0, 0),
+                    force_tensors=[np.eye(3)])
+
+
+def test_drag_polynomial_order_cap():
+    with pytest.raises(ValueError, match="exceeds the cap"):
+        DragSurface("d", force_tensors=[np.zeros((3, 3))] * 5)

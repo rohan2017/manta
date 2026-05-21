@@ -21,7 +21,7 @@ def _build_buddy(name: str) -> Craft:
     c = Craft(name)
     c.add(Mass("body", mass=10.0, moi=(0.5, 0.5, 0.5)))
     c.add(TetherEndpoint("hook"))
-    c.add(DragSurface("drag", area=0.005, drag_coefficient=0.4))
+    c.add(DragSurface.isotropic_quadratic("drag", area=0.005, drag_coefficient=0.4))
     return c
 
 

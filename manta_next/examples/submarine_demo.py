@@ -44,7 +44,7 @@ def main() -> None:
     sub = Craft("nautilus")
     sub.add(Mass("hull", mass=mass, moi=(2.0, 8.0, 8.0)))
     sub.add(PointBuoy("buoy", volume=V_disp))
-    sub.add(DragSurface("hull_drag", area=A_drag, drag_coefficient=Cd_hull))
+    sub.add(DragSurface.isotropic_quadratic("hull_drag", area=A_drag, drag_coefficient=Cd_hull))
     # Stern thruster along +x.
     sub.add(Thruster("propulsion", force=(1.0, 0.0, 0.0),
                      transform=(-L/2, 0.0, 0.0)))
