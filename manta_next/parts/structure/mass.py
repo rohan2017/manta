@@ -1,9 +1,6 @@
-"""Mass — a lump of mass that contributes m·g to the craft's wrench when
-gravity is registered.
-
-M1 scope: gravity is provided directly on the TickContext. Field-based
-gravity (and other field interactions) lands in M2+ alongside the World
-abstraction.
+"""Mass — a lump of mass that contributes m·g to the craft's wrench
+under the registered GravityField. Diagonal MOI feeds into the body's
+inertia aggregation via parallel-axis lifts at Craft.compile_tick time.
 """
 
 from __future__ import annotations
@@ -39,12 +36,10 @@ class Mass(Part):
     def update(self, ctx) -> Wrench:
         if not self.apply_gravity:
             return Wrench.zero(CraftFrame)
-        # ctx.gravity is in CraftFrame (M2: orientation state allowed, the
-        # ctx rotates the world-frame gravity into craft frame each tick).
-        # The force is applied at the part's origin (= COM by convention
-        # for a point mass; Mass.moi describes the tensor *about that
-        # origin* in part frame). Wrench-at-offset bookkeeping lives in
-        # Craft._aggregate_wrenches.
+        # ctx.gravity is the GravityField sampled at the craft origin and
+        # rotated into CraftFrame. Force is applied at the part's origin
+        # (= its COM by convention for a point mass); the wrench-at-offset
+        # lift into the body's net is handled in Craft._aggregate_wrenches.
         force = ctx.gravity * self.mass
         return Wrench(
             force=force,

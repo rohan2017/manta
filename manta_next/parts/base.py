@@ -4,41 +4,35 @@ A Part is a Python class that:
 
   * Declares its parameters at class scope using `Parameter(default)`.
   * Declares mutable per-tick state via `State(init=..., manifold=...)`.
-  * Receives any per-tick external inputs via `Input(default)` (reserved
-    for M4 wiring).
-  * Implements `update(ctx) -> Wrench | PartUpdate` to contribute a wrench
-    each tick (and optionally write new state).
+  * Receives any per-tick external inputs via `Input(default)`.
+  * Emits per-tick observables via `Output(shape=...)`.
+  * Implements `update(ctx) -> Wrench | PartUpdate` (and optionally
+    `post_update(ctx_post) -> dict`) to contribute a wrench, write
+    new state, and/or emit Output values each tick.
 
 Example::
 
-    class FlywheelMotor(Part):
-        I_axial:    float  = Parameter(0.01)
-        torque_cmd: float  = Parameter(0.0)
-        axis:       tuple  = Parameter((0.0, 0.0, 1.0))
+    from manta_next.parts import Part, Parameter, Mass, Wrench
+    from manta_next.ir.frames import CraftFrame
+    from manta_next.ir.types import Vec3
 
-        angle: Scalar = State(init=0.0)
-        rate:  Scalar = State(init=0.0)
+    class ConstantUpwardLift(Part):
+        \"\"\"A toy Part: applies a fixed body-frame +z force.\"\"\"
+        magnitude: float = Parameter(1.0)
 
         def update(self, ctx):
-            accel = self.torque_cmd / self.I_axial
-            new_rate  = self.rate + accel * ctx.dt
-            new_angle = self.angle + self.rate * ctx.dt
-            # Reaction torque on parent.
-            reaction = ir.Vec3[CraftFrame].constant(self.axis) * (-self.torque_cmd)
-            return PartUpdate(
-                wrench=Wrench(reaction, ...),
-                new_state={"angle": new_angle, "rate": new_rate},
-            )
+            f = Vec3[CraftFrame].constant((0.0, 0.0, self.magnitude))
+            return Wrench(force=f,
+                          torque=Vec3[CraftFrame].constant((0, 0, 0)))
 
-Inside `update`, `self.angle` and `self.rate` read the *current* tick's
-symbolic state nodes — the tracer rebinds them before calling update()
-and restores the Python defaults afterward. State omitted from
-`new_state` is passed through unchanged.
+Inside `update`, declared State / Input attributes read the *current*
+tick's symbolic node — the tracer rebinds the attribute before calling
+update() and restores the Python default after the tick is compiled.
+State omitted from `PartUpdate.new_state` passes through unchanged.
 
-The `_declarations()` walk collects everything subclasses contribute,
-including parents. Construction-time overrides (`Motor("m", I_axial=0.02)`)
-replace defaults; State() declarations also accept an init override so
-the initial value can vary per instance.
+`_declarations()` walks the MRO so subclasses inherit Parameter/State/
+Input/Output entries from their parents. Construction-time overrides
+(`MyPart("p", magnitude=0.5)`) replace declared defaults.
 """
 
 from __future__ import annotations
@@ -138,10 +132,12 @@ class State(_Declaration):
 
     Args:
         init      Python value (default initial value across compiles).
-        manifold  Tag describing how the state composes / what its tangent
-                  space looks like. M3 supports 'R1' (Scalar). 'R3', 'SO3',
-                  and 'RigidBody' will be added alongside the EKF
-                  integration in a later milestone.
+        manifold  Tag describing how the state composes / what its
+                  tangent space looks like. Today only `'R1'` (scalar)
+                  is wired through `Craft.compile_tick` for part-declared
+                  State; the rigid-body slots use 'R3' and 'SO3'
+                  internally but those manifolds aren't yet selectable
+                  from a user Part. See `manta_next.math.manifold`.
     """
 
     __slots__ = ("init", "manifold")
@@ -149,8 +145,10 @@ class State(_Declaration):
     def __init__(self, init, manifold: str = "R1") -> None:
         if manifold not in ("R1",):
             raise NotImplementedError(
-                f"State.manifold={manifold!r} not yet supported. "
-                f"M3 ships 'R1' only.")
+                f"State.manifold={manifold!r}: only 'R1' is currently "
+                f"supported on user-declared Part state. 'R3'/'SO3'/"
+                f"'RigidBody' are defined in manta_next.math.manifold "
+                f"but not yet selectable here.")
         super().__init__(default=init)
         self.init = init
         self.manifold = manifold
@@ -201,11 +199,11 @@ class Part:
     contribute a `Wrench` per tick.
 
     Every Part has a `transform` parameter — a static (x, y, z) position
-    offset from its parent's frame. (Static orientation will land
-    alongside articulated joints in M3; for M2 the static rotation is
-    forced to identity.) The framework uses this transform to roll the
-    part's wrench up into its parent's frame (force-at-offset → torque
-    contribution at parent origin).
+    offset from its parent's frame. Static orientation between part and
+    parent is currently fixed at identity; non-identity static rotations
+    would be a future extension. The framework uses this transform to
+    roll the part's wrench up into its parent's frame (force-at-offset
+    → torque contribution at parent origin).
 
     Construction signature::
 

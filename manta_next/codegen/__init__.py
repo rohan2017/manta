@@ -18,8 +18,8 @@ Architecture:
 """
 
 def __getattr__(name):
-    # Lazy-import top-level emit_cpp so the package is usable while
-    # individual sub-modules are still landing (M10 staging).
+    # Lazy attribute so individual sub-modules can be imported without
+    # forcing the whole codegen pipeline through.
     if name == "emit_cpp":
         from .cpp import emit_cpp as _e
         return _e

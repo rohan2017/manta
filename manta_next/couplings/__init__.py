@@ -6,8 +6,11 @@ consistent, and an EKF over the connected component sees full
 cross-craft Jacobians). `World.compile` detects coupled connected
 components and routes them to `compile_coupled_tick`.
 
-The base `Coupling` ABC lives in `manta_next.world`; concrete couplings
-live here.
+The base `Coupling` ABC lives in `.base`; concrete couplings live in
+sibling modules (`.tether`, …). `manta_next.world` re-exports
+`Coupling` for backward compatibility with `from manta_next.world
+import Coupling` — that re-export is scheduled for removal in a
+follow-up cleanup.
 """
 
 from .base import Coupling

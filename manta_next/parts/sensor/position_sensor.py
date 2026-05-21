@@ -1,10 +1,9 @@
 """PositionSensor — anchor-frame position observer (GPS / motion capture).
 
-Emits the craft's anchor-frame position as a per-tick Output. The point
-in M9 is to provide a clean measurement-model handle for the EKF: the
-sensor's Output declaration *is* the measurement model, the noise can be
-injected externally (sim) or modeled inside the part (a future R-bearing
-sensor base class).
+Emits the craft's anchor-frame position as a per-tick Output. The
+sensor's Output declaration *is* the measurement model for the EKF;
+noise can be injected externally (sim) or modeled on the part itself
+(see `IMU` for the pattern).
 """
 
 from __future__ import annotations
@@ -26,7 +25,7 @@ class PositionSensor(Part):
     For a sensor mounted at a static offset from the craft origin, the
     Part.transform parameter shifts the apparent reading by `R·offset` —
     handled by emitting `ctx.position + R·offset`. Default offset is zero
-    (sensor at craft origin), which matches IMU's M8 default.
+    (sensor at craft origin).
     """
 
     position = Output(shape="vec3")

@@ -1,19 +1,20 @@
 """World — top-level simulation container.
 
 A World holds:
-  * Crafts (each anchored to one Anchor; one craft per "coupling
-    component" until concrete Couplings are added).
+  * Crafts (each anchored to one Anchor).
   * Anchors (coordinate-frame roots; one per coupling component).
-  * Couplings (inter-craft constraints; ABC for now — concrete subclasses
-    like Tether / ContactConstraint land in a future milestone).
-  * Gravity (single world-frame vector for M6; field-based gravity with
-    Planet anchors arrives later).
+  * Couplings (inter-craft constraints, e.g. `Tether`). Couplings force
+    the two endpoint crafts into the same connected component → one
+    shared compiled tick.
+  * Fields (GravityField, FluidField, MagField, CollisionField). One
+    instance per field kind; per-source variation is expressed as
+    `Disturbance` subclasses added to that instance.
 
 At `world.compile()` time the framework walks (craft, coupling) as an
 undirected graph and computes connected components. Each component
-becomes one IR tick graph with its own anchor. Today, with no Coupling
-subclasses shipped, every craft is its own component — but the API is
-in place so that adding a Tether later just slots in.
+becomes one IR tick graph: single-craft components use
+`Craft.compile_tick`, multi-craft components route through
+`compile_coupled_tick` in `manta_next.coupled_tick`.
 
 User-facing API::
 
@@ -29,8 +30,9 @@ User-facing API::
     for _ in range(N):
         state = cw.step(state, dt=0.01)
 
-For multi-craft worlds, `state` is a dict keyed by craft name; each
-value is the per-craft state dict the tick function consumes.
+For multi-craft worlds, `state` is a dict keyed by component id; each
+value is the per-component state dict (slot names prefixed with the
+craft name when the component contains more than one craft).
 """
 
 from __future__ import annotations
@@ -65,10 +67,10 @@ class Anchor:
     that's the type tag used in `Vec3[AnchorFrame]`. `Anchor` here is
     the runtime instance that carries metadata.
 
-    Per-anchor field overrides aren't supported in M11 — every craft
-    sees the world's registered fields. When planets land, an Anchor
-    may carry a Planet pointer that contributes additional Disturbances
-    to the world's fields.
+    Per-anchor field overrides aren't supported yet — every craft sees
+    the world's registered fields. When planets land, an Anchor may
+    carry a Planet pointer that contributes additional Disturbances to
+    the world's fields.
     """
 
     def __init__(self, name: str) -> None:
@@ -285,11 +287,10 @@ class World:
         """Walk the (craft, coupling) graph, compute connected components,
         and emit one compiled tick per component.
 
-        With no Coupling subclasses available in M6, every craft is its
-        own component. The component infrastructure is in place so that
-        adding a Tether (or any future Coupling) automatically merges
-        crafts into a shared tick graph at compile time without any
-        user-facing change.
+        Single-craft components compile via `Craft.compile_tick`;
+        multi-craft components (joined by Couplings) route through
+        `compile_coupled_tick` to share a single tick over their full
+        connected state.
         """
         components = self._compute_components()
         compiled: dict[str, dict] = {}
@@ -350,8 +351,8 @@ class World:
     def _compute_components(self) -> dict[str, list[dict]]:
         """Connected components of (craft, coupling) as an undirected
         graph. Returns a dict from component id (= first-craft name) to
-        the list of entry dicts in that component. For M6 every craft is
-        a singleton."""
+        the list of entry dicts in that component. A craft with no
+        couplings is its own singleton component."""
         # Build adjacency from couplings.
         craft_id_to_entry = {id(e["craft"]): e for e in self._crafts}
         adjacency: dict[int, list[int]] = {
@@ -405,8 +406,10 @@ class World:
 class CompiledWorld:
     """Runtime wrapper around per-component compiled tick functions.
 
-    State layout: `dict[component_id, dict[slot_name, value]]`. With
-    M6's one-craft-per-component, `component_id == craft.name`.
+    State layout: `dict[component_id, dict[slot_name, value]]`. For a
+    singleton (no-coupling) component, `component_id == craft.name` and
+    the inner dict uses unprefixed slot names. For multi-craft coupled
+    components, slot names are prefixed `<craft_name>.<slot>`.
 
     Stepping::
 

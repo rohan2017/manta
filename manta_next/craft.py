@@ -1,6 +1,6 @@
-"""Craft — full rigid-body dynamics with orientation and Newton-Euler.
+"""Craft — full 6-DOF rigid-body dynamics with Newton-Euler integration.
 
-M2 scope:
+Scope:
 - 13-DOF rigid-body state: position (3) + orientation quaternion (4) +
   linear velocity (3) + angular velocity (3).
 - Parts have static position offsets (`Part.transform`) in craft frame.
@@ -16,10 +16,14 @@ M2 scope:
   where r_OC = -r_com (origin minus COM in craft frame).
 - Integration: position via symplectic-flavored Euler; orientation via
   SO3 boxplus on ω·dt; velocities via Euler.
+- Sensor outputs that depend on the just-computed body acceleration
+  (e.g. IMU accelerometer) are emitted in the post-Newton-Euler
+  `post_update()` phase.
 
-M2 omissions: articulated joints (M3+), inputs/state on parts (M3+),
-field-based gravity beyond a static world-frame vector (M3+), part
-static orientations beyond identity (M3+).
+Known omissions: non-identity static orientation between part and craft
+frames; multi-DOF articulated joints (the single-DOF revolute `Joint`
+part is supported); field disturbances tied to per-craft motion (only
+queried, not contributed-to by parts).
 """
 
 from __future__ import annotations
@@ -172,10 +176,11 @@ def _aggregate_inertials(parts: list[Part]) -> dict[str, Any]:
     a list of parts. Returns concrete Python/numpy values — these are
     constants in the traced graph, not symbolic nodes.
 
-    Parts without `mass` are skipped (Wrench-only contributors like
-    actuators in a future world). For M2 every contributing part is a
-    Mass (or subclass), so `mass`, `moi`, and `transform` are the only
-    attributes consulted.
+    Walks `part.mass`, `part.moi`, `part.transform` on every part. Parts
+    without `mass` (Thruster, sensors, drag surfaces, …) are skipped.
+    `Joint` exposes `.mass` and `.moi` as @property aggregates over its
+    rotor children, so the body sees the rotor's inertia distribution
+    via the same code path as a plain `Mass`.
     """
     m_total = 0.0
     com_sum = np.zeros(3)        # m_i · r_i, then divide
@@ -219,20 +224,20 @@ def _aggregate_inertials(parts: list[Part]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def _wrench_to_craft(wrench_part: Wrench, transform: tuple) -> Wrench:
-    """Roll a Wrench[CraftFrame] (which is what parts emit in M2 — they're
+    """Roll a Wrench[CraftFrame] (which is what parts emit — they're
     composed in CraftFrame even though they conceptually live in
     PartFrame) up through a static position offset.
 
-    Assumes identity orientation between part and craft (M2 constraint).
-    For a force F applied at offset r from craft origin:
+    Assumes identity orientation between part and craft (static rotation
+    is fixed at I in the current Part API). For a force F applied at
+    offset r from craft origin:
         F_craft = F_part
         τ_craft = τ_part + r × F_part
 
     Inputs:
         wrench_part: a Wrench whose frame tag is already CraftFrame (the
-                     parts emit forces in CraftFrame for M2; the static
-                     part frame conventionally aligns with craft for
-                     non-articulated parts).
+                     static part frame conventionally aligns with craft
+                     for non-articulated parts).
         transform:   (x, y, z) position offset of the part from craft origin.
 
     Output: an equivalent Wrench at the craft origin.
@@ -260,11 +265,12 @@ def _wrench_to_craft(wrench_part: Wrench, transform: tuple) -> Wrench:
 class Craft:
     """A collection of parts with shared rigid-body dynamics.
 
-    M2 scope: full 6-DOF rigid body. State is
-        position    : Vec3[AnchorFrame]
-        orientation : Quat[AnchorFrame, CraftFrame]
-        velocity    : Vec3[AnchorFrame]
+    State (13 DOF):
+        position         : Vec3[AnchorFrame]
+        orientation      : Quat[AnchorFrame, CraftFrame]
+        velocity         : Vec3[AnchorFrame]
         angular_velocity : Vec3[CraftFrame]
+    plus one Scalar per `R1` State slot declared on any of the parts.
     """
 
     def __init__(self, name: str) -> None:
@@ -418,8 +424,9 @@ class Craft:
                     if sdecl.manifold != "R1":
                         raise NotImplementedError(
                             f"{type(part).__name__}('{part.name}'): "
-                            f"State manifold {sdecl.manifold!r} not supported "
-                            f"in M3.")
+                            f"State manifold {sdecl.manifold!r} not yet "
+                            f"supported on part-declared state. Only 'R1' "
+                            f"is wired through compile_tick today.")
                     sym = ir.Scalar.input(input_name)
                     part_states[sname] = sym
                     saved[sname] = getattr(part, sname)

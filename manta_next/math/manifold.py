@@ -4,19 +4,19 @@ These describe the structure of a *state*: how it composes, what its
 tangent space looks like, and how `boxplus`/`boxminus` lift between the
 ambient (4D for SO3, 3D for R3) and the tangent (3D for SO3, 3D for R3).
 
-State declarations on parts will reference these manifold types (M1
-work); the EKF will use boxplus/boxminus + autodiff to derive
-tangent-space Jacobians. M0 lays the foundation: the types exist, their
-ops emit CasADi expressions, and the well-known SO(3)-on-quaternion
-math is correct.
+The ESKF in `manta_next.estimation.ekf` uses boxplus/boxminus + CasADi
+autodiff to derive tangent-space Jacobians via the standard pattern
 
-No "manifold differentiation magic" — we just provide boxplus / boxminus
-as plain CasADi expressions. CasADi's autodiff differentiates through
-them naively; the *manifold-correct* Jacobian (tangent → tangent) is
-recovered by wrapping the function as
     delta_out = boxminus(f(boxplus(x_ref, delta_in)), x_ref_post)
-and asking CasADi for d(delta_out)/d(delta_in). That structural pattern
-is what M3's EKF integration will use.
+
+and asking CasADi for ∂δ_out / ∂δ_in at δ_in=0. No "manifold
+differentiation magic" — boxplus/boxminus are plain CasADi expressions
+and the framework just composes them.
+
+`_so3_exp` and `_so3_log` are deliberately branch-free (eps-regularized
+in place of an `if_else`) because CasADi's autodiff walks both branches
+of a conditional, and the non-Taylor branch had `d(sin(0)/0)/dω = NaN`
+that poisoned every Jacobian extracted from a tick using boxplus.
 """
 
 from __future__ import annotations
