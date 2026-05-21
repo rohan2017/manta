@@ -137,7 +137,7 @@ class State(_Declaration):
                   is wired through `Craft.compile_tick` for part-declared
                   State; the rigid-body slots use 'R3' and 'SO3'
                   internally but those manifolds aren't yet selectable
-                  from a user Part. See `manta_next.math.manifold`.
+                  from a user Part. See `manta_next.ir.manifold`.
     """
 
     __slots__ = ("init", "manifold")
@@ -147,7 +147,7 @@ class State(_Declaration):
             raise NotImplementedError(
                 f"State.manifold={manifold!r}: only 'R1' is currently "
                 f"supported on user-declared Part state. 'R3'/'SO3'/"
-                f"'RigidBody' are defined in manta_next.math.manifold "
+                f"'RigidBody' are defined in manta_next.ir.manifold "
                 f"but not yet selectable here.")
         super().__init__(default=init)
         self.init = init
@@ -362,7 +362,7 @@ class CompositePart(Part):
     def update(self, ctx):
         """CompositePart has no intrinsic wrench contribution by default —
         subclasses (RootPart, Joint, etc.) override if they need to."""
-        from ..math.wrench import Wrench
+        from ..ir.wrench import Wrench
         from ..ir.frames import CraftFrame
         return Wrench.zero(CraftFrame)
 

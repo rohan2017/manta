@@ -7,7 +7,7 @@ import pytest
 
 from manta_next import ir
 from manta_next.ir.frames import CraftFrame, AnchorFrame
-from manta_next.math.manifold import R3, SO3
+from manta_next.ir.manifold import R3, SO3
 
 
 def test_so3_identity_log_is_zero():
@@ -132,7 +132,7 @@ def test_r3_trivial_boxplus_boxminus():
 # ---------------------------------------------------------------------------
 
 def test_r3_boxplus_rejects_mismatched_delta_frame():
-    from manta_next.math.manifold import R3
+    from manta_next.ir.manifold import R3
     from manta_next.ir.frames import FrameError
     with ir.Graph() as g:
         v = ir.Vec3[CraftFrame].input("v")
@@ -143,7 +143,7 @@ def test_r3_boxplus_rejects_mismatched_delta_frame():
 
 
 def test_r3_boxminus_rejects_mismatched_other_frame():
-    from manta_next.math.manifold import R3
+    from manta_next.ir.manifold import R3
     from manta_next.ir.frames import FrameError
     with ir.Graph() as g:
         v1 = ir.Vec3[CraftFrame].input("v1")
@@ -154,7 +154,7 @@ def test_r3_boxminus_rejects_mismatched_other_frame():
 
 
 def test_rigid_body_boxplus_rejects_mismatched_position_delta():
-    from manta_next.math.manifold import R3, SO3, RigidBody
+    from manta_next.ir.manifold import R3, SO3, RigidBody
     from manta_next.ir.frames import FrameError
     with ir.Graph() as g:
         p   = ir.Vec3[AnchorFrame].input("p")

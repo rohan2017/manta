@@ -14,7 +14,7 @@ from __future__ import annotations
 from ...ir.frames import CraftFrame
 from ...ir.types import Vec3
 from ..base import Output, Part, PartUpdate
-from ...math.wrench import Wrench
+from ...ir.wrench import Wrench
 
 
 class DVL(Part):

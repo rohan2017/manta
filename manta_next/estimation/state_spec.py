@@ -194,7 +194,7 @@ class StateSpec:
             δ_out = boxminus(f(boxplus(x, δ_in)), f(x))
             F     = ∂δ_out / ∂δ_in  evaluated at δ_in = 0
         """
-        from ..math.manifold import _so3_exp
+        from ..ir.manifold import _so3_exp
         chunks: list[ca.MX] = []
         for slot in self._slots:
             x_chunk = x_ambient[slot.offset : slot.offset + slot.dim]
@@ -232,7 +232,7 @@ class StateSpec:
           R3 / R1    →  δ = x_a − x_b
           SO3        →  δ_θ = boxminus(q_a, q_b) = log(q_a ⊗ q_b⁻¹)
         """
-        from ..math.manifold import _so3_log
+        from ..ir.manifold import _so3_log
         chunks: list[ca.MX] = []
         for slot in self._slots:
             a_chunk = x_a[slot.offset : slot.offset + slot.dim]

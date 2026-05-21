@@ -29,10 +29,10 @@ from .craft import TickContext, _aggregate_inertials, _wrench_to_craft
 from .inertia import symbolic_inertia_rollup
 from .kinematics import kinematic_pass
 from .ir.frames import AnchorFrame, CraftFrame
-from .math.manifold import SO3
+from .ir.manifold import SO3
 from .ir.types import Mat3, Quat, Scalar, Vec3
 from .parts.base import Part, PartUpdate, State
-from .math.wrench import Wrench
+from .ir.wrench import Wrench
 
 
 def compile_coupled_tick(crafts: list,

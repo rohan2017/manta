@@ -7,7 +7,7 @@ saturating mode), and each joint's reaction propagates correctly
 through the chain — the tilt actuator pushes against the pan rotor,
 and the pan actuator pushes against the body.
 
-Demonstrates the M20 milestone capabilities:
+Demonstrates the articulation primitives:
   * Nested CompositePart hierarchy (Joint hosting Joint).
   * Symbolic kinematic pass tracking the joint chain.
   * Symbolic inertia rollup: the camera's body-frame position and

@@ -36,7 +36,7 @@ import casadi as ca
 from ...ir.frames import CraftFrame
 from ...ir.types import Vec3
 from ..base import Parameter, Part, PartUpdate
-from ...math.wrench import Wrench
+from ...ir.wrench import Wrench
 
 
 class Naca00xx(Part):

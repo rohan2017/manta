@@ -1,28 +1,31 @@
 """Joint — 1-DOF revolute joint (mirrors legacy `Motor` in motor.hpp).
 
-A `Joint` is a kinematic abstraction: one rotational degree of freedom
-about a body-frame `axis`, with internal `angle` and `rate` state. It
-hosts a list of `Mass` children whose inertial properties become the
-joint's rotor. The joint produces:
+A `Joint` is a `CompositePart`: one rotational degree of freedom about
+an input-frame `axis`, with internal `angle` and `rate` state. It
+hosts a subtree of children whose inertial properties become the
+joint's rotor. Children may be `Mass` parts at any offset, or further
+nested `Joint`s (e.g., pan–tilt gimbals). The symbolic kinematic and
+inertia passes lift child positions and tensors through the joint
+chain, so a rotor's body-frame COM and inertia track the joint angle.
 
-  * Reaction torque on the parent body: `-clamped_torque · axis`.
-  * Gyroscopic correction: `-ω_body × (I_axial · rate · axis)`.
-  * Gravity on each child mass (lifted to the joint origin).
+The joint emits:
+  * Reaction torque on the mount frame (Newton's 3rd): `-τ_cmd · axis`,
+    rotated through `ctx.R_craft_from_input` into body-frame coords.
+  * Gyroscopic correction: `-ω_input × (I_axial · rate · axis)`, where
+    `ω_input` is the joint's input-frame angular velocity (the body's
+    ω for a top-level joint; the outer joint's output ω for a nested
+    inner joint).
+
+Each child `Mass` contributes its own gravity via `Mass.update`; the
+Joint itself emits no force.
 
 Modes:
   * "passive"     — no commanded torque; rotor free-spins under whatever
                     initial rate is set. The gyroscopic correction still
-                    couples the rotor's angular momentum into the body.
+                    couples the rotor's angular momentum into the mount.
   * "saturating"  — commanded torque clipped to `±stall_torque`. Beyond
                     that, the actuator stalls and only the clamped torque
                     is applied.
-
-v1 restriction: child Mass parts must have `transform=(0,0,0)` (rotor
-balanced about the joint origin). To place the assembly elsewhere on
-the body, set the **Joint's** `transform`, not the children's. This
-keeps the rolled-up MOI diagonal and lets the standard body aggregation
-machinery work unchanged. Multi-DOF joints and unbalanced rotors land
-in a future milestone.
 
 The name `Joint` (vs. `Motor`) is intentional: `Motor` is reserved for a
 future part that models real motor dynamics (back-EMF, thermal limits,
@@ -37,7 +40,7 @@ import numpy as np
 from ...ir.frames import CraftFrame
 from ...ir.types import Scalar, Vec3
 from ..base import CompositePart, Input, Parameter, Part, PartUpdate, State
-from ...math.wrench import Wrench
+from ...ir.wrench import Wrench
 
 
 _PASSIVE    = "passive"

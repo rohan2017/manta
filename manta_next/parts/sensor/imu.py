@@ -42,7 +42,7 @@ import numpy as np
 from ...ir.frames import CraftFrame
 from ...ir.types import Vec3
 from ..base import Output, Parameter, Part, PartUpdate
-from ...math.wrench import Wrench
+from ...ir.wrench import Wrench
 
 
 class IMU(Part):

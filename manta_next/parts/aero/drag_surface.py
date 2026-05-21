@@ -51,7 +51,7 @@ import numpy as np
 from ...ir.frames import AnchorFrame, CraftFrame
 from ...ir.types import Vec3
 from ..base import Parameter, Part, PartUpdate
-from ...math.wrench import Wrench
+from ...ir.wrench import Wrench
 
 
 _MAX_ORDER = 4

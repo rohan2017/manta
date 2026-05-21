@@ -20,10 +20,15 @@ Scope:
   (e.g. IMU accelerometer) are emitted in the post-Newton-Euler
   `post_update()` phase.
 
+Articulation: nested `Joint` chains compose symbolically through the
+kinematic pass; `r_com`, `I_com`, and per-part offsets pick up joint-
+angle dependence via `inertia.symbolic_inertia_rollup`. Native multi-
+DOF joints (ball, universal) are still future work — for now stack
+single-DOF Joints to build them.
+
 Known omissions: non-identity static orientation between part and craft
-frames; multi-DOF articulated joints (the single-DOF revolute `Joint`
-part is supported); field disturbances tied to per-craft motion (only
-queried, not contributed-to by parts).
+frames; field disturbances tied to per-craft motion (only queried, not
+contributed-to by parts).
 """
 
 from __future__ import annotations
@@ -35,10 +40,10 @@ import numpy as np
 
 from . import ir
 from .ir.frames import AnchorFrame, CraftFrame
-from .math.manifold import SO3
+from .ir.manifold import SO3
 from .ir.types import Mat3, Quat, Scalar, Vec3
 from .parts.base import Part, PartUpdate, State
-from .math.wrench import Wrench
+from .ir.wrench import Wrench
 
 
 # ---------------------------------------------------------------------------
@@ -130,10 +135,24 @@ class TickContext:
       velocity_body    : Vec3[CraftFrame]            — body linear velocity
                                                        (R^T · v_anchor).
                                                        What a DVL reads.
+      R_craft_from_input : Mat3[CraftFrame, CraftFrame]
+                                                     — rotates a vector
+                                                       in the part's
+                                                       INPUT-frame coords
+                                                       into body-frame
+                                                       coords. Identity
+                                                       for parts mounted
+                                                       directly on the
+                                                       craft root; for a
+                                                       Joint nested
+                                                       inside another
+                                                       Joint, carries
+                                                       the outer joint's
+                                                       angle.
 
     Body-frame inertial acceleration is NOT here — it depends on the
     aggregated wrench, which is the very thing parts are contributing.
-    A post-Newton-Euler sensor phase would expose it cleanly; deferred.
+    Sensors that need it read it off `PostUpdateContext` instead.
     """
 
     __slots__ = ("gravity", "gravity_field", "fluid_field", "mag_field",
@@ -235,10 +254,10 @@ def _wrench_to_craft(wrench_part: Wrench, r_in_craft: Vec3) -> Wrench:
     """Lift a part-emitted wrench to a wrench acting at the craft origin.
 
     The part's wrench is assumed already expressed in body-frame
-    (CraftFrame) coords — every part that depends on a rotated input
-    frame (Joint, future articulated parts) is responsible for
-    rotating its native-frame quantities into body-frame inside its
-    own `update()` using `ctx.R_craft_from_input`. The lift here is
+    (CraftFrame) coords — any part whose native quantities live in a
+    rotated input frame (Joint axis, articulated thruster, …) is
+    responsible for rotating them into body-frame inside its own
+    `update()` using `ctx.R_craft_from_input`. The lift here is
     purely the parallel-axis-style force-to-torque coupling:
 
         F_at_origin = F_at_part
@@ -598,8 +617,9 @@ class Craft:
             # like the IMU's accelerometer need these.
             a_origin_body = orientation.conjugate().apply(a_origin_anchor)
             # Post-NE context is currently tied to the body (root)
-            # kinematic state; per-part post_update contexts that walk
-            # the joint chain land in M20.4.
+            # kinematic state — per-part post_update contexts that walk
+            # the joint chain would let a rotor-mounted accelerometer
+            # read its own lever-arm contribution. Open follow-up.
             root_kin = kin_states[self.root]
             ctx_post = PostUpdateContext(
                 gravity=root_kin.gravity_in_craft,

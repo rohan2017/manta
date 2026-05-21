@@ -3,28 +3,24 @@
 Given the body's rigid-body state (position, orientation, velocity,
 angular velocity) and every Joint's (angle, rate), compute for each
 part its effective kinematic state — origin position, linear velocity
-at the origin, angular velocity — all as CasADi MX expressions composed
-through the joint chain. A flat craft (no nested joints) reduces to
-"everything is the body's state offset by `part.transform`," matching
-pre-M20 behavior. Deep nesting (gimbal: pan → tilt → camera) composes
-naturally.
+at the origin, angular velocity, the part's body-frame position, and
+the rotation matrices that take its input/output frames into body
+coords — all as CasADi MX expressions composed through the joint
+chain. A flat craft (no nested joints) reduces to "everything is the
+body's state offset by `part.transform`" with identity rotations; deep
+nesting (gimbal: pan → tilt → camera) composes naturally.
 
-**Frame convention** (deliberately simple in v1):
-  * Anchor-frame fields (`origin_in_anchor`, `velocity_origin`) carry
-    the part's actual absolute position / velocity.
-  * "Body-frame" fields (`angular_velocity_in_craft`,
-    `velocity_body_in_craft`, `gravity_in_craft`) are expressed in the
-    **body's CraftFrame coords** even for nested parts whose own frame
-    differs by the joint chain.
-
-This keeps the emitted wrench algebra unchanged: every part's wrench
-still lives in CraftFrame and the existing aggregation lifts each by
-its anchor-frame offset. The part's own rotated frame is not exposed
-in M20.2 — sensors that need their own-frame reading would compose
-their `orientation_input` against the body's orientation, which the
-kinematic pass tracks internally but doesn't surface in `TickContext`
-yet. M20.4 will expose it cleanly when wrench aggregation gets the
-proper input-frame rotation handling.
+**Frame convention**:
+  * Anchor-frame fields (`origin_in_anchor`, `velocity_origin`,
+    `orientation_anchor_from_*`) carry the part's actual absolute pose.
+  * "In CraftFrame" fields (`angular_velocity_input/output`,
+    `velocity_body_in_craft`, `gravity_in_craft`, `r_in_craft`,
+    `R_craft_from_input/output`) are expressed in the **body's
+    CraftFrame coords** even for nested parts whose own frame differs
+    by the joint chain. Wrench aggregation lifts each part's emitted
+    wrench through `r_in_craft`; articulated parts that emit
+    input-frame quantities (Joint axis, etc.) rotate them through
+    `R_craft_from_input` inside their own `update()`.
 """
 
 from __future__ import annotations
