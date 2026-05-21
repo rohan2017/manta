@@ -46,10 +46,10 @@ def main() -> None:
     sub.add(PointBuoy("buoy", volume=V_disp))
     sub.add(DragSurface("hull_drag", area=A_drag, drag_coefficient=Cd_hull))
     # Stern thruster along +x.
-    sub.add(Thruster.linear("propulsion", max_thrust=1.0, axis=(1.0, 0.0, 0.0),
+    sub.add(Thruster("propulsion", force=(1.0, 0.0, 0.0),
                      transform=(-L/2, 0.0, 0.0)))
     # Vertical thruster for diving.
-    sub.add(Thruster.linear("dive", max_thrust=1.0, axis=(0.0, 0.0, -1.0)))
+    sub.add(Thruster("dive", force=(0.0, 0.0, -1.0)))
     # Sensors.
     sub.add(IMU("imu"))
     sub.add(DVL("dvl"))

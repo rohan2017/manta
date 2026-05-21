@@ -5,35 +5,31 @@ Tensor-style model: per-order force and torque vectors in CraftFrame.
     F(t) = Σ_k F_k · throttle^k        (k = 0, 1, …, N;  N ≤ 4)
     τ(t) = Σ_k τ_k · throttle^k
 
-The user supplies `forces = [F_0, F_1, …, F_N]` and (optionally) the
-matching `torques`. `throttle` is a scalar `Input`. The polynomial order
-is capped at 4 — beyond that you're modeling something CasADi's
-single-symbol throttle can't represent cleanly anyway.
+Two equivalent construction styles:
 
-Common patterns:
+  * **Linear (single-vector shortcut):** when you pass `force=(x,y,z)`
+    and (optionally) `torque=(x,y,z)`, the thruster is 1st-order:
+    F = throttle·(x,y,z) and τ = throttle·(x,y,z).
 
-  * EDF / rocket motor (linear thrust along axis, no torque):
-      Thruster.linear("edf", max_thrust=10.0, axis=(0,0,1))
-    → F_0=(0,0,0), F_1=(0,0,10)
+      Thruster("edf", force=(0, 0, 10))
+      → F_1 = (0, 0, 10);  F = throttle · (0, 0, 10)
 
-  * Quadcopter prop (linear thrust + linear yaw reaction torque):
-      Thruster.linear("prop_cw",
-                      max_thrust=10.0, axis=(0,0,1),
-                      torque_coefficient=+0.1, torque_axis=(0,0,1))
-    → F_1=(0,0,10), τ_1=(0,0,+1.0)
+      Thruster("prop_cw", force=(0, 0, 10), torque=(0, 0, +0.5))
+      → F_1 = (0, 0, 10), τ_1 = (0, 0, +0.5)
 
-  * Higher-order propeller (RPM² thrust):
+  * **Polynomial (full tensor form):** pass `forces=[F_0, F_1, …, F_N]`
+    and optionally `torques=[…]`. Cap at 4th order.
+
       Thruster("blade", forces=[(0,0,0), (0,0,0), (0,0,K_T)])
-    → F = K_T · throttle²
+      → F = K_T · throttle²
 
+Mixing `force=...` and `forces=...` in the same constructor is an error.
 The force is applied at the mount offset (Part.transform); the framework
 lifts that to a body-origin wrench, so off-axis thrusters produce
 correct body torques automatically.
 """
 
 from __future__ import annotations
-
-import casadi as ca
 
 from ...ir.frames import CraftFrame
 from ...ir.types import Vec3
@@ -44,94 +40,90 @@ from ...math.wrench import Wrench
 _MAX_ORDER = 4
 
 
-def _normalize_polynomial(seq, name: str) -> tuple:
-    """Validate + normalize a forces/torques argument to a tuple of
-    3-tuples-of-floats. Each entry is one polynomial coefficient
-    (F_k or τ_k)."""
-    if seq is None:
-        return ((0.0, 0.0, 0.0),)
-    out: list[tuple[float, float, float]] = []
-    for k, vec in enumerate(seq):
-        if len(vec) != 3:
-            raise ValueError(
-                f"Thruster {name}: coefficient {k} must be length-3, "
-                f"got {vec!r}")
-        out.append(tuple(float(x) for x in vec))
-    if len(out) - 1 > _MAX_ORDER:
+def _as_polynomial(*,
+                    force=None,
+                    forces=None,
+                    name: str,
+                    kind: str) -> tuple:
+    """Resolve the `force`/`forces` (or `torque`/`torques`) inputs into
+    the canonical polynomial form: a tuple of 3-tuples-of-floats giving
+    [F_0, F_1, …, F_N].
+
+    Validation:
+      * `force` and `forces` are mutually exclusive.
+      * `force=(x,y,z)` produces [(0,0,0), (x,y,z)] (a 1st-order linear).
+      * `forces=[F_0, F_1, …]` is taken verbatim. Order capped at 4.
+      * Missing → [(0,0,0)] (constant-zero, the no-op default).
+    """
+    if force is not None and forces is not None:
         raise ValueError(
-            f"Thruster {name}: polynomial order {len(out)-1} exceeds "
-            f"the cap of {_MAX_ORDER}.")
-    if not out:
-        out.append((0.0, 0.0, 0.0))
-    return tuple(out)
+            f"Thruster {name!r}: pass `{kind}=(x,y,z)` for the 1st-order "
+            f"linear case OR `{kind}s=[F_0, F_1, …]` for the polynomial "
+            f"case, not both.")
+    if force is not None:
+        if len(force) != 3:
+            raise ValueError(
+                f"Thruster {name!r}: `{kind}` must be length-3, got "
+                f"{force!r}")
+        return ((0.0, 0.0, 0.0),
+                tuple(float(x) for x in force))
+    if forces is not None:
+        out: list[tuple[float, float, float]] = []
+        for k, vec in enumerate(forces):
+            if len(vec) != 3:
+                raise ValueError(
+                    f"Thruster {name!r}: `{kind}s[{k}]` must be length-3, "
+                    f"got {vec!r}")
+            out.append(tuple(float(x) for x in vec))
+        if len(out) - 1 > _MAX_ORDER:
+            raise ValueError(
+                f"Thruster {name!r}: polynomial order {len(out)-1} "
+                f"exceeds the cap of {_MAX_ORDER}.")
+        if not out:
+            out.append((0.0, 0.0, 0.0))
+        return tuple(out)
+    return ((0.0, 0.0, 0.0),)
 
 
 class Thruster(Part):
-    """Polynomial-in-throttle thruster (legacy Thruster1..4 equivalent).
+    """Polynomial-in-throttle thruster.
 
-    Parameters:
-        forces   — tuple/list of force coefficient 3-tuples in CraftFrame,
-                   ordered [F_0, F_1, …, F_N]. Order N capped at 4.
-        torques  — same shape for torque coefficients (applied at the
-                   mount point — the offset lift adds extra torque via
-                   Part.transform).
+    Constructor accepts either of:
+      * `force=(x,y,z)` and/or `torque=(x,y,z)` for the 1st-order linear case
+        (F = throttle · force_vec, τ = throttle · torque_vec).
+      * `forces=[F_0, F_1, …]` and/or `torques=[τ_0, τ_1, …]` for the full
+        polynomial case (order capped at 4).
 
     Input:
-        throttle — scalar control input. Units depend on how you scaled
-                   the F_k / τ_k coefficients. For Thruster.linear(...)
-                   the convention is throttle ∈ [0, 1] giving up to
-                   max_thrust Newtons of force.
+        throttle — scalar control input. Units depend on the scaling of
+                   the F_k / τ_k coefficients. For the linear `force=v`
+                   case, throttle is the standard 0–1 ratio if v is the
+                   max-thrust vector; in general it's whatever the user
+                   chose.
     """
 
     forces:   tuple = Parameter(((0.0, 0.0, 0.0),))
     torques:  tuple = Parameter(((0.0, 0.0, 0.0),))
     throttle: float = Input(default=0.0)
 
-    @classmethod
-    def linear(cls,
-               name: str,
-               *,
-               max_thrust: float,
-               axis: tuple[float, float, float] = (0.0, 0.0, 1.0),
-               torque_coefficient: float = 0.0,
-               torque_axis: tuple[float, float, float] | None = None,
-               **kwargs) -> "Thruster":
-        """1st-order linear-throttle thruster.
-
-        Args:
-            max_thrust         — N at throttle=1.0.
-            axis               — body-frame unit thrust direction.
-            torque_coefficient — N·m at throttle=1.0 about `torque_axis`.
-                                  Use the same axis as thrust for prop
-                                  yaw-reaction; reverse sign for the CCW
-                                  rotors of a quadcopter.
-            torque_axis        — body-frame torque direction. Defaults to
-                                  `axis` (yaw reaction torque from a prop
-                                  spinning about its thrust axis).
-        """
-        F_1 = tuple(max_thrust * a for a in axis)
-        t_ax = torque_axis if torque_axis is not None else axis
-        τ_1 = tuple(torque_coefficient * a for a in t_ax)
-        return cls(name,
-                   forces=((0.0, 0.0, 0.0), F_1),
-                   torques=((0.0, 0.0, 0.0), τ_1),
-                   **kwargs)
-
-    def __init__(self, name: str, **overrides) -> None:
-        # Validate + normalize before storing on the instance.
-        if "forces" in overrides:
-            overrides["forces"] = _normalize_polynomial(overrides["forces"],
-                                                         name)
-        if "torques" in overrides:
-            overrides["torques"] = _normalize_polynomial(overrides["torques"],
-                                                          name)
+    def __init__(self,
+                 name: str,
+                 *,
+                 force: tuple | None = None,
+                 forces: list | tuple | None = None,
+                 torque: tuple | None = None,
+                 torques: list | tuple | None = None,
+                 **overrides) -> None:
+        overrides["forces"] = _as_polynomial(
+            force=force, forces=forces, name=name, kind="force")
+        overrides["torques"] = _as_polynomial(
+            force=torque, forces=torques, name=name, kind="torque")
         super().__init__(name, **overrides)
 
     def update(self, ctx):
         # Pre-compute throttle powers 1, t, t², t³, t⁴ up to whatever
-        # max-order shows up in forces / torques.
+        # max-order appears in forces / torques.
         max_order = max(len(self.forces), len(self.torques)) - 1
-        # We always have throttle^0 = 1 (handled inline below).
         powers = [None] * (max_order + 1)
         if max_order >= 1:
             powers[1] = self.throttle      # symbolic Scalar

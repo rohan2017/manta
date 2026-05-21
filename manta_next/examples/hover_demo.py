@@ -25,7 +25,7 @@ def main() -> None:
     # Build the craft.
     c = Craft("drone")
     c.add(Mass("body", mass=m, moi=(0.05, 0.05, 0.08)))
-    c.add(Thruster.linear("t", max_thrust=1.0))
+    c.add(Thruster("t", force=(0.0, 0.0, 1.0)))
     c.add(IMU("g"))
     c.add(PositionSensor("gps"))
 

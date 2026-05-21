@@ -38,7 +38,7 @@ def test_ekf_predict_with_per_tick_input():
     m = 1.0
     c = Craft("hover_ekf")
     c.add(Mass("body", mass=m, moi=(0.1, 0.1, 0.1)))
-    c.add(Thruster.linear("t", max_thrust=1.0))
+    c.add(Thruster("t", force=(0.0, 0.0, 1.0)))
 
     # Sim
     tick = c.compile_tick(gravity_anchor=g)
@@ -83,7 +83,7 @@ def test_ekf_predict_input_default_fallback():
     c = Craft("default_thrust")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     # Thruster default throttle=0 — craft should free-fall.
-    c.add(Thruster.linear("t", max_thrust=1.0))
+    c.add(Thruster("t", force=(0.0, 0.0, 1.0)))
     ekf = EKF(c, gravity_anchor=g)
     for _ in range(200):
         ekf.predict(dt=0.005)
@@ -96,7 +96,7 @@ def test_ekf_predict_input_default_fallback():
 def test_ekf_predict_unknown_input_raises():
     c = Craft("any")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
-    c.add(Thruster.linear("t", max_thrust=1.0))
+    c.add(Thruster("t", force=(0.0, 0.0, 1.0)))
     ekf = EKF(c, gravity_anchor=(0.0, 0.0, 0.0))
     with pytest.raises(KeyError, match="unknown input"):
         ekf.predict(dt=0.01, u={"nope.bad": 1.0})
@@ -118,7 +118,7 @@ def test_hover_with_eskf_tracks_ground_truth():
     # Build the craft once; sim and EKF share the same instance.
     c = Craft("drone")
     c.add(Mass("body", mass=m, moi=(0.05, 0.05, 0.08)))
-    c.add(Thruster.linear("t", max_thrust=1.0))
+    c.add(Thruster("t", force=(0.0, 0.0, 1.0)))
     c.add(IMU("g"))
     c.add(PositionSensor("gps"))
 
@@ -229,7 +229,7 @@ def test_eskf_nees_consistency_over_seeds():
     def make_craft():
         c = Craft("drone")
         c.add(Mass("body", mass=m, moi=(0.05, 0.05, 0.08)))
-        c.add(Thruster.linear("t", max_thrust=1.0))
+        c.add(Thruster("t", force=(0.0, 0.0, 1.0)))
         c.add(IMU("g"))
         c.add(PositionSensor("gps"))
         return c

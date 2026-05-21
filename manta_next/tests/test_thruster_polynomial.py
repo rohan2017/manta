@@ -25,10 +25,11 @@ def test_zeroth_order_constant_force():
 
 
 def test_first_order_linear_in_throttle():
-    """Standard linear thruster: F = throttle · F_1."""
+    """Standard linear thruster: F = throttle · F_1, built via the
+    one-vector `force=…` shortcut."""
     c = Craft("c")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
-    c.add(Thruster.linear("t", max_thrust=10.0, axis=(0.0, 0.0, 1.0)))
+    c.add(Thruster("t", force=(0.0, 0.0, 10.0)))
     tick = c.compile_tick(gravity_anchor=(0, 0, 0))
     state = c.initial_state()
     state["t.throttle"] = 0.5    # half throttle = 5 N
@@ -72,13 +73,12 @@ def test_fourth_order_polynomial():
 
 def test_torque_coefficient_yaw_reaction():
     """Quadcopter prop: linear thrust along +z with linear yaw torque about z.
-    A spinning prop produces both."""
+    Both come from the one-vector shortcut."""
     c = Craft("c")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
-    c.add(Thruster.linear(
-        "prop",
-        max_thrust=10.0, axis=(0, 0, 1),
-        torque_coefficient=+0.1, torque_axis=(0, 0, 1)))
+    c.add(Thruster("prop",
+                   force=(0.0, 0.0, 10.0),
+                   torque=(0.0, 0.0, 0.1)))
     tick = c.compile_tick(gravity_anchor=(0, 0, 0))
     state = c.initial_state()
     state["prop.throttle"] = 1.0
@@ -97,13 +97,20 @@ def test_invalid_coefficient_shape_raises():
         Thruster("t", forces=((0, 0),))
 
 
-def test_linear_shortcut_round_trip():
-    """Thruster.linear matches direct construction with explicit
-    forces/torques arrays for the same parameters."""
-    t1 = Thruster.linear("a", max_thrust=10.0, axis=(0, 0, 1),
-                         torque_coefficient=0.05, torque_axis=(0, 0, 1))
+def test_one_vector_shortcut_matches_explicit_polynomial():
+    """The `force=(x,y,z)` shortcut produces the same forces tuple as
+    explicit `forces=[(0,0,0), (x,y,z)]`."""
+    t1 = Thruster("a",
+                   force=(0.0, 0.0, 10.0),
+                   torque=(0.0, 0.0, 0.05))
     t2 = Thruster("a",
                    forces=((0,0,0), (0,0,10.0)),
                    torques=((0,0,0), (0,0,0.05)))
     assert t1.forces == t2.forces
     assert t1.torques == t2.torques
+
+
+def test_force_and_forces_mutually_exclusive():
+    """Passing both `force` and `forces` is a construction error."""
+    with pytest.raises(ValueError, match="not both"):
+        Thruster("a", force=(0, 0, 1), forces=[(0, 0, 0), (0, 0, 1)])

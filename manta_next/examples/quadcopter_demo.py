@@ -1,6 +1,6 @@
 """Quadcopter demo — 4× linear Thrusters with yaw-reaction torque.
 
-Mirrors legacy ex2_quadcopter. Each rotor is a `Thruster.linear` with:
+Mirrors legacy ex2_quadcopter. Each rotor is a 1st-order `Thruster` with:
   * thrust along +z (body) scaled by throttle
   * yaw torque about body z with sign alternating CW/CCW between
     diagonal pairs (the standard quadcopter chirality)
@@ -33,23 +33,20 @@ def _build_quadcopter() -> Craft:
 
     c = Craft("quad")
     c.add(Mass("body", mass=mass, moi=(0.01, 0.01, 0.02)))
-    # Rotors — alternating CW (+τ_z) and CCW (-τ_z).
-    c.add(Thruster.linear(
-        "rotor_front",  max_thrust=max_thrust,
-        axis=(0, 0, 1), torque_coefficient=+k_yaw,
-        transform=(+L, 0, 0)))
-    c.add(Thruster.linear(
-        "rotor_right",  max_thrust=max_thrust,
-        axis=(0, 0, 1), torque_coefficient=-k_yaw,
-        transform=(0, +L, 0)))
-    c.add(Thruster.linear(
-        "rotor_back",   max_thrust=max_thrust,
-        axis=(0, 0, 1), torque_coefficient=+k_yaw,
-        transform=(-L, 0, 0)))
-    c.add(Thruster.linear(
-        "rotor_left",   max_thrust=max_thrust,
-        axis=(0, 0, 1), torque_coefficient=-k_yaw,
-        transform=(0, -L, 0)))
+    # Rotors — alternating CW (+τ_z) and CCW (-τ_z). force vector is
+    # along body +z scaled by max_thrust; torque vector is along the
+    # same axis scaled by yaw coefficient (signed for chirality).
+    F_vec = (0.0, 0.0, max_thrust)
+    τ_cw  = (0.0, 0.0, +k_yaw * max_thrust)
+    τ_ccw = (0.0, 0.0, -k_yaw * max_thrust)
+    c.add(Thruster("rotor_front",
+                   force=F_vec, torque=τ_cw,  transform=(+L, 0, 0)))
+    c.add(Thruster("rotor_right",
+                   force=F_vec, torque=τ_ccw, transform=(0, +L, 0)))
+    c.add(Thruster("rotor_back",
+                   force=F_vec, torque=τ_cw,  transform=(-L, 0, 0)))
+    c.add(Thruster("rotor_left",
+                   force=F_vec, torque=τ_ccw, transform=(0, -L, 0)))
     # Sensors.
     c.add(IMU("imu"))
     c.add(PositionSensor("gps"))

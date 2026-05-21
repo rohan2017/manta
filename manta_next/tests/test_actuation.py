@@ -15,7 +15,7 @@ def test_hover_thrust_cancels_gravity():
     m = 2.0
     c = Craft("hover")
     c.add(Mass("body", mass=m, moi=(0.1, 0.1, 0.1)))
-    c.add(Thruster.linear("t", max_thrust=1.0, axis=(0.0, 0.0, 1.0)))
+    c.add(Thruster("t", force=(0.0, 0.0, 1.0)))
 
     tick = c.compile_tick(gravity_anchor=g_world)
     state = c.initial_state()
@@ -40,7 +40,7 @@ def test_excess_thrust_accelerates_up():
     m = 1.0
     c = Craft("ascent")
     c.add(Mass("body", mass=m, moi=(0.1, 0.1, 0.1)))
-    c.add(Thruster.linear("t", max_thrust=1.0))
+    c.add(Thruster("t", force=(0.0, 0.0, 1.0)))
 
     tick = c.compile_tick(gravity_anchor=g_world)
     state = c.initial_state()
@@ -65,7 +65,7 @@ def test_offset_thruster_produces_torque():
     c = Craft("rolling")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     # Thruster mounted at (+1, 0, 0), pointing +z → torque about body y.
-    c.add(Thruster.linear("t", max_thrust=1.0, axis=(0.0, 0.0, 1.0), transform=(1.0, 0.0, 0.0)))
+    c.add(Thruster("t", force=(0.0, 0.0, 1.0), transform=(1.0, 0.0, 0.0)))
 
     tick = c.compile_tick(gravity_anchor=(0.0, 0.0, 0.0))
     state = c.initial_state()
