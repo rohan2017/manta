@@ -26,6 +26,8 @@ import numpy as np
 
 from . import ir
 from .craft import TickContext, _aggregate_inertials, _wrench_to_craft
+from .inertia import symbolic_inertia_rollup
+from .kinematics import kinematic_pass
 from .ir.frames import AnchorFrame, CraftFrame
 from .math.manifold import SO3
 from .ir.types import Mat3, Quat, Scalar, Vec3
@@ -90,20 +92,16 @@ def compile_coupled_tick(crafts: list,
                 "compile_coupled_tick: coupling references a craft not in "
                 "the given crafts list.")
 
-    # Compute inertials per craft (numpy). Same nested-Joint guard as
-    # the single-craft path.
-    from .craft import _check_joints_have_only_mass_children
-    inertials = {}
+    # Quick numpy snapshot per craft (mass-positivity guard only). The
+    # actual COM / I_com used in Newton-Euler are symbolic and built
+    # inside the ir.Graph block below — they pick up joint-angle
+    # dependence when a Joint reorients a rotor.
     for craft in crafts:
-        _check_joints_have_only_mass_children(craft.name, craft._parts)
         ai = _aggregate_inertials(craft._parts)
         if ai["m_total"] <= 0.0:
             raise ValueError(
-                f"Craft '{craft.name}': total mass is {ai['m_total']}; need m > 0.")
-        ai["I_com_inv"] = (
-            np.linalg.inv(ai["I_com"])
-            if np.linalg.det(ai["I_com"]) > 1e-18 else None)
-        inertials[id(craft)] = ai
+                f"Craft '{craft.name}': total mass is "
+                f"{ai['m_total']}; need m > 0.")
 
     name = "_".join(c.name for c in crafts) + "_coupled_tick"
     with ir.Graph(name=name) as g:
@@ -132,8 +130,7 @@ def compile_coupled_tick(crafts: list,
         for craft in crafts:
             pc = per_craft[id(craft)]
             _restore_part_attrs(craft, pc)
-            _emit_per_craft_dynamics(
-                g, craft, inertials[id(craft)], pc, dt)
+            _emit_per_craft_dynamics(g, craft, pc, dt)
 
     return g.compile()
 
@@ -161,28 +158,13 @@ def _trace_craft_pass1(g_ctx,
     velocity    = ir.Vec3[AnchorFrame].input(prefix + "velocity")
     ang_vel     = ir.Vec3[CraftFrame].input(prefix + "angular_velocity")
 
-    # Per-tick context.
-    g_anchor = gravity_field.state_at_sym(position)
-    g_craft  = orientation.conjugate().apply(g_anchor)
-    v_body   = orientation.conjugate().apply(velocity)
     if collision_field is None:
         from .fields import CollisionField as _CF
         collision_field = _CF()
-    ctx = TickContext(
-        gravity=g_craft,
-        gravity_field=gravity_field,
-        fluid_field=fluid_field,
-        mag_field=mag_field,
-        collision_field=collision_field,
-        dt=dt,
-        position=position,
-        orientation=orientation,
-        velocity=velocity,
-        angular_velocity=ang_vel,
-        velocity_body=v_body,
-    )
 
-    # State + Input rebinds on each part.
+    # State + Input rebinds on each part — must happen BEFORE the
+    # kinematic pass, so it sees the joint angle/rate symbols when
+    # building per-part kinematic states.
     state_input_nodes: dict[Part, dict[str, Any]] = {}
     saved_state_attrs: dict[Part, dict[str, Any]] = {}
     saved_input_attrs: dict[Part, dict[str, Any]] = {}
@@ -212,12 +194,50 @@ def _trace_craft_pass1(g_ctx,
                 object.__setattr__(part, iname, sym)
             saved_input_attrs[part] = saved_i
 
+    # Symbolic kinematic + inertia passes over the part tree.
+    kin_states = kinematic_pass(
+        craft.root, position, orientation, velocity, ang_vel, gravity_field)
+    inertia = symbolic_inertia_rollup(craft.root)
+
+    # Per-craft TickContext (root-body view) for couplings to read. Per-
+    # part TickContexts are built per part below for `update()`.
+    root_kin = kin_states[craft.root]
+    ctx = TickContext(
+        gravity=root_kin.gravity_in_craft,
+        gravity_field=gravity_field,
+        fluid_field=fluid_field,
+        mag_field=mag_field,
+        collision_field=collision_field,
+        dt=dt,
+        position=position,
+        orientation=orientation,
+        velocity=velocity,
+        angular_velocity=ang_vel,
+        velocity_body=root_kin.velocity_body_in_craft,
+        R_craft_from_input=root_kin.R_craft_from_input,
+    )
+
     # Aggregate wrenches + collect state/sensor outputs.
     net = Wrench.zero(CraftFrame)
     new_state_outputs: list[tuple[str, Any]] = []
     sensor_outputs:    list[tuple[str, Any]] = []
     for part in craft._parts:
-        result = part.update(ctx)
+        kin = kin_states[part]
+        ctx_part = TickContext(
+            gravity=kin.gravity_in_craft,
+            gravity_field=gravity_field,
+            fluid_field=fluid_field,
+            mag_field=mag_field,
+            collision_field=collision_field,
+            dt=dt,
+            position=kin.origin_in_anchor,
+            orientation=orientation,
+            velocity=kin.velocity_origin,
+            angular_velocity=kin.angular_velocity_input,
+            velocity_body=kin.velocity_body_in_craft,
+            R_craft_from_input=kin.R_craft_from_input,
+        )
+        result = part.update(ctx_part)
         if isinstance(result, Wrench):
             w_part = result; new_state = {}; outputs = {}
         elif isinstance(result, PartUpdate):
@@ -261,8 +281,8 @@ def _trace_craft_pass1(g_ctx,
         for oname, oval in outputs.items():
             sensor_outputs.append((prefix + f"{part.name}.{oname}", oval))
 
-        # Wrench at-part-offset → at-craft-origin.
-        w_craft = _wrench_to_craft(w_part, part.transform)
+        # Wrench at-part-offset → at-craft-origin via symbolic position.
+        w_craft = _wrench_to_craft(w_part, kin.r_in_craft)
         net = net + w_craft
 
     return {
@@ -272,6 +292,7 @@ def _trace_craft_pass1(g_ctx,
         "ang_vel":           ang_vel,
         "ctx":               ctx,
         "net":               net,
+        "inertia":           inertia,
         "new_state_outputs": new_state_outputs,
         "sensor_outputs":    sensor_outputs,
         "saved_state_attrs": saved_state_attrs,
@@ -288,10 +309,10 @@ def _restore_part_attrs(craft, pc) -> None:
             object.__setattr__(part, iname, ival)
 
 
-def _emit_per_craft_dynamics(g_ctx, craft, inertials, pc, dt) -> None:
+def _emit_per_craft_dynamics(g_ctx, craft, pc, dt) -> None:
     """Newton-Euler + symplectic integration + emit state/sensor outputs
     for one craft. Reads pc["net"] (which by this point includes any
-    coupling-injected wrenches)."""
+    coupling-injected wrenches) and pc["inertia"] (symbolic rollup)."""
     prefix = f"{craft.name}."
 
     position    = pc["position"]
@@ -299,26 +320,27 @@ def _emit_per_craft_dynamics(g_ctx, craft, inertials, pc, dt) -> None:
     velocity    = pc["velocity"]
     ang_vel     = pc["ang_vel"]
     net         = pc["net"]
+    inertia     = pc["inertia"]
 
-    m_total     = inertials["m_total"]
-    com_np      = inertials["com"]
-    I_com_np    = inertials["I_com"]
-    I_com_inv_np = inertials["I_com_inv"]
+    m_total          = inertia["m_total"]
+    com_mx           = inertia["com_in_craft_mx"]
+    I_com_mx         = inertia["I_com_in_craft_mx"]
+    I_com_at_zero_np = inertia["I_com_at_zero"]
 
     F_craft    = net.force
     tau_origin = net.torque
-    r_com = ir.Vec3[CraftFrame].constant(tuple(com_np))
+    r_com = ir.Vec3[CraftFrame].from_mx(com_mx)
     tau_com = tau_origin - r_com.cross(F_craft)
 
     f_anchor = orientation.apply(F_craft / m_total)
     a_com_anchor = f_anchor
 
-    I_com   = ir.Mat3[CraftFrame, CraftFrame].constant(I_com_np)
+    I_com   = ir.Mat3[CraftFrame, CraftFrame].from_mx(I_com_mx)
     I_omega = I_com @ ang_vel
     tau_eff = tau_com - ang_vel.cross(I_omega)
-    if I_com_inv_np is not None:
-        I_com_inv = ir.Mat3[CraftFrame, CraftFrame].constant(I_com_inv_np)
-        alpha = I_com_inv @ tau_eff
+    if np.linalg.det(I_com_at_zero_np) > 1e-18:
+        alpha_mx = ca.solve(I_com_mx, tau_eff._mx)
+        alpha = ir.Vec3[CraftFrame].from_mx(alpha_mx)
     else:
         alpha = ir.Vec3[CraftFrame].constant((0.0, 0.0, 0.0))
 

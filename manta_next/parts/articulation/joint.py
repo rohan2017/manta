@@ -45,6 +45,33 @@ _SATURATING = "saturating"
 _MODES      = (_PASSIVE, _SATURATING)
 
 
+def _offset_from(ancestor, descendant) -> np.ndarray:
+    """Sum the static `transform` of every part on the path from
+    `ancestor` (exclusive) down to `descendant` (inclusive). Used to
+    compute the rest-pose offset of a child relative to a joint origin
+    so the rotor's I_axial can apply a parallel-axis lift.
+
+    This is the **at-zero-angle** rest offset — it ignores any nested
+    joint rotations, since `I_axial` is the rotor's inertia about its
+    own axis and the parallel-axis lift only depends on perpendicular
+    distance, which is invariant under spins about the rotor's own
+    axis when child masses are themselves axisymmetric. For
+    cross-product moments-of-inertia that DO depend on inner-joint
+    angle, the full symbolic body-aggregate handles it; `I_axial` is
+    a scalar used only inside the joint's own dynamics."""
+    chain: list = []
+    cur = descendant
+    while cur is not None and cur is not ancestor:
+        chain.append(cur)
+        cur = cur.parent
+    if cur is not ancestor:
+        raise ValueError(
+            f"_offset_from: '{descendant.name}' is not a descendant of "
+            f"'{ancestor.name}'.")
+    return sum((np.asarray(p.transform, dtype=float) for p in chain),
+               start=np.zeros(3))
+
+
 class Joint(CompositePart):
     """1-DOF revolute joint with an axial rotor (set of Mass children).
 
@@ -84,64 +111,81 @@ class Joint(CompositePart):
     # ----- Child Masses ----------------------------------------------------
 
     def add(self, child) -> Part:
-        """Attach a Part to the rotor. v1 of the new hierarchy still
-        restricts children to balanced Mass parts (zero transform); the
-        full symbolic kinematics that lifts these restrictions lands in
-        M20.2–M20.4.
+        """Attach a Part to the rotor.
+
+        Children may be `Mass` parts (rotor inertia) or nested `Joint`s
+        (e.g., pan–tilt gimbals). Child Masses can sit anywhere — the
+        symbolic kinematic and inertia passes lift their position
+        through the joint chain. Other leaf-part types (Thruster,
+        sensors, drag surfaces) need their `update()` to rotate any
+        input-frame quantities through `ctx.R_craft_from_input` before
+        they will read correctly on a moving rotor; until they do,
+        only `Mass` and `Joint` are accepted here.
 
         Returns the child (so chained construction reads naturally,
-        matching CompositePart.add).
+        matching `CompositePart.add`).
         """
         # Lazy-import to avoid a circular dependency at module load time.
         from ..structure.mass import Mass
-        if isinstance(child, Joint):
+        if not isinstance(child, (Mass, Joint)):
             raise TypeError(
-                f"Joint('{self.name}').add: nested Joints not supported "
-                f"yet — the symbolic kinematic pass that handles them "
-                f"lands in M20.2. The hierarchy primitives are in place "
-                f"so this restriction is temporary.")
-        if not isinstance(child, Mass):
-            raise TypeError(
-                f"Joint.add: only Mass children supported in v1, got "
-                f"{type(child).__name__}")
-        if tuple(child.transform) != (0.0, 0.0, 0.0):
-            raise ValueError(
-                f"Joint('{self.name}'): child Mass '{child.name}' has "
-                f"nonzero transform {child.transform}. v1 requires children "
-                f"at the joint origin; offset the Joint's transform instead.")
+                f"Joint.add: only Mass and Joint children supported, got "
+                f"{type(child).__name__}. Leaf parts that emit wrenches "
+                f"in their own input frame need to be made articulation-"
+                f"aware (rotate by ctx.R_craft_from_input) before they "
+                f"can ride on a moving rotor.")
         return super().add(child)
 
     # ----- Rotor I_axial computed from children ---------------------------
 
     @property
     def I_axial(self) -> float:
-        """Children's combined MOI about the joint's spin axis.
+        """Rotor MOI about the joint's spin axis, with parallel-axis lifts.
 
-        Computed directly from each child Mass's diagonal `moi` tuple.
-        v1 children are required to sit at the joint origin (enforced
-        in `add()`), so no parallel-axis lift is needed yet. The body's
-        inertia tensor is computed separately by Craft's aggregation
-        walker, which sees the same child Mass parts directly — Joint
-        itself contributes no mass/MOI to that walk."""
+        Walks the subtree below this joint, summing each Mass's
+        diagonal MOI about the joint origin. The lift accounts for
+        children offset from the joint axis (`r_⊥² · m`) but treats
+        each child as if its frame is aligned with the joint's input
+        frame at zero angle — which matches the gyroscopic-correction
+        usage in `update()`, where I_axial only ever multiplies the
+        rate-along-axis. A child Mass's own diagonal MOI rotates with
+        any nested Joint above it, but the axial projection along the
+        SAME axis is rotation-invariant for symmetric rotors and a
+        good approximation otherwise."""
         axis = np.array(self.axis, dtype=float)
         n = float(np.linalg.norm(axis))
         if n <= 0.0:
             return 0.0
         axis_unit = axis / n
-        I_diag = np.zeros((3, 3))
-        for c in self._children:
-            moi_diag = getattr(c, "moi", (0.0, 0.0, 0.0))
-            I_diag += np.diag([float(moi_diag[0]),
-                                float(moi_diag[1]),
-                                float(moi_diag[2])])
-        return float(axis_unit @ I_diag @ axis_unit)
+
+        total = 0.0
+        for descendant in self.walk():
+            if descendant is self:
+                continue
+            m = float(getattr(descendant, "mass", 0.0) or 0.0)
+            moi_diag = getattr(descendant, "moi", (0.0, 0.0, 0.0))
+            I_own = np.diag([float(moi_diag[0]),
+                              float(moi_diag[1]),
+                              float(moi_diag[2])])
+            r = _offset_from(self, descendant)
+            # Parallel-axis lift about the joint origin (in joint input frame).
+            I_lifted = I_own + m * (float(r @ r) * np.eye(3) - np.outer(r, r))
+            total += float(axis_unit @ I_lifted @ axis_unit)
+        return total
 
     # ----- update() --------------------------------------------------------
 
     def update(self, ctx) -> PartUpdate:
         I_ax = self.I_axial
-        axis_v = Vec3[CraftFrame].constant(tuple(self.axis))
-        axis_mx = axis_v._mx
+        # The Joint's spin axis is given in its INPUT-frame coords.
+        # Rotate to body-frame via R_craft_from_input so the reaction
+        # torque and gyroscopic term land in the same coords the body
+        # aggregation expects. For a Joint mounted directly on root
+        # this matrix is identity; for a nested inner Joint it carries
+        # the outer joint's angle.
+        axis_local_mx = ca.MX(list(self.axis))
+        R_in_mx = ctx.R_craft_from_input._mx
+        axis_mx = ca.mtimes(R_in_mx, axis_local_mx)
 
         # Torque per mode. We work in MX so the saturating clamp can use
         # ca.fmin / ca.fmax for a branch-free symbolic clip.
@@ -166,12 +210,16 @@ class Joint(CompositePart):
         new_angle_mx = (angle_mx + rate_mx * dt_mx
                         + 0.5 * accel_mx * dt_mx * dt_mx)
 
-        # --- Wrench on the body ---
-        # Reaction torque (Newton's 3rd, only meaningful in saturating mode
-        # where commanded torque is nonzero).
+        # --- Wrench on the mount ---
+        # Reaction torque (Newton's 3rd, only meaningful in saturating
+        # mode where commanded torque is nonzero). Expressed in body
+        # frame via the body-rotated axis.
         reaction_mx = axis_mx * (-tau_mx)
         # Gyroscopic correction: a spinning rotor that the body tries to
-        # tilt off-axis pushes back via -ω × L_rotor.
+        # tilt off-axis pushes back via -ω × L_rotor. ω is the joint's
+        # INPUT-frame ω (kinematic_pass gives us this directly in
+        # body-frame coords) — for a top-level joint that's body ω; for
+        # a nested joint it's the outer joint's output ω.
         L_rotor_mx = axis_mx * (I_ax * rate_mx)
         omega_mx = ctx.angular_velocity._mx
         # ca.cross handles 3-vec × 3-vec.

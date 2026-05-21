@@ -36,17 +36,13 @@ class Mass(Part):
     def update(self, ctx) -> Wrench:
         if not self.apply_gravity:
             return Wrench.zero(CraftFrame)
-        # Query the GravityField at THIS part's anchor-frame position,
-        # not at the craft origin (which is what ctx.gravity captures).
-        # For a uniform field this folds to the same constant; for a
-        # spatially-varying field (e.g. PointMassGravity) it picks up
-        # the right local g for parts mounted far from the craft origin.
-        offset_craft  = Vec3[CraftFrame].constant(tuple(self.transform))
-        offset_anchor = ctx.orientation.apply(offset_craft)
-        p_anchor      = ctx.position + offset_anchor
-        g_anchor      = ctx.gravity_field.state_at_sym(p_anchor)
-        g_local       = ctx.orientation.conjugate().apply(g_anchor)
-        force = g_local * self.mass
+        # `ctx.gravity` is the GravityField sampled at THIS part's anchor
+        # position (computed by the kinematic pass), then rotated into
+        # body-frame coords. For a flat craft with a uniform field this
+        # folds to the constant body-frame gravity; for a spatially
+        # varying field (e.g. PointMassGravity) it picks up the right
+        # local g for parts mounted far from the craft origin.
+        force = ctx.gravity * self.mass
         return Wrench(
             force=force,
             torque=Vec3[CraftFrame].constant((0.0, 0.0, 0.0)),

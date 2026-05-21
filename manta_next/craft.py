@@ -139,7 +139,8 @@ class TickContext:
     __slots__ = ("gravity", "gravity_field", "fluid_field", "mag_field",
                  "collision_field",
                  "dt", "position", "orientation", "velocity",
-                 "angular_velocity", "velocity_body")
+                 "angular_velocity", "velocity_body",
+                 "R_craft_from_input")
 
     def __init__(self,
                  *,
@@ -153,7 +154,8 @@ class TickContext:
                  orientation: Quat,
                  velocity: Vec3,
                  angular_velocity: Vec3,
-                 velocity_body: Vec3) -> None:
+                 velocity_body: Vec3,
+                 R_craft_from_input: Mat3) -> None:
         self.gravity = gravity
         self.gravity_field = gravity_field
         self.fluid_field = fluid_field
@@ -165,6 +167,12 @@ class TickContext:
         self.velocity = velocity
         self.angular_velocity = angular_velocity
         self.velocity_body = velocity_body
+        # Body-frame rotation of the part's INPUT frame. Identity for any
+        # part mounted directly on the craft root; for a Mass / Joint
+        # child of an outer Joint, this carries the outer joint's angle.
+        # Articulated parts use this to express their input-frame axes
+        # (e.g., a Joint's spin axis) in body-frame coords.
+        self.R_craft_from_input = R_craft_from_input
 
 
 # ---------------------------------------------------------------------------
@@ -220,57 +228,26 @@ def _aggregate_inertials(parts: list[Part]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Joint composition guard
-# ---------------------------------------------------------------------------
-
-def _check_joints_have_only_mass_children(craft_name: str,
-                                          parts: list) -> None:
-    """Reject Joint-on-Joint compositions at compile time.
-
-    The current `Joint.update()` reads `ctx.angular_velocity` (the body
-    ω) for its gyroscopic-correction term `-ω × L_rotor`. That's the
-    parent's ω as long as a Joint mounts directly on the Craft. A
-    Joint mounted on another Joint would see the inner joint's parent
-    as the body itself, not as the outer joint — wrong gyro reference.
-    The constructor-side `Joint.add(...)` already refuses nested
-    Joints; this is a defense-in-depth check at compile time in case
-    a future Joint subclass bypasses that path.
-    """
-    # Lazy-import to dodge circular module init.
-    from .parts.articulation.joint import Joint
-    for part in parts:
-        if not isinstance(part, Joint):
-            continue
-        for child in part.children:
-            if isinstance(child, Joint):
-                raise TypeError(
-                    f"Craft '{craft_name}': Joint '{part.name}' has a "
-                    f"nested Joint child '{child.name}'. Mount each Joint "
-                    f"directly on the Craft.")
-
-
-# ---------------------------------------------------------------------------
 # Wrench transformation (part frame → craft frame)
 # ---------------------------------------------------------------------------
 
-def _wrench_to_craft(wrench_part: Wrench, transform: tuple) -> Wrench:
-    """Roll a Wrench[CraftFrame] (which is what parts emit — they're
-    composed in CraftFrame even though they conceptually live in
-    PartFrame) up through a static position offset.
+def _wrench_to_craft(wrench_part: Wrench, r_in_craft: Vec3) -> Wrench:
+    """Lift a part-emitted wrench to a wrench acting at the craft origin.
 
-    Assumes identity orientation between part and craft (static rotation
-    is fixed at I in the current Part API). For a force F applied at
-    offset r from craft origin:
-        F_craft = F_part
-        τ_craft = τ_part + r × F_part
+    The part's wrench is assumed already expressed in body-frame
+    (CraftFrame) coords — every part that depends on a rotated input
+    frame (Joint, future articulated parts) is responsible for
+    rotating its native-frame quantities into body-frame inside its
+    own `update()` using `ctx.R_craft_from_input`. The lift here is
+    purely the parallel-axis-style force-to-torque coupling:
 
-    Inputs:
-        wrench_part: a Wrench whose frame tag is already CraftFrame (the
-                     static part frame conventionally aligns with craft
-                     for non-articulated parts).
-        transform:   (x, y, z) position offset of the part from craft origin.
+        F_at_origin = F_at_part
+        τ_at_origin = τ_at_part + r × F_at_part
 
-    Output: an equivalent Wrench at the craft origin.
+    `r_in_craft` is the part's body-frame position (from the
+    symbolic kinematic pass), which for a flat craft simplifies to
+    `part.transform` and for a part on a joint chain composes through
+    the chain.
     """
     if wrench_part.frame is not CraftFrame:
         from .ir.frames import FrameError, _capture_user_source
@@ -280,8 +257,7 @@ def _wrench_to_craft(wrench_part: Wrench, transform: tuple) -> Wrench:
             got=f"frame={wrench_part.frame.__name__}",
             source=_capture_user_source(),
         )
-    r = Vec3[CraftFrame].constant(tuple(transform))
-    extra_torque = r.cross(wrench_part.force)
+    extra_torque = r_in_craft.cross(wrench_part.force)
     return Wrench(
         force=wrench_part.force,
         torque=wrench_part.torque + extra_torque,
@@ -410,16 +386,15 @@ class Craft:
         if not self._parts:
             raise ValueError(f"Craft '{self.name}': no parts added.")
 
-        _check_joints_have_only_mass_children(self.name, self._parts)
-
-        inertials = _aggregate_inertials(self._parts)
-        m_total = inertials["m_total"]
-        if m_total <= 0.0:
+        # Quick numpy snapshot for the m_total > 0 guard. The actual COM
+        # and I_com used in Newton-Euler are computed symbolically below
+        # (inside the ir.Graph block) so they pick up joint-angle
+        # dependence when a Joint reorients a rotor.
+        snapshot = _aggregate_inertials(self._parts)
+        if snapshot["m_total"] <= 0.0:
             raise ValueError(
-                f"Craft '{self.name}': total mass is {m_total}; need m > 0.")
-        com_np    = inertials["com"]
-        I_com_np  = inertials["I_com"]
-        I_com_inv_np = np.linalg.inv(I_com_np) if np.linalg.det(I_com_np) > 1e-18 else None
+                f"Craft '{self.name}': total mass is "
+                f"{snapshot['m_total']}; need m > 0.")
 
         with ir.Graph(name=f"{self.name}_tick") as g:
             # --- State inputs --------------------------------------------
@@ -428,28 +403,6 @@ class Craft:
             velocity    = ir.Vec3[AnchorFrame].input("velocity")
             ang_vel     = ir.Vec3[CraftFrame].input("angular_velocity")
             dt          = ir.Scalar.input("dt")
-
-            # --- Per-tick context (gravity rotated to CraftFrame) --------
-            # Query the registered GravityField at the craft's anchor
-            # position. For a uniform field this folds to a constant; for
-            # a point-mass field it becomes a position-dependent MX.
-            g_anchor = gravity_field.state_at_sym(position)
-            g_craft  = orientation.conjugate().apply(g_anchor)
-            v_body   = orientation.conjugate().apply(velocity)
-
-            ctx = TickContext(
-                gravity=g_craft,
-                gravity_field=gravity_field,
-                fluid_field=fluid_field,
-                mag_field=mag_field,
-                collision_field=collision_field,
-                dt=dt,
-                position=position,
-                orientation=orientation,
-                velocity=velocity,
-                angular_velocity=ang_vel,
-                velocity_body=v_body,
-            )
 
             # --- Per-part state plumbing ---------------------------------
             # For each part with State declarations, create a graph input
@@ -498,11 +451,59 @@ class Craft:
                     object.__setattr__(part, iname, sym)
                 saved_input_attrs[part] = saved
 
+            # --- Symbolic kinematic pass --------------------------------
+            # Now that all Joint angles/rates have been rebound to MX
+            # symbols above, walk the part tree to produce each part's
+            # effective kinematic state (position, velocity, ω, gravity).
+            # For a flat craft this just adds part-offset lever-arms to
+            # the body state; for nested joints it composes through the
+            # chain.
+            from .kinematics import kinematic_pass
+            kin_states = kinematic_pass(
+                self.root, position, orientation, velocity, ang_vel,
+                gravity_field)
+
+            # --- Symbolic inertia rollup --------------------------------
+            # Build (m_total, com, I_com) as MX expressions in joint
+            # angles. For a flat craft these simplify to the same
+            # constants as the numpy snapshot above; for a craft with a
+            # Joint, com and I_com vary symbolically with the joint
+            # angle.
+            from .inertia import symbolic_inertia_rollup
+            inertia = symbolic_inertia_rollup(self.root)
+            m_total          = inertia["m_total"]
+            com_mx           = inertia["com_in_craft_mx"]
+            I_com_mx         = inertia["I_com_in_craft_mx"]
+            I_com_at_zero_np = inertia["I_com_at_zero"]
+
             # --- Aggregate wrenches + collect state updates --------------
             net = Wrench.zero(CraftFrame)
             new_state_outputs: list[tuple[str, Any]] = []
             sensor_outputs:    list[tuple[str, Any]] = []
             for part in self._parts:
+                # Build a per-part TickContext from its kinematic state.
+                # ctx.orientation stays the body's orientation so wrenches
+                # the part emits remain in CraftFrame (the existing
+                # aggregation expects that). ctx.position / velocity /
+                # gravity / angular_velocity are the PART's effective
+                # values — for a flat craft these equal `body + lever arm
+                # from part.transform`, matching what every part used to
+                # compute manually.
+                kin = kin_states[part]
+                ctx = TickContext(
+                    gravity=kin.gravity_in_craft,
+                    gravity_field=gravity_field,
+                    fluid_field=fluid_field,
+                    mag_field=mag_field,
+                    collision_field=collision_field,
+                    dt=dt,
+                    position=kin.origin_in_anchor,
+                    orientation=orientation,
+                    velocity=kin.velocity_origin,
+                    angular_velocity=kin.angular_velocity_input,
+                    velocity_body=kin.velocity_body_in_craft,
+                    R_craft_from_input=kin.R_craft_from_input,
+                )
                 result = part.update(ctx)
                 if isinstance(result, Wrench):
                     w_part = result
@@ -551,8 +552,9 @@ class Craft:
                 for oname, oval in outputs.items():
                     sensor_outputs.append((f"{part.name}.{oname}", oval))
 
-                # Aggregate wrench (in CraftFrame, transformed for offset).
-                w_craft = _wrench_to_craft(w_part, part.transform)
+                # Aggregate wrench (in CraftFrame, lifted to body origin
+                # via the part's symbolic body-frame position).
+                w_craft = _wrench_to_craft(w_part, kin.r_in_craft)
                 net = net + w_craft
 
             # Hold off on restoring part attrs — `post_update` runs
@@ -563,20 +565,24 @@ class Craft:
             tau_origin = net.torque       # Vec3[CraftFrame], about craft origin
 
             # τ_com = τ_origin − r_com × F   (in craft frame)
-            r_com = ir.Vec3[CraftFrame].constant(tuple(com_np))
+            r_com = ir.Vec3[CraftFrame].from_mx(com_mx)
             tau_com = tau_origin - r_com.cross(F_craft)
 
             # Linear: a_com (anchor) = R · (F_craft / m_total)
             f_anchor = orientation.apply(F_craft / m_total)
             a_com_anchor = f_anchor       # already divided by m_total
 
-            # Angular: I_com · α = τ_com − ω × (I_com · ω)  in craft frame
-            I_com   = ir.Mat3[CraftFrame, CraftFrame].constant(I_com_np)
+            # Angular: I_com · α = τ_com − ω × (I_com · ω)  in craft frame.
+            # I_com is symbolic in joint angles; solve at runtime rather
+            # than pre-inverting. If the at-rest snapshot is singular
+            # (point mass at origin with zero MOI), fall back to α = 0
+            # — rotational dynamics are physically undefined there.
+            I_com   = ir.Mat3[CraftFrame, CraftFrame].from_mx(I_com_mx)
             I_omega = I_com @ ang_vel
             tau_eff = tau_com - ang_vel.cross(I_omega)
-            if I_com_inv_np is not None:
-                I_com_inv = ir.Mat3[CraftFrame, CraftFrame].constant(I_com_inv_np)
-                alpha = I_com_inv @ tau_eff
+            if np.linalg.det(I_com_at_zero_np) > 1e-18:
+                alpha_mx = ca.solve(I_com_mx, tau_eff._mx)
+                alpha = ir.Vec3[CraftFrame].from_mx(alpha_mx)
             else:
                 # Degenerate inertia (e.g., single point mass at origin):
                 # treat α as zero. Rotational dynamics are undefined.
@@ -591,8 +597,12 @@ class Craft:
             # Body-frame acceleration at the craft origin, plus α: parts
             # like the IMU's accelerometer need these.
             a_origin_body = orientation.conjugate().apply(a_origin_anchor)
+            # Post-NE context is currently tied to the body (root)
+            # kinematic state; per-part post_update contexts that walk
+            # the joint chain land in M20.4.
+            root_kin = kin_states[self.root]
             ctx_post = PostUpdateContext(
-                gravity=g_craft,
+                gravity=root_kin.gravity_in_craft,
                 acceleration_anchor=a_origin_anchor,
                 angular_acceleration=alpha,
                 orientation=orientation,
