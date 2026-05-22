@@ -49,8 +49,8 @@ class PointBuoy(Part):
         # Field queries at the buoy's actual position. For uniform fields
         # this is the same as querying at the craft origin; for spatially
         # varying fields it captures the correct local value.
-        fluid    = ctx.fluid_field.state_at_sym(p_world)
-        g_anchor = ctx.gravity_field.state_at_sym(p_world)
+        fluid    = ctx.fluid_field.state_at_sym(p_world, ctx.t)
+        g_anchor = ctx.gravity_field.state_at_sym(p_world, ctx.t)
 
         # F_anchor = -ρ·V·g  (opposes gravity, scaled by displaced mass).
         scale = fluid.density * self.volume

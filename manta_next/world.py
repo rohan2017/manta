@@ -343,12 +343,19 @@ class CompiledWorld:
 
     def step(self,
              state: dict[str, dict[str, Any]],
-             dt: float) -> dict[str, dict[str, Any]]:
-        """Advance every component by `dt`. Returns a fresh state dict."""
+             dt: float,
+             t: float = 0.0) -> dict[str, dict[str, Any]]:
+        """Advance every component by `dt`. Returns a fresh state dict.
+
+        `t` is the world-clock time at the start of this step. Most
+        disturbances ignore it; planet-attached disturbances use it to
+        compute the planet's current rotation. Defaults to 0 for sims
+        that don't care about absolute time.
+        """
         new_state: dict[str, dict[str, Any]] = {}
         for comp_id, comp in self._components.items():
             comp_state = state[comp_id]
-            out = comp["tick"](dt=dt, **comp_state)
+            out = comp["tick"](t=t, dt=dt, **comp_state)
             # Output dict only contains slot keys the tick wrote; merge
             # over the input to preserve any extra metadata the user
             # may have stashed in there. (Defensive — for clean callers

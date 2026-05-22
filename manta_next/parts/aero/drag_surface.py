@@ -165,7 +165,7 @@ class DragSurface(Part):
         v_rot_world = ctx.orientation.apply(v_rot_craft)
         v_surface_anchor = ctx.velocity + v_rot_world
 
-        fluid = ctx.fluid_field.state_at_sym(p_world)
+        fluid = ctx.fluid_field.state_at_sym(p_world, ctx.t)
         rho   = fluid.density
         v_rel_world = v_surface_anchor - fluid.velocity
 

@@ -135,7 +135,7 @@ class TickContext:
 
     __slots__ = ("gravity", "gravity_field", "fluid_field", "mag_field",
                  "collision_field",
-                 "dt", "position", "orientation", "velocity",
+                 "t", "dt", "position", "orientation", "velocity",
                  "angular_velocity", "velocity_body",
                  "R_craft_from_input",
                  "acceleration_world", "acceleration_body",
@@ -148,6 +148,7 @@ class TickContext:
                  fluid_field,
                  mag_field,
                  collision_field,
+                 t: Scalar,
                  dt: Scalar,
                  position: Vec3,
                  orientation: Quat,
@@ -163,6 +164,7 @@ class TickContext:
         self.fluid_field = fluid_field
         self.mag_field = mag_field
         self.collision_field = collision_field
+        self.t = t
         self.dt = dt
         self.position = position
         self.orientation = orientation
@@ -391,6 +393,7 @@ class Craft:
             velocity    = ir.Vec3[WorldFrame].input("velocity")
             ang_vel     = ir.Vec3[CraftFrame].input("angular_velocity")
             dt          = ir.Scalar.input("dt")
+            t           = ir.Scalar.input("t")
             # Compile-time placeholder symbols for current-tick body
             # acceleration / angular acceleration. update() reads these
             # via TickContext; after Newton-Euler builds the real MX
@@ -480,7 +483,7 @@ class Craft:
             from .kinematics import kinematic_pass
             kin_states = kinematic_pass(
                 self.root, position, orientation, velocity, ang_vel,
-                gravity_field,
+                gravity_field, t,
                 body_acceleration_world=a_world_placeholder,
                 body_angular_acceleration=alpha_placeholder)
 
@@ -517,6 +520,7 @@ class Craft:
                     fluid_field=fluid_field,
                     mag_field=mag_field,
                     collision_field=collision_field,
+                    t=t,
                     dt=dt,
                     position=kin.origin_in_world,
                     orientation=orientation,
@@ -710,7 +714,7 @@ class Craft:
                         f"Scalar, Quat); got {type(out_val).__name__}")
                 g.output(out_val, out_name)
 
-        return g.compile()
+        return g.compile(defaults={"t": 0.0})
 
     # ----- Helpers --------------------------------------------------------
 

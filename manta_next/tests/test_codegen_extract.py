@@ -75,7 +75,7 @@ def test_predict_fn_matches_compile_tick():
     u_flat = np.array([state["t.throttle"]])
 
     # Through extracted predict.
-    x_new_extract = np.asarray(cf.predict_fn(x_flat, u_flat, 0.005)).ravel()
+    x_new_extract = np.asarray(cf.predict_fn(x_flat, u_flat, 0.005, 0.0)).ravel()
     # Through native compile_tick.
     out = tick(dt=0.005, **state)
     state_new = {**state, **out}
@@ -99,7 +99,7 @@ def test_position_sensor_H_is_identity_on_position_block():
 
     x = cf.spec.pack(c.initial_state())
     u = np.zeros(cf.n_inputs)
-    H = np.asarray(H_pos(x, u, 0.005))
+    H = np.asarray(H_pos(x, u, 0.005, 0.0))
     # Tangent layout: position[0:3], orientation[3:6], velocity[6:9],
     # angular_velocity[9:12].
     np.testing.assert_allclose(H[:, 0:3], np.eye(3), atol=1e-12)
@@ -116,7 +116,7 @@ def test_gyro_H_is_identity_on_angular_velocity_block():
 
     x = cf.spec.pack(c.initial_state())
     u = np.zeros(cf.n_inputs)
-    H = np.asarray(H_gyro(x, u, 0.005))
+    H = np.asarray(H_gyro(x, u, 0.005, 0.0))
     np.testing.assert_allclose(H[:, 9:12], np.eye(3), atol=1e-12)
     np.testing.assert_allclose(H[:, 0:9],  0.0,       atol=1e-12)
 
@@ -133,7 +133,7 @@ def test_extract_craft_with_no_inputs():
     # u vector is empty; predict still callable.
     x = cf.spec.pack(c.initial_state())
     u = np.zeros(0)
-    x_new = np.asarray(cf.predict_fn(x, u, 0.005)).ravel()
+    x_new = np.asarray(cf.predict_fn(x, u, 0.005, 0.0)).ravel()
     # Under (0,0,-9.81) gravity, after dt=0.005: v_z ≈ -0.04905, z ≈ -1.226e-4.
     assert np.isclose(x_new[9], -0.04905, atol=1e-6)   # velocity[2]
     assert np.isclose(x_new[2], -1.22625e-4, atol=1e-8)  # position[2]

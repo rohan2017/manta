@@ -74,7 +74,8 @@ class EKF:
         x_sym  = ca.MX.sym("x",  n_ambient, 1)
         u_sym  = ca.MX.sym("u",  n_u, 1) if n_u > 0 else ca.MX.zeros(0, 1)
         dt_sym = ca.MX.sym("dt", 1, 1)
-        x_new  = self._tick_on_flat(cf, x_sym, u_sym, dt_sym)
+        t_sym  = ca.MX.sym("t",  1, 1)
+        x_new  = self._tick_on_flat(cf, x_sym, u_sym, dt_sym, t_sym)
 
         # --- Tangent-space linearization -----------------------------------
         # δ_out(δ_in) = boxminus( f( boxplus(x, δ_in), u ), f(x, u) )
@@ -83,7 +84,7 @@ class EKF:
         # don't have to track when it matters.
         delta_in = ca.MX.sym("delta_in", n_tangent, 1)
         x_pert    = self.spec.boxplus_sym(x_sym, delta_in)
-        x_pert_new = self._tick_on_flat(cf, x_pert, u_sym, dt_sym)
+        x_pert_new = self._tick_on_flat(cf, x_pert, u_sym, dt_sym, t_sym)
         delta_out = self.spec.boxminus_sym(x_pert_new, x_new)
         F_sym = ca.substitute(
             ca.jacobian(delta_out, delta_in),
@@ -92,11 +93,11 @@ class EKF:
         )
 
         self._f_fn = ca.Function("ekf_predict",
-                                  [x_sym, u_sym, dt_sym], [x_new],
-                                  ["x", "u", "dt"], ["x_new"])
+                                  [x_sym, u_sym, dt_sym, t_sym], [x_new],
+                                  ["x", "u", "dt", "t"], ["x_new"])
         self._F_fn = ca.Function("ekf_F",
-                                  [x_sym, u_sym, dt_sym], [F_sym],
-                                  ["x", "u", "dt"], ["F"])
+                                  [x_sym, u_sym, dt_sym, t_sym], [F_sym],
+                                  ["x", "u", "dt", "t"], ["F"])
         # Cache for update-time use.
         self._x_sym = x_sym
         self._delta_zero_sym = ca.MX.sym("delta_zero", n_tangent, 1)
@@ -119,7 +120,7 @@ class EKF:
         n_in = cf.n_in()
         for i in range(n_in):
             name = cf.name_in(i)
-            if name == "dt" or name in self.spec:
+            if name in ("dt", "t") or name in self.spec:
                 continue
             if "." in name:
                 part_name, sub = name.split(".", 1)
@@ -146,7 +147,8 @@ class EKF:
                       cf: ca.Function,
                       x_sym: ca.MX,
                       u_sym: ca.MX,
-                      dt_sym: ca.MX) -> ca.MX:
+                      dt_sym: ca.MX,
+                      t_sym: ca.MX) -> ca.MX:
         """Apply the Craft's compiled tick CasADi Function to a flat
         ambient-state symbolic vector + flat input vector + dt, and concat
         the named outputs back to a flat ambient vector in the StateSpec's
@@ -164,6 +166,8 @@ class EKF:
         for name in in_names:
             if name == "dt":
                 sliced.append(dt_sym)
+            elif name == "t":
+                sliced.append(t_sym)
             elif name in self.spec:
                 slot = self.spec.slot(name)
                 sliced.append(x_sym[slot.offset : slot.offset + slot.dim])
@@ -245,10 +249,11 @@ class EKF:
     def predict(self,
                 dt: float,
                 u: dict[str, float] | None = None,
-                Q: np.ndarray | None = None) -> None:
+                Q: np.ndarray | None = None,
+                t: float = 0.0) -> None:
         """Advance the nominal state and tangent covariance by `dt`.
 
-        x       ← f(x, u, dt)                         (ambient)
+        x       ← f(x, u, dt, t)                      (ambient)
         P       ← F P Fᵀ + Q                          (tangent)
 
         Args:
@@ -258,10 +263,12 @@ class EKF:
                   default captured at construction time. With no Input
                   slots in the craft, `u` is ignored.
             Q     process-noise covariance (tangent-dim square).
+            t     world-clock time at the start of this step. Ignored
+                  by everything except planet-attached disturbances.
         """
         u_vec = self._build_u(u)
-        x_new = np.asarray(self._f_fn(self._x, u_vec, dt)).reshape(-1)
-        F     = np.asarray(self._F_fn(self._x, u_vec, dt))
+        x_new = np.asarray(self._f_fn(self._x, u_vec, dt, t)).reshape(-1)
+        F     = np.asarray(self._F_fn(self._x, u_vec, dt, t))
         n = self.spec.tangent_dim
         if Q is None:
             Q = np.zeros((n, n))

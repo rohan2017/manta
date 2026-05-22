@@ -158,6 +158,7 @@ def kinematic_pass(root_part,
                    body_velocity,
                    body_angular_velocity,
                    gravity_field,
+                   t,
                    *,
                    body_acceleration_world,
                    body_angular_acceleration) -> dict:
@@ -181,7 +182,7 @@ def kinematic_pass(root_part,
 
     # ----- root state (coincides with body) -----------------------------
     body_v_in_body = body_orientation.conjugate().apply(body_velocity)
-    g_world_body  = gravity_field.state_at_sym(body_position)
+    g_world_body  = gravity_field.state_at_sym(body_position, t)
     g_body         = body_orientation.conjugate().apply(g_world_body)
 
     eye3_mat = Mat3[CraftFrame, CraftFrame].from_mx(ca.MX.eye(3))
@@ -218,7 +219,7 @@ def kinematic_pass(root_part,
             return
         for child in parent.children:
             child_state = _compute_child_state(
-                parent_state, child, body_orientation, gravity_field,
+                parent_state, child, body_orientation, gravity_field, t,
                 body_acceleration_world=body_acceleration_world,
                 body_angular_acceleration=body_angular_acceleration,
                 body_angular_velocity=body_angular_velocity)
@@ -230,7 +231,7 @@ def kinematic_pass(root_part,
 
 
 def _compute_child_state(parent_state: KinematicState, child,
-                         body_orientation, gravity_field,
+                         body_orientation, gravity_field, t,
                          *,
                          body_acceleration_world,
                          body_angular_acceleration,
@@ -328,7 +329,7 @@ def _compute_child_state(parent_state: KinematicState, child,
 
     # ctx.gravity: gravity at the child's anchor position, in body-frame
     # coords. Same convention as the body's root for backward compat.
-    g_world_at_child = gravity_field.state_at_sym(child_origin_in_world)
+    g_world_at_child = gravity_field.state_at_sym(child_origin_in_world, t)
     g_at_child_in_craft = body_orientation.conjugate().apply(g_world_at_child)
 
     # ----- acceleration at the child's mount point ---------------------

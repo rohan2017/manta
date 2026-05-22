@@ -35,7 +35,7 @@ class Magnetometer(Part):
         offset_craft = Vec3[CraftFrame].constant(tuple(self.transform))
         p_world = ctx.position + ctx.orientation.apply(offset_craft)
 
-        B_world = ctx.mag_field.state_at_sym(p_world)
+        B_world = ctx.mag_field.state_at_sym(p_world, ctx.t)
         B_craft  = ctx.orientation.conjugate().apply(B_world)
 
         zero_v = Vec3[CraftFrame].constant((0.0, 0.0, 0.0))

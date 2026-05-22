@@ -16,7 +16,7 @@ def _eval_fluid_at(field, point_xyz):
     """Evaluate a FluidField at a concrete point, returning numpy
     (density, velocity)."""
     p = Vec3[WorldFrame].constant(point_xyz)
-    s = field.state_at_sym(p)
+    s = field.state_at_sym(p, 0.0)
     rho = float(ca.evalf(s.density))
     vel = np.asarray(ca.evalf(s.velocity._mx)).ravel()
     return rho, vel

@@ -80,7 +80,7 @@ class UniformMag(Disturbance):
             raise ValueError(
                 f"UniformMag: B_vec must be length-3, got {B_vec!r}")
 
-    def contribute_at_sym(self, point):
+    def contribute_at_sym(self, point, t):
         return _VEC3_ANCHOR.constant(self.B_vec)
 
     def __repr__(self) -> str:
@@ -113,7 +113,7 @@ class DipoleMag(Disturbance):
         self.moment   = tuple(float(x) for x in moment)
         self.eps      = float(eps)
 
-    def contribute_at_sym(self, point):
+    def contribute_at_sym(self, point, t):
         r_src = _VEC3_ANCHOR.constant(self.position)
         m     = _VEC3_ANCHOR.constant(self.moment)
         r     = point - r_src

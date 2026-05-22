@@ -106,6 +106,7 @@ def compile_coupled_tick(crafts: list,
     name = "_".join(c.name for c in crafts) + "_coupled_tick"
     with ir.Graph(name=name) as g:
         dt = ir.Scalar.input("dt")
+        t  = ir.Scalar.input("t")
 
         # Pass 1: per-craft inputs, TickContext, part wrench aggregation,
         # state/input rebinds. We keep all the symbolic handles in
@@ -114,7 +115,7 @@ def compile_coupled_tick(crafts: list,
         per_craft: dict[int, dict[str, Any]] = {}
         for craft in crafts:
             per_craft[id(craft)] = _trace_craft_pass1(
-                g, craft, gravity_field, fluid_field, mag_field, dt,
+                g, craft, gravity_field, fluid_field, mag_field, dt, t,
                 collision_field=collision_field)
 
         # Pass 2: coupling wrench injection.
@@ -132,7 +133,7 @@ def compile_coupled_tick(crafts: list,
             _restore_part_attrs(craft, pc)
             _emit_per_craft_dynamics(g, craft, pc, dt)
 
-    return g.compile()
+    return g.compile(defaults={"t": 0.0})
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +146,7 @@ def _trace_craft_pass1(g_ctx,
                        fluid_field,
                        mag_field,
                        dt,
+                       t,
                        collision_field=None) -> dict[str, Any]:
     """Set up one craft's state inputs, part rebinds, TickContext, run
     all parts' update(), and collect their wrench contributions + state
@@ -221,7 +223,8 @@ def _trace_craft_pass1(g_ctx,
 
     # Symbolic kinematic + inertia passes over the part tree.
     kin_states = kinematic_pass(
-        craft.root, position, orientation, velocity, ang_vel, gravity_field,
+        craft.root, position, orientation, velocity, ang_vel,
+        gravity_field, t,
         body_acceleration_world=a_world_placeholder,
         body_angular_acceleration=alpha_placeholder)
     inertia = symbolic_inertia_rollup(craft.root)
@@ -235,6 +238,7 @@ def _trace_craft_pass1(g_ctx,
         fluid_field=fluid_field,
         mag_field=mag_field,
         collision_field=collision_field,
+        t=t,
         dt=dt,
         position=position,
         orientation=orientation,
@@ -259,6 +263,7 @@ def _trace_craft_pass1(g_ctx,
             fluid_field=fluid_field,
             mag_field=mag_field,
             collision_field=collision_field,
+            t=t,
             dt=dt,
             position=kin.origin_in_world,
             orientation=orientation,

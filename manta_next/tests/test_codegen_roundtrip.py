@@ -155,10 +155,10 @@ def test_python_cpp_roundtrip(tmp_path: Path):
     funcs = result.funcs
     x_flat = funcs.spec.pack(state)
     u_flat = np.array([state["t.throttle"]])
-    F_py = np.asarray(funcs.predict_jacobian_fn(x_flat, u_flat, 0.005))
+    F_py = np.asarray(funcs.predict_jacobian_fn(x_flat, u_flat, 0.005, 0.0))
     H_pos_py = np.asarray(
         next(o for o in funcs.outputs if o.full_name == "gps.position"
-             ).H_fn(x_flat, u_flat, 0.005))
+             ).H_fn(x_flat, u_flat, 0.005, 0.0))
 
     # ---- 6: compare ----
     ATOL = 1e-10        # CasADi flat-C vs Python eval — bit-identical in
@@ -181,8 +181,8 @@ def test_python_cpp_roundtrip(tmp_path: Path):
     # from the new state instead.
     h_gps = next(o for o in funcs.outputs if o.full_name == "gps.position")
     h_gyr = next(o for o in funcs.outputs if o.full_name == "g.gyro")
-    gps_py_new  = np.asarray(h_gps.h_fn(x_flat, u_flat, 0.005)).ravel()
-    gyro_py_new = np.asarray(h_gyr.h_fn(x_flat, u_flat, 0.005)).ravel()
+    gps_py_new  = np.asarray(h_gps.h_fn(x_flat, u_flat, 0.005, 0.0)).ravel()
+    gyro_py_new = np.asarray(h_gyr.h_fn(x_flat, u_flat, 0.005, 0.0)).ravel()
     np.testing.assert_allclose(cpp_lines["gps"], gps_py_new, atol=ATOL)
     np.testing.assert_allclose(cpp_lines["gyr"], gyro_py_new, atol=ATOL)
 

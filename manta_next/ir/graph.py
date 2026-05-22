@@ -114,8 +114,15 @@ class Graph:
 
     # ----- Compilation -----------------------------------------------------
 
-    def compile(self) -> "CompiledGraph":
-        """Build a `casadi.Function` from this graph's inputs and outputs."""
+    def compile(self,
+                defaults: dict[str, Any] | None = None) -> "CompiledGraph":
+        """Build a `casadi.Function` from this graph's inputs and outputs.
+
+        `defaults` — optional `{input_name: default_value}` map used by
+        the compiled wrapper when the caller omits an input. Lets
+        ergonomic inputs (like `t` for time) stay optional in the
+        majority of tests.
+        """
         if not self._outputs:
             raise ValueError(
                 f"Graph '{self._name}': no outputs registered; "
@@ -130,7 +137,8 @@ class Graph:
         opts = {"allow_duplicate_io_names": True}
         fn = ca.Function(self._name, in_mxs, out_mxs,
                          in_names, out_names, opts)
-        return CompiledGraph(fn, dict(self._inputs), dict(self._outputs))
+        return CompiledGraph(fn, dict(self._inputs), dict(self._outputs),
+                             defaults=defaults)
 
     def jacobian(self, of: str, wrt: str) -> "CompiledGraph":
         """Return a CompiledGraph computing d(output `of`) / d(input `wrt`).
@@ -191,7 +199,8 @@ class CompiledGraph:
     """
 
     def __init__(self, fn: ca.Function, input_specs: dict[str, Any],
-                 output_specs: dict[str, Any]) -> None:
+                 output_specs: dict[str, Any],
+                 defaults: dict[str, Any] | None = None) -> None:
         self.casadi_function = fn
         self._input_specs  = input_specs
         self._output_specs = output_specs
@@ -201,6 +210,11 @@ class CompiledGraph:
         # passing them back into __call__ is benign and silently dropped.
         # Other unknown keys still raise — typo protection.
         self._output_only = set(output_specs) - set(input_specs)
+        # Optional per-input default values. Filled in by __call__ when the
+        # caller omits the key. Used for ergonomic inputs like `t` that
+        # most callers don't bother to thread but a few (planet rotation)
+        # need.
+        self._defaults: dict[str, Any] = dict(defaults or {})
 
     # ----- Call -----------------------------------------------------------
 
@@ -208,6 +222,9 @@ class CompiledGraph:
         # Drop output-only keys carried via the {**state, **out} merge.
         kwargs = {k: v for k, v in kwargs.items()
                   if k not in self._output_only}
+        # Fill in defaults for any expected inputs the caller didn't supply.
+        for name, default in self._defaults.items():
+            kwargs.setdefault(name, default)
         # Validate input set.
         provided = set(kwargs)
         expected = set(self._input_specs)

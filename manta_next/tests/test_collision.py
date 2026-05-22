@@ -12,7 +12,7 @@ from manta_next.parts import Collider, Mass
 
 def _eval_pen_at(field, point_xyz):
     p = Vec3[WorldFrame].constant(point_xyz)
-    val = field.state_at_sym(p)
+    val = field.state_at_sym(p, 0.0)
     return np.asarray(ca.evalf(val._mx)).ravel()
 
 

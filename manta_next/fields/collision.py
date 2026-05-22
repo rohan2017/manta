@@ -92,7 +92,7 @@ class HalfSpace(Disturbance):
                 f"HalfSpace: origin and normal must be length-3; got "
                 f"origin={origin!r}, normal={normal!r}")
 
-    def contribute_at_sym(self, point):
+    def contribute_at_sym(self, point, t):
         origin_v = _VEC3_ANCHOR.constant(self.origin)
         normal_v = _VEC3_ANCHOR.constant(self.normal)
         # Signed perpendicular distance from plane (positive = outside).

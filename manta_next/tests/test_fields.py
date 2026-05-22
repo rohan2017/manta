@@ -34,7 +34,7 @@ def _eval_at(field, point_xyz):
     """Evaluate a Field's state_at at a concrete point, returning np array."""
     import casadi as ca
     p = Vec3[WorldFrame].constant(point_xyz)
-    val = field.state_at_sym(p)
+    val = field.state_at_sym(p, 0.0)
     return np.asarray(ca.evalf(val._mx)).ravel()
 
 
@@ -84,7 +84,7 @@ def test_field_rejects_mismatched_disturbance():
     """A disturbance with the wrong value_shape can't be added."""
     class WrongShape(Disturbance):
         field_value_shape = float        # not Vec3[WorldFrame]
-        def contribute_at_sym(self, point): return 0.0
+        def contribute_at_sym(self, point, t): return 0.0
 
     gf = GravityField()
     with pytest.raises(TypeError, match="not"):

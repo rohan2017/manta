@@ -116,7 +116,7 @@ class UniformFluid(Disturbance):
             raise ValueError(
                 f"UniformFluid: velocity must be length-3, got {velocity!r}")
 
-    def contribute_at_sym(self, point) -> FluidState:
+    def contribute_at_sym(self, point, t) -> FluidState:
         return FluidState(
             density  = ca.MX(self.density),
             velocity = _VEC3_ANCHOR.constant(self.velocity),
@@ -149,7 +149,7 @@ class CurrentFlow(Disturbance):
             raise ValueError(
                 f"CurrentFlow: velocity must be length-3, got {velocity!r}")
 
-    def contribute_at_sym(self, point) -> FluidState:
+    def contribute_at_sym(self, point, t) -> FluidState:
         return FluidState(
             density  = ca.MX(0.0),
             velocity = _VEC3_ANCHOR.constant(self.velocity),

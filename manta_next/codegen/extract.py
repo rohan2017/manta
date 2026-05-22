@@ -113,10 +113,11 @@ def extract(craft,
     x_sym  = ca.MX.sym("x",  n_ambient, 1)
     u_sym  = ca.MX.sym("u",  n_u, 1) if n_u > 0 else ca.MX.zeros(0, 1)
     dt_sym = ca.MX.sym("dt", 1, 1)
+    t_sym  = ca.MX.sym("t",  1, 1)
 
     # Group tick outputs by name (state slots + sensor outputs).
     tick_outputs_by_name = _evaluate_tick_flat(
-        cf, x_sym, u_sym, dt_sym, spec, input_names, craft=craft)
+        cf, x_sym, u_sym, dt_sym, t_sym, spec, input_names, craft=craft)
 
     # --- predict_fn -------------------------------------------------------
     state_chunks = []
@@ -129,15 +130,15 @@ def extract(craft,
 
     predict_fn = ca.Function(
         f"{craft.name}_predict",
-        [x_sym, u_sym, dt_sym], [x_new],
-        ["x", "u", "dt"], ["x_new"],
+        [x_sym, u_sym, dt_sym, t_sym], [x_new],
+        ["x", "u", "dt", "t"], ["x_new"],
     )
 
     # --- predict_jacobian_fn ---------------------------------------------
     delta = ca.MX.sym("delta", n_tangent, 1)
     x_pert = spec.boxplus_sym(x_sym, delta)
     pert_outputs_by_name = _evaluate_tick_flat(
-        cf, x_pert, u_sym, dt_sym, spec, input_names, craft=craft)
+        cf, x_pert, u_sym, dt_sym, t_sym, spec, input_names, craft=craft)
     pert_chunks = []
     for slot in spec.slots:
         chunk = pert_outputs_by_name[slot.name]
@@ -156,8 +157,8 @@ def extract(craft,
     F_sym = ca.densify(F_sym)
     predict_jacobian_fn = ca.Function(
         f"{craft.name}_predict_jacobian",
-        [x_sym, u_sym, dt_sym], [F_sym],
-        ["x", "u", "dt"], ["F"],
+        [x_sym, u_sym, dt_sym, t_sym], [F_sym],
+        ["x", "u", "dt", "t"], ["F"],
     )
 
     # --- per-Output (h, H) -----------------------------------------------
@@ -184,13 +185,13 @@ def extract(craft,
             H_sym = ca.densify(H_sym)
             cname = f"{craft.name}_h_{part.name}_{out_name}"
             h_fn = ca.Function(
-                cname, [x_sym, u_sym, dt_sym], [h_mx_flat],
-                ["x", "u", "dt"], ["h"],
+                cname, [x_sym, u_sym, dt_sym, t_sym], [h_mx_flat],
+                ["x", "u", "dt", "t"], ["h"],
             )
             H_fn = ca.Function(
                 cname + "_jacobian",
-                [x_sym, u_sym, dt_sym], [H_sym],
-                ["x", "u", "dt"], ["H"],
+                [x_sym, u_sym, dt_sym, t_sym], [H_sym],
+                ["x", "u", "dt", "t"], ["H"],
             )
             outputs.append(OutputSpec(
                 part_name=part.name,
@@ -224,7 +225,7 @@ def _discover_input_names(cf: ca.Function,
     out: list[str] = []
     for i in range(cf.n_in()):
         name = cf.name_in(i)
-        if name == "dt" or name in spec:
+        if name in ("dt", "t") or name in spec:
             continue
         if "." in name:
             part_name, sub = name.split(".", 1)
@@ -258,11 +259,12 @@ def _evaluate_tick_flat(cf: ca.Function,
                         x_sym,
                         u_sym,
                         dt_sym,
+                        t_sym,
                         spec: StateSpec,
                         input_names: list[str],
                         craft=None) -> dict:
     """Apply the compiled tick CasADi Function to a flat ambient-state
-    symbolic vector + flat input vector + dt, returning a dict mapping
+    symbolic vector + flat input vector + dt + t, returning a dict mapping
     every output name (state slots + sensor outputs) → its symbolic MX."""
     in_names  = [cf.name_in(i)  for i in range(cf.n_in())]
     out_names = [cf.name_out(i) for i in range(cf.n_out())]
@@ -272,6 +274,8 @@ def _evaluate_tick_flat(cf: ca.Function,
     for name in in_names:
         if name == "dt":
             sliced.append(dt_sym)
+        elif name == "t":
+            sliced.append(t_sym)
         elif name in spec:
             slot = spec.slot(name)
             sliced.append(x_sym[slot.offset : slot.offset + slot.dim])

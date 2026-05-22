@@ -74,7 +74,7 @@ class UniformGravity(Disturbance):
             raise ValueError(
                 f"UniformGravity: g_vec must be length-3, got {g_vec!r}")
 
-    def contribute_at_sym(self, point):
+    def contribute_at_sym(self, point, t):
         # Constant regardless of `point`; the symbolic dependency on
         # point is None — CasADi will fold this into a constant during
         # codegen.
@@ -108,7 +108,7 @@ class PointMassGravity(Disturbance):
         self.GM = float(GM)
         self.eps = float(eps)
 
-    def contribute_at_sym(self, point):
+    def contribute_at_sym(self, point, t):
         r_src = _VEC3_ANCHOR.constant(self.position)
         # r = point − r_src   (Vec3 supports operator-)
         r = point - r_src

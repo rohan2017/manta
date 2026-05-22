@@ -6,16 +6,15 @@ is expressed by attaching different `Disturbance` subclasses to the
 same Field instance: a uniform-g background, a planet's inverse-square
 pull, a transient impulse — all GravityField disturbances.
 
-`Field.state_at_sym(point)` returns the symbolic MX value of the field
-at the queried world-frame point. Implementation is a fixed-shape sum
-over every registered Disturbance's `contribute_at_sym(point)`.
+`Field.state_at_sym(point, t)` returns the symbolic MX value of the
+field at the queried world-frame point at world-clock time `t`.
+Implementation is a fixed-shape sum over every registered
+Disturbance's `contribute_at_sym(point, t)`.
 
-Disturbances are pure-Python objects whose `contribute_at_sym` builds
-a CasADi MX expression in terms of `point` (and any closed-over
-parameters). They're attached at World-construction time and stay
-fixed across compiled ticks. Time-varying behavior — gusts, transient
-impulses — is captured downstream via Inputs or per-tick parameters,
-not by mutating the field between ticks.
+Most disturbances are static in time — they accept `t` and ignore it.
+Planet-attached disturbances (ocean rotating with Earth, dipole field
+rotating with the planet) close over the planet's transforms and use
+`t` to compute the current rotation.
 """
 
 from __future__ import annotations
@@ -42,9 +41,11 @@ class Disturbance(ABC):
     field_value_shape: type = type(None)
 
     @abstractmethod
-    def contribute_at_sym(self, point: "Vec3"):
+    def contribute_at_sym(self, point: "Vec3", t):
         """Return this disturbance's contribution at the given world-frame
-        point. Output type matches the host Field's value type."""
+        point at world-clock time `t` (Scalar MX). Output type matches
+        the host Field's value type. Static disturbances accept `t` and
+        ignore it."""
         raise NotImplementedError
 
 
@@ -94,8 +95,9 @@ class Field(ABC):
         GravityField.)"""
         raise NotImplementedError
 
-    def state_at_sym(self, point: "Vec3"):
-        """Sum every registered disturbance's contribution at `point`.
+    def state_at_sym(self, point: "Vec3", t):
+        """Sum every registered disturbance's contribution at `point` at
+        time `t`.
 
         Returns the field value as a CasADi-typed expression in the
         field's `value_shape`. If no disturbances are registered, returns
@@ -103,7 +105,7 @@ class Field(ABC):
         """
         out = self._zero_value()
         for d in self._disturbances:
-            out = out + d.contribute_at_sym(point)
+            out = out + d.contribute_at_sym(point, t)
         return out
 
     def __repr__(self) -> str:

@@ -53,7 +53,7 @@ class Collider(Part):
         v_point_anchor = ctx.velocity + v_rot_world
 
         # Penetration vector from the CollisionField.
-        pen = ctx.collision_field.state_at_sym(p_world)
+        pen = ctx.collision_field.state_at_sym(p_world, ctx.t)
         pen_mx = pen._mx
         v_mx   = v_point_anchor._mx
         pen_sq = ca.dot(pen_mx, pen_mx) + 1e-12

@@ -275,6 +275,7 @@ def _build_cpp(funcs: CraftFunctions,
         lines.append(f"    double u_in[{funcs.n_inputs}];")
     else:
         lines.append("    double u_in[1] = {0.0};   // placeholder, never read")
+    lines.append("    double t = 0.0;   // world-clock time; not yet plumbed through C++ wrapper")
     lines.append("    pack_state(x, x_in);")
     lines.append("    pack_inputs(u, u_in);")
     # CasADi's SZ_ARG / SZ_RES are the FULL working sizes (named inputs +
@@ -282,7 +283,7 @@ def _build_cpp(funcs: CraftFunctions,
     # only the named slots. The kernel may write to the extra slots during
     # evaluation.
     lines.append(f"    const double* arg[{pname}_SZ_ARG] = {{0}};")
-    lines.append("    arg[0] = x_in; arg[1] = u_in; arg[2] = &dt;")
+    lines.append("    arg[0] = x_in; arg[1] = u_in; arg[2] = &dt; arg[3] = &t;")
     lines.append(f"    double* res[{pname}_SZ_RES] = {{0}};")
     lines.append("    res[0] = x_out;")
     lines.append(f"    long long iw[{pname}_SZ_IW > 0 ? {pname}_SZ_IW : 1];")
@@ -305,10 +306,11 @@ def _build_cpp(funcs: CraftFunctions,
     else:
         lines.append("    double u_in[1] = {0.0};")
     lines.append(f"    Eigen::Matrix<double, {qcls}::tangent_dim, {qcls}::tangent_dim, Eigen::ColMajor> F;")
+    lines.append("    double t = 0.0;")
     lines.append("    pack_state(x, x_in);")
     lines.append("    pack_inputs(u, u_in);")
     lines.append(f"    const double* arg[{fn}_SZ_ARG] = {{0}};")
-    lines.append("    arg[0] = x_in; arg[1] = u_in; arg[2] = &dt;")
+    lines.append("    arg[0] = x_in; arg[1] = u_in; arg[2] = &dt; arg[3] = &t;")
     lines.append(f"    double* res[{fn}_SZ_RES] = {{0}};")
     lines.append("    res[0] = F.data();")
     lines.append(f"    long long iw[{fn}_SZ_IW > 0 ? {fn}_SZ_IW : 1];")
@@ -333,6 +335,7 @@ def _build_cpp(funcs: CraftFunctions,
         else:
             lines.append("    double u_in[1] = {0.0};")
         lines.append("    double dt = 0.0;")    # h doesn't depend on dt in our parts
+        lines.append("    double t  = 0.0;")
         if o.out_dim == 1:
             lines.append("    double y = 0.0;")
         else:
@@ -340,7 +343,7 @@ def _build_cpp(funcs: CraftFunctions,
         lines.append("    pack_state(x, x_in);")
         lines.append("    pack_inputs(u, u_in);")
         lines.append(f"    const double* arg[{h_fn}_SZ_ARG] = {{0}};")
-        lines.append("    arg[0] = x_in; arg[1] = u_in; arg[2] = &dt;")
+        lines.append("    arg[0] = x_in; arg[1] = u_in; arg[2] = &dt; arg[3] = &t;")
         lines.append(f"    double* res[{h_fn}_SZ_RES] = {{0}};")
         if o.out_dim == 1:
             lines.append("    res[0] = &y;")
@@ -362,12 +365,13 @@ def _build_cpp(funcs: CraftFunctions,
         else:
             lines.append("    double u_in[1] = {0.0};")
         lines.append("    double dt = 0.0;")
+        lines.append("    double t  = 0.0;")
         lines.append(
             f"    Eigen::Matrix<double, {o.out_dim}, {qcls}::tangent_dim, Eigen::ColMajor> H;")
         lines.append("    pack_state(x, x_in);")
         lines.append("    pack_inputs(u, u_in);")
         lines.append(f"    const double* arg[{H_fn}_SZ_ARG] = {{0}};")
-        lines.append("    arg[0] = x_in; arg[1] = u_in; arg[2] = &dt;")
+        lines.append("    arg[0] = x_in; arg[1] = u_in; arg[2] = &dt; arg[3] = &t;")
         lines.append(f"    double* res[{H_fn}_SZ_RES] = {{0}};")
         lines.append("    res[0] = H.data();")
         lines.append(f"    long long iw[{H_fn}_SZ_IW > 0 ? {H_fn}_SZ_IW : 1];")
