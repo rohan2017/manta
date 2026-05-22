@@ -106,7 +106,7 @@ def extract(craft,
 
     # Group tick outputs by name (state slots + sensor outputs).
     tick_outputs_by_name = _evaluate_tick_flat(
-        cf, x_sym, u_sym, dt_sym, spec, input_names)
+        cf, x_sym, u_sym, dt_sym, spec, input_names, craft=craft)
 
     # --- predict_fn -------------------------------------------------------
     state_chunks = []
@@ -127,7 +127,7 @@ def extract(craft,
     delta = ca.MX.sym("delta", n_tangent, 1)
     x_pert = spec.boxplus_sym(x_sym, delta)
     pert_outputs_by_name = _evaluate_tick_flat(
-        cf, x_pert, u_sym, dt_sym, spec, input_names)
+        cf, x_pert, u_sym, dt_sym, spec, input_names, craft=craft)
     pert_chunks = []
     for slot in spec.slots:
         chunk = pert_outputs_by_name[slot.name]
@@ -208,21 +208,39 @@ def _discover_input_names(cf: ca.Function,
                           craft,
                           spec: StateSpec) -> list[str]:
     """Return the ordered list of part-Input names found in the tick
-    Function's input signature (skipping state slots + dt)."""
+    Function's input signature (skipping state slots, dt, and Noise
+    channels — Noise inputs are routed separately, see
+    `_discover_noise_names`)."""
     out: list[str] = []
     for i in range(cf.n_in()):
         name = cf.name_in(i)
         if name == "dt" or name in spec:
             continue
         if "." in name:
-            part_name, input_name = name.split(".", 1)
+            part_name, sub = name.split(".", 1)
             part = next((p for p in craft.parts if p.name == part_name), None)
-            if part and input_name in part.input_declarations():
+            if part and sub in part.input_declarations():
                 out.append(name)
                 continue
+            if part and sub in part.noise_declarations():
+                continue   # handled by _discover_noise_names
         raise RuntimeError(
             f"extract: tick input {name!r} not in StateSpec and not a "
-            f"recognized part Input.")
+            f"recognized part Input or Noise.")
+    return out
+
+
+def _discover_noise_names(cf: ca.Function, craft) -> list[str]:
+    """Return the ordered list of Noise channels exposed by the tick."""
+    out: list[str] = []
+    for i in range(cf.n_in()):
+        name = cf.name_in(i)
+        if "." not in name:
+            continue
+        part_name, sub = name.split(".", 1)
+        part = next((p for p in craft.parts if p.name == part_name), None)
+        if part and sub in part.noise_declarations():
+            out.append(name)
     return out
 
 
@@ -231,7 +249,8 @@ def _evaluate_tick_flat(cf: ca.Function,
                         u_sym,
                         dt_sym,
                         spec: StateSpec,
-                        input_names: list[str]) -> dict:
+                        input_names: list[str],
+                        craft=None) -> dict:
     """Apply the compiled tick CasADi Function to a flat ambient-state
     symbolic vector + flat input vector + dt, returning a dict mapping
     every output name (state slots + sensor outputs) → its symbolic MX."""
@@ -248,6 +267,17 @@ def _evaluate_tick_flat(cf: ca.Function,
             sliced.append(x_sym[slot.offset : slot.offset + slot.dim])
         elif name in u_index:
             sliced.append(u_sym[u_index[name]])
+        elif "." in name and craft is not None:
+            # Noise channel — feed zero of the right shape (predict /
+            # H jacobian evaluate the clean tick).
+            part_name, sub = name.split(".", 1)
+            part = next((p for p in craft.parts if p.name == part_name), None)
+            if part and sub in part.noise_declarations():
+                ndecl = part.noise_declarations()[sub]
+                dim = 1 if ndecl.shape == "scalar" else 3
+                sliced.append(ca.MX.zeros(dim, 1))
+                continue
+            raise RuntimeError(f"extract: tick input {name!r} not handled.")
         else:
             raise RuntimeError(f"extract: tick input {name!r} not handled.")
 

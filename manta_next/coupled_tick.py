@@ -201,6 +201,24 @@ def _trace_craft_pass1(g_ctx,
                 object.__setattr__(part, iname, sym)
             saved_input_attrs[part] = saved_i
 
+    # Per-part Noise plumbing — same shape as the single-craft path.
+    saved_noise_attrs: dict[Part, dict[str, Any]] = {}
+    for part in craft._parts:
+        ndecls = part.noise_declarations()
+        if not ndecls:
+            continue
+        saved_n: dict[str, Any] = {}
+        for nname, ndecl in ndecls.items():
+            input_name = prefix + f"{part.name}.{nname}"
+            frame = ndecl.frame or CraftFrame
+            if ndecl.shape == "scalar":
+                sym = ir.Scalar.input(input_name)
+            else:
+                sym = ir.Vec3[frame].input(input_name)
+            saved_n[nname] = getattr(part, nname)
+            object.__setattr__(part, nname, sym)
+        saved_noise_attrs[part] = saved_n
+
     # Symbolic kinematic + inertia passes over the part tree.
     kin_states = kinematic_pass(
         craft.root, position, orientation, velocity, ang_vel, gravity_field,
@@ -312,6 +330,7 @@ def _trace_craft_pass1(g_ctx,
         "sensor_outputs":    sensor_outputs,
         "saved_state_attrs": saved_state_attrs,
         "saved_input_attrs": saved_input_attrs,
+        "saved_noise_attrs": saved_noise_attrs,
         "a_world_sym":      a_world_sym,
         "alpha_sym":         alpha_sym,
     }
@@ -324,6 +343,9 @@ def _restore_part_attrs(craft, pc) -> None:
     for part, saved in pc["saved_input_attrs"].items():
         for iname, ival in saved.items():
             object.__setattr__(part, iname, ival)
+    for part, saved in pc["saved_noise_attrs"].items():
+        for nname, nval in saved.items():
+            object.__setattr__(part, nname, nval)
 
 
 def _emit_per_craft_dynamics(g_ctx, craft, pc, dt) -> None:

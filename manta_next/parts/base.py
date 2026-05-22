@@ -118,6 +118,43 @@ class Input(_Declaration):
     """
 
 
+class Noise(_Declaration):
+    """Per-tick white-Gaussian noise vector, declared at class scope.
+
+    The framework:
+      * Creates a graph input named `<part_name>.<noise_name>` each
+        compile (shape determined by `shape`).
+      * Rebinds the part attribute to the symbolic node before calling
+        `update()`, so `self.<noise_name>` reads as a `Vec3[frame]` (or
+        Scalar) inside the function body. Add it to a sensor reading
+        and the framework wires the noise through the graph.
+      * Initial state from `Craft.initial_state()` seeds the slot at
+        zero (clean signal). Sim callers draw fresh samples per tick
+        via `Craft.sample_noise(rng)` and merge into the state dict;
+        the EKF leaves the slot at zero and reads `Part.noise_R(name)`
+        for the measurement-noise covariance instead.
+
+    Args:
+        shape — "scalar" or "vec3". Default "vec3".
+        frame — Frame class for the vec3 form. Default `CraftFrame`.
+                Ignored for scalar shape.
+        sigma — 1-σ standard deviation, scalar (isotropic across axes).
+                R(name) returns σ²·I of the right size.
+    """
+
+    __slots__ = ("shape", "frame", "sigma")
+
+    def __init__(self, shape: str = "vec3", frame=None,
+                 sigma: float = 0.0) -> None:
+        super().__init__(default=None)
+        if shape not in ("scalar", "vec3"):
+            raise ValueError(
+                f"Noise: shape must be 'scalar' or 'vec3'; got {shape!r}")
+        self.shape = shape
+        self.frame = frame
+        self.sigma = float(sigma)
+
+
 class State(_Declaration):
     """Per-tick state slot.
 
@@ -235,11 +272,18 @@ class Part:
 
     def _apply_declarations(self, overrides: dict[str, Any]) -> None:
         decls = self._declarations()
-        unknown = set(overrides) - set(decls)
+        # Noise declarations expose a per-instance `<name>_sigma`
+        # attribute. Recognize override keys of that form and route
+        # them to the matching declaration without reporting "unknown".
+        noise_sigma_keys = {
+            f"{n}_sigma" for n, d in decls.items() if isinstance(d, Noise)
+        }
+        unknown = set(overrides) - set(decls) - noise_sigma_keys
         if unknown:
             raise TypeError(
                 f"{type(self).__name__}({self.name!r}): unknown parameter(s) "
-                f"{sorted(unknown)}. Declared: {sorted(decls)}")
+                f"{sorted(unknown)}. Declared: "
+                f"{sorted(set(decls) | noise_sigma_keys)}")
         for attr_name, decl in decls.items():
             value = overrides.get(attr_name, decl.default)
             # Plain attribute. For State, this is the init value used both
@@ -247,6 +291,10 @@ class Part:
             # attribute holds OUTSIDE of a trace. Inside a trace, the
             # framework rebinds it to the symbolic input node.
             setattr(self, attr_name, value)
+            if isinstance(decl, Noise):
+                sigma_key = f"{attr_name}_sigma"
+                setattr(self, sigma_key,
+                        float(overrides.get(sigma_key, decl.sigma)))
 
     @classmethod
     def _declarations(cls) -> dict[str, _Declaration]:
@@ -277,6 +325,37 @@ class Part:
         """Just the Output entries (subset of _declarations)."""
         return {n: d for n, d in cls._declarations().items()
                 if isinstance(d, Output)}
+
+    @classmethod
+    def noise_declarations(cls) -> dict[str, "Noise"]:
+        """Just the Noise entries (subset of _declarations)."""
+        return {n: d for n, d in cls._declarations().items()
+                if isinstance(d, Noise)}
+
+    def noise_R(self, name: str) -> Any:
+        """Measurement-noise covariance for a declared Noise slot.
+
+        Reads the per-instance `<name>_sigma` attribute (set at
+        construction time, default from the declaration). Returns:
+            * `σ²·I3` (np.ndarray, 3×3) for vec3 noise.
+            * `σ²` (float) for scalar noise.
+
+        Used by the EKF to size measurement updates without the user
+        having to specify R separately:
+            `ekf.update(h, z, R=imu.noise_R("gyro_noise"))`.
+        """
+        import numpy as np
+        decls = self.noise_declarations()
+        if name not in decls:
+            raise KeyError(
+                f"{type(self).__name__}('{self.name}'): no Noise slot "
+                f"named {name!r}. Declared: {sorted(decls)}")
+        decl = decls[name]
+        sigma = float(getattr(self, f"{name}_sigma"))
+        var = sigma ** 2
+        if decl.shape == "scalar":
+            return var
+        return var * np.eye(3)
 
     # --- Required + optional overrides ------------------------------------
 

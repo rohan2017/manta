@@ -110,7 +110,11 @@ class EKF:
     def _discover_input_names(self, cf: ca.Function) -> list[str]:
         """Return the ordered list of part-Input names present in the
         tick's CasADi-Function signature. Used at __init__ to size the u
-        vector and at predict() to route u-dict values into the call."""
+        vector and at predict() to route u-dict values into the call.
+
+        Noise channels are accepted but not returned — the EKF leaves
+        them at zero (clean prediction); the user reads
+        `part.noise_R(name)` for measurement-noise covariance instead."""
         out: list[str] = []
         n_in = cf.n_in()
         for i in range(n_in):
@@ -118,17 +122,19 @@ class EKF:
             if name == "dt" or name in self.spec:
                 continue
             if "." in name:
-                part_name, input_name = name.split(".", 1)
+                part_name, sub = name.split(".", 1)
                 part = next(
                     (p for p in self.craft.parts if p.name == part_name),
                     None,
                 )
-                if part and input_name in part.input_declarations():
+                if part and sub in part.input_declarations():
                     out.append(name)
                     continue
+                if part and sub in part.noise_declarations():
+                    continue   # zero-fed by _tick_on_flat
             raise RuntimeError(
                 f"EKF: tick input {name!r} not in StateSpec and not "
-                f"recognized as a part Input.")
+                f"recognized as a part Input or Noise.")
         return out
 
     def _input_default(self, full_name: str) -> float:
@@ -163,6 +169,20 @@ class EKF:
                 sliced.append(x_sym[slot.offset : slot.offset + slot.dim])
             elif name in u_index:
                 sliced.append(u_sym[u_index[name]])
+            elif "." in name:
+                # Noise channel — feed zero of the right shape.
+                part_name, sub = name.split(".", 1)
+                part = next(
+                    (p for p in self.craft.parts if p.name == part_name),
+                    None,
+                )
+                if part and sub in part.noise_declarations():
+                    ndecl = part.noise_declarations()[sub]
+                    dim = 1 if ndecl.shape == "scalar" else 3
+                    sliced.append(ca.MX.zeros(dim, 1))
+                    continue
+                raise RuntimeError(
+                    f"EKF: tick input {name!r} not handled.")
             else:
                 raise RuntimeError(
                     f"EKF: tick input {name!r} not handled.")

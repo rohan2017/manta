@@ -23,12 +23,19 @@ def test_output_decl_introspection():
 
 def test_output_not_in_initial_state():
     """Outputs are per-tick reads, not state slots — they don't appear in
-    initial_state()."""
+    initial_state(). (Noise slots DO appear, seeded at zero — they're
+    user-supplied each tick.)"""
     c = Craft("with_imu")
     c.add(Mass("body", mass=1.0))
     c.add(IMU("g"))
     state = c.initial_state()
-    assert not any(k.startswith("g.") for k in state)
+    g_keys = [k for k in state if k.startswith("g.")]
+    # IMU declares two Noise slots (gyro_noise, accel_noise), but no
+    # state/input slots that would surface under the "g." prefix.
+    assert set(g_keys) == {"g.gyro_noise", "g.accel_noise"}
+    # The actual Outputs are NOT in initial_state.
+    assert "g.gyro"  not in state
+    assert "g.accel" not in state
 
 
 def test_output_decl_validation():
@@ -276,37 +283,47 @@ def test_accel_offset_imu_reads_centripetal_under_rotation():
 
 
 def test_imu_noise_sigmas_default_to_zero():
+    """Default Noise sigma is 0 on every channel — clean signal,
+    `sample_noise(rng)` returns zeros, `noise_R` returns the zero
+    matrix."""
     imu = IMU("g")
     assert imu.gyro_noise_sigma  == 0.0
     assert imu.accel_noise_sigma == 0.0
 
 
-def test_imu_sample_noise_zero_sigma_returns_zeros():
-    """With zero sigmas, sample_noise returns zero vectors (and doesn't
-    consume RNG state — reproducible)."""
-    imu = IMU("g")
+def test_craft_sample_noise_zero_sigma_returns_zeros():
+    """With zero sigmas, `craft.sample_noise(rng)` returns zero vectors
+    for every declared Noise slot and doesn't consume RNG state."""
+    c = Craft("clean")
+    c.add(Mass("body", mass=1.0))
+    c.add(IMU("g"))
     rng = np.random.default_rng(0)
-    samp = imu.sample_noise(rng)
-    np.testing.assert_array_equal(samp["gyro"],  np.zeros(3))
-    np.testing.assert_array_equal(samp["accel"], np.zeros(3))
+    samp = c.sample_noise(rng)
+    np.testing.assert_array_equal(samp["g.gyro_noise"],  np.zeros(3))
+    np.testing.assert_array_equal(samp["g.accel_noise"], np.zeros(3))
 
 
-def test_imu_sample_noise_nonzero_sigma_returns_scaled_samples():
-    """With sigma > 0, the samples have approximately the right std."""
-    imu = IMU("g", gyro_noise_sigma=0.05, accel_noise_sigma=0.2)
+def test_craft_sample_noise_nonzero_sigma_returns_scaled_samples():
+    """With sigma > 0, sample_noise draws Gaussian samples at the
+    requested 1-σ. Sigmas live on the part via `<name>_sigma`
+    constructor kwargs."""
+    c = Craft("noisy")
+    c.add(Mass("body", mass=1.0))
+    c.add(IMU("g", gyro_noise_sigma=0.05, accel_noise_sigma=0.2))
     rng = np.random.default_rng(0)
     samples_g, samples_a = [], []
     for _ in range(5000):
-        s = imu.sample_noise(rng)
-        samples_g.append(s["gyro"])
-        samples_a.append(s["accel"])
+        s = c.sample_noise(rng)
+        samples_g.append(s["g.gyro_noise"])
+        samples_a.append(s["g.accel_noise"])
     sg = np.array(samples_g);  sa = np.array(samples_a)
-    # Empirical std should be within 2% of the nominal sigma for 5k samples.
     np.testing.assert_allclose(sg.std(axis=0), 0.05, rtol=0.05)
     np.testing.assert_allclose(sa.std(axis=0), 0.20, rtol=0.05)
 
 
-def test_imu_R_matrices_are_sigma_squared_identity():
+def test_noise_R_is_sigma_squared_identity():
     imu = IMU("g", gyro_noise_sigma=0.01, accel_noise_sigma=0.1)
-    np.testing.assert_allclose(imu.gyro_R,  (0.01**2) * np.eye(3))
-    np.testing.assert_allclose(imu.accel_R, (0.1 **2) * np.eye(3))
+    np.testing.assert_allclose(imu.noise_R("gyro_noise"),
+                                (0.01 ** 2) * np.eye(3))
+    np.testing.assert_allclose(imu.noise_R("accel_noise"),
+                                (0.1  ** 2) * np.eye(3))

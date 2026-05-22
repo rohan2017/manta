@@ -465,6 +465,28 @@ class Craft:
                     object.__setattr__(part, iname, sym)
                 saved_input_attrs[part] = saved
 
+            # --- Per-part Noise plumbing ---------------------------------
+            # Each Noise declaration becomes a graph input vector. The
+            # default initial-state value is zero (clean signal — what
+            # the EKF wants). Sim callers draw a fresh sample per tick
+            # via `Craft.sample_noise(rng)`.
+            saved_noise_attrs: dict[Part, dict[str, Any]] = {}
+            for part in self._parts:
+                ndecls = part.noise_declarations()
+                if not ndecls:
+                    continue
+                saved: dict[str, Any] = {}
+                for nname, ndecl in ndecls.items():
+                    input_name = f"{part.name}.{nname}"
+                    frame = ndecl.frame or CraftFrame
+                    if ndecl.shape == "scalar":
+                        sym = ir.Scalar.input(input_name)
+                    else:
+                        sym = ir.Vec3[frame].input(input_name)
+                    saved[nname] = getattr(part, nname)
+                    object.__setattr__(part, nname, sym)
+                saved_noise_attrs[part] = saved
+
             # --- Symbolic kinematic pass --------------------------------
             # Now that all Joint angles/rates have been rebound to MX
             # symbols above, walk the part tree to produce each part's
@@ -668,6 +690,9 @@ class Craft:
             for part, saved in saved_input_attrs.items():
                 for iname, ival in saved.items():
                     object.__setattr__(part, iname, ival)
+            for part, saved in saved_noise_attrs.items():
+                for nname, nval in saved.items():
+                    object.__setattr__(part, nname, nval)
 
             # --- Symplectic-flavored Euler integration -------------------
             # Linear: position += v·dt + ½·a·dt²;  velocity += a·dt.
@@ -706,6 +731,30 @@ class Craft:
 
     # ----- Helpers --------------------------------------------------------
 
+    def sample_noise(self, rng) -> dict:
+        """Draw one tick of white-Gaussian samples for every declared
+        `Noise` slot on every part. Returns a dict of
+        `"<part>.<noise>" → np.ndarray` ready to merge into the state
+        dict before calling the compiled tick.
+
+        Slots whose sigma is 0 return zero vectors without consuming
+        RNG state (so a deterministic-seed sim stays reproducible
+        regardless of which noise channels are active).
+        """
+        out: dict[str, Any] = {}
+        for part in self._parts:
+            for nname, ndecl in part.noise_declarations().items():
+                key = f"{part.name}.{nname}"
+                sigma = float(getattr(part, f"{nname}_sigma"))
+                if ndecl.shape == "scalar":
+                    out[key] = (rng.normal(0.0, sigma)
+                                if sigma > 0.0 else 0.0)
+                else:
+                    out[key] = (rng.normal(0.0, sigma, 3)
+                                if sigma > 0.0
+                                else np.zeros(3, dtype=float))
+        return out
+
     def initial_state(self, **overrides) -> dict:
         """Build the initial state dict for the compiled tick.
 
@@ -729,6 +778,14 @@ class Craft:
             # the user can update them per-tick or leave them alone.
             for iname in part.input_declarations():
                 state[f"{part.name}.{iname}"] = float(getattr(part, iname))
+            # Noise slots: seed at zero (clean signal). Sim callers
+            # overwrite via `craft.sample_noise(rng)` each tick; the EKF
+            # leaves them at zero and reads `part.noise_R(name)` for the
+            # measurement-noise covariance instead.
+            for nname, ndecl in part.noise_declarations().items():
+                shape = 3 if ndecl.shape == "vec3" else 1
+                state[f"{part.name}.{nname}"] = (
+                    np.zeros(shape, dtype=float) if shape > 1 else 0.0)
         unknown = set(overrides) - set(state)
         if unknown:
             raise KeyError(
