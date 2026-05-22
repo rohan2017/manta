@@ -44,7 +44,10 @@ def emit_cpp(craft,
              class_name: str,
              basename: str | None = None,
              namespace: str = "manta_next_gen",
-             gravity_world: tuple[float, float, float] = (0.0, 0.0, -9.81),
+             gravity_field=None,
+             fluid_field=None,
+             mag_field=None,
+             collision_field=None,
              ) -> EmitResult:
     """Emit a complete, buildable C++ library for `craft`.
 
@@ -54,9 +57,10 @@ def emit_cpp(craft,
         class_name      — C++ class name. Conventionally PascalCase.
         basename        — filename stem; defaults to lowercased class_name.
         namespace       — C++ namespace.
-        gravity_world  — world-frame gravity baked into the predict
-                           kernel. Must match the sim that generated
-                           any data being compared against.
+        gravity_field / fluid_field / mag_field / collision_field —
+                          baked into the predict kernel. Same shape as
+                          `Craft.compile_tick`. Must match the sim that
+                          generated any data being compared against.
 
     Returns:
         EmitResult with paths to every emitted file plus the
@@ -66,7 +70,11 @@ def emit_cpp(craft,
     out_dir = Path(out_dir).resolve()
     base = basename or class_name.lower()
 
-    funcs = extract(craft, gravity_world=gravity_world)
+    funcs = extract(craft,
+                    gravity_field=gravity_field,
+                    fluid_field=fluid_field,
+                    mag_field=mag_field,
+                    collision_field=collision_field)
     kpaths = emit_kernels(funcs, out_dir, basename=base)
     wpaths = emit_wrapper(funcs, craft, out_dir,
                           class_name=class_name, basename=base,

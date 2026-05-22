@@ -3,6 +3,7 @@
 import numpy as np
 
 from manta_next import Craft, World
+from manta_next.fields import FluidField, GravityField
 from manta_next.parts import Mass, Naca00xx, Thruster
 
 
@@ -10,8 +11,8 @@ def test_zero_aoa_no_lift_only_drag():
     """At α=0 (wind exactly along chord), CL=0 and only drag acts."""
     rho = 1.225
     w = (World()
-         .add_uniform_gravity((0, 0, 0))   # no gravity, isolate aero
-         .add_uniform_fluid(density=rho))
+         .add_field(GravityField().add_uniform((0, 0, 0)))   # no gravity, isolate aero
+         .add_field(FluidField().add_uniform(density=rho)))
     c = Craft("foil")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(Naca00xx("wing",
@@ -44,8 +45,8 @@ def test_positive_aoa_produces_upward_lift():
     """
     rho = 1.225
     w = (World()
-         .add_uniform_gravity((0, 0, 0))
-         .add_uniform_fluid(density=rho))
+         .add_field(GravityField().add_uniform((0, 0, 0)))
+         .add_field(FluidField().add_uniform(density=rho)))
     c = Craft("foil")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(Naca00xx("wing",
@@ -74,7 +75,7 @@ def test_positive_aoa_produces_upward_lift():
 def test_no_fluid_field_means_no_aero():
     """Without a FluidField registered, the airfoil contributes nothing
     (zero ρ → zero forces)."""
-    w = World().add_uniform_gravity((0, 0, 0))    # no fluid
+    w = World().add_field(GravityField().add_uniform((0, 0, 0)))    # no fluid
     c = Craft("foil")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(Naca00xx("wing", area=100.0, CL_max=10.0))   # huge wing
@@ -94,8 +95,8 @@ def test_drag_dominates_at_high_angle():
     by default coefficients)."""
     rho = 1.225
     w = (World()
-         .add_uniform_gravity((0, 0, 0))
-         .add_uniform_fluid(density=rho))
+         .add_field(GravityField().add_uniform((0, 0, 0)))
+         .add_field(FluidField().add_uniform(density=rho)))
     c = Craft("foil")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(Naca00xx("wing",
@@ -123,8 +124,8 @@ def test_lift_zero_at_alpha_zero_and_90():
     → zero lift, all drag."""
     rho = 1.225
     w = (World()
-         .add_uniform_gravity((0, 0, 0))
-         .add_uniform_fluid(density=rho))
+         .add_field(GravityField().add_uniform((0, 0, 0)))
+         .add_field(FluidField().add_uniform(density=rho)))
     c = Craft("foil")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(Naca00xx("wing",
@@ -150,8 +151,8 @@ def test_offset_airfoil_produces_torque():
     pitch torque on the body."""
     rho = 1.225
     w = (World()
-         .add_uniform_gravity((0, 0, 0))
-         .add_uniform_fluid(density=rho))
+         .add_field(GravityField().add_uniform((0, 0, 0)))
+         .add_field(FluidField().add_uniform(density=rho)))
     c = Craft("plane")
     c.add(Mass("body", mass=1.0, moi=(0.05, 0.05, 0.05)))
     # Wing 1 m forward of body origin in +x direction.

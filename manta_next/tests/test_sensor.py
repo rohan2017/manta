@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from manta_next import World, Craft
+from manta_next.fields import GravityField
 from manta_next.parts import IMU, Joint, Mass, Output, Part, PartUpdate, Thruster, Wrench
 from manta_next.ir.frames import CraftFrame
 from manta_next.ir.types import Vec3
@@ -51,7 +52,7 @@ def test_stationary_craft_reads_zero_gyro():
     c = Craft("stat")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(IMU("g"))
-    tick = c.compile_tick(gravity_world=(0.0, 0.0, 0.0))
+    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
     state = c.initial_state()
     out = tick(dt=0.001, **state)
     np.testing.assert_allclose(np.array(out["g.gyro"]).ravel(),
@@ -68,7 +69,7 @@ def test_spinning_craft_reads_omega():
     c = Craft("spin")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(IMU("g"))
-    tick = c.compile_tick(gravity_world=(0.0, 0.0, 0.0))
+    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
     state = c.initial_state()
     # Set body ω along three axes.
     state["angular_velocity"] = np.array([0.7, -0.2, 1.3])
@@ -83,7 +84,7 @@ def test_gyro_unaffected_by_linear_velocity():
     c = Craft("translating")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(IMU("g"))
-    tick = c.compile_tick(gravity_world=(0.0, 0.0, 0.0))
+    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
     state = c.initial_state()
     state["velocity"] = np.array([5.0, 3.0, -2.0])
     out = tick(dt=0.001, **state)
@@ -107,8 +108,8 @@ def test_imu_adds_no_wrench():
 
     g = (0.0, 0.0, -9.81)
     s1 = make(False); s2 = make(True)
-    t1 = s1.compile_tick(gravity_world=g)
-    t2 = s2.compile_tick(gravity_world=g)
+    t1 = s1.compile_tick(gravity_field=GravityField(g=g))
+    t2 = s2.compile_tick(gravity_field=GravityField(g=g))
 
     st1, st2 = s1.initial_state(), s2.initial_state()
     for _ in range(200):
@@ -137,7 +138,7 @@ def test_gyro_tracks_motor_reaction_spin():
     c.add(j)
     c.add(IMU("g"))
 
-    tick = c.compile_tick(gravity_world=(0.0, 0.0, 0.0))
+    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
     state = c.initial_state()
     state["m.torque_cmd"] = 0.1   # τ = 0.1 N·m about body z
 
@@ -161,7 +162,7 @@ def test_gyro_tracks_motor_reaction_spin():
 # ---------------------------------------------------------------------------
 
 def test_imu_output_appears_in_world_step():
-    w = World().add_uniform_gravity((0.0, 0.0, 0.0))
+    w = World().add_field(GravityField().add_uniform((0.0, 0.0, 0.0)))
     c = Craft("imu_craft")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(IMU("g"))
@@ -192,7 +193,7 @@ def test_missing_output_write_raises():
     c.add(Mass("body", mass=1.0))
     c.add(BrokenSensor("b"))
     with pytest.raises(KeyError, match="not written"):
-        c.compile_tick(gravity_world=(0.0, 0.0, 0.0))
+        c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
 
 
 def test_unknown_output_write_raises():
@@ -208,7 +209,7 @@ def test_unknown_output_write_raises():
     c.add(Mass("body", mass=1.0))
     c.add(UnknownOutput("u"))
     with pytest.raises(KeyError, match="unknown output"):
-        c.compile_tick(gravity_world=(0.0, 0.0, 0.0))
+        c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
 
 
 # ---------------------------------------------------------------------------
@@ -223,7 +224,7 @@ def test_accel_in_free_fall_reads_zero():
     c = Craft("falling")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(IMU("g"))
-    tick = c.compile_tick(gravity_world=(0.0, 0.0, -9.81))
+    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
     state = c.initial_state()
     out = tick(dt=0.001, **state)
     accel = np.array(out["g.accel"]).ravel()
@@ -235,7 +236,7 @@ def test_accel_zero_gravity_zero_acceleration_reads_zero():
     c = Craft("drift")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(IMU("g"))
-    tick = c.compile_tick(gravity_world=(0.0, 0.0, 0.0))
+    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
     state = c.initial_state()
     state["velocity"] = np.array([5.0, 0.0, 0.0])   # constant velocity
     out = tick(dt=0.001, **state)
@@ -251,7 +252,7 @@ def test_accel_picks_up_thruster_acceleration():
     c.add(Mass("body", mass=2.0, moi=(0.1, 0.1, 0.1), apply_gravity=False))
     c.add(Thruster("t", force=(10.0, 0.0, 0.0)))   # 10 N along +x at throttle=1
     c.add(IMU("g"))
-    tick = c.compile_tick(gravity_world=(0.0, 0.0, 0.0))
+    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
     state = c.initial_state()
     state["t.throttle"] = 1.0
     out = tick(dt=0.001, **state)
@@ -269,7 +270,7 @@ def test_accel_offset_imu_reads_centripetal_under_rotation():
     c = Craft("spinner")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1), apply_gravity=False))
     c.add(IMU("imu", transform=(1.0, 0.0, 0.0)))
-    tick = c.compile_tick(gravity_world=(0.0, 0.0, 0.0))
+    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
     state = c.initial_state()
     omega_z = 2.0   # rad/s about +z
     state["angular_velocity"] = np.array([0.0, 0.0, omega_z])

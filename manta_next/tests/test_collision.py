@@ -4,7 +4,7 @@ import casadi as ca
 import numpy as np
 
 from manta_next import Craft, World
-from manta_next.fields import CollisionField, HalfSpace
+from manta_next.fields import CollisionField, HalfSpace, GravityField
 from manta_next.ir.frames import WorldFrame
 from manta_next.ir.types import Vec3
 from manta_next.parts import Collider, Mass
@@ -81,7 +81,7 @@ def test_no_collision_field_means_no_contact_force():
     """Without a CollisionField registered, a Collider on a free-falling
     body has no effect — the body just free-falls."""
     g = (0.0, 0.0, -9.81)
-    w = World().add_uniform_gravity(g)
+    w = World().add_field(GravityField().add_uniform(g))
     c = Craft("ball")
     c.add(Mass("body", mass=1.0, moi=(0.01, 0.01, 0.01)))
     c.add(Collider("contact", stiffness=1e5, damping=10.0))
@@ -103,7 +103,7 @@ def test_ball_rests_on_ground_at_compression_equilibrium():
     c_damp = 100.0
 
     w = (World()
-         .add_uniform_gravity((0, 0, -g))
+         .add_field(GravityField().add_uniform((0, 0, -g)))
          .add_field(CollisionField().add(HalfSpace(normal=(0, 0, 1)))))
     cr = Craft("ball")
     cr.add(Mass("body", mass=m, moi=(0.01, 0.01, 0.01)))
@@ -127,7 +127,7 @@ def test_dropped_ball_bounces():
     """A ball dropped above the ground bounces, then settles with damping."""
     g = 9.81
     w = (World()
-         .add_uniform_gravity((0, 0, -g))
+         .add_field(GravityField().add_uniform((0, 0, -g)))
          .add_field(CollisionField().add(HalfSpace(normal=(0, 0, 1)))))
     cr = Craft("ball")
     cr.add(Mass("body", mass=1.0, moi=(0.01, 0.01, 0.01)))
@@ -155,7 +155,7 @@ def test_offset_collider_produces_tip_over_torque():
     over' moment when the support isn't under the COM."""
     g = 9.81
     w = (World()
-         .add_uniform_gravity((0, 0, -g))
+         .add_field(GravityField().add_uniform((0, 0, -g)))
          .add_field(CollisionField().add(HalfSpace(normal=(0, 0, 1)))))
     cr = Craft("tower")
     cr.add(Mass("body", mass=1.0, moi=(0.05, 0.05, 0.05)))
@@ -193,7 +193,7 @@ def test_collision_field_reaches_coupled_tick():
     cf = CollisionField()
     cf.add(HalfSpace(origin=(0, 0, 0), normal=(0, 0, 1)))
     w = (World()
-         .add_uniform_gravity((0.0, 0.0, -g))
+         .add_field(GravityField().add_uniform((0.0, 0.0, -g)))
          .add_field(cf))
 
     a = Craft("a")

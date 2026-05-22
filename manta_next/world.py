@@ -18,7 +18,7 @@ becomes one IR tick graph: single-craft components use
 User-facing API::
 
     w = World()
-    w.add_uniform_gravity((0, 0, -9.81))
+    w.add_field(GravityField().add_uniform((0, 0, -9.81)))
 
     drone = Craft("drone")
     drone.add(Mass("body", mass=1.0))
@@ -44,7 +44,6 @@ import numpy as np
 from .craft import Craft
 from .fields import (
     CollisionField, Field, FluidField, GravityField, MagField,
-    UniformFluid, UniformGravity, UniformMag,
 )
 
 
@@ -91,47 +90,6 @@ class World:
                 f"to attach additional disturbances to it.")
         self._fields[cls] = field
         return self
-
-    def add_uniform_gravity(self,
-                            g_vec: tuple[float, float, float]) -> "World":
-        """Shortcut: register a GravityField containing one UniformGravity
-        disturbance. The common case for sims that don't care about
-        position-dependent gravity. Returns self for chaining."""
-        gf = GravityField()
-        gf.add(UniformGravity(g_vec))
-        return self.add_field(gf)
-
-    def add_uniform_fluid(self,
-                          density: float,
-                          velocity: tuple[float, float, float] = (0.0, 0.0, 0.0)
-                          ) -> "World":
-        """Shortcut: register a FluidField with one UniformFluid disturbance.
-
-        Common values:
-          * density=1.225, velocity=(0,0,0)  — standard sea-level air
-          * density=1025                       — seawater
-          * density=1000                       — fresh water
-
-        Returns self for chaining.
-        """
-        ff = FluidField()
-        ff.add(UniformFluid(density, velocity))
-        return self.add_field(ff)
-
-    def add_uniform_mag(self,
-                        B_vec: tuple[float, float, float]) -> "World":
-        """Shortcut: register a MagField with one UniformMag disturbance.
-
-        Common Earth-field first-order approximations (Tesla):
-          * Equator:   (3e-5, 0, 0)       — ~30 µT horizontal
-          * Mid-lat:   (2e-5, 0, -4.5e-5) — ~50 µT inclined
-          * Pole:      (0, 0, -6e-5)      — ~60 µT vertical
-
-        Returns self for chaining.
-        """
-        mf = MagField()
-        mf.add(UniformMag(B_vec))
-        return self.add_field(mf)
 
     def get_field(self, cls: type) -> Field | None:
         """Return the registered field of type `cls`, or None."""

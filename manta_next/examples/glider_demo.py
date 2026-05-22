@@ -12,6 +12,7 @@ Run::
 import numpy as np
 
 from manta_next import Craft, World
+from manta_next.fields import GravityField, FluidField
 from manta_next.parts import Mass, Naca00xx, IMU
 
 
@@ -29,7 +30,7 @@ def main() -> None:
                          normal_axis=(0.0, 0.0, 1.0)))
     glider.add(IMU("imu"))
 
-    w = World().add_uniform_gravity(g).add_uniform_fluid(density=rho_air)
+    w = World().add_field(GravityField().add_uniform(g)).add_field(FluidField().add_uniform(density=rho_air))
     # Launched horizontal at 15 m/s with the chord level.
     w.add_craft(glider, position=(0.0, 0.0, 100.0),
                 velocity=(15.0, 0.0, 0.0))

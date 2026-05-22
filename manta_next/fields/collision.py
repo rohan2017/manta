@@ -56,6 +56,14 @@ class CollisionField(Field):
     def _zero_value(self):
         return _VEC3_ANCHOR.constant((0.0, 0.0, 0.0))
 
+    def add_half_space(self,
+                       origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
+                       normal: tuple[float, float, float] = (0.0, 0.0, 1.0)
+                       ) -> "CollisionField":
+        """Attach a half-space obstacle (infinite ground plane / wall).
+        Returns self."""
+        return self.add(HalfSpace(origin=origin, normal=normal))
+
 
 class HalfSpace(Disturbance):
     """Infinite half-space below a plane.

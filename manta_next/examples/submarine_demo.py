@@ -18,6 +18,7 @@ Run::
 import numpy as np
 
 from manta_next import Craft, World
+from manta_next.fields import FluidField, GravityField
 from manta_next.parts import (
     DVL, DragSurface, IMU, Mass, PointBuoy, PositionSensor, Thruster,
 )
@@ -56,8 +57,8 @@ def main() -> None:
     sub.add(PositionSensor("gps"))
 
     w = (World()
-         .add_uniform_gravity(g_world)
-         .add_uniform_fluid(density=rho_sea))
+         .add_field(GravityField().add_uniform(g_world))
+         .add_field(FluidField().add_uniform(density=rho_sea)))
     w.add_craft(sub, position=(0.0, 0.0, -10.0))    # 10 m depth
     cw = w.compile()
     state = cw.initial_state()

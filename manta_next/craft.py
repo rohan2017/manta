@@ -330,7 +330,6 @@ class Craft:
                      fluid_field:     "Field | None" = None,
                      mag_field:       "Field | None" = None,
                      collision_field: "Field | None" = None,
-                     gravity_world: tuple[float, float, float] | None = None,
                      ) -> "ir.graph.CompiledGraph":
         """Trace the 6-DOF rigid-body tick into a callable function.
 
@@ -340,17 +339,8 @@ class Craft:
                               world-frame gravity is `field.state_at_sym(
                               position)`, which becomes a position-
                               dependent symbolic expression when non-
-                              uniform disturbances are present.
-            gravity_world  — escape hatch for direct use without a
-                              field: pass a (gx, gy, gz) tuple and the
-                              compile creates an internal one-shot
-                              GravityField with one UniformGravity
-                              disturbance. Convenient for tests and
-                              codegen extract.
-
-        Exactly one of `gravity_field` / `gravity_world` must be
-        provided (or neither, in which case gravity defaults to zero
-        — useful for in-vacuum scenarios).
+                              uniform disturbances are present. None ⇒
+                              in-vacuum (zero gravity everywhere).
 
         State (both input and output):
             position         : Vec3[WorldFrame]            (3,)
@@ -359,23 +349,16 @@ class Craft:
             angular_velocity : Vec3[CraftFrame]             (3,)
         Other input: dt (scalar).
         """
-        # Resolve gravity source.
+        # Default any unspecified field to an empty instance (zero
+        # contribution everywhere). Empty fields fold to constants
+        # symbolically — no runtime cost.
         from .fields import (
             CollisionField as _CollisionField,
             FluidField as _FluidField,
             GravityField as _GravityField,
             MagField as _MagField,
-            UniformGravity as _UniformGravity,
         )
-        if gravity_field is not None and gravity_world is not None:
-            raise ValueError(
-                "Craft.compile_tick: pass `gravity_field` OR "
-                "`gravity_world`, not both.")
-        if gravity_field is None and gravity_world is not None:
-            gravity_field = _GravityField()
-            gravity_field.add(_UniformGravity(gravity_world))
         if gravity_field is None:
-            # No gravity specified → zero field (in-vacuum).
             gravity_field = _GravityField()
         if fluid_field is None:
             # No fluid specified → zero density / zero velocity. Parts

@@ -24,6 +24,7 @@ from __future__ import annotations
 import numpy as np
 
 from manta_next import Craft
+from manta_next.fields import GravityField
 from manta_next.parts import Joint, Mass
 
 
@@ -58,7 +59,7 @@ def _build_gimbal() -> Craft:
 
 def main() -> None:
     c = _build_gimbal()
-    tick = c.compile_tick(gravity_world=(0.0, 0.0, 0.0))
+    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
     state = c.initial_state()
 
     # Phase 1: drive PAN only (no tilt command) — pan accelerates, body

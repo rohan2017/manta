@@ -5,7 +5,7 @@ import numpy as np
 
 from manta_next import Craft, World
 from manta_next.fields import (
-    CurrentFlow, FluidField, FluidState, UniformFluid,
+    CurrentFlow, FluidField, FluidState, GravityField, UniformFluid,
 )
 from manta_next.ir.frames import WorldFrame
 from manta_next.ir.types import Vec3
@@ -74,8 +74,8 @@ def test_buoy_neutral_when_displaced_weight_equals_craft_weight():
     g   = (0.0, 0.0, -9.81)
 
     w = (World()
-         .add_uniform_gravity(g)
-         .add_uniform_fluid(density=rho))
+         .add_field(GravityField().add_uniform(g))
+         .add_field(FluidField().add_uniform(density=rho)))
     c = Craft("float")
     c.add(Mass("body", mass=m, moi=(0.1, 0.1, 0.1)))
     c.add(PointBuoy("buoy", volume=V))
@@ -100,8 +100,8 @@ def test_buoy_sinks_when_displaced_weight_less_than_craft_weight():
     g   = (0.0, 0.0, -9.81)
 
     w = (World()
-         .add_uniform_gravity(g)
-         .add_uniform_fluid(density=rho))
+         .add_field(GravityField().add_uniform(g))
+         .add_field(FluidField().add_uniform(density=rho)))
     c = Craft("sinker")
     c.add(Mass("body", mass=m, moi=(0.1, 0.1, 0.1)))
     c.add(PointBuoy("buoy", volume=V))
@@ -127,8 +127,8 @@ def test_buoy_rises_when_displaced_weight_greater_than_craft_weight():
     g   = (0.0, 0.0, -9.81)
 
     w = (World()
-         .add_uniform_gravity(g)
-         .add_uniform_fluid(density=rho))
+         .add_field(GravityField().add_uniform(g))
+         .add_field(FluidField().add_uniform(density=rho)))
     c = Craft("balloon")
     c.add(Mass("body", mass=m, moi=(0.1, 0.1, 0.1)))
     c.add(PointBuoy("buoy", volume=V))
@@ -145,7 +145,7 @@ def test_no_fluid_field_means_no_buoyancy():
     """Without a FluidField registered the buoy contributes nothing —
     the craft free-falls as if there were no fluid at all."""
     g = (0.0, 0.0, -9.81)
-    w = World().add_uniform_gravity(g)    # no fluid added
+    w = World().add_field(GravityField().add_uniform(g))    # no fluid added
     c = Craft("freefall")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(PointBuoy("buoy", volume=1.0))   # would normally float a lot
@@ -171,8 +171,8 @@ def test_buoy_offset_produces_righting_torque():
     g   = (0.0, 0.0, -9.81)
 
     w = (World()
-         .add_uniform_gravity(g)
-         .add_uniform_fluid(density=rho))
+         .add_field(GravityField().add_uniform(g))
+         .add_field(FluidField().add_uniform(density=rho)))
     c = Craft("hull")
     c.add(Mass("body", mass=m, moi=(0.1, 0.1, 0.1)))
     # Buoy mounted 0.5 m above body origin in craft +z.

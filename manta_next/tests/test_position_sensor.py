@@ -3,6 +3,7 @@
 import numpy as np
 
 from manta_next import Craft, World
+from manta_next.fields import GravityField
 from manta_next.parts import Mass, PositionSensor
 
 
@@ -11,7 +12,7 @@ def test_position_sensor_at_origin_reads_craft_position():
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(PositionSensor("gps"))
 
-    tick = c.compile_tick(gravity_world=(0.0, 0.0, 0.0))
+    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
     state = c.initial_state()
     state["position"] = np.array([3.0, -1.0, 2.5])
 
@@ -28,7 +29,7 @@ def test_position_sensor_tracks_position_under_freefall():
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(PositionSensor("gps"))
 
-    tick = c.compile_tick(gravity_world=g)
+    tick = c.compile_tick(gravity_field=GravityField(g=g))
     state = c.initial_state()
     state["position"] = np.array([0.0, 0.0, 10.0])
 
@@ -47,7 +48,7 @@ def test_position_sensor_with_offset_adds_R_offset():
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(PositionSensor("gps", transform=(1.0, 0.0, 0.0)))
 
-    tick = c.compile_tick(gravity_world=(0.0, 0.0, 0.0))
+    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
     state = c.initial_state()
     # Craft at origin, rotated 90° about world-frame z (so body +x → anchor +y).
     state["position"] = np.array([0.0, 0.0, 0.0])

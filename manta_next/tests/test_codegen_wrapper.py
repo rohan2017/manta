@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from manta_next import Craft
+from manta_next.fields import GravityField
 from manta_next.codegen.extract import extract
 from manta_next.codegen.kernels import emit_kernels
 from manta_next.codegen.wrapper import emit_wrapper
@@ -28,7 +29,7 @@ def _hover_craft():
 # ---------------------------------------------------------------------------
 
 def test_wrapper_files_exist(tmp_path: Path):
-    funcs = extract(_hover_craft())
+    funcs = extract(_hover_craft(), gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
     emit_kernels(funcs, tmp_path, basename="drone")
     paths = emit_wrapper(funcs, _hover_craft(), tmp_path,
                         class_name="Drone", basename="drone")
@@ -37,7 +38,7 @@ def test_wrapper_files_exist(tmp_path: Path):
 
 
 def test_wrapper_hpp_declares_typed_state_and_methods(tmp_path: Path):
-    funcs = extract(_hover_craft())
+    funcs = extract(_hover_craft(), gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
     emit_kernels(funcs, tmp_path, basename="drone")
     paths = emit_wrapper(funcs, _hover_craft(), tmp_path,
                         class_name="Drone", basename="drone")
@@ -92,7 +93,7 @@ def test_wrapper_compiles_against_kernels(tmp_path: Path,
         pytest.skip("Eigen headers not found")
 
     c = _hover_craft()
-    funcs = extract(c)
+    funcs = extract(c, gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
     kpaths = emit_kernels(funcs, tmp_path, basename="drone")
     wpaths = emit_wrapper(funcs, c, tmp_path,
                           class_name="Drone", basename="drone")

@@ -13,6 +13,7 @@ Run::
 import numpy as np
 
 from manta_next import Craft, World
+from manta_next.fields import GravityField, FluidField
 from manta_next.couplings import Tether
 from manta_next.parts import DragSurface, Mass, TetherEndpoint
 
@@ -29,8 +30,8 @@ def main() -> None:
     # Both crafts in the same seawater field, no gravity (sideways view).
     rho_sea = 1025.0
     w = (World()
-         .add_uniform_gravity((0.0, 0.0, 0.0))
-         .add_uniform_fluid(density=rho_sea))
+         .add_field(GravityField().add_uniform((0.0, 0.0, 0.0)))
+         .add_field(FluidField().add_uniform(density=rho_sea)))
 
     alice = _build_buddy("alice")
     bob   = _build_buddy("bob")

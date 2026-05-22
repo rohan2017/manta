@@ -109,11 +109,11 @@ def test_world_uniform_gravity_matches_direct_compile():
     direct gravity_world escape hatch."""
     c1 = Craft("solo_a")
     c1.add(Mass("body", mass=1.0))
-    direct = c1.compile_tick(gravity_world=(0.0, 0.0, -9.81))
+    direct = c1.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
 
     c2 = Craft("solo_b")
     c2.add(Mass("body", mass=1.0))
-    w = World().add_uniform_gravity((0.0, 0.0, -9.81))
+    w = World().add_field(GravityField().add_uniform((0.0, 0.0, -9.81)))
     w.add_craft(c2, position=(0.0, 0.0, 50.0))
     cw = w.compile()
 
@@ -230,7 +230,7 @@ def test_uniform_gravity_unchanged_after_offset_fix():
     # Setup A: Mass at origin.
     cA = Craft("a")
     cA.add(Mass("body", mass=1.0))
-    wA = World().add_uniform_gravity(g)
+    wA = World().add_field(GravityField().add_uniform(g))
     wA.add_craft(cA, position=(0, 0, 10))
     cwA = wA.compile()
     sA = cwA.initial_state()
@@ -239,7 +239,7 @@ def test_uniform_gravity_unchanged_after_offset_fix():
     cB = Craft("b")
     cB.add(Mass("hub", mass=1e-12, apply_gravity=False))
     cB.add(Mass("body", mass=1.0, transform=(5.0, -3.0, 2.0)))
-    wB = World().add_uniform_gravity(g)
+    wB = World().add_field(GravityField().add_uniform(g))
     wB.add_craft(cB, position=(0, 0, 10))
     cwB = wB.compile()
     sB = cwB.initial_state()

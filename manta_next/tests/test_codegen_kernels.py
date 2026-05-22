@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from manta_next import Craft
+from manta_next.fields import GravityField
 from manta_next.codegen.extract import extract
 from manta_next.codegen.kernels import emit_kernels, kernel_function_names
 from manta_next.parts import IMU, Mass, PositionSensor, Thruster
@@ -22,7 +23,7 @@ def _hover_craft():
 
 
 def test_emit_kernels_produces_c_and_h(tmp_path: Path):
-    funcs = extract(_hover_craft())
+    funcs = extract(_hover_craft(), gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
     paths = emit_kernels(funcs, tmp_path)
     assert paths["c"].exists()
     assert paths["h"].exists()
@@ -31,7 +32,7 @@ def test_emit_kernels_produces_c_and_h(tmp_path: Path):
 
 
 def test_kernel_header_declares_every_function(tmp_path: Path):
-    funcs = extract(_hover_craft())
+    funcs = extract(_hover_craft(), gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
     paths = emit_kernels(funcs, tmp_path)
     header_text = paths["h"].read_text()
 
@@ -53,7 +54,7 @@ def test_kernel_c_compiles_with_cc(tmp_path: Path):
     if cc is None:
         pytest.skip("no C compiler on PATH")
 
-    funcs = extract(_hover_craft())
+    funcs = extract(_hover_craft(), gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
     paths = emit_kernels(funcs, tmp_path)
 
     obj = tmp_path / "kernels.o"

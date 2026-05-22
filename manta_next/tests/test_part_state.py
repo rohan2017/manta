@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from manta_next.craft import Craft
+from manta_next.fields import GravityField
 from manta_next.parts import (
     Joint,
     Mass,
@@ -30,7 +31,7 @@ def test_passive_joint_spins_at_initial_rate():
     j.add(Mass("rotor", mass=0.1, moi=(0.01, 0.01, 0.05)))
     c.add(j)
 
-    tick = c.compile_tick(gravity_world=(0.0, 0.0, 0.0))
+    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
     state = c.initial_state(**{"wheel.rate": 1.0})
     assert state["wheel.angle"] == 0.0
     assert state["wheel.rate"]  == 1.0
@@ -53,7 +54,7 @@ def test_multiple_joints_have_independent_state():
     c.add(fast)
     c.add(slow)
 
-    tick = c.compile_tick(gravity_world=(0.0, 0.0, 0.0))
+    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
     state = c.initial_state(**{"fast.rate": 5.0, "slow.rate": 1.0})
     for _ in range(1000):
         out = tick(dt=0.001, **state)
@@ -75,7 +76,7 @@ def test_saturating_joint_below_stall_accelerates_rotor():
     j.add(Mass("rotor", mass=0.5, moi=(0.025, 0.025, 0.05)))
     c.add(j)
 
-    tick = c.compile_tick(gravity_world=(0.0, 0.0, 0.0))
+    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
     state = c.initial_state()
     state["wheel.torque_cmd"] = 0.5
     for _ in range(1000):
@@ -96,7 +97,7 @@ def test_saturating_joint_clamps_at_stall():
     j.add(Mass("rotor", mass=0.5, moi=(0.025, 0.025, 0.05)))
     c.add(j)
 
-    tick = c.compile_tick(gravity_world=(0.0, 0.0, 0.0))
+    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
     state = c.initial_state()
     state["wheel.torque_cmd"] = 5.0   # way above stall=0.2
     for _ in range(1000):
@@ -119,7 +120,7 @@ def test_saturating_joint_reaction_spins_body_counter():
     j.add(Mass("rotor", mass=0.1, moi=(0.005, 0.005, 0.05)))
     c.add(j)
 
-    tick = c.compile_tick(gravity_world=(0.0, 0.0, 0.0))
+    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
     state = c.initial_state()
     state["wheel.torque_cmd"] = 0.5
     for _ in range(1000):
@@ -181,7 +182,7 @@ def test_joint_doesnt_break_free_fall():
     j.add(Mass("rotor", mass=0.1, moi=(0.001, 0.001, 0.01)))
     c.add(j)
 
-    tick = c.compile_tick(gravity_world=(0.0, 0.0, -9.81))
+    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
     state = c.initial_state(position=(0.0, 0.0, 100.0),
                              **{"wheel.rate": 10.0})
     for _ in range(1000):
@@ -253,7 +254,7 @@ def test_nested_passive_joints_each_track_their_own_rate():
     outer.add(inner)
     c.add(outer)
 
-    tick = c.compile_tick(gravity_world=(0.0, 0.0, 0.0))
+    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
     state = c.initial_state(**{"pan.rate": 2.0, "tilt.rate": 1.0})
     for _ in range(1000):
         out = tick(dt=0.001, **state)
@@ -277,7 +278,7 @@ def test_nested_joint_saturating_drives_inner_rotor():
     outer.add(inner)
     c.add(outer)
 
-    tick = c.compile_tick(gravity_world=(0.0, 0.0, 0.0))
+    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
     state = c.initial_state()
     state["tilt.torque_cmd"] = 0.5
     for _ in range(1000):
@@ -304,7 +305,7 @@ def test_offset_rotor_at_pi_over_2_shows_com_in_y():
                transform=(1.0, 0.0, 0.0)))
     c.add(j)
 
-    tick = c.compile_tick(gravity_world=(0.0, 0.0, 0.0))
+    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
     state = c.initial_state()
     # Set arm.angle = π/2 directly (rate = 0 → angle stays put under no
     # torque). The first tick exercises Newton-Euler with the rotated
@@ -331,7 +332,7 @@ def test_offset_rotor_changes_body_com():
                transform=(1.0, 0.0, 0.0)))
     c.add(j)
 
-    tick = c.compile_tick(gravity_world=(0.0, 0.0, -9.81))
+    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
     # Run once at angle = 0 (tip at +x in body frame) vs angle = π/2
     # (tip at +y). The body's COM differs; under gravity (-z anchor)
     # this rolls the body's angular velocity differently if the body

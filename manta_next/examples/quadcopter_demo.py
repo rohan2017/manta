@@ -19,6 +19,7 @@ Run::
 import numpy as np
 
 from manta_next import Craft, World
+from manta_next.fields import GravityField
 from manta_next.parts import IMU, Mass, PositionSensor, Thruster
 
 
@@ -56,7 +57,7 @@ def _build_quadcopter() -> Craft:
 def main() -> None:
     g = (0.0, 0.0, -9.81)
     quad = _build_quadcopter()
-    w = World().add_uniform_gravity(g)
+    w = World().add_field(GravityField().add_uniform(g))
     w.add_craft(quad, position=(0, 0, 2))
     cw = w.compile()
     state = cw.initial_state()

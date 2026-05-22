@@ -10,7 +10,7 @@ import casadi as ca
 import numpy as np
 
 from manta_next import Craft, World
-from manta_next.fields import DipoleMag, MagField, UniformMag
+from manta_next.fields import DipoleMag, MagField, UniformMag, GravityField
 from manta_next.ir.frames import WorldFrame
 from manta_next.ir.types import Vec3
 from manta_next.parts import DVL, Magnetometer, Mass
@@ -24,7 +24,7 @@ def test_dvl_stationary_craft_reads_zero():
     c = Craft("dvl_test")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(DVL("d"))
-    tick = c.compile_tick(gravity_world=(0, 0, 0))
+    tick = c.compile_tick(gravity_field=GravityField(g=(0, 0, 0)))
     state = c.initial_state()
     out = tick(dt=0.001, **state)
     np.testing.assert_allclose(np.array(out["d.velocity"]).ravel(),
@@ -36,7 +36,7 @@ def test_dvl_moving_craft_reads_anchor_velocity_when_unrotated():
     c = Craft("dvl_move")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(DVL("d"))
-    tick = c.compile_tick(gravity_world=(0, 0, 0))
+    tick = c.compile_tick(gravity_field=GravityField(g=(0, 0, 0)))
     state = c.initial_state()
     state["velocity"] = np.array([1.5, -0.3, 2.0])
     out = tick(dt=0.001, **state)
@@ -61,7 +61,7 @@ def test_dvl_rotated_craft_reads_rotated_velocity():
     c = Craft("dvl_rot")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(DVL("d"))
-    tick = c.compile_tick(gravity_world=(0, 0, 0))
+    tick = c.compile_tick(gravity_field=GravityField(g=(0, 0, 0)))
     state = c.initial_state()
     state["orientation"] = np.array([np.cos(np.pi/4), 0, 0, np.sin(np.pi/4)])
     state["velocity"]    = np.array([1.0, 0.0, 0.0])
@@ -127,7 +127,7 @@ def test_magnetometer_reads_uniform_field_when_unrotated():
     c = Craft("mag_craft")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(Magnetometer("m"))
-    w = World().add_uniform_mag((1.0, 2.0, 3.0))
+    w = World().add_field(MagField().add_uniform((1.0, 2.0, 3.0)))
     w.add_craft(c)
     cw = w.compile()
     state = cw.initial_state()
@@ -143,7 +143,7 @@ def test_magnetometer_reads_rotated_field_under_craft_rotation():
     c = Craft("mag_rot")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(Magnetometer("m"))
-    w = World().add_uniform_mag((1.0, 0.0, 0.0))
+    w = World().add_field(MagField().add_uniform((1.0, 0.0, 0.0)))
     w.add_craft(c, orientation=(np.cos(np.pi/4), 0, 0, np.sin(np.pi/4)))
     cw = w.compile()
     state = cw.initial_state()
@@ -158,7 +158,7 @@ def test_magnetometer_with_no_field_reads_zero():
     c = Craft("nomag")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(Magnetometer("m"))
-    tick = c.compile_tick(gravity_world=(0, 0, 0))
+    tick = c.compile_tick(gravity_field=GravityField(g=(0, 0, 0)))
     state = c.initial_state()
     out = tick(dt=0.001, **state)
     np.testing.assert_allclose(np.array(out["m.B"]).ravel(),

@@ -12,7 +12,7 @@ Run::
 import numpy as np
 
 from manta_next import Craft, World
-from manta_next.fields import CollisionField, HalfSpace
+from manta_next.fields import CollisionField, HalfSpace, GravityField
 from manta_next.parts import Collider, Mass
 
 
@@ -24,7 +24,7 @@ def main() -> None:
     cf = CollisionField()
     cf.add(HalfSpace(origin=(0, 0, 0), normal=(0, 0, 1)))
     w = (World()
-         .add_uniform_gravity((0, 0, -g))
+         .add_field(GravityField().add_uniform((0, 0, -g)))
          .add_field(cf))
 
     ball = Craft("ball")

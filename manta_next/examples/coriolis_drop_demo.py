@@ -26,6 +26,7 @@ from __future__ import annotations
 import numpy as np
 
 from manta_next import Craft, Planet
+from manta_next.fields import GravityField
 from manta_next.parts import Mass
 
 
@@ -45,7 +46,7 @@ def main() -> None:
 
     c = Craft("ball")
     c.add(Mass("body", mass=1.0))
-    tick = c.compile_tick(gravity_world=(0.0, 0.0, 0.0))   # no forces
+    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))   # no forces
     state = c.initial_state(position=tuple(p_world0),
                               velocity=tuple(v_world0))
 

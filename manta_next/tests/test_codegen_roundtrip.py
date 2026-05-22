@@ -24,6 +24,7 @@ import numpy as np
 import pytest
 
 from manta_next import Craft
+from manta_next.fields import GravityField
 from manta_next.codegen import emit_cpp
 from manta_next.parts import IMU, Mass, PositionSensor, Thruster
 
@@ -99,7 +100,8 @@ def test_python_cpp_roundtrip(tmp_path: Path):
 
     # ---- 1: emit_cpp ----
     craft  = _hover_craft()
-    result = emit_cpp(craft, tmp_path, class_name="Drone")
+    result = emit_cpp(craft, tmp_path, class_name="Drone",
+                      gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
 
     # ---- 2: compile kernels + wrapper ----
     k_obj = tmp_path / "kernels.o"
@@ -136,7 +138,7 @@ def test_python_cpp_roundtrip(tmp_path: Path):
                  for l in p.stdout.strip().splitlines()}
 
     # ---- 5: run the same loop in Python ----
-    tick = craft.compile_tick(gravity_world=(0.0, 0.0, -9.81))
+    tick = craft.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
     state = craft.initial_state()
     state["position"] = np.array([0.0, 0.0, 5.0])
     state["velocity"] = np.array([0.5, 0.0, 0.0])

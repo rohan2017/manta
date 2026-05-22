@@ -23,6 +23,7 @@ import numpy as np
 import pytest
 
 from manta_next import Craft, World
+from manta_next.fields import GravityField
 from manta_next.estimation.ekf import EKF, measurement_slot
 from manta_next.parts import IMU, Mass, PositionSensor, Thruster
 
@@ -41,10 +42,10 @@ def test_ekf_predict_with_per_tick_input():
     c.add(Thruster("t", force=(0.0, 0.0, 1.0)))
 
     # Sim
-    tick = c.compile_tick(gravity_world=g)
+    tick = c.compile_tick(gravity_field=GravityField(g=g))
     sim_state = c.initial_state()
     # EKF
-    ekf = EKF(c, gravity_world=g)
+    ekf = EKF(c, gravity_field=GravityField(g=g))
 
     # Thrust profile: zero for 0.2s, then m·g (hover) for 0.5s, then 2·m·g.
     dt = 0.005
@@ -84,7 +85,7 @@ def test_ekf_predict_input_default_fallback():
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     # Thruster default throttle=0 — craft should free-fall.
     c.add(Thruster("t", force=(0.0, 0.0, 1.0)))
-    ekf = EKF(c, gravity_world=g)
+    ekf = EKF(c, gravity_field=GravityField(g=g))
     for _ in range(200):
         ekf.predict(dt=0.005)
 
@@ -97,7 +98,7 @@ def test_ekf_predict_unknown_input_raises():
     c = Craft("any")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(Thruster("t", force=(0.0, 0.0, 1.0)))
-    ekf = EKF(c, gravity_world=(0.0, 0.0, 0.0))
+    ekf = EKF(c, gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
     with pytest.raises(KeyError, match="unknown input"):
         ekf.predict(dt=0.01, u={"nope.bad": 1.0})
 
@@ -124,7 +125,7 @@ def test_hover_with_eskf_tracks_ground_truth():
 
     # Sim path: use World/CompiledWorld so the demo exercises the public
     # surface used by user code.
-    w = World().add_uniform_gravity(g_world)
+    w = World().add_field(GravityField().add_uniform(g_world))
     w.add_craft(c, position=(0.0, 0.0, 5.0))
     cw = w.compile()
     sim = cw.initial_state()
@@ -132,7 +133,7 @@ def test_hover_with_eskf_tracks_ground_truth():
 
     # EKF path. Initial estimate offset from truth so we can watch it pull
     # in via measurement updates.
-    ekf = EKF(c, gravity_world=g_world)
+    ekf = EKF(c, gravity_field=GravityField(g=g_world))
     init = c.initial_state(position=(0.0, 0.0, 4.0),
                            velocity=(0.5, 0.0, 0.0))
     P0   = np.eye(ekf.spec.tangent_dim) * 1e-1
@@ -243,12 +244,12 @@ def test_eskf_nees_consistency_over_seeds():
     for seed in range(5):
         rng = np.random.default_rng(seed=seed)
         c = make_craft()
-        w = World().add_uniform_gravity(g_world)
+        w = World().add_field(GravityField().add_uniform(g_world))
         w.add_craft(c, position=(0, 0, 5))
         cw = w.compile()
         sim = cw.initial_state()
 
-        ekf = EKF(c, gravity_world=g_world)
+        ekf = EKF(c, gravity_field=GravityField(g=g_world))
         init = c.initial_state(position=(0, 0, 4), velocity=(0.5, 0, 0))
         ekf.reset(state=init, P=np.eye(ekf.spec.tangent_dim) * 1e-1)
 

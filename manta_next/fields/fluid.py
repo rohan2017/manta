@@ -55,17 +55,41 @@ class FluidField(Field):
     (uniform background, localized currents, planet-registered ocean +
     atmosphere) are added as Disturbance subclasses to one FluidField
     instance.
+
+    Builder methods (`add_uniform`, `add_current`) return self for
+    chaining. The constructor accepts `density=` for the common
+    single-uniform case (no flow) — equivalent to one `add_uniform`.
     """
 
     # Sentinel for the type-check in Field.add — any disturbance whose
     # `field_value_shape` is FluidState may be added.
     value_shape = FluidState
 
+    def __init__(self,
+                 density: float | None = None,
+                 velocity: tuple[float, float, float] = (0.0, 0.0, 0.0)
+                 ) -> None:
+        super().__init__()
+        if density is not None:
+            self.add_uniform(density, velocity)
+
     def _zero_value(self) -> FluidState:
         return FluidState(
             density  = ca.MX(0.0),
             velocity = _VEC3_ANCHOR.constant((0.0, 0.0, 0.0)),
         )
+
+    def add_uniform(self,
+                    density: float,
+                    velocity: tuple[float, float, float] = (0.0, 0.0, 0.0)
+                    ) -> "FluidField":
+        """Attach a uniform density (+ optional flow). Returns self."""
+        return self.add(UniformFluid(density, velocity))
+
+    def add_current(self,
+                    velocity: tuple[float, float, float]) -> "FluidField":
+        """Attach a flow contribution at zero density. Returns self."""
+        return self.add(CurrentFlow(velocity))
 
 
 # ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from manta_next import World, Coupling, Craft, CompiledWorld
+from manta_next.fields import GravityField
 from manta_next.parts import Joint, Mass
 
 
@@ -16,11 +17,11 @@ def test_single_craft_world_matches_direct_compile():
     directly compiling the craft."""
     c1 = Craft("solo_a")
     c1.add(Mass("body", mass=1.0))
-    direct_tick = c1.compile_tick(gravity_world=(0.0, 0.0, -9.81))
+    direct_tick = c1.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
 
     c2 = Craft("solo_b")
     c2.add(Mass("body", mass=1.0))
-    w = World().add_uniform_gravity((0.0, 0.0, -9.81))
+    w = World().add_field(GravityField().add_uniform((0.0, 0.0, -9.81)))
     w.add_craft(c2, position=(0.0, 0.0, 100.0))
     cw = w.compile()
 
@@ -48,7 +49,7 @@ def test_single_craft_world_matches_direct_compile():
 def test_two_crafts_fall_independently():
     """Two crafts at different starting positions with different masses,
     both fall under gravity. State stays separate per craft."""
-    w = World().add_uniform_gravity((0.0, 0.0, -9.81))
+    w = World().add_field(GravityField().add_uniform((0.0, 0.0, -9.81)))
 
     a = Craft("alice")
     a.add(Mass("body", mass=1.0))
@@ -83,7 +84,7 @@ def test_two_crafts_fall_independently():
 def test_world_carries_part_state_through_step():
     """Part-state slots (e.g. a passive Joint's angle/rate) propagate
     through World.step like any other state."""
-    w = World().add_uniform_gravity((0.0, 0.0, 0.0))   # zero gravity for clarity
+    w = World().add_field(GravityField().add_uniform((0.0, 0.0, 0.0)))   # zero gravity for clarity
     c = Craft("with_rotor")
     c.add(Mass("body", mass=1.0))
     j = Joint("wheel", mode="passive")

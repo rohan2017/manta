@@ -3,6 +3,7 @@
 import numpy as np
 
 from manta_next import Craft, World
+from manta_next.fields import GravityField
 from manta_next.parts import Mass, Thruster
 
 
@@ -17,7 +18,7 @@ def test_hover_thrust_cancels_gravity():
     c.add(Mass("body", mass=m, moi=(0.1, 0.1, 0.1)))
     c.add(Thruster("t", force=(0.0, 0.0, 1.0)))
 
-    tick = c.compile_tick(gravity_world=g_world)
+    tick = c.compile_tick(gravity_field=GravityField(g=g_world))
     state = c.initial_state()
     state["t.throttle"] = m * 9.81           # exactly counters gravity
 
@@ -42,7 +43,7 @@ def test_excess_thrust_accelerates_up():
     c.add(Mass("body", mass=m, moi=(0.1, 0.1, 0.1)))
     c.add(Thruster("t", force=(0.0, 0.0, 1.0)))
 
-    tick = c.compile_tick(gravity_world=g_world)
+    tick = c.compile_tick(gravity_field=GravityField(g=g_world))
     state = c.initial_state()
     state["t.throttle"] = m * 9.81 + 1.0     # net = +1 N upward → a = 1 m/s²
 
@@ -67,7 +68,7 @@ def test_offset_thruster_produces_torque():
     # Thruster mounted at (+1, 0, 0), pointing +z → torque about body y.
     c.add(Thruster("t", force=(0.0, 0.0, 1.0), transform=(1.0, 0.0, 0.0)))
 
-    tick = c.compile_tick(gravity_world=(0.0, 0.0, 0.0))
+    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
     state = c.initial_state()
     state["t.throttle"] = 1.0     # 1 N at 1 m → τ = +1 N·m about body y.
 

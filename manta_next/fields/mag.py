@@ -34,12 +34,33 @@ _MU0_OVER_4PI = 1.0e-7
 
 
 class MagField(Field):
-    """Magnetic flux density field, Vec3[WorldFrame] in Tesla."""
+    """Magnetic flux density field, Vec3[WorldFrame] in Tesla.
+
+    Builder methods (`add_uniform`, `add_dipole`) return self for
+    chaining. The constructor accepts `B=(bx,by,bz)` for the common
+    single-uniform case — equivalent to one `add_uniform`.
+    """
 
     value_shape = _VEC3_ANCHOR
 
+    def __init__(self, B: tuple[float, float, float] | None = None) -> None:
+        super().__init__()
+        if B is not None:
+            self.add_uniform(B)
+
     def _zero_value(self):
         return _VEC3_ANCHOR.constant((0.0, 0.0, 0.0))
+
+    def add_uniform(self, B_vec: tuple[float, float, float]) -> "MagField":
+        """Attach a position-independent magnetic field. Returns self."""
+        return self.add(UniformMag(B_vec))
+
+    def add_dipole(self,
+                   moment: tuple[float, float, float],
+                   position: tuple[float, float, float] = (0.0, 0.0, 0.0),
+                   eps: float = 1e-3) -> "MagField":
+        """Attach a point-dipole source. Returns self."""
+        return self.add(DipoleMag(position=position, moment=moment, eps=eps))
 
 
 class UniformMag(Disturbance):

@@ -6,6 +6,7 @@ import math
 import numpy as np
 
 from manta_next.craft import Craft
+from manta_next.fields import GravityField
 from manta_next.parts import Mass
 
 
@@ -67,7 +68,7 @@ def test_free_spinning_body_conserves_angular_momentum_z():
     # Spherical inertia so ω×(I·ω) = 0 even off-axis; clean check.
     c.add(Mass("body", mass=1.0, moi=(1.0, 1.0, 1.0)))
 
-    tick = c.compile_tick(gravity_world=(0.0, 0.0, 0.0))  # no gravity
+    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))  # no gravity
 
     omega_0 = 2.0  # rad/s about +z
     state = c.initial_state(angular_velocity=(0.0, 0.0, omega_0))
@@ -92,7 +93,7 @@ def test_free_spinning_anisotropic_intermediate_axis():
     c = Craft("ellipsoid")
     c.add(Mass("body", mass=1.0, moi=(0.5, 1.0, 2.0)))   # Izz > Iyy > Ixx
 
-    tick = c.compile_tick(gravity_world=(0.0, 0.0, 0.0))
+    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
 
     state = c.initial_state(angular_velocity=(0.0, 0.0, 1.0))
     for _ in range(500):
@@ -115,7 +116,7 @@ def test_no_position_drift_from_pure_rotation():
     c.add(Mass("a", mass=1.0, transform=(+r, 0.0, 0.0)))
     c.add(Mass("b", mass=1.0, transform=(-r, 0.0, 0.0)))
 
-    tick = c.compile_tick(gravity_world=(0.0, 0.0, 0.0))
+    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
     state = c.initial_state(angular_velocity=(0.0, 0.0, 5.0))
     for _ in range(1000):
         out = tick(dt=0.001, **state)
@@ -134,7 +135,7 @@ def test_gravity_creates_no_torque_at_balanced_com():
     c.add(Mass("a", mass=1.0, transform=(+0.5, 0.0, 0.0)))
     c.add(Mass("b", mass=1.0, transform=(-0.5, 0.0, 0.0)))
     # COM = (0,0,0) by symmetry.
-    tick = c.compile_tick(gravity_world=(0.0, 0.0, -9.81))
+    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
 
     state = c.initial_state()
     for _ in range(100):
@@ -153,7 +154,7 @@ def test_quaternion_normalization_holds_over_long_run():
     thanks to the .normalize() call inside the tick."""
     c = Craft("long_spin")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.2, 0.3)))
-    tick = c.compile_tick(gravity_world=(0.0, 0.0, 0.0))
+    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
 
     state = c.initial_state(angular_velocity=(0.3, 0.5, 0.7))
     for _ in range(10_000):

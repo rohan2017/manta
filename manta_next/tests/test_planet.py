@@ -12,6 +12,7 @@ These tests verify:
 import numpy as np
 
 from manta_next import Craft, Planet, World
+from manta_next.fields import GravityField
 from manta_next.parts import Mass
 
 
@@ -76,7 +77,7 @@ def test_inertial_straight_line_curves_in_planet_frame():
 
     c = Craft("ball")
     c.add(Mass("body", mass=1.0))
-    tick = c.compile_tick(gravity_world=(0.0, 0.0, 0.0))
+    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
 
     # Start on the rotation axis with v_planet = (v0, 0, 0).
     p_w0, v_w0 = planet.planet_to_world((0, 0, 0), (v0, 0, 0), t=0.0)

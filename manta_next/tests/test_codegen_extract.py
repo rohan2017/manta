@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from manta_next import Craft, World
+from manta_next.fields import GravityField
 from manta_next.codegen.extract import extract
 from manta_next.parts import IMU, Mass, PositionSensor, Thruster
 
@@ -26,7 +27,7 @@ def _hover_craft():
 # ---------------------------------------------------------------------------
 
 def test_extract_returns_complete_function_set():
-    cf = extract(_hover_craft())
+    cf = extract(_hover_craft(), gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
 
     assert cf.craft_name == "drone"
     assert cf.ambient_dim == 13   # pos(3) + ori(4) + vel(3) + omega(3)
@@ -62,9 +63,9 @@ def test_extract_returns_complete_function_set():
 
 def test_predict_fn_matches_compile_tick():
     c   = _hover_craft()
-    cf  = extract(c)
+    cf  = extract(c, gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
 
-    tick = c.compile_tick(gravity_world=(0.0, 0.0, -9.81))
+    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
     state = c.initial_state()
     state["position"] = np.array([0.0, 0.0, 5.0])
     state["t.throttle"] = 1.5 * 9.81
@@ -91,7 +92,7 @@ def test_position_sensor_H_is_identity_on_position_block():
     """For a sensor at the craft origin, h(x) = position, so
     H = ∂position/∂δ = [I3 | 0 …] in the tangent layout."""
     c  = _hover_craft()
-    cf = extract(c)
+    cf = extract(c, gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
 
     by_name = {o.full_name: o for o in cf.outputs}
     H_pos = by_name["gps.position"].H_fn
@@ -108,7 +109,7 @@ def test_position_sensor_H_is_identity_on_position_block():
 def test_gyro_H_is_identity_on_angular_velocity_block():
     """gyro = ω → H has I3 in the ω columns and zeros elsewhere."""
     c  = _hover_craft()
-    cf = extract(c)
+    cf = extract(c, gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
 
     by_name = {o.full_name: o for o in cf.outputs}
     H_gyro = by_name["g.gyro"].H_fn
@@ -127,7 +128,7 @@ def test_gyro_H_is_identity_on_angular_velocity_block():
 def test_extract_craft_with_no_inputs():
     c = Craft("free_fall")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
-    cf = extract(c)
+    cf = extract(c, gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
     assert cf.n_inputs == 0
     # u vector is empty; predict still callable.
     x = cf.spec.pack(c.initial_state())

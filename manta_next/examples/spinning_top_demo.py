@@ -23,6 +23,7 @@ Run::
 import numpy as np
 
 from manta_next import Craft, World
+from manta_next.fields import GravityField
 from manta_next.parts import Joint, Mass, Thruster
 
 
@@ -54,7 +55,7 @@ def _build_top() -> Craft:
 
 def _run_scenario(label: str, rotor_rate: float) -> None:
     """Apply a brief lateral impulse and print angular velocity history."""
-    w = World().add_uniform_gravity((0.0, 0.0, 0.0))   # gravity off
+    w = World().add_field(GravityField().add_uniform((0.0, 0.0, 0.0)))   # gravity off
     c = _build_top()
     w.add_craft(c)
     cw = w.compile()
