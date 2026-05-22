@@ -160,7 +160,9 @@ def test_ekf_constructs_with_input_parts():
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(_flywheel("motor", I_axial=0.05, torque_cmd=0.3))
 
-    ekf = EKF(c, gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
+    _ekf_world = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
+    _ekf_world.add_craft(c)
+    ekf = EKF(_ekf_world)
     ekf.predict(dt=0.01)
     # τ=0.3, I=0.05 → α = 6 rad/s² → rate after 0.01s = 0.06.
     assert np.isclose(ekf.state_dict()["motor.rate"], 0.06, atol=1e-9)

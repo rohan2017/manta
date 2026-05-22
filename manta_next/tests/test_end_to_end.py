@@ -45,7 +45,9 @@ def test_ekf_predict_with_per_tick_input():
     tick = c.compile_tick(gravity_field=GravityField(g=g))
     sim_state = c.initial_state()
     # EKF
-    ekf = EKF(c, gravity_field=GravityField(g=g))
+    _ekf_world = World().add_field(GravityField(g=g))
+    _ekf_world.add_craft(c)
+    ekf = EKF(_ekf_world)
 
     # Thrust profile: zero for 0.2s, then m·g (hover) for 0.5s, then 2·m·g.
     dt = 0.005
@@ -85,7 +87,9 @@ def test_ekf_predict_input_default_fallback():
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     # Thruster default throttle=0 — craft should free-fall.
     c.add(Thruster("t", force=(0.0, 0.0, 1.0)))
-    ekf = EKF(c, gravity_field=GravityField(g=g))
+    _ekf_world = World().add_field(GravityField(g=g))
+    _ekf_world.add_craft(c)
+    ekf = EKF(_ekf_world)
     for _ in range(200):
         ekf.predict(dt=0.005)
 
@@ -98,7 +102,9 @@ def test_ekf_predict_unknown_input_raises():
     c = Craft("any")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(Thruster("t", force=(0.0, 0.0, 1.0)))
-    ekf = EKF(c, gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
+    _ekf_world = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
+    _ekf_world.add_craft(c)
+    ekf = EKF(_ekf_world)
     with pytest.raises(KeyError, match="unknown input"):
         ekf.predict(dt=0.01, u={"nope.bad": 1.0})
 
@@ -133,7 +139,9 @@ def test_hover_with_eskf_tracks_ground_truth():
 
     # EKF path. Initial estimate offset from truth so we can watch it pull
     # in via measurement updates.
-    ekf = EKF(c, gravity_field=GravityField(g=g_world))
+    _ekf_world = World().add_field(GravityField(g=g_world))
+    _ekf_world.add_craft(c)
+    ekf = EKF(_ekf_world)
     init = c.initial_state(position=(0.0, 0.0, 4.0),
                            velocity=(0.5, 0.0, 0.0))
     P0   = np.eye(ekf.spec.tangent_dim) * 1e-1
@@ -249,7 +257,11 @@ def test_eskf_nees_consistency_over_seeds():
         cw = w.compile()
         sim = cw.initial_state()
 
-        ekf = EKF(c, gravity_field=GravityField(g=g_world))
+        _ekf_world = World().add_field(GravityField(g=g_world))
+
+        _ekf_world.add_craft(c)
+
+        ekf = EKF(_ekf_world)
         init = c.initial_state(position=(0, 0, 4), velocity=(0.5, 0, 0))
         ekf.reset(state=init, P=np.eye(ekf.spec.tangent_dim) * 1e-1)
 
