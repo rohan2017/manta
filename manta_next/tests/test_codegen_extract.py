@@ -64,7 +64,7 @@ def test_predict_fn_matches_compile_tick():
     c   = _hover_craft()
     cf  = extract(c)
 
-    tick = c.compile_tick(gravity_anchor=(0.0, 0.0, -9.81))
+    tick = c.compile_tick(gravity_world=(0.0, 0.0, -9.81))
     state = c.initial_state()
     state["position"] = np.array([0.0, 0.0, 5.0])
     state["t.throttle"] = 1.5 * 9.81

@@ -28,7 +28,7 @@ def test_single_mass_free_fall_numerics():
     c = Craft("free_fall")
     c.add(Mass("body", mass=1.0))
 
-    tick = c.compile_tick(gravity_anchor=(0.0, 0.0, -9.81))
+    tick = c.compile_tick(gravity_world=(0.0, 0.0, -9.81))
 
     state = _initial_at_rest(c, z=100.0)
     dt = 0.001
@@ -60,7 +60,7 @@ def test_multi_mass_aggregates_correctly():
     c.add(Mass("third", mass=0.5, transform=(0.0, 0.5, 0.0)))
     assert c.total_mass == 3.5
 
-    tick = c.compile_tick(gravity_anchor=(0.0, 0.0, -9.81))
+    tick = c.compile_tick(gravity_world=(0.0, 0.0, -9.81))
     state = _initial_at_rest(c)
     for _ in range(100):
         out = tick(dt=0.01, **state)
@@ -81,7 +81,7 @@ def test_apply_gravity_false_makes_part_inert():
     c.add(Mass("ballast", mass=10.0, apply_gravity=False))
     c.add(Mass("active",  mass=1.0))
 
-    tick = c.compile_tick(gravity_anchor=(0.0, 0.0, -9.81))
+    tick = c.compile_tick(gravity_world=(0.0, 0.0, -9.81))
 
     state = _initial_at_rest(c)
     out = tick(dt=0.1, **state)
@@ -96,7 +96,7 @@ def test_horizontal_gravity():
     """Gravity along +x produces +x acceleration of the origin."""
     c = Craft("sideways")
     c.add(Mass("body", mass=1.0))
-    tick = c.compile_tick(gravity_anchor=(2.0, 0.0, 0.0))
+    tick = c.compile_tick(gravity_world=(2.0, 0.0, 0.0))
 
     state = _initial_at_rest(c)
     for _ in range(100):

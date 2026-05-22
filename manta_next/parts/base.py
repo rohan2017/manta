@@ -388,5 +388,5 @@ class TickContext:   # noqa: D401  (docstring is the API doc)
     the concrete class with fields gravity, gravity_field, fluid_field,
     mag_field, collision_field, dt, position, orientation, velocity,
     angular_velocity, velocity_body, R_craft_from_input,
-    acceleration_anchor, acceleration_body, angular_acceleration."""
+    acceleration_world, acceleration_body, angular_acceleration."""
     __slots__ = ()

@@ -17,7 +17,7 @@ Scope:
 - Integration: position via symplectic-flavored Euler; orientation via
   SO3 boxplus on ω·dt; velocities via Euler.
 - Single-phase parts: each Part implements exactly one `update(ctx)`
-  function. `ctx.acceleration_anchor` / `ctx.acceleration_body` /
+  function. `ctx.acceleration_world` / `ctx.acceleration_body` /
   `ctx.angular_acceleration` reflect **current-tick** dynamics — the
   framework runs `update()` against MX placeholders, then substitutes
   the real Newton-Euler outputs into the emitted sensor expressions
@@ -44,7 +44,7 @@ import casadi as ca
 import numpy as np
 
 from . import ir
-from .ir.frames import AnchorFrame, CraftFrame
+from .ir.frames import WorldFrame, CraftFrame
 from .ir.manifold import SO3
 from .ir.types import Mat3, Quat, Scalar, Vec3
 from .parts.base import Part, PartUpdate, State
@@ -84,10 +84,10 @@ class TickContext:
                                                        field. Same idiom
                                                        as gravity_field.
       dt               : Scalar                      — integrator timestep.
-      position         : Vec3[AnchorFrame]           — craft origin in
-                                                       anchor frame.
-      orientation      : Quat[AnchorFrame,CraftFrame]— craft attitude.
-      velocity         : Vec3[AnchorFrame]           — anchor-frame linear
+      position         : Vec3[WorldFrame]           — craft origin in
+                                                       world frame.
+      orientation      : Quat[WorldFrame,CraftFrame]— craft attitude.
+      velocity         : Vec3[WorldFrame]           — world-frame linear
                                                        velocity.
       angular_velocity : Vec3[CraftFrame]            — body angular velocity
                                                        ω. What a rate gyro
@@ -110,7 +110,7 @@ class TickContext:
                                                        the outer joint's
                                                        angle.
 
-      acceleration_anchor  : Vec3[AnchorFrame]      — anchor-frame
+      acceleration_world  : Vec3[WorldFrame]      — world-frame
                                                        inertial accel
                                                        at the part's
                                                        mount point.
@@ -138,7 +138,7 @@ class TickContext:
                  "dt", "position", "orientation", "velocity",
                  "angular_velocity", "velocity_body",
                  "R_craft_from_input",
-                 "acceleration_anchor", "acceleration_body",
+                 "acceleration_world", "acceleration_body",
                  "angular_acceleration")
 
     def __init__(self,
@@ -155,7 +155,7 @@ class TickContext:
                  angular_velocity: Vec3,
                  velocity_body: Vec3,
                  R_craft_from_input: Mat3,
-                 acceleration_anchor: Vec3,
+                 acceleration_world: Vec3,
                  acceleration_body: Vec3,
                  angular_acceleration: Vec3) -> None:
         self.gravity = gravity
@@ -175,7 +175,7 @@ class TickContext:
         # Articulated parts use this to express their input-frame axes
         # (e.g., a Joint's spin axis) in body-frame coords.
         self.R_craft_from_input = R_craft_from_input
-        self.acceleration_anchor  = acceleration_anchor
+        self.acceleration_world  = acceleration_world
         self.acceleration_body    = acceleration_body
         self.angular_acceleration = angular_acceleration
 
@@ -284,9 +284,9 @@ class Craft:
     `add()` chain on individual parts.
 
     State (13 DOF):
-        position         : Vec3[AnchorFrame]
-        orientation      : Quat[AnchorFrame, CraftFrame]
-        velocity         : Vec3[AnchorFrame]
+        position         : Vec3[WorldFrame]
+        orientation      : Quat[WorldFrame, CraftFrame]
+        velocity         : Vec3[WorldFrame]
         angular_velocity : Vec3[CraftFrame]
     plus one Scalar per `R1` State slot declared on any of the parts.
     """
@@ -330,32 +330,32 @@ class Craft:
                      fluid_field:     "Field | None" = None,
                      mag_field:       "Field | None" = None,
                      collision_field: "Field | None" = None,
-                     gravity_anchor: tuple[float, float, float] | None = None,
+                     gravity_world: tuple[float, float, float] | None = None,
                      ) -> "ir.graph.CompiledGraph":
         """Trace the 6-DOF rigid-body tick into a callable function.
 
         Args:
             gravity_field   — registered GravityField to query for the
                               craft's instantaneous gravity. Per tick the
-                              anchor-frame gravity is `field.state_at_sym(
+                              world-frame gravity is `field.state_at_sym(
                               position)`, which becomes a position-
                               dependent symbolic expression when non-
                               uniform disturbances are present.
-            gravity_anchor  — escape hatch for direct use without a
+            gravity_world  — escape hatch for direct use without a
                               field: pass a (gx, gy, gz) tuple and the
                               compile creates an internal one-shot
                               GravityField with one UniformGravity
                               disturbance. Convenient for tests and
                               codegen extract.
 
-        Exactly one of `gravity_field` / `gravity_anchor` must be
+        Exactly one of `gravity_field` / `gravity_world` must be
         provided (or neither, in which case gravity defaults to zero
         — useful for in-vacuum scenarios).
 
         State (both input and output):
-            position         : Vec3[AnchorFrame]            (3,)
-            orientation      : Quat[AnchorFrame, CraftFrame] (4,)  (w, x, y, z)
-            velocity         : Vec3[AnchorFrame]            (3,)
+            position         : Vec3[WorldFrame]            (3,)
+            orientation      : Quat[WorldFrame, CraftFrame] (4,)  (w, x, y, z)
+            velocity         : Vec3[WorldFrame]            (3,)
             angular_velocity : Vec3[CraftFrame]             (3,)
         Other input: dt (scalar).
         """
@@ -367,13 +367,13 @@ class Craft:
             MagField as _MagField,
             UniformGravity as _UniformGravity,
         )
-        if gravity_field is not None and gravity_anchor is not None:
+        if gravity_field is not None and gravity_world is not None:
             raise ValueError(
                 "Craft.compile_tick: pass `gravity_field` OR "
-                "`gravity_anchor`, not both.")
-        if gravity_field is None and gravity_anchor is not None:
+                "`gravity_world`, not both.")
+        if gravity_field is None and gravity_world is not None:
             gravity_field = _GravityField()
-            gravity_field.add(_UniformGravity(gravity_anchor))
+            gravity_field.add(_UniformGravity(gravity_world))
         if gravity_field is None:
             # No gravity specified → zero field (in-vacuum).
             gravity_field = _GravityField()
@@ -403,9 +403,9 @@ class Craft:
 
         with ir.Graph(name=f"{self.name}_tick") as g:
             # --- State inputs --------------------------------------------
-            position    = ir.Vec3[AnchorFrame].input("position")
-            orientation = ir.Quat[AnchorFrame, CraftFrame].input("orientation")
-            velocity    = ir.Vec3[AnchorFrame].input("velocity")
+            position    = ir.Vec3[WorldFrame].input("position")
+            orientation = ir.Quat[WorldFrame, CraftFrame].input("orientation")
+            velocity    = ir.Vec3[WorldFrame].input("velocity")
             ang_vel     = ir.Vec3[CraftFrame].input("angular_velocity")
             dt          = ir.Scalar.input("dt")
             # Compile-time placeholder symbols for current-tick body
@@ -413,9 +413,9 @@ class Craft:
             # via TickContext; after Newton-Euler builds the real MX
             # expressions, ca.substitute replaces the placeholders. No
             # runtime state — purely a compile-time wiring trick.
-            a_anchor_sym = ca.MX.sym(f"{self.name}_a_anchor", 3, 1)
+            a_world_sym = ca.MX.sym(f"{self.name}_a_anchor", 3, 1)
             alpha_sym    = ca.MX.sym(f"{self.name}_alpha", 3, 1)
-            a_anchor_placeholder = ir.Vec3[AnchorFrame].from_mx(a_anchor_sym)
+            a_world_placeholder = ir.Vec3[WorldFrame].from_mx(a_world_sym)
             alpha_placeholder    = ir.Vec3[CraftFrame].from_mx(alpha_sym)
 
             # --- Per-part state plumbing ---------------------------------
@@ -476,7 +476,7 @@ class Craft:
             kin_states = kinematic_pass(
                 self.root, position, orientation, velocity, ang_vel,
                 gravity_field,
-                body_acceleration_anchor=a_anchor_placeholder,
+                body_acceleration_world=a_world_placeholder,
                 body_angular_acceleration=alpha_placeholder)
 
             # --- Symbolic inertia rollup --------------------------------
@@ -513,13 +513,13 @@ class Craft:
                     mag_field=mag_field,
                     collision_field=collision_field,
                     dt=dt,
-                    position=kin.origin_in_anchor,
+                    position=kin.origin_in_world,
                     orientation=orientation,
                     velocity=kin.velocity_origin,
                     angular_velocity=kin.angular_velocity_input,
                     velocity_body=kin.velocity_body_in_craft,
                     R_craft_from_input=kin.R_craft_from_input,
-                    acceleration_anchor=kin.acceleration_anchor,
+                    acceleration_world=kin.acceleration_world,
                     acceleration_body=kin.acceleration_body,
                     angular_acceleration=kin.angular_acceleration,
                 )
@@ -586,8 +586,8 @@ class Craft:
             # creates an unsolved fixpoint (would need added-mass-style
             # inertia augmentation). Raise so the part author rewrites
             # the dependency explicitly.
-            for sym_name, sym_mx in (("acceleration_anchor", a_anchor_sym),
-                                      ("acceleration_body", a_anchor_sym),
+            for sym_name, sym_mx in (("acceleration_world", a_world_sym),
+                                      ("acceleration_body", a_world_sym),
                                       ("angular_acceleration", alpha_sym)):
                 if (ca.depends_on(net.force._mx, sym_mx)
                         or ca.depends_on(net.torque._mx, sym_mx)):
@@ -607,8 +607,8 @@ class Craft:
             tau_com = tau_origin - r_com.cross(F_craft)
 
             # Linear: a_com (anchor) = R · (F_craft / m_total)
-            f_anchor = orientation.apply(F_craft / m_total)
-            a_com_anchor = f_anchor       # already divided by m_total
+            f_world = orientation.apply(F_craft / m_total)
+            a_com_world = f_world       # already divided by m_total
 
             # Angular: I_com · α = τ_com − ω × (I_com · ω)  in craft frame.
             # I_com is symbolic in joint angles; solve at runtime rather
@@ -629,15 +629,15 @@ class Craft:
             # a_origin (anchor) = a_com + R · [α × r_OC + ω × (ω × r_OC)]
             r_OC = -r_com   # origin − COM, in CraftFrame
             offset_term = alpha.cross(r_OC) + ang_vel.cross(ang_vel.cross(r_OC))
-            a_origin_anchor = a_com_anchor + orientation.apply(offset_term)
+            a_origin_world = a_com_world + orientation.apply(offset_term)
 
             # --- Substitute placeholders → real dynamics ----------------
             # Every output and per-part state-update expression that
-            # referenced `ctx.acceleration_anchor` /
+            # referenced `ctx.acceleration_world` /
             # `ctx.acceleration_body` / `ctx.angular_acceleration` now
             # gets the actual Newton-Euler result wired in.
-            placeholders = ca.vertcat(a_anchor_sym, alpha_sym)
-            real_values  = ca.vertcat(a_origin_anchor._mx, alpha._mx)
+            placeholders = ca.vertcat(a_world_sym, alpha_sym)
+            real_values  = ca.vertcat(a_origin_world._mx, alpha._mx)
             from .ir.types import _IRValue
 
             def _resolve(val):
@@ -671,17 +671,17 @@ class Craft:
 
             # --- Symplectic-flavored Euler integration -------------------
             # Linear: position += v·dt + ½·a·dt²;  velocity += a·dt.
-            new_velocity = velocity + a_origin_anchor * dt
-            new_position = position + velocity * dt + a_origin_anchor * (0.5 * dt * dt)
+            new_velocity = velocity + a_origin_world * dt
+            new_position = position + velocity * dt + a_origin_world * (0.5 * dt * dt)
             # Angular: ω_new = ω + α·dt;  q_new = q ⊞ (ω·dt).
             new_ang_vel  = ang_vel + alpha * dt
             current_so3  = SO3.from_quat(orientation)
             # boxplus expects a Vec3 in the rotation's from_frame; SO3.boxplus
             # in our convention uses left trivialization with from=Anchor.
             # We're updating by the body-frame ω_dt — convert via rotation
-            # (R · ω_dt lives in Anchor frame, which is SO3.from_frame).
-            omega_dt_anchor = orientation.apply(ang_vel * dt)
-            new_so3 = current_so3.boxplus(omega_dt_anchor)
+            # (R · ω_dt lives in World frame, which is SO3.from_frame).
+            omega_dt_world = orientation.apply(ang_vel * dt)
+            new_so3 = current_so3.boxplus(omega_dt_world)
             # Renormalize quaternion after every step (Euler error in
             # boxplus is tiny per tick but accumulates over thousands).
             new_orientation = new_so3.quat.normalize()

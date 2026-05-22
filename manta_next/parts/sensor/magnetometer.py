@@ -1,7 +1,7 @@
 """Magnetometer — body-frame magnetic flux reading.
 
 Queries the registered MagField at the sensor's mount point in
-AnchorFrame, rotates the result into CraftFrame. That's exactly what a
+WorldFrame, rotates the result into CraftFrame. That's exactly what a
 3-axis fluxgate magnetometer reads when the craft is oriented in the
 field.
 
@@ -33,10 +33,10 @@ class Magnetometer(Part):
 
     def update(self, ctx) -> PartUpdate:
         offset_craft = Vec3[CraftFrame].constant(tuple(self.transform))
-        p_anchor = ctx.position + ctx.orientation.apply(offset_craft)
+        p_world = ctx.position + ctx.orientation.apply(offset_craft)
 
-        B_anchor = ctx.mag_field.state_at_sym(p_anchor)
-        B_craft  = ctx.orientation.conjugate().apply(B_anchor)
+        B_world = ctx.mag_field.state_at_sym(p_world)
+        B_craft  = ctx.orientation.conjugate().apply(B_world)
 
         zero_v = Vec3[CraftFrame].constant((0.0, 0.0, 0.0))
         return PartUpdate(

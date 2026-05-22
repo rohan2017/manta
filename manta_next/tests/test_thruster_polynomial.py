@@ -14,7 +14,7 @@ def test_zeroth_order_constant_force():
     c = Craft("c")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(Thruster("t", forces=((0.0, 0.0, 5.0),)))   # F_0 only
-    tick = c.compile_tick(gravity_anchor=(0, 0, 0))
+    tick = c.compile_tick(gravity_world=(0, 0, 0))
     state = c.initial_state()
     state["t.throttle"] = 0.0
     for _ in range(100):
@@ -30,7 +30,7 @@ def test_first_order_linear_in_throttle():
     c = Craft("c")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(Thruster("t", force=(0.0, 0.0, 10.0)))
-    tick = c.compile_tick(gravity_anchor=(0, 0, 0))
+    tick = c.compile_tick(gravity_world=(0, 0, 0))
     state = c.initial_state()
     state["t.throttle"] = 0.5    # half throttle = 5 N
     for _ in range(100):
@@ -46,7 +46,7 @@ def test_second_order_quadratic_in_throttle():
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     # F_0 = 0, F_1 = 0, F_2 = (0, 0, 4) → at throttle=0.5 → F = 4·0.25 = 1.0 N
     c.add(Thruster("t", forces=((0,0,0), (0,0,0), (0,0,4.0))))
-    tick = c.compile_tick(gravity_anchor=(0, 0, 0))
+    tick = c.compile_tick(gravity_world=(0, 0, 0))
     state = c.initial_state()
     state["t.throttle"] = 0.5
     for _ in range(100):
@@ -63,7 +63,7 @@ def test_fourth_order_polynomial():
     # F(t) = (0, 0, 1 + t + t² + t³ + t⁴)
     c.add(Thruster("t",
                    forces=((0,0,1), (0,0,1), (0,0,1), (0,0,1), (0,0,1))))
-    tick = c.compile_tick(gravity_anchor=(0, 0, 0))
+    tick = c.compile_tick(gravity_world=(0, 0, 0))
     state = c.initial_state()
     state["t.throttle"] = 2.0
     out = tick(dt=0.001, **state)
@@ -79,7 +79,7 @@ def test_torque_coefficient_yaw_reaction():
     c.add(Thruster("prop",
                    force=(0.0, 0.0, 10.0),
                    torque=(0.0, 0.0, 0.1)))
-    tick = c.compile_tick(gravity_anchor=(0, 0, 0))
+    tick = c.compile_tick(gravity_world=(0, 0, 0))
     state = c.initial_state()
     state["prop.throttle"] = 1.0
     out = tick(dt=0.001, **state)

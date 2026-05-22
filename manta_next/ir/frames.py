@@ -1,9 +1,9 @@
 """Frame tags.
 
 A Frame is a static type-marker. It carries no runtime data — its identity is
-its class. Frame tags participate in IR type checking: a `Vec3[AnchorFrame]`
+its class. Frame tags participate in IR type checking: a `Vec3[WorldFrame]`
 cannot be cross-producted with a `Vec3[CraftFrame]` without rotating one of
-them through a `Quat[AnchorFrame, CraftFrame]` first.
+them through a `Quat[WorldFrame, CraftFrame]` first.
 
 Stock frames cover the manta hierarchy `World → Planet → Anchor → Craft →
 Part`. Users declaring their own frames just subclass `Frame`:
@@ -41,20 +41,26 @@ class Frame:
 # ----- Stock frames ---------------------------------------------------------
 
 class WorldFrame(Frame):
-    """The inertial reference. The integrator advances state in this frame."""
+    """The inertial reference. The integrator writes Newton-Euler in this
+    frame — `m·a = F`, no pseudo-forces. Craft state (position, velocity,
+    orientation) lives here. Choose it inertial: e.g., for a drone above
+    a launch pad, treat WorldFrame as Earth-Centered Inertial (or as a
+    locally non-rotating tangent plane if you're OK with ignoring Earth's
+    rotation at the timescales of interest)."""
+
 
 class PlanetFrame(Frame):
-    """A planet's body frame (rotates with the planet). Optional layer."""
-
-class AnchorFrame(Frame):
-    """A floating-origin coordinate root for a coupling component. One per
-    connected (craft + coupling) group at compile time. Use this as the
-    parent for craft-local frames."""
+    """A planet's body-fixed frame — rotates with the planet, parameterized
+    by a transform from `WorldFrame`. Surface-fixed objects (launch pads,
+    ground geometry, atmospheric models) are naturally authored here.
+    Coriolis / centrifugal effects emerge automatically when something
+    expressed in PlanetFrame is read in WorldFrame; the integrator
+    itself stays inertial."""
 
 
 class CraftFrame(Frame):
-    """A single craft's body frame. Rotates and translates relative to its
-    AnchorFrame."""
+    """A single craft's body frame. Rotates and translates relative to
+    WorldFrame."""
 
 class PartFrame(Frame):
     """A part's local frame, rigidly attached to its parent (which may be

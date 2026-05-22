@@ -6,7 +6,7 @@ pull, body-of-mass attraction) is expressed by adding different
 Disturbance subclasses to the same GravityField instance.
 
 Shipped disturbances:
-  * UniformGravity(g_vec)              — constant Vec3[AnchorFrame].
+  * UniformGravity(g_vec)              — constant Vec3[WorldFrame].
   * PointMassGravity(position, GM)     — Newtonian inverse-square pull.
 """
 
@@ -14,18 +14,18 @@ from __future__ import annotations
 
 import casadi as ca
 
-from ..ir.frames import AnchorFrame
+from ..ir.frames import WorldFrame
 from ..ir.types import Vec3
 from .base import Disturbance, Field
 
 
-_VEC3_ANCHOR = Vec3[AnchorFrame]
+_VEC3_ANCHOR = Vec3[WorldFrame]
 
 
 class GravityField(Field):
-    """Gravitational acceleration `g(point)` in the AnchorFrame.
+    """Gravitational acceleration `g(point)` in the WorldFrame.
 
-    `state_at_sym(point)` returns Vec3[AnchorFrame] giving the
+    `state_at_sym(point)` returns Vec3[WorldFrame] giving the
     acceleration a free-falling test mass would experience at `point`.
     """
 
@@ -40,7 +40,7 @@ class UniformGravity(Disturbance):
     sims that don't care about altitude variation.
 
     Args:
-        g_vec — (x, y, z) gravity acceleration in AnchorFrame, m/s².
+        g_vec — (x, y, z) gravity acceleration in WorldFrame, m/s².
                 Conventionally (0, 0, -9.81) for Earth-near-surface
                 with z pointing up.
     """
@@ -69,7 +69,7 @@ class PointMassGravity(Disturbance):
     g(p) = -GM · (p - r_src) / |p - r_src|³
 
     Args:
-        position — (x, y, z) source position in AnchorFrame, meters.
+        position — (x, y, z) source position in WorldFrame, meters.
         GM       — gravitational parameter (G·M), m³/s². For Earth GM
                    ≈ 3.986e14; for the Moon ≈ 4.903e12.
         eps      — softening length to avoid singularity at r→0 (m).

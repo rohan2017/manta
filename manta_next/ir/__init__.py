@@ -13,7 +13,6 @@ from .frames import (
     Frame,
     WorldFrame,
     PlanetFrame,
-    AnchorFrame,
     CraftFrame,
     PartFrame,
     FrameError,
@@ -25,7 +24,7 @@ from .graph import Graph
 
 __all__ = [
     "Frame",
-    "WorldFrame", "PlanetFrame", "AnchorFrame", "CraftFrame", "PartFrame",
+    "WorldFrame", "PlanetFrame", "CraftFrame", "PartFrame",
     "FrameError",
     "Scalar", "Vec3", "Mat3", "Quat",
     "SO3", "R3", "RigidBody",

@@ -1,8 +1,7 @@
 """World — top-level simulation container.
 
 A World holds:
-  * Crafts (each anchored to one Anchor).
-  * Anchors (coordinate-frame roots; one per coupling component).
+  * Crafts (each registered with optional initial state overrides).
   * Couplings (inter-craft constraints, e.g. `Tether`). Couplings force
     the two endpoint crafts into the same connected component → one
     shared compiled tick.
@@ -49,37 +48,6 @@ from .fields import (
 )
 
 
-# ---------------------------------------------------------------------------
-# Anchor
-# ---------------------------------------------------------------------------
-
-class Anchor:
-    """A coordinate-frame root for one or more crafts.
-
-    Anchors are floating origins: they're meant to drift with the
-    cluster they hold so float32 stays precise. Today an Anchor is
-    primarily a label — it has a name. Its physical meaning expands
-    when planets land:
-      * `parent=None` ⇒ rooted in the world's inertial frame.
-      * `parent=<planet>` ⇒ rooted in a rotating planet frame.
-
-    The Anchor type at IR level is `manta_next.ir.frames.AnchorFrame`;
-    that's the type tag used in `Vec3[AnchorFrame]`. `Anchor` here is
-    the runtime instance that carries metadata.
-
-    Per-anchor field overrides aren't supported yet — every craft sees
-    the world's registered fields. When planets land, an Anchor may
-    carry a Planet pointer that contributes additional Disturbances to
-    the world's fields.
-    """
-
-    def __init__(self, name: str) -> None:
-        self.name = name
-
-    def __repr__(self) -> str:
-        return f"<Anchor '{self.name}'>"
-
-
 # Coupling is referenced below as a type and via isinstance; the ABC
 # itself lives in couplings/base.py. External callers should import it
 # from `manta_next.couplings` (or `manta_next`).
@@ -95,8 +63,7 @@ class World:
 
     def __init__(self, name: str = "world") -> None:
         self.name = name
-        self._anchors: dict[str, Anchor] = {}
-        # _crafts: list of dicts with craft, anchor, initial_state_overrides.
+        # _crafts: list of dicts with craft, initial_state_overrides.
         self._crafts: list[dict[str, Any]] = []
         self._couplings: list[Coupling] = []
         # Fields keyed by exact subclass (one GravityField per world, one
@@ -175,10 +142,6 @@ class World:
         return tuple(self._fields.values())
 
     @property
-    def anchors(self) -> dict[str, Anchor]:
-        return dict(self._anchors)
-
-    @property
     def crafts(self) -> tuple[Craft, ...]:
         return tuple(entry["craft"] for entry in self._crafts)
 
@@ -188,17 +151,9 @@ class World:
 
     # ---- Adding things ---------------------------------------------------
 
-    def add_anchor(self, anchor: Anchor) -> Anchor:
-        if anchor.name in self._anchors:
-            raise ValueError(
-                f"World '{self.name}': anchor '{anchor.name}' already exists")
-        self._anchors[anchor.name] = anchor
-        return anchor
-
     def add_craft(self,
                   craft: Craft,
                   *,
-                  anchor: "Anchor | str | None" = None,
                   position=(0.0, 0.0, 0.0),
                   orientation=(1.0, 0.0, 0.0, 0.0),
                   velocity=(0.0, 0.0, 0.0),
@@ -208,11 +163,7 @@ class World:
 
         Args:
             craft           — the Craft instance.
-            anchor          — Anchor instance, anchor name, or None. If
-                              None, the world auto-creates an anchor named
-                              `<craft.name>_anchor`. If a str, looks up
-                              an existing anchor (must be already registered).
-            position, ...   — rigid-body initial state.
+            position, ...   — rigid-body initial state in WorldFrame.
             **extra_state   — per-part state overrides
                               (e.g., `**{"wheel.angle": 0.5}`).
         """
@@ -226,25 +177,6 @@ class World:
                     f"World '{self.name}': craft name '{craft.name}' collides "
                     f"with an existing craft")
 
-        # Resolve anchor.
-        if anchor is None:
-            anchor = Anchor(f"{craft.name}_anchor")
-            self.add_anchor(anchor)
-        elif isinstance(anchor, str):
-            if anchor not in self._anchors:
-                raise KeyError(
-                    f"World '{self.name}': no anchor named '{anchor}' "
-                    f"registered. Use add_anchor first or pass an Anchor "
-                    f"instance.")
-            anchor = self._anchors[anchor]
-        elif isinstance(anchor, Anchor):
-            if anchor.name not in self._anchors:
-                self.add_anchor(anchor)
-        else:
-            raise TypeError(
-                f"World.add_craft: anchor must be Anchor|str|None, "
-                f"got {type(anchor).__name__}")
-
         initial_state_overrides: dict[str, Any] = {
             "position":         position,
             "orientation":      orientation,
@@ -254,7 +186,6 @@ class World:
         }
         self._crafts.append({
             "craft":  craft,
-            "anchor": anchor,
             "initial_state_overrides": initial_state_overrides,
         })
         return craft
@@ -301,7 +232,6 @@ class World:
             comp_crafts = [e["craft"] for e in comp_entries]
             if len(comp_crafts) == 1:
                 craft  = comp_crafts[0]
-                anchor = comp_entries[0]["anchor"]
                 tick = craft.compile_tick(
                     gravity_field=gravity_field,
                     fluid_field=fluid_field,
@@ -311,7 +241,6 @@ class World:
                     **comp_entries[0]["initial_state_overrides"])
                 compiled[comp_id] = {
                     "crafts":  [craft],
-                    "anchor":  anchor,
                     "tick":    tick,
                     "initial": init,
                 }
@@ -340,7 +269,6 @@ class World:
                         init[f"{entry['craft'].name}.{k}"] = v
                 compiled[comp_id] = {
                     "crafts":  comp_crafts,
-                    "anchor":  comp_entries[0]["anchor"],
                     "tick":    tick,
                     "initial": init,
                 }
@@ -391,9 +319,8 @@ class World:
 
     def __repr__(self) -> str:
         n_c = len(self._crafts)
-        n_a = len(self._anchors)
         n_x = len(self._couplings)
-        return (f"<World '{self.name}': {n_c} craft(s), {n_a} anchor(s), "
+        return (f"<World '{self.name}': {n_c} craft(s), "
                 f"{n_x} coupling(s)>")
 
 

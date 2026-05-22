@@ -73,7 +73,7 @@ class CraftFunctions:
 
 def extract(craft,
             *,
-            gravity_anchor: tuple[float, float, float] = (0.0, 0.0, -9.81),
+            gravity_world: tuple[float, float, float] = (0.0, 0.0, -9.81),
             ) -> CraftFunctions:
     """Extract per-function ca.Functions from a Craft.
 
@@ -83,7 +83,7 @@ def extract(craft,
 
     Args:
         craft           — the manta_next Craft to extract from.
-        gravity_anchor  — anchor-frame gravity used during the compile.
+        gravity_world  — world-frame gravity used during the compile.
 
     Returns:
         A `CraftFunctions` bundle.
@@ -92,7 +92,7 @@ def extract(craft,
     n_ambient = spec.ambient_dim
     n_tangent = spec.tangent_dim
 
-    compiled_tick = craft.compile_tick(gravity_anchor=gravity_anchor)
+    compiled_tick = craft.compile_tick(gravity_world=gravity_world)
     cf = compiled_tick.casadi_function
 
     # Enumerate part Inputs from the tick's input signature.

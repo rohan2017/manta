@@ -44,7 +44,7 @@ def emit_cpp(craft,
              class_name: str,
              basename: str | None = None,
              namespace: str = "manta_next_gen",
-             gravity_anchor: tuple[float, float, float] = (0.0, 0.0, -9.81),
+             gravity_world: tuple[float, float, float] = (0.0, 0.0, -9.81),
              ) -> EmitResult:
     """Emit a complete, buildable C++ library for `craft`.
 
@@ -54,7 +54,7 @@ def emit_cpp(craft,
         class_name      — C++ class name. Conventionally PascalCase.
         basename        — filename stem; defaults to lowercased class_name.
         namespace       — C++ namespace.
-        gravity_anchor  — anchor-frame gravity baked into the predict
+        gravity_world  — world-frame gravity baked into the predict
                            kernel. Must match the sim that generated
                            any data being compared against.
 
@@ -66,7 +66,7 @@ def emit_cpp(craft,
     out_dir = Path(out_dir).resolve()
     base = basename or class_name.lower()
 
-    funcs = extract(craft, gravity_anchor=gravity_anchor)
+    funcs = extract(craft, gravity_world=gravity_world)
     kpaths = emit_kernels(funcs, out_dir, basename=base)
     wpaths = emit_wrapper(funcs, craft, out_dir,
                           class_name=class_name, basename=base,

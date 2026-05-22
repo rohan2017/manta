@@ -2,7 +2,7 @@
 
   F = -k·(L − L_rest) · r̂   −   c · (v_rel · r̂) · r̂
 
-where L is the instantaneous distance between endpoints in the anchor
+where L is the instantaneous distance between endpoints in the world
 frame, r̂ is the unit vector from A to B, v_rel is the relative anchor-
 frame velocity of B's endpoint minus A's endpoint. The force is applied
 to A in the direction r̂ (pulling A toward B when stretched and
@@ -10,7 +10,7 @@ extending v_rel · r̂ > 0), with equal-and-opposite F on B.
 
 Each endpoint Part on the craft has a `Part.transform` giving the
 attachment offset in body frame. The Tether reads both transforms,
-computes the anchor-frame positions, evaluates the force, and emits a
+computes the world-frame positions, evaluates the force, and emits a
 pair of wrenches at-the-endpoint-offsets. The compile_coupled_tick
 framework lifts these to craft-origin wrenches via the standard
 force-at-offset → body-frame-torque mechanism, so off-axis attachments
@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import casadi as ca
 
-from ..ir.frames import AnchorFrame, CraftFrame
+from ..ir.frames import WorldFrame, CraftFrame
 from ..ir.types import Vec3
 from ..ir.wrench import Wrench
 from .base import Coupling
@@ -94,7 +94,7 @@ class Tether(Coupling):
         off_a_craft = Vec3[CraftFrame].constant(tuple(ep_a.transform))
         off_b_craft = Vec3[CraftFrame].constant(tuple(ep_b.transform))
 
-        # Endpoint positions in anchor frame.
+        # Endpoint positions in world frame.
         off_a_anchor = ctx_a.orientation.apply(off_a_craft)
         off_b_anchor = ctx_b.orientation.apply(off_b_craft)
         p_a_anchor = ctx_a.position + off_a_anchor
@@ -106,9 +106,9 @@ class Tether(Coupling):
         r_sq = ca.dot(r_mx, r_mx) + 1e-30
         L    = ca.sqrt(r_sq)
         r_hat_mx = r_mx / L
-        r_hat = Vec3[AnchorFrame].from_mx(r_hat_mx)
+        r_hat = Vec3[WorldFrame].from_mx(r_hat_mx)
 
-        # Endpoint velocities in anchor frame:
+        # Endpoint velocities in world frame:
         #   v_endpoint_anchor = v_origin + R · (ω × r_endpoint_body)
         v_rot_a_craft = ctx_a.angular_velocity.cross(off_a_craft)
         v_rot_b_craft = ctx_b.angular_velocity.cross(off_b_craft)

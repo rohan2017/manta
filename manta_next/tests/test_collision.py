@@ -5,13 +5,13 @@ import numpy as np
 
 from manta_next import Craft, World
 from manta_next.fields import CollisionField, HalfSpace
-from manta_next.ir.frames import AnchorFrame
+from manta_next.ir.frames import WorldFrame
 from manta_next.ir.types import Vec3
 from manta_next.parts import Collider, Mass
 
 
 def _eval_pen_at(field, point_xyz):
-    p = Vec3[AnchorFrame].constant(point_xyz)
+    p = Vec3[WorldFrame].constant(point_xyz)
     val = field.state_at_sym(p)
     return np.asarray(ca.evalf(val._mx)).ravel()
 

@@ -1,20 +1,10 @@
-"""World + Anchor + Coupling — top-level container tests."""
+"""World + Coupling — top-level container tests."""
 
 import numpy as np
 import pytest
 
-from manta_next import World, Anchor, Coupling, Craft, CompiledWorld
+from manta_next import World, Coupling, Craft, CompiledWorld
 from manta_next.parts import Joint, Mass
-
-
-# ---------------------------------------------------------------------------
-# Anchor
-# ---------------------------------------------------------------------------
-
-def test_anchor_basic():
-    a = Anchor("lab_floor")
-    assert a.name == "lab_floor"
-    assert "lab_floor" in repr(a)
 
 
 # ---------------------------------------------------------------------------
@@ -26,7 +16,7 @@ def test_single_craft_world_matches_direct_compile():
     directly compiling the craft."""
     c1 = Craft("solo_a")
     c1.add(Mass("body", mass=1.0))
-    direct_tick = c1.compile_tick(gravity_anchor=(0.0, 0.0, -9.81))
+    direct_tick = c1.compile_tick(gravity_world=(0.0, 0.0, -9.81))
 
     c2 = Craft("solo_b")
     c2.add(Mass("body", mass=1.0))
@@ -137,14 +127,6 @@ def test_add_craft_same_instance_twice_raises():
     w.add_craft(c)
     with pytest.raises(ValueError, match="already added"):
         w.add_craft(c)
-
-
-def test_add_craft_unknown_anchor_name_raises():
-    w = World()
-    c = Craft("c")
-    c.add(Mass("body", mass=1.0))
-    with pytest.raises(KeyError, match="no anchor named"):
-        w.add_craft(c, anchor="missing")
 
 
 def test_add_coupling_rejects_unregistered_craft():

@@ -7,7 +7,7 @@ from manta_next import Craft, World
 from manta_next.fields import (
     CurrentFlow, FluidField, FluidState, UniformFluid,
 )
-from manta_next.ir.frames import AnchorFrame
+from manta_next.ir.frames import WorldFrame
 from manta_next.ir.types import Vec3
 from manta_next.parts import Mass, PointBuoy
 
@@ -15,7 +15,7 @@ from manta_next.parts import Mass, PointBuoy
 def _eval_fluid_at(field, point_xyz):
     """Evaluate a FluidField at a concrete point, returning numpy
     (density, velocity)."""
-    p = Vec3[AnchorFrame].constant(point_xyz)
+    p = Vec3[WorldFrame].constant(point_xyz)
     s = field.state_at_sym(p)
     rho = float(ca.evalf(s.density))
     vel = np.asarray(ca.evalf(s.velocity._mx)).ravel()

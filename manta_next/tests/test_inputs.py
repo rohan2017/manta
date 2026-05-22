@@ -59,7 +59,7 @@ def test_zero_torque_default_keeps_flywheel_at_rest():
     c.add(Mass("body", mass=100.0, moi=(1000.0, 1000.0, 1000.0)))
     c.add(_flywheel("motor", I_axial=0.01))    # default torque_cmd=0
 
-    tick = c.compile_tick(gravity_anchor=(0.0, 0.0, 0.0))
+    tick = c.compile_tick(gravity_world=(0.0, 0.0, 0.0))
     state = c.initial_state()
     for _ in range(1000):
         out = tick(dt=0.001, **state)
@@ -74,7 +74,7 @@ def test_per_tick_torque_drives_flywheel():
     c.add(Mass("body", mass=100.0, moi=(1000.0, 1000.0, 1000.0)))
     c.add(_flywheel("motor", I_axial=0.01))
 
-    tick = c.compile_tick(gravity_anchor=(0.0, 0.0, 0.0))
+    tick = c.compile_tick(gravity_world=(0.0, 0.0, 0.0))
     state = c.initial_state()
 
     # First second: idle (default 0 torque).
@@ -105,7 +105,7 @@ def test_input_value_can_change_each_tick():
     c.add(Mass("body", mass=100.0, moi=(1000.0, 1000.0, 1000.0)))
     c.add(_flywheel("motor", I_axial=0.01))
 
-    tick = c.compile_tick(gravity_anchor=(0.0, 0.0, 0.0))
+    tick = c.compile_tick(gravity_world=(0.0, 0.0, 0.0))
     state = c.initial_state()
 
     # Apply a sinusoidal torque over 2 seconds.
@@ -159,7 +159,7 @@ def test_ekf_constructs_with_input_parts():
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(_flywheel("motor", I_axial=0.05, torque_cmd=0.3))
 
-    ekf = EKF(c, gravity_anchor=(0.0, 0.0, 0.0))
+    ekf = EKF(c, gravity_world=(0.0, 0.0, 0.0))
     ekf.predict(dt=0.01)
     # τ=0.3, I=0.05 → α = 6 rad/s² → rate after 0.01s = 0.06.
     assert np.isclose(ekf.state_dict()["motor.rate"], 0.06, atol=1e-9)
@@ -188,7 +188,7 @@ def test_multiple_inputs_on_one_part():
     assert state["p.scale_a"] == 1.0
     assert state["p.scale_b"] == 2.0
 
-    tick = c.compile_tick(gravity_anchor=(0.0, 0.0, -9.81))
+    tick = c.compile_tick(gravity_world=(0.0, 0.0, -9.81))
     out = tick(dt=0.001, **state)
     assert "position" in out
 

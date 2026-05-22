@@ -36,7 +36,7 @@ def main() -> None:
     sim = cw.initial_state()
 
     # EKF — start with a deliberate position + velocity offset.
-    ekf = EKF(c, gravity_anchor=g_world)
+    ekf = EKF(c, gravity_world=g_world)
     init = c.initial_state(position=(0.0, 0.0, 4.0),
                            velocity=(0.5, 0.0, 0.0))
     ekf.reset(state=init,

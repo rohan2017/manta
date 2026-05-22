@@ -58,7 +58,7 @@ def _build_gimbal() -> Craft:
 
 def main() -> None:
     c = _build_gimbal()
-    tick = c.compile_tick(gravity_anchor=(0.0, 0.0, 0.0))
+    tick = c.compile_tick(gravity_world=(0.0, 0.0, 0.0))
     state = c.initial_state()
 
     # Phase 1: drive PAN only (no tilt command) — pan accelerates, body

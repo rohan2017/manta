@@ -1,6 +1,6 @@
 """CollisionField + obstacle disturbances.
 
-`CollisionField.state_at_sym(point)` returns a Vec3[AnchorFrame]
+`CollisionField.state_at_sym(point)` returns a Vec3[WorldFrame]
 giving the **outward penetration vector** at the query point:
 
   * `(0, 0, 0)` when the point is NOT inside any registered obstacle.
@@ -30,12 +30,12 @@ from __future__ import annotations
 
 import casadi as ca
 
-from ..ir.frames import AnchorFrame
+from ..ir.frames import WorldFrame
 from ..ir.types import Vec3
 from .base import Disturbance, Field
 
 
-_VEC3_ANCHOR = Vec3[AnchorFrame]
+_VEC3_ANCHOR = Vec3[WorldFrame]
 
 # Smoothing parameter for the penetration-depth `max(0, x)` regularizer.
 # Small enough that depth ≈ |x| for |x| > 1mm; large enough to keep
@@ -65,8 +65,8 @@ class HalfSpace(Disturbance):
     obstacle (below the plane); the outward direction is `+normal`.
 
     Args:
-        origin — point on the plane (anchor frame), m.
-        normal — outward unit normal (anchor frame). For a ground plane
+        origin — point on the plane (world frame), m.
+        normal — outward unit normal (world frame). For a ground plane
                  at z=0 with air above and solid below: origin=(0,0,0),
                  normal=(0,0,1).
     """

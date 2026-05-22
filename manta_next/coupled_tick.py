@@ -28,7 +28,7 @@ from . import ir
 from .craft import TickContext, _aggregate_inertials, _wrench_to_craft
 from .inertia import symbolic_inertia_rollup
 from .kinematics import kinematic_pass
-from .ir.frames import AnchorFrame, CraftFrame
+from .ir.frames import WorldFrame, CraftFrame
 from .ir.manifold import SO3
 from .ir.types import Mat3, Quat, Scalar, Vec3
 from .parts.base import Part, PartUpdate, State
@@ -153,16 +153,16 @@ def _trace_craft_pass1(g_ctx,
     prefix = f"{craft.name}."
 
     # State inputs (prefixed).
-    position    = ir.Vec3[AnchorFrame].input(prefix + "position")
-    orientation = ir.Quat[AnchorFrame, CraftFrame].input(prefix + "orientation")
-    velocity    = ir.Vec3[AnchorFrame].input(prefix + "velocity")
+    position    = ir.Vec3[WorldFrame].input(prefix + "position")
+    orientation = ir.Quat[WorldFrame, CraftFrame].input(prefix + "orientation")
+    velocity    = ir.Vec3[WorldFrame].input(prefix + "velocity")
     ang_vel     = ir.Vec3[CraftFrame].input(prefix + "angular_velocity")
     # Placeholder MX symbols for current-tick body acceleration / α
     # (substituted with the real Newton-Euler outputs after the wrench
     # sum is known — see Craft.compile_tick for the rationale).
-    a_anchor_sym = ca.MX.sym(f"{craft.name}_a_anchor", 3, 1)
+    a_world_sym = ca.MX.sym(f"{craft.name}_a_anchor", 3, 1)
     alpha_sym    = ca.MX.sym(f"{craft.name}_alpha", 3, 1)
-    a_anchor_placeholder = ir.Vec3[AnchorFrame].from_mx(a_anchor_sym)
+    a_world_placeholder = ir.Vec3[WorldFrame].from_mx(a_world_sym)
     alpha_placeholder    = ir.Vec3[CraftFrame].from_mx(alpha_sym)
 
     if collision_field is None:
@@ -204,7 +204,7 @@ def _trace_craft_pass1(g_ctx,
     # Symbolic kinematic + inertia passes over the part tree.
     kin_states = kinematic_pass(
         craft.root, position, orientation, velocity, ang_vel, gravity_field,
-        body_acceleration_anchor=a_anchor_placeholder,
+        body_acceleration_world=a_world_placeholder,
         body_angular_acceleration=alpha_placeholder)
     inertia = symbolic_inertia_rollup(craft.root)
 
@@ -224,7 +224,7 @@ def _trace_craft_pass1(g_ctx,
         angular_velocity=ang_vel,
         velocity_body=root_kin.velocity_body_in_craft,
         R_craft_from_input=root_kin.R_craft_from_input,
-        acceleration_anchor=root_kin.acceleration_anchor,
+        acceleration_world=root_kin.acceleration_world,
         acceleration_body=root_kin.acceleration_body,
         angular_acceleration=root_kin.angular_acceleration,
     )
@@ -242,13 +242,13 @@ def _trace_craft_pass1(g_ctx,
             mag_field=mag_field,
             collision_field=collision_field,
             dt=dt,
-            position=kin.origin_in_anchor,
+            position=kin.origin_in_world,
             orientation=orientation,
             velocity=kin.velocity_origin,
             angular_velocity=kin.angular_velocity_input,
             velocity_body=kin.velocity_body_in_craft,
             R_craft_from_input=kin.R_craft_from_input,
-            acceleration_anchor=kin.acceleration_anchor,
+            acceleration_world=kin.acceleration_world,
             acceleration_body=kin.acceleration_body,
             angular_acceleration=kin.angular_acceleration,
         )
@@ -312,7 +312,7 @@ def _trace_craft_pass1(g_ctx,
         "sensor_outputs":    sensor_outputs,
         "saved_state_attrs": saved_state_attrs,
         "saved_input_attrs": saved_input_attrs,
-        "a_anchor_sym":      a_anchor_sym,
+        "a_world_sym":      a_world_sym,
         "alpha_sym":         alpha_sym,
     }
 
@@ -349,8 +349,8 @@ def _emit_per_craft_dynamics(g_ctx, craft, pc, dt) -> None:
     r_com = ir.Vec3[CraftFrame].from_mx(com_mx)
     tau_com = tau_origin - r_com.cross(F_craft)
 
-    f_anchor = orientation.apply(F_craft / m_total)
-    a_com_anchor = f_anchor
+    f_world = orientation.apply(F_craft / m_total)
+    a_com_world = f_world
 
     I_com   = ir.Mat3[CraftFrame, CraftFrame].from_mx(I_com_mx)
     I_omega = I_com @ ang_vel
@@ -363,13 +363,13 @@ def _emit_per_craft_dynamics(g_ctx, craft, pc, dt) -> None:
 
     r_OC = -r_com
     offset_term = alpha.cross(r_OC) + ang_vel.cross(ang_vel.cross(r_OC))
-    a_origin_anchor = a_com_anchor + orientation.apply(offset_term)
+    a_origin_world = a_com_world + orientation.apply(offset_term)
 
     # --- Validate wrench independence from placeholder dynamics ----------
-    a_anchor_sym = pc["a_anchor_sym"]
+    a_world_sym = pc["a_world_sym"]
     alpha_sym    = pc["alpha_sym"]
-    for sym_name, sym_mx in (("acceleration_anchor", a_anchor_sym),
-                              ("acceleration_body", a_anchor_sym),
+    for sym_name, sym_mx in (("acceleration_world", a_world_sym),
+                              ("acceleration_body", a_world_sym),
                               ("angular_acceleration", alpha_sym)):
         if (ca.depends_on(net.force._mx, sym_mx)
                 or ca.depends_on(net.torque._mx, sym_mx)):
@@ -379,8 +379,8 @@ def _emit_per_craft_dynamics(g_ctx, craft, pc, dt) -> None:
                 f"of state only.")
 
     # --- Substitute placeholders → real dynamics in emitted outputs -----
-    placeholders = ca.vertcat(a_anchor_sym, alpha_sym)
-    real_values  = ca.vertcat(a_origin_anchor._mx, alpha._mx)
+    placeholders = ca.vertcat(a_world_sym, alpha_sym)
+    real_values  = ca.vertcat(a_origin_world._mx, alpha._mx)
     from .ir.types import _IRValue
 
     def _resolve(val):
@@ -400,12 +400,12 @@ def _emit_per_craft_dynamics(g_ctx, craft, pc, dt) -> None:
     sensor_outputs    = [(n, _resolve(v))
                           for n, v in pc["sensor_outputs"]]
 
-    new_velocity = velocity + a_origin_anchor * dt
-    new_position = position + velocity * dt + a_origin_anchor * (0.5 * dt * dt)
+    new_velocity = velocity + a_origin_world * dt
+    new_position = position + velocity * dt + a_origin_world * (0.5 * dt * dt)
     new_ang_vel  = ang_vel + alpha * dt
     current_so3  = SO3.from_quat(orientation)
-    omega_dt_anchor = orientation.apply(ang_vel * dt)
-    new_so3 = current_so3.boxplus(omega_dt_anchor)
+    omega_dt_world = orientation.apply(ang_vel * dt)
+    new_so3 = current_so3.boxplus(omega_dt_world)
     new_orientation = new_so3.quat.normalize()
 
     g_ctx.output(new_position,    prefix + "position")

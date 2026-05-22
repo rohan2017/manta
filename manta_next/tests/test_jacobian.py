@@ -5,14 +5,14 @@ import math
 import numpy as np
 
 from manta_next import ir
-from manta_next.ir.frames import CraftFrame, AnchorFrame
+from manta_next.ir.frames import CraftFrame, WorldFrame
 
 
 def test_linear_jacobian_is_constant():
     """f(x, v, dt) = x + v * dt. df/dx = identity (a 3x3 I)."""
     with ir.Graph() as g:
-        x  = ir.Vec3[AnchorFrame].input("x")
-        v  = ir.Vec3[AnchorFrame].input("v")
+        x  = ir.Vec3[WorldFrame].input("x")
+        v  = ir.Vec3[WorldFrame].input("v")
         dt = ir.Scalar.input("dt")
         g.output(x + v * dt, "x_next")
 
@@ -24,8 +24,8 @@ def test_linear_jacobian_is_constant():
 def test_jacobian_wrt_velocity():
     """Same expression. df/dv = dt * I."""
     with ir.Graph() as g:
-        x  = ir.Vec3[AnchorFrame].input("x")
-        v  = ir.Vec3[AnchorFrame].input("v")
+        x  = ir.Vec3[WorldFrame].input("x")
+        v  = ir.Vec3[WorldFrame].input("v")
         dt = ir.Scalar.input("dt")
         g.output(x + v * dt, "x_next")
 
@@ -38,7 +38,7 @@ def test_quat_jacobian_at_identity():
     """For q = identity quaternion, d(q.apply(v))/d(v) should be the
     identity matrix (R(q=identity) = I)."""
     with ir.Graph() as g:
-        q = ir.Quat[AnchorFrame, CraftFrame].input("q")
+        q = ir.Quat[WorldFrame, CraftFrame].input("q")
         v = ir.Vec3[CraftFrame].input("v")
         g.output(q.apply(v), "v_scene")
 

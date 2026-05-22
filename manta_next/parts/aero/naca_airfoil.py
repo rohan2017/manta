@@ -70,18 +70,18 @@ class Naca00xx(Part):
     induced_k:   float = Parameter(0.1)
 
     def update(self, ctx) -> PartUpdate:
-        # --- relative wind at the airfoil's mount point (anchor frame) ---
+        # --- relative wind at the airfoil's mount point (world frame) ---
         offset_craft = Vec3[CraftFrame].constant(tuple(self.transform))
         offset_anchor = ctx.orientation.apply(offset_craft)
-        p_anchor = ctx.position + offset_anchor
+        p_world = ctx.position + offset_anchor
 
         v_rot_craft = ctx.angular_velocity.cross(offset_craft)
-        v_rot_anchor = ctx.orientation.apply(v_rot_craft)
-        v_surface_anchor = ctx.velocity + v_rot_anchor
+        v_rot_world = ctx.orientation.apply(v_rot_craft)
+        v_surface_anchor = ctx.velocity + v_rot_world
 
-        fluid = ctx.fluid_field.state_at_sym(p_anchor)
+        fluid = ctx.fluid_field.state_at_sym(p_world)
         rho   = fluid.density
-        v_rel = v_surface_anchor - fluid.velocity   # Vec3[AnchorFrame]
+        v_rel = v_surface_anchor - fluid.velocity   # Vec3[WorldFrame]
 
         # --- decompose v_rel into the airfoil's body-frame axes -----------
         # Rotate v_rel into CraftFrame.

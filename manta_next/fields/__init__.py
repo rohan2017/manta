@@ -11,7 +11,7 @@ per the Field redesign:
     same Field instance.
   * `field.add(Disturbance)` — append a contribution.
   * `field.state_at_sym(point)` — return the symbolic MX value of the
-    field at `point` (Vec3[AnchorFrame]). Equals the sum of every
+    field at `point` (Vec3[WorldFrame]). Equals the sum of every
     registered disturbance's contribution.
 
 User-facing surface::

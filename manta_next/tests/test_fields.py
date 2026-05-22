@@ -21,7 +21,7 @@ from manta_next import Craft, World
 from manta_next.fields import (
     Disturbance, Field, GravityField, PointMassGravity, UniformGravity,
 )
-from manta_next.ir.frames import AnchorFrame
+from manta_next.ir.frames import WorldFrame
 from manta_next.ir.types import Vec3
 from manta_next.parts import Mass
 
@@ -33,7 +33,7 @@ from manta_next.parts import Mass
 def _eval_at(field, point_xyz):
     """Evaluate a Field's state_at at a concrete point, returning np array."""
     import casadi as ca
-    p = Vec3[AnchorFrame].constant(point_xyz)
+    p = Vec3[WorldFrame].constant(point_xyz)
     val = field.state_at_sym(p)
     return np.asarray(ca.evalf(val._mx)).ravel()
 
@@ -83,7 +83,7 @@ def test_disturbance_superposition_adds():
 def test_field_rejects_mismatched_disturbance():
     """A disturbance with the wrong value_shape can't be added."""
     class WrongShape(Disturbance):
-        field_value_shape = float        # not Vec3[AnchorFrame]
+        field_value_shape = float        # not Vec3[WorldFrame]
         def contribute_at_sym(self, point): return 0.0
 
     gf = GravityField()
@@ -106,10 +106,10 @@ def test_world_add_field_keys_by_class():
 
 def test_world_uniform_gravity_matches_direct_compile():
     """Bit-equal behavior between the World/Field path and the
-    direct gravity_anchor escape hatch."""
+    direct gravity_world escape hatch."""
     c1 = Craft("solo_a")
     c1.add(Mass("body", mass=1.0))
-    direct = c1.compile_tick(gravity_anchor=(0.0, 0.0, -9.81))
+    direct = c1.compile_tick(gravity_world=(0.0, 0.0, -9.81))
 
     c2 = Craft("solo_b")
     c2.add(Mass("body", mass=1.0))
@@ -179,7 +179,7 @@ def test_offset_mass_under_point_mass_gravity_feels_local_g():
 
     Setup: craft origin at distance r0 from the point mass; a Mass
     mounted at offset r0 (along the same axis) in the body so its
-    anchor-frame position is 2·r0 from the source. The Mass should
+    world-frame position is 2·r0 from the source. The Mass should
     feel g(2·r0) = -GM/(2·r0)² = ¼ · g(r0), not g(r0).
     """
     GM = 1.0e10

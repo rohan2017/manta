@@ -1,6 +1,6 @@
 """MagField + Uniform/Dipole magnetic disturbances.
 
-Magnetic flux density B at a point, in Tesla, expressed in AnchorFrame.
+Magnetic flux density B at a point, in Tesla, expressed in WorldFrame.
 Per the Field-redesign pattern, there's one MagField class; per-source
 variation lives in Disturbance subclasses.
 
@@ -10,7 +10,7 @@ Shipped disturbances:
   * DipoleMag(position, moment) — point-dipole field B(p) =
                                    μ₀/(4π) · (3(m̂·r̂)r̂ − m̂) / r³
                                    for a magnet of moment m at position
-                                   `position` (anchor frame, A·m²).
+                                   `position` (world frame, A·m²).
                                    Useful for nearby permanent magnets
                                    and small-body dipole approximations
                                    of larger sources.
@@ -22,19 +22,19 @@ import math
 
 import casadi as ca
 
-from ..ir.frames import AnchorFrame
+from ..ir.frames import WorldFrame
 from ..ir.types import Vec3
 from .base import Disturbance, Field
 
 
-_VEC3_ANCHOR = Vec3[AnchorFrame]
+_VEC3_ANCHOR = Vec3[WorldFrame]
 
 # Vacuum permeability over 4π. In SI units. μ₀/(4π) = 1e-7 H/m.
 _MU0_OVER_4PI = 1.0e-7
 
 
 class MagField(Field):
-    """Magnetic flux density field, Vec3[AnchorFrame] in Tesla."""
+    """Magnetic flux density field, Vec3[WorldFrame] in Tesla."""
 
     value_shape = _VEC3_ANCHOR
 
@@ -74,8 +74,8 @@ class DipoleMag(Disturbance):
     where r = p − r_src, r̂ = r/|r|.
 
     Args:
-        position — (x, y, z) dipole position in AnchorFrame, m.
-        moment   — (mx, my, mz) magnetic dipole moment in AnchorFrame,
+        position — (x, y, z) dipole position in WorldFrame, m.
+        moment   — (mx, my, mz) magnetic dipole moment in WorldFrame,
                    A·m². For Earth this is ~8e22 (purely fictitious
                    point-dipole approximation).
         eps      — softening length (m) to avoid singularity at the

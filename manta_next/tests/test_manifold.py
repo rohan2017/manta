@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from manta_next import ir
-from manta_next.ir.frames import CraftFrame, AnchorFrame
+from manta_next.ir.frames import CraftFrame, WorldFrame
 from manta_next.ir.manifold import R3, SO3
 
 
@@ -136,7 +136,7 @@ def test_r3_boxplus_rejects_mismatched_delta_frame():
     from manta_next.ir.frames import FrameError
     with ir.Graph() as g:
         v = ir.Vec3[CraftFrame].input("v")
-        d = ir.Vec3[AnchorFrame].input("d")     # wrong frame
+        d = ir.Vec3[WorldFrame].input("d")     # wrong frame
         r = R3(v)
         with pytest.raises(FrameError, match="R3.boxplus"):
             r.boxplus(d)
@@ -147,7 +147,7 @@ def test_r3_boxminus_rejects_mismatched_other_frame():
     from manta_next.ir.frames import FrameError
     with ir.Graph() as g:
         v1 = ir.Vec3[CraftFrame].input("v1")
-        v2 = ir.Vec3[AnchorFrame].input("v2")
+        v2 = ir.Vec3[WorldFrame].input("v2")
         r1 = R3(v1); r2 = R3(v2)
         with pytest.raises(FrameError, match="R3.boxminus"):
             r1.boxminus(r2)
@@ -157,16 +157,16 @@ def test_rigid_body_boxplus_rejects_mismatched_position_delta():
     from manta_next.ir.manifold import R3, SO3, RigidBody
     from manta_next.ir.frames import FrameError
     with ir.Graph() as g:
-        p   = ir.Vec3[AnchorFrame].input("p")
-        ori = ir.Quat[AnchorFrame, CraftFrame].input("ori")
-        vL  = ir.Vec3[AnchorFrame].input("vL")
+        p   = ir.Vec3[WorldFrame].input("p")
+        ori = ir.Quat[WorldFrame, CraftFrame].input("ori")
+        vL  = ir.Vec3[WorldFrame].input("vL")
         vA  = ir.Vec3[CraftFrame].input("vA")
         rb  = RigidBody(position=p, orientation=SO3(ori),
                         vel_linear=vL, vel_angular=vA)
-        # δp must be in AnchorFrame; pass CraftFrame to trigger the check.
+        # δp must be in WorldFrame; pass CraftFrame to trigger the check.
         bad_dp = ir.Vec3[CraftFrame].input("bad_dp")
-        dθ     = ir.Vec3[AnchorFrame].input("dθ")
-        dvL    = ir.Vec3[AnchorFrame].input("dvL")
+        dθ     = ir.Vec3[WorldFrame].input("dθ")
+        dvL    = ir.Vec3[WorldFrame].input("dvL")
         dvA    = ir.Vec3[CraftFrame].input("dvA")
         with pytest.raises(FrameError, match="d_position"):
             rb.boxplus(bad_dp, dθ, dvL, dvA)

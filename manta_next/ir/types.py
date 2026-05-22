@@ -5,9 +5,9 @@ operators dispatch to CasADi while preserving and checking frame tags.
 
 Type parameterization uses `__class_getitem__` so the syntax reads cleanly:
 
-    Vec3[AnchorFrame]
+    Vec3[WorldFrame]
     Mat3[CraftFrame, PartFrame]
-    Quat[AnchorFrame, CraftFrame]
+    Quat[WorldFrame, CraftFrame]
 
 `Cls[args]` returns a small typed-constructor object (not the bare class).
 Its `.input(name)` and `.constant(value)` factories produce instances of the

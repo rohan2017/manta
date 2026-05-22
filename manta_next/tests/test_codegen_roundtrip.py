@@ -136,7 +136,7 @@ def test_python_cpp_roundtrip(tmp_path: Path):
                  for l in p.stdout.strip().splitlines()}
 
     # ---- 5: run the same loop in Python ----
-    tick = craft.compile_tick(gravity_anchor=(0.0, 0.0, -9.81))
+    tick = craft.compile_tick(gravity_world=(0.0, 0.0, -9.81))
     state = craft.initial_state()
     state["position"] = np.array([0.0, 0.0, 5.0])
     state["velocity"] = np.array([0.5, 0.0, 0.0])

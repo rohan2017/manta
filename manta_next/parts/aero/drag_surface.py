@@ -48,7 +48,7 @@ from __future__ import annotations
 import casadi as ca
 import numpy as np
 
-from ...ir.frames import AnchorFrame, CraftFrame
+from ...ir.frames import WorldFrame, CraftFrame
 from ...ir.types import Vec3
 from ..base import Parameter, Part, PartUpdate
 from ...ir.wrench import Wrench
@@ -158,19 +158,19 @@ class DragSurface(Part):
         # --- v_rel at the mount point, in CraftFrame -------------------------
         offset_craft = Vec3[CraftFrame].constant(tuple(self.transform))
         offset_anchor = ctx.orientation.apply(offset_craft)
-        p_anchor      = ctx.position + offset_anchor
+        p_world      = ctx.position + offset_anchor
 
-        # Velocity of the surface point in anchor frame.
+        # Velocity of the surface point in world frame.
         v_rot_craft = ctx.angular_velocity.cross(offset_craft)
-        v_rot_anchor = ctx.orientation.apply(v_rot_craft)
-        v_surface_anchor = ctx.velocity + v_rot_anchor
+        v_rot_world = ctx.orientation.apply(v_rot_craft)
+        v_surface_anchor = ctx.velocity + v_rot_world
 
-        fluid = ctx.fluid_field.state_at_sym(p_anchor)
+        fluid = ctx.fluid_field.state_at_sym(p_world)
         rho   = fluid.density
-        v_rel_anchor = v_surface_anchor - fluid.velocity
+        v_rel_world = v_surface_anchor - fluid.velocity
 
         # Polynomial drag/lift is expressed in CraftFrame; rotate v_rel.
-        v_rel_craft = ctx.orientation.conjugate().apply(v_rel_anchor)
+        v_rel_craft = ctx.orientation.conjugate().apply(v_rel_world)
         v_rel_mx    = v_rel_craft._mx
 
         # --- Σ_k ρ · A_k · (v_rel componentwise to k) ------------------------

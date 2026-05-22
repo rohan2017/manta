@@ -50,7 +50,7 @@ class EKF:
     def __init__(self,
                  craft,
                  *,
-                 gravity_anchor: tuple[float, float, float] = (0.0, 0.0, -9.81),
+                 gravity_world: tuple[float, float, float] = (0.0, 0.0, -9.81),
                  ) -> None:
         self.craft = craft
         self.spec  = StateSpec.from_craft(craft)
@@ -59,7 +59,7 @@ class EKF:
         n_tangent = self.spec.tangent_dim
 
         # --- Lift the Craft's tick to a flat ambient → ambient function -----
-        compiled_tick = craft.compile_tick(gravity_anchor=gravity_anchor)
+        compiled_tick = craft.compile_tick(gravity_world=gravity_world)
         cf = compiled_tick.casadi_function
 
         # Walk the tick's input names to enumerate part Inputs (order

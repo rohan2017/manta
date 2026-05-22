@@ -4,15 +4,15 @@ import numpy as np
 import pytest
 
 from manta_next import ir
-from manta_next.ir.frames import AnchorFrame, CraftFrame, AnchorFrame
+from manta_next.ir.frames import WorldFrame, CraftFrame, WorldFrame
 
 
 def test_translate_by_velocity():
     """The end-state target from the M0 spec — verifies tracing + compile + call."""
     with ir.Graph() as g:
-        p_scene = ir.Vec3[AnchorFrame].input("p_scene")
+        p_scene = ir.Vec3[WorldFrame].input("p_scene")
         v_craft = ir.Vec3[CraftFrame].input("v_craft")
-        q       = ir.Quat[AnchorFrame, CraftFrame].input("q")
+        q       = ir.Quat[WorldFrame, CraftFrame].input("q")
         dt      = ir.Scalar.input("dt")
 
         v_scene = q.apply(v_craft)
@@ -82,13 +82,13 @@ def test_compile_with_no_outputs_raises():
 
 def test_summary_includes_frames_and_io():
     with ir.Graph(name="demo") as g:
-        a = ir.Vec3[AnchorFrame].input("a")
-        b = ir.Vec3[AnchorFrame].input("b")
+        a = ir.Vec3[WorldFrame].input("a")
+        b = ir.Vec3[WorldFrame].input("b")
         g.output(a + b, "sum")
 
     s = g.summary()
     assert "demo" in s
-    assert "AnchorFrame" in s     # AnchorFrame is the alias
+    assert "WorldFrame" in s     # WorldFrame is the alias
     assert "sum" in s
     assert "Inputs (2)" in s
     assert "Outputs (1)" in s
