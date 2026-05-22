@@ -25,7 +25,7 @@ the graph to a different backend (C++/Eigen, C/embedded).
 from . import ir
 from .craft import Craft
 from .world import World, CompiledWorld
-from .planet import Planet
+from .planets import Planet
 from .couplings import Coupling
 
 __all__ = ["ir", "Craft", "World", "Coupling", "CompiledWorld", "Planet"]

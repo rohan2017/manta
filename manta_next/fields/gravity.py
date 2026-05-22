@@ -122,3 +122,69 @@ class PointMassGravity(Disturbance):
 
     def __repr__(self) -> str:
         return (f"<PointMassGravity position={self.position} GM={self.GM:.3e}>")
+
+
+class J2Gravity(Disturbance):
+    """J2 oblateness perturbation around a point mass.
+
+    For an oblate spheroid with equatorial bulge, the gravitational
+    potential acquires a J2 term beyond the point-mass; the
+    corresponding acceleration is
+
+        g_J2(r) = -(3/2) · J2 · GM · R_eq² / r⁵ · [
+            (1 - 5(ẑ·r̂)²) · r + 2(ẑ·r̂)·|r|·ẑ
+        ]
+
+    where ẑ is the polar (spin) axis. This is the perturbation only —
+    add it alongside a `PointMassGravity` to model the full field.
+
+    Args:
+        position    — (x, y, z) planet center in WorldFrame, m.
+        GM          — gravitational parameter (G·M), m³/s².
+        J2          — dimensionless J2 coefficient. Earth: 1.0826e-3.
+        eq_radius   — equatorial radius, m. Earth: 6.378e6.
+        polar_axis  — unit polar/spin axis in WorldFrame. Default
+                      (0, 0, 1).
+        eps         — softening length, m.
+    """
+
+    field_value_shape = _VEC3_ANCHOR
+
+    def __init__(self,
+                 position: tuple[float, float, float],
+                 GM: float,
+                 J2: float,
+                 eq_radius: float,
+                 polar_axis: tuple[float, float, float] = (0.0, 0.0, 1.0),
+                 eps: float = 1.0) -> None:
+        self.position = tuple(float(x) for x in position)
+        self.GM = float(GM)
+        self.J2 = float(J2)
+        self.eq_radius = float(eq_radius)
+        axis = ca.DM([float(polar_axis[0]),
+                      float(polar_axis[1]),
+                      float(polar_axis[2])])
+        n = float(ca.norm_2(axis))
+        if n == 0.0:
+            raise ValueError("J2Gravity: polar_axis must be nonzero.")
+        self._axis = axis / n
+        self.eps = float(eps)
+
+    def contribute_at_sym(self, point, t):
+        r_src = _VEC3_ANCHOR.constant(self.position)
+        r     = point - r_src
+        r_mx  = r._mx
+        r_sq  = ca.dot(r_mx, r_mx) + self.eps**2
+        r_mag = ca.sqrt(r_sq)
+        z_hat = self._axis
+        z_dot_r = ca.dot(z_hat, r_mx)
+        coef  = -1.5 * self.J2 * self.GM * (self.eq_radius ** 2) / (r_sq ** 2 * r_mag)
+        # cos²(latitude-complement) = (ẑ · r̂)² = (ẑ · r)² / |r|²
+        cos2 = (z_dot_r * z_dot_r) / r_sq
+        bracket = (1.0 - 5.0 * cos2) * r_mx + 2.0 * z_dot_r * z_hat
+        g_mx = coef * bracket
+        return _VEC3_ANCHOR.from_mx(g_mx)
+
+    def __repr__(self) -> str:
+        return (f"<J2Gravity position={self.position} GM={self.GM:.3e} "
+                f"J2={self.J2:.4e} R_eq={self.eq_radius:.3e}>")

@@ -68,6 +68,14 @@ class World:
         # Fields keyed by exact subclass (one GravityField per world, one
         # FluidField, …). Concrete subclasses query by class.
         self._fields: dict[type, Field] = {}
+        # Planets registered with this world. Each one contributes its
+        # standing field disturbances at compile() time via
+        # `planet.register_disturbances(world)`. Multi-planet supported;
+        # disturbances superpose into the shared field instances.
+        self._planets: list = []
+        # Set to True once compile() has walked the planet list — guards
+        # against double-registration if the user re-compiles.
+        self._planets_registered = False
 
     # ---- Fields ----------------------------------------------------------
 
@@ -95,9 +103,49 @@ class World:
         """Return the registered field of type `cls`, or None."""
         return self._fields.get(cls)
 
+    def get_or_create_field(self, cls: type) -> Field:
+        """Return the registered field of type `cls`, creating + adding
+        a fresh empty instance if none is registered. Used by
+        `Planet.register_disturbances` so a planet's contributions land
+        on the same field instance whether or not the user pre-added
+        one."""
+        if cls in self._fields:
+            return self._fields[cls]
+        instance = cls()
+        self.add_field(instance)
+        return instance
+
     @property
     def fields(self) -> tuple[Field, ...]:
         return tuple(self._fields.values())
+
+    @property
+    def planets(self) -> tuple:
+        return tuple(self._planets)
+
+    def add_planet(self, planet) -> "World":
+        """Register a planet with this world. The planet's
+        `register_disturbances(world)` is called at `world.compile()`
+        time, attaching its standing contributions to the world's
+        shared fields. Multi-planet worlds superpose contributions
+        from every registered planet.
+        """
+        from .planets.base import Planet
+        if not isinstance(planet, Planet):
+            raise TypeError(
+                f"World.add_planet: expected a Planet, got "
+                f"{type(planet).__name__}")
+        for existing in self._planets:
+            if existing is planet:
+                raise ValueError(
+                    f"World '{self.name}': planet {planet.name!r} already added")
+            if existing.name == planet.name:
+                raise ValueError(
+                    f"World '{self.name}': planet name {planet.name!r} "
+                    f"collides with an existing planet")
+        planet._world = self
+        self._planets.append(planet)
+        return self
 
     @property
     def crafts(self) -> tuple[Craft, ...]:
@@ -177,7 +225,24 @@ class World:
         multi-craft components (joined by Couplings) route through
         `compile_coupled_tick` to share a single tick over their full
         connected state.
+
+        Before tracing, every registered Planet's
+        `register_disturbances(self)` runs once — attaching the
+        planet's standing contributions to the world's shared fields.
+        Re-compile is idempotent (planets register at most once per
+        world).
         """
+        # Walk planets once, in registration order. A planet may create
+        # field instances via `world.get_or_create_field(...)`.
+        if not self._planets_registered:
+            for planet in self._planets:
+                planet.register_disturbances(self)
+            self._planets_registered = True
+
+        # Resolve any PlanetState-wrapped initial conditions to
+        # WorldFrame seeds at t=0.
+        self._resolve_planet_state_overrides()
+
         components = self._compute_components()
         compiled: dict[str, dict] = {}
         # Field lookups (shared across components).
@@ -232,6 +297,48 @@ class World:
                 }
         return CompiledWorld(compiled, self)
 
+    def _resolve_planet_state_overrides(self) -> None:
+        """Walk every craft entry and replace any `PlanetState`-wrapped
+        position / velocity with its WorldFrame equivalent at t=0,
+        using the wrapping planet's `planet_to_world(...)` transform.
+
+        Plain tuples / numpy arrays pass through unchanged.
+        """
+        from .planets.state import PlanetState
+        for entry in self._crafts:
+            overrides = entry["initial_state_overrides"]
+            pos = overrides.get("position")
+            vel = overrides.get("velocity")
+            # Resolve as a pair so the planet sees both together (its
+            # velocity transform depends on the position via ω × r).
+            pos_planet = pos if isinstance(pos, PlanetState) else None
+            vel_planet = vel if isinstance(vel, PlanetState) else None
+            if pos_planet is None and vel_planet is None:
+                continue
+            # If one is PlanetState the other should be too (or default
+            # plain (0,0,0) interpreted in the same frame).
+            planet = (pos_planet or vel_planet).planet
+            if pos_planet is not None and pos_planet.planet is not planet:
+                raise ValueError(
+                    f"World '{self.name}': craft "
+                    f"{entry['craft'].name!r}: position and velocity "
+                    f"reference different planets; pick one frame")
+            if vel_planet is not None and vel_planet.planet is not planet:
+                raise ValueError(
+                    f"World '{self.name}': craft "
+                    f"{entry['craft'].name!r}: position and velocity "
+                    f"reference different planets; pick one frame")
+            p_planet_val = (pos_planet.value
+                            if pos_planet is not None
+                            else tuple(pos))
+            v_planet_val = (vel_planet.value
+                            if vel_planet is not None
+                            else tuple(vel))
+            p_world, v_world = planet.planet_to_world(
+                p_planet_val, v_planet_val, t=0.0)
+            overrides["position"] = p_world
+            overrides["velocity"] = v_world
+
     def _compute_components(self) -> dict[str, list[dict]]:
         """Connected components of (craft, coupling) as an undirected
         graph. Returns a dict from component id (= first-craft name) to
@@ -278,8 +385,9 @@ class World:
     def __repr__(self) -> str:
         n_c = len(self._crafts)
         n_x = len(self._couplings)
+        n_p = len(self._planets)
         return (f"<World '{self.name}': {n_c} craft(s), "
-                f"{n_x} coupling(s)>")
+                f"{n_x} coupling(s), {n_p} planet(s)>")
 
 
 # ---------------------------------------------------------------------------
