@@ -204,7 +204,11 @@ def _trace_craft_pass1(g_ctx,
             saved_input_attrs[part] = saved_i
 
     # Per-part Noise plumbing — same shape as the single-craft path.
+    # White channels: one graph input, bind directly. RW channels: a
+    # state input (bias) + a driver input; after-tick state update
+    # `bias_next = bias + sqrt(dt) · driver`.
     saved_noise_attrs: dict[Part, dict[str, Any]] = {}
+    rw_bias_updates: list[tuple[str, Any]] = []   # (state_name, bias_next)
     for part in craft._parts:
         ndecls = part.noise_declarations()
         if not ndecls:
@@ -213,12 +217,40 @@ def _trace_craft_pass1(g_ctx,
         for nname, ndecl in ndecls.items():
             input_name = prefix + f"{part.name}.{nname}"
             frame = ndecl.frame or CraftFrame
+            if ndecl.kind == "white":
+                if ndecl.shape == "scalar":
+                    sym = ir.Scalar.input(input_name)
+                else:
+                    sym = ir.Vec3[frame].input(input_name)
+                saved_n[nname] = getattr(part, nname)
+                object.__setattr__(part, nname, sym)
+                continue
+            # kind == "rw"
+            sigma = float(getattr(part, f"{nname}_sigma"))
+            if sigma <= 0.0:
+                if ndecl.shape == "scalar":
+                    zero_sym = ir.Scalar.from_mx(ca.MX(0.0))
+                else:
+                    zero_sym = ir.Vec3[frame].from_mx(ca.MX.zeros(3, 1))
+                saved_n[nname] = getattr(part, nname)
+                object.__setattr__(part, nname, zero_sym)
+                continue
+            driver_name = f"{input_name}_driver"
             if ndecl.shape == "scalar":
-                sym = ir.Scalar.input(input_name)
+                bias_sym   = ir.Scalar.input(input_name)
+                driver_sym = ir.Scalar.input(driver_name)
+                sqrt_dt    = ca.sqrt(dt._mx)
+                bias_next_mx = bias_sym._mx + sqrt_dt * driver_sym._mx
+                bias_next = ir.Scalar.from_mx(bias_next_mx)
             else:
-                sym = ir.Vec3[frame].input(input_name)
+                bias_sym   = ir.Vec3[frame].input(input_name)
+                driver_sym = ir.Vec3[frame].input(driver_name)
+                sqrt_dt    = ca.sqrt(dt._mx)
+                bias_next_mx = bias_sym._mx + sqrt_dt * driver_sym._mx
+                bias_next = ir.Vec3[frame].from_mx(bias_next_mx)
             saved_n[nname] = getattr(part, nname)
-            object.__setattr__(part, nname, sym)
+            object.__setattr__(part, nname, bias_sym)
+            rw_bias_updates.append((input_name, bias_next))
         saved_noise_attrs[part] = saved_n
 
     # Symbolic kinematic + inertia passes over the part tree.
@@ -334,6 +366,7 @@ def _trace_craft_pass1(g_ctx,
         "inertia":           inertia,
         "new_state_outputs": new_state_outputs,
         "sensor_outputs":    sensor_outputs,
+        "rw_bias_updates":   rw_bias_updates,
         "saved_state_attrs": saved_state_attrs,
         "saved_input_attrs": saved_input_attrs,
         "saved_noise_attrs": saved_noise_attrs,
@@ -442,6 +475,10 @@ def _emit_per_craft_dynamics(g_ctx, craft, pc, dt) -> None:
     g_ctx.output(new_ang_vel,     prefix + "angular_velocity")
     for out_name, out_val in new_state_outputs:
         g_ctx.output(out_val, out_name)
+    # RW bias state outputs (per-craft prefix already baked into the
+    # `input_name` recorded during pass-1 plumbing).
+    for bias_name, bias_next in pc.get("rw_bias_updates", []):
+        g_ctx.output(bias_next, bias_name)
     for out_name, out_val in sensor_outputs:
         if not isinstance(out_val, _IRValue):
             raise TypeError(

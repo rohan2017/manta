@@ -120,6 +120,22 @@ class StateSpec:
                     raise NotImplementedError(
                         f"StateSpec: manifold {sdecl.manifold!r} on "
                         f"{part.name}.{sname} not yet supported.")
+            # RW Noise declarations synthesize a bias state slot per
+            # channel — `<part>.<name>` is the bias; the driver is a
+            # noise input handled by the EKF auto-Q path. R3 for vec3
+            # channels, R1 for scalar channels. Channels with
+            # sigma == 0 are inert (no bias state created).
+            for nname, ndecl in part.noise_declarations().items():
+                if ndecl.kind != "rw":
+                    continue
+                sigma = float(getattr(part, f"{nname}_sigma"))
+                if sigma <= 0.0:
+                    continue
+                key = f"{part.name}.{nname}"
+                if ndecl.shape == "scalar":
+                    add(key, 1, "R1", 1)
+                else:
+                    add(key, 3, "R3", 3)
 
         return cls(slots)
 

@@ -31,8 +31,10 @@ def test_output_not_in_initial_state():
     c.add(IMU("g"))
     state = c.initial_state()
     g_keys = [k for k in state if k.startswith("g.")]
-    # IMU declares two Noise slots (gyro_noise, accel_noise), but no
-    # state/input slots that would surface under the "g." prefix.
+    # IMU declares two white Noise channels (gyro_noise, accel_noise)
+    # plus two RW channels (gyro_bias, accel_bias) — but the RW
+    # channels default to sigma=0 (inert) so neither bias state nor
+    # driver shows up in initial_state. Only the two white drivers do.
     assert set(g_keys) == {"g.gyro_noise", "g.accel_noise"}
     # The actual Outputs are NOT in initial_state.
     assert "g.gyro"  not in state

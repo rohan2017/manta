@@ -119,38 +119,50 @@ class Input(_Declaration):
 
 
 class Noise(_Declaration):
-    """Per-tick white-Gaussian noise vector, declared at class scope.
+    """Per-tick noise channel declared at class scope.
 
-    The framework:
-      * Creates a graph input named `<part_name>.<noise_name>` each
-        compile (shape determined by `shape`).
-      * Rebinds the part attribute to the symbolic node before calling
-        `update()`, so `self.<noise_name>` reads as a `Vec3[frame]` (or
-        Scalar) inside the function body. Add it to a sensor reading
-        and the framework wires the noise through the graph.
-      * Initial state from `Craft.initial_state()` seeds the slot at
-        zero (clean signal). Sim callers draw fresh samples per tick
-        via `Craft.sample_noise(rng)` and merge into the state dict;
-        the EKF leaves the slot at zero and reads `Part.noise_R(name)`
-        for the measurement-noise covariance instead.
+    Two kinds:
+
+      * `kind="white"` (default) — per-tick i.i.d. Gaussian.
+        The framework creates a graph input named
+        `<part>.<noise_name>`, rebinds the part attribute to that
+        input, and the part adds it directly into its sensor reading
+        (or process expression). σ is the per-tick measurement stddev.
+
+      * `kind="rw"` — random-walk bias. The framework synthesizes:
+          - A **state slot** `<part>.<noise_name>` holding the bias.
+          - A driver noise input `<part>.<noise_name>_driver`.
+          - A state update each tick:
+                bias_next = bias + sqrt(dt) · driver,    driver ~ N(0, σ²).
+        Inside `update()`, `self.<noise_name>` reads the bias state
+        (the slowly-drifting current value) — typically added into
+        the sensor signal alongside a separate white channel. σ has
+        continuous σ/√Hz semantics; per-tick bias variance is dt·σ².
 
     Args:
         shape — "scalar" or "vec3". Default "vec3".
+        kind  — "white" (default) or "rw".
         frame — Frame class for the vec3 form. Default `CraftFrame`.
                 Ignored for scalar shape.
         sigma — 1-σ standard deviation, scalar (isotropic across axes).
-                R(name) returns σ²·I of the right size.
+                White: per-tick measurement stddev. RW: σ/√Hz drift
+                density.
     """
 
-    __slots__ = ("shape", "frame", "sigma")
+    __slots__ = ("shape", "kind", "frame", "sigma")
 
-    def __init__(self, shape: str = "vec3", frame=None,
+    def __init__(self, shape: str = "vec3", kind: str = "white",
+                 frame=None,
                  sigma: float = 0.0) -> None:
         super().__init__(default=None)
         if shape not in ("scalar", "vec3"):
             raise ValueError(
                 f"Noise: shape must be 'scalar' or 'vec3'; got {shape!r}")
+        if kind not in ("white", "rw"):
+            raise ValueError(
+                f"Noise: kind must be 'white' or 'rw'; got {kind!r}")
         self.shape = shape
+        self.kind  = kind
         self.frame = frame
         self.sigma = float(sigma)
 

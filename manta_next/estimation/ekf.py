@@ -88,6 +88,9 @@ class EKF:
 
         # Walk the tick signature: collect Inputs (ordered → flat u
         # vector) and Noise channels (ordered → flat n vector).
+        # Noise channels include both `kind="white"` (raw `<part>.<n>`)
+        # and `kind="rw"` drivers (`<part>.<n>_driver` — the RW bias
+        # itself is a state slot listed by `self.spec`, not a noise).
         self._input_names: list[str] = []
         self._noise_specs: list[dict[str, Any]] = []
         for i in range(cf.n_in()):
@@ -105,18 +108,31 @@ class EKF:
                     f"EKF: tick input {name!r} references unknown part.")
             if sub in part.input_declarations():
                 self._input_names.append(name)
-            elif sub in part.noise_declarations():
-                ndecl = part.noise_declarations()[sub]
-                dim = 1 if ndecl.shape == "scalar" else 3
+                continue
+            ndecls = part.noise_declarations()
+            if sub in ndecls and ndecls[sub].kind == "white":
+                ndecl = ndecls[sub]
+                dim   = 1 if ndecl.shape == "scalar" else 3
                 sigma = float(getattr(part, f"{sub}_sigma"))
                 self._noise_specs.append({
                     "part": part, "name": sub, "full": name,
                     "dim": dim, "sigma": sigma,
                 })
-            else:
-                raise RuntimeError(
-                    f"EKF: tick input {name!r} is neither an Input "
-                    f"nor a Noise.")
+                continue
+            if sub.endswith("_driver"):
+                bias_name = sub[: -len("_driver")]
+                if bias_name in ndecls and ndecls[bias_name].kind == "rw":
+                    ndecl = ndecls[bias_name]
+                    dim   = 1 if ndecl.shape == "scalar" else 3
+                    sigma = float(getattr(part, f"{bias_name}_sigma"))
+                    self._noise_specs.append({
+                        "part": part, "name": sub, "full": name,
+                        "dim": dim, "sigma": sigma,
+                    })
+                    continue
+            raise RuntimeError(
+                f"EKF: tick input {name!r} is neither an Input "
+                f"nor a recognized Noise channel.")
 
         self._u_defaults = np.array(
             [float(getattr(next(p for p in self.craft.parts

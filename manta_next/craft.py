@@ -495,11 +495,20 @@ class Craft:
                 saved_input_attrs[part] = saved
 
             # --- Per-part Noise plumbing ---------------------------------
-            # Each Noise declaration becomes a graph input vector. The
-            # default initial-state value is zero (clean signal — what
-            # the EKF wants). Sim callers draw a fresh sample per tick
-            # via `Craft.sample_noise(rng)`.
+            # Each Noise declaration becomes a graph input vector. For
+            # `kind="white"`, this is a per-tick noise driver input the
+            # part reads directly (e.g. inside a sensor expression).
+            # For `kind="rw"` with sigma > 0, the framework synthesizes:
+            #   * a STATE input `<part>.<name>` (the bias);
+            #   * a NOISE input `<part>.<name>_driver` (per-tick).
+            # `self.<name>` is rebound to the bias state inside
+            # `update()`. After the part runs, the framework emits a
+            # state update `bias_next = bias + sqrt(dt) · driver`.
+            # RW channels with sigma == 0 are inert — `self.<name>` is
+            # bound to a zero MX and no state slot is created.
             saved_noise_attrs: dict[Part, dict[str, Any]] = {}
+            # Track RW bias state outputs to emit after the part loop.
+            rw_bias_updates: list[tuple[str, Any]] = []   # (state_name, bias_next_mx)
             for part in self._parts:
                 ndecls = part.noise_declarations()
                 if not ndecls:
@@ -508,12 +517,44 @@ class Craft:
                 for nname, ndecl in ndecls.items():
                     input_name = f"{part.name}.{nname}"
                     frame = ndecl.frame or CraftFrame
+                    if ndecl.kind == "white":
+                        if ndecl.shape == "scalar":
+                            sym = ir.Scalar.input(input_name)
+                        else:
+                            sym = ir.Vec3[frame].input(input_name)
+                        saved[nname] = getattr(part, nname)
+                        object.__setattr__(part, nname, sym)
+                        continue
+                    # kind == "rw"
+                    sigma = float(getattr(part, f"{nname}_sigma"))
+                    if sigma <= 0.0:
+                        # Inert RW channel: bind `self.<nname>` to a
+                        # zero constant; no state slot, no driver.
+                        if ndecl.shape == "scalar":
+                            zero_sym = ir.Scalar.from_mx(ca.MX(0.0))
+                        else:
+                            zero_sym = ir.Vec3[frame].from_mx(
+                                ca.MX.zeros(3, 1))
+                        saved[nname] = getattr(part, nname)
+                        object.__setattr__(part, nname, zero_sym)
+                        continue
+                    # Active RW channel: bias state + driver noise.
+                    driver_name = f"{input_name}_driver"
                     if ndecl.shape == "scalar":
-                        sym = ir.Scalar.input(input_name)
+                        bias_sym   = ir.Scalar.input(input_name)
+                        driver_sym = ir.Scalar.input(driver_name)
+                        sqrt_dt    = ca.sqrt(dt._mx)
+                        bias_next_mx = bias_sym._mx + sqrt_dt * driver_sym._mx
+                        bias_next = ir.Scalar.from_mx(bias_next_mx)
                     else:
-                        sym = ir.Vec3[frame].input(input_name)
+                        bias_sym   = ir.Vec3[frame].input(input_name)
+                        driver_sym = ir.Vec3[frame].input(driver_name)
+                        sqrt_dt    = ca.sqrt(dt._mx)
+                        bias_next_mx = bias_sym._mx + sqrt_dt * driver_sym._mx
+                        bias_next = ir.Vec3[frame].from_mx(bias_next_mx)
                     saved[nname] = getattr(part, nname)
-                    object.__setattr__(part, nname, sym)
+                    object.__setattr__(part, nname, bias_sym)
+                    rw_bias_updates.append((input_name, bias_next))
                 saved_noise_attrs[part] = saved
 
             # --- Symbolic kinematic pass --------------------------------
@@ -750,6 +791,9 @@ class Craft:
             # Per-part state outputs (names like "motor.angle").
             for out_name, out_val in new_state_outputs:
                 g.output(out_val, out_name)
+            # RW bias state outputs (names like "imu.gyro_bias").
+            for bias_name, bias_next_val in rw_bias_updates:
+                g.output(bias_next_val, bias_name)
             # Per-part sensor outputs (names like "imu.gyro").
             for out_name, out_val in sensor_outputs:
                 if not isinstance(out_val, _IRValue):
@@ -775,8 +819,15 @@ class Craft:
         out: dict[str, Any] = {}
         for part in self._parts:
             for nname, ndecl in part.noise_declarations().items():
-                key = f"{part.name}.{nname}"
                 sigma = float(getattr(part, f"{nname}_sigma"))
+                if ndecl.kind == "white":
+                    key = f"{part.name}.{nname}"
+                else:
+                    # Inert RW channels (sigma == 0) aren't in the
+                    # graph; skip emitting a sample.
+                    if sigma <= 0.0:
+                        continue
+                    key = f"{part.name}.{nname}_driver"
                 if ndecl.shape == "scalar":
                     out[key] = (rng.normal(0.0, sigma)
                                 if sigma > 0.0 else 0.0)
@@ -809,14 +860,29 @@ class Craft:
             # the user can update them per-tick or leave them alone.
             for iname in part.input_declarations():
                 state[f"{part.name}.{iname}"] = float(getattr(part, iname))
-            # Noise slots: seed at zero (clean signal). Sim callers
-            # overwrite via `craft.sample_noise(rng)` each tick; the EKF
-            # leaves them at zero and reads `part.noise_R(name)` for the
-            # measurement-noise covariance instead.
+            # Noise / RW-bias slots. Seed everything at zero.
+            #   * White: one slot `<part>.<nname>` (the per-tick driver).
+            #     EKF leaves it at zero; sim overwrites via
+            #     `craft.sample_noise(rng)`.
+            #   * RW (sigma > 0): two slots — `<part>.<nname>` is the
+            #     bias state, `<part>.<nname>_driver` is the per-tick
+            #     driver. RW channels with sigma == 0 are inert.
             for nname, ndecl in part.noise_declarations().items():
                 shape = 3 if ndecl.shape == "vec3" else 1
-                state[f"{part.name}.{nname}"] = (
-                    np.zeros(shape, dtype=float) if shape > 1 else 0.0)
+                zero  = (np.zeros(shape, dtype=float)
+                         if shape > 1 else 0.0)
+                if ndecl.kind == "white":
+                    state[f"{part.name}.{nname}"] = zero
+                else:
+                    sigma = float(getattr(part, f"{nname}_sigma"))
+                    if sigma <= 0.0:
+                        continue
+                    state[f"{part.name}.{nname}"] = (
+                        np.zeros(shape, dtype=float)
+                        if shape > 1 else 0.0)
+                    state[f"{part.name}.{nname}_driver"] = (
+                        np.zeros(shape, dtype=float)
+                        if shape > 1 else 0.0)
         unknown = set(overrides) - set(state)
         if unknown:
             raise KeyError(
