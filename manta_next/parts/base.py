@@ -260,6 +260,17 @@ class Part:
     # Subclasses MAY override these for static info / part-name dispatch.
     cpp_class: ClassVar[str] = ""           # filled in by future codegen backends
 
+    # Fields the part requires registered on the World. Verified at
+    # `world.compile()`. Subclasses override with concrete Field subclasses
+    # (e.g., `requires_fields = [GravityField]` for a Mass-like part).
+    # Use Field BASE classes — the registered field may be any subclass.
+    requires_fields: ClassVar[list[type]] = []
+
+    # Planet subclass the part requires. None ⇒ no planet required.
+    # Verified at `world.compile()`. Subclasses override; the matched
+    # planet is then accessible via `ctx.planet(PlanetCls)`.
+    requires_planet: ClassVar[type | None] = None
+
     # Universal: every part has a static (parent → part) offset.
     transform: "tuple[float, float, float]" = Parameter((0.0, 0.0, 0.0))
 

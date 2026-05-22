@@ -139,7 +139,8 @@ class TickContext:
                  "angular_velocity", "velocity_body",
                  "R_craft_from_input",
                  "acceleration_world", "acceleration_body",
-                 "angular_acceleration")
+                 "angular_acceleration",
+                 "_world")
 
     def __init__(self,
                  *,
@@ -158,7 +159,8 @@ class TickContext:
                  R_craft_from_input: Mat3,
                  acceleration_world: Vec3,
                  acceleration_body: Vec3,
-                 angular_acceleration: Vec3) -> None:
+                 angular_acceleration: Vec3,
+                 world=None) -> None:
         self.gravity = gravity
         self.gravity_field = gravity_field
         self.fluid_field = fluid_field
@@ -171,6 +173,7 @@ class TickContext:
         self.velocity = velocity
         self.angular_velocity = angular_velocity
         self.velocity_body = velocity_body
+        self._world = world
         # Body-frame rotation of the part's INPUT frame. Identity for any
         # part mounted directly on the craft root; for a Mass / Joint
         # child of an outer Joint, this carries the outer joint's angle.
@@ -180,6 +183,42 @@ class TickContext:
         self.acceleration_world  = acceleration_world
         self.acceleration_body    = acceleration_body
         self.angular_acceleration = angular_acceleration
+
+    # ----- World introspection helpers ----------------------------------
+
+    def has_field(self, cls: type) -> bool:
+        """True iff a field of type `cls` (or a subclass) is registered
+        on the world driving this tick. Returns False when no World is
+        attached (e.g., a bare `Craft.compile_tick()` call with no
+        world)."""
+        if self._world is None:
+            return False
+        for f in self._world.fields:
+            if isinstance(f, cls):
+                return True
+        return False
+
+    def get_field(self, cls: type):
+        """Return the registered field of type `cls`, or None.
+        Symmetric to `World.get_field`. Convenient for parts that want
+        to enable extra behavior if a field is present."""
+        if self._world is None:
+            return None
+        for f in self._world.fields:
+            if isinstance(f, cls):
+                return f
+        return None
+
+    def planet(self, cls: type):
+        """Return the registered planet of type `cls` (or subclass),
+        or None. Parts declaring `requires_planet = EarthClass` reach
+        for the concrete instance through this accessor."""
+        if self._world is None:
+            return None
+        for p in self._world.planets:
+            if isinstance(p, cls):
+                return p
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -297,6 +336,10 @@ class Craft:
         from .parts.base import RootPart
         self.name = name
         self.root = RootPart(f"{name}_root")
+        # Set by World.compile() — used by TickContext helpers
+        # (`ctx.has_field`, `ctx.get_field`, `ctx.planet`) so parts can
+        # introspect optional registrations.
+        self._world: "World | None" = None
 
     def add(self, part: Part) -> Part:
         """Attach a part to the craft's root. Equivalent to
@@ -522,6 +565,7 @@ class Craft:
                     collision_field=collision_field,
                     t=t,
                     dt=dt,
+                    world=self._world,
                     position=kin.origin_in_world,
                     orientation=orientation,
                     velocity=kin.velocity_origin,

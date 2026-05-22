@@ -230,7 +230,8 @@ class World:
         `register_disturbances(self)` runs once — attaching the
         planet's standing contributions to the world's shared fields.
         Re-compile is idempotent (planets register at most once per
-        world).
+        world). Then each craft's parts are checked against
+        `requires_fields` / `requires_planet`.
         """
         # Walk planets once, in registration order. A planet may create
         # field instances via `world.get_or_create_field(...)`.
@@ -242,6 +243,30 @@ class World:
         # Resolve any PlanetState-wrapped initial conditions to
         # WorldFrame seeds at t=0.
         self._resolve_planet_state_overrides()
+
+        # Verify per-part `requires_fields` / `requires_planet` against
+        # the world's registry. Stamp each craft with a back-pointer so
+        # parts can introspect fields/planets via TickContext helpers.
+        for entry in self._crafts:
+            craft = entry["craft"]
+            craft._world = self
+            for part in craft.parts:
+                for req_cls in getattr(type(part), "requires_fields", []):
+                    if self.get_field(req_cls) is None and not any(
+                            isinstance(f, req_cls) for f in self.fields):
+                        raise ValueError(
+                            f"World '{self.name}': part "
+                            f"{type(part).__name__}('{part.name}') "
+                            f"requires a registered {req_cls.__name__} but "
+                            f"none is attached to this world.")
+                req_planet = getattr(type(part), "requires_planet", None)
+                if req_planet is not None and not any(
+                        isinstance(p, req_planet) for p in self._planets):
+                    raise ValueError(
+                        f"World '{self.name}': part "
+                        f"{type(part).__name__}('{part.name}') "
+                        f"requires a {req_planet.__name__} planet but "
+                        f"none is registered with this world.")
 
         components = self._compute_components()
         compiled: dict[str, dict] = {}
