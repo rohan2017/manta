@@ -45,14 +45,29 @@ def _eigen_type_for(slot: StateSlot) -> str:
 def _state_field_init(slot: StateSlot, craft) -> str:
     """C++ initializer expression for the State field's default value.
 
-    For R3/R1 the default is zero; SO3 default is (1, 0, 0, 0); part R1
-    slots take their declaration's init value (which may be non-zero).
+    For R3/R1 the default is zero; SO3 default is (1, 0, 0, 0); part
+    User-State slots take their declaration's init value (which may be
+    non-zero). RW-bias state slots (synthesized from Noise(kind="rw"))
+    take zero, matching the bias seed in `Craft.initial_state()`.
     """
     if "." in slot.name:
-        part_name, state_name = slot.name.split(".", 1)
+        part_name, sub = slot.name.split(".", 1)
         part = next(p for p in craft.parts if p.name == part_name)
-        init = float(getattr(part, state_name))
-        return repr(init)
+        # User-declared State slot — its init is the declaration's
+        # `init` value (scalar).
+        if sub in part.state_declarations():
+            init = float(getattr(part, sub))
+            return repr(init)
+        # RW-bias state slot — synthesized from a Noise(kind="rw")
+        # declaration; the bias starts at zero.
+        if sub in part.noise_declarations() \
+                and part.noise_declarations()[sub].kind == "rw":
+            if slot.manifold == "R3":
+                return "Eigen::Vector3d::Zero()"
+            return "0.0"
+        raise RuntimeError(
+            f"wrapper: state slot {slot.name!r} is neither a user "
+            f"State nor an RW bias.")
     if slot.manifold == "R3":
         return "Eigen::Vector3d::Zero()"
     if slot.manifold == "SO3":

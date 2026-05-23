@@ -234,7 +234,14 @@ def _discover_input_names(cf: ca.Function,
                 out.append(name)
                 continue
             if part and sub in part.noise_declarations():
-                continue   # handled by _discover_noise_names
+                # White driver (RW drivers carry the `_driver` suffix
+                # below and are not in noise_declarations directly).
+                continue
+            if (part and sub.endswith("_driver")
+                    and sub[: -len("_driver")] in part.noise_declarations()
+                    and part.noise_declarations()[sub[: -len("_driver")]].kind
+                        == "rw"):
+                continue   # RW driver input
         raise RuntimeError(
             f"extract: tick input {name!r} not in StateSpec and not a "
             f"recognized part Input or Noise.")
@@ -242,7 +249,8 @@ def _discover_input_names(cf: ca.Function,
 
 
 def _discover_noise_names(cf: ca.Function, craft) -> list[str]:
-    """Return the ordered list of Noise channels exposed by the tick."""
+    """Return the ordered list of Noise channels (white drivers + RW
+    drivers) exposed by the tick."""
     out: list[str] = []
     for i in range(cf.n_in()):
         name = cf.name_in(i)
@@ -250,7 +258,15 @@ def _discover_noise_names(cf: ca.Function, craft) -> list[str]:
             continue
         part_name, sub = name.split(".", 1)
         part = next((p for p in craft.parts if p.name == part_name), None)
-        if part and sub in part.noise_declarations():
+        if part is None:
+            continue
+        if sub in part.noise_declarations() \
+                and part.noise_declarations()[sub].kind == "white":
+            out.append(name)
+        elif (sub.endswith("_driver")
+              and sub[: -len("_driver")] in part.noise_declarations()
+              and part.noise_declarations()[sub[: -len("_driver")]].kind
+                  == "rw"):
             out.append(name)
     return out
 
@@ -283,14 +299,25 @@ def _evaluate_tick_flat(cf: ca.Function,
             sliced.append(u_sym[u_index[name]])
         elif "." in name and craft is not None:
             # Noise channel — feed zero of the right shape (predict /
-            # H jacobian evaluate the clean tick).
+            # H jacobian evaluate the clean tick). White: name matches
+            # a noise declaration directly. RW driver: name ends in
+            # `_driver`, prefix matches an RW noise declaration.
             part_name, sub = name.split(".", 1)
             part = next((p for p in craft.parts if p.name == part_name), None)
-            if part and sub in part.noise_declarations():
+            if part and sub in part.noise_declarations() \
+                    and part.noise_declarations()[sub].kind == "white":
                 ndecl = part.noise_declarations()[sub]
                 dim = 1 if ndecl.shape == "scalar" else 3
                 sliced.append(ca.MX.zeros(dim, 1))
                 continue
+            if (part and sub.endswith("_driver")):
+                bias = sub[: -len("_driver")]
+                if (bias in part.noise_declarations()
+                        and part.noise_declarations()[bias].kind == "rw"):
+                    ndecl = part.noise_declarations()[bias]
+                    dim = 1 if ndecl.shape == "scalar" else 3
+                    sliced.append(ca.MX.zeros(dim, 1))
+                    continue
             raise RuntimeError(f"extract: tick input {name!r} not handled.")
         else:
             raise RuntimeError(f"extract: tick input {name!r} not handled.")
