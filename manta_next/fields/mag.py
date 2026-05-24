@@ -74,7 +74,8 @@ class UniformMag(Disturbance):
 
     field_value_shape = _VEC3_ANCHOR
 
-    def __init__(self, B_vec: tuple[float, float, float]) -> None:
+    def __init__(self, B_vec: tuple[float, float, float], *, name: str | None = None) -> None:
+        super().__init__(name=name)
         self.B_vec = tuple(float(x) for x in B_vec)
         if len(self.B_vec) != 3:
             raise ValueError(
@@ -108,7 +109,8 @@ class DipoleMag(Disturbance):
     def __init__(self,
                  position: tuple[float, float, float],
                  moment: tuple[float, float, float],
-                 eps: float = 1e-3) -> None:
+                 eps: float = 1e-3, *, name: str | None = None) -> None:
+        super().__init__(name=name)
         self.position = tuple(float(x) for x in position)
         self.moment   = tuple(float(x) for x in moment)
         self.eps      = float(eps)

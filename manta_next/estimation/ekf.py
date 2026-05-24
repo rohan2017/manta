@@ -98,58 +98,55 @@ class EKF:
         cf = compiled_tick.casadi_function
 
         # Walk the tick signature: collect Inputs and Noise channels.
-        # Names are flat-prefixed `<craft>.<part>.<sub>` (or just
-        # `<craft>.<rigid>` for body slots). The EKF's StateSpec uses
-        # the same prefixed names, so spec membership is the
-        # "is this a state?" check.
+        # Names are flat-prefixed `<owner>.<sub>` where `<owner>` is a
+        # craft name or a field-disturbance name. The EKF's StateSpec
+        # uses the same prefixed names — spec membership is the
+        # "is this a state slot?" check.
+        # Index field disturbances by name for noise-channel routing.
+        dist_by_name: dict[str, Any] = {}
+        from ..fields.base import Disturbance
+        for field in world.fields:
+            for dist in field._disturbances:
+                if isinstance(dist, Disturbance):
+                    dist_by_name[dist.name] = dist
+
         self._input_names: list[str] = []
         self._noise_specs: list[dict[str, Any]] = []
         for i in range(cf.n_in()):
             name = cf.name_in(i)
             if name in ("dt", "t") or name in self.spec:
                 continue
-            # Expect `<craft>.<part>.<sub>` (rigid slots are already in
-            # spec via the prefix; everything else is part-scoped).
             head, _, rest = name.partition(".")
             craft = next((c for c in self.crafts if c.name == head), None)
-            if craft is None or "." not in rest:
-                raise RuntimeError(
-                    f"EKF: tick input {name!r} not in spec and not in the "
-                    f"`<craft>.<part>.<sub>` shape.")
-            part_name, sub = rest.split(".", 1)
-            part = next((p for p in craft.parts
-                         if p.name == part_name), None)
-            if part is None:
-                raise RuntimeError(
-                    f"EKF: tick input {name!r}: unknown part "
-                    f"{part_name!r} on craft {craft.name!r}.")
-            if sub in part.input_declarations():
-                self._input_names.append(name)
-                continue
-            ndecls = part.noise_declarations()
-            if sub in ndecls and ndecls[sub].kind == "white":
-                ndecl = ndecls[sub]
-                dim   = 1 if ndecl.shape == "scalar" else 3
-                sigma = float(getattr(part, f"{sub}_sigma"))
-                self._noise_specs.append({
-                    "craft": craft, "part": part, "name": sub,
-                    "full": name, "dim": dim, "sigma": sigma,
-                })
-                continue
-            if sub.endswith("_driver"):
-                bias_name = sub[: -len("_driver")]
-                if bias_name in ndecls and ndecls[bias_name].kind == "rw":
-                    ndecl = ndecls[bias_name]
-                    dim   = 1 if ndecl.shape == "scalar" else 3
-                    sigma = float(getattr(part, f"{bias_name}_sigma"))
-                    self._noise_specs.append({
-                        "craft": craft, "part": part, "name": sub,
-                        "full": name, "dim": dim, "sigma": sigma,
-                    })
+            dist  = dist_by_name.get(head)
+            if craft is not None:
+                # Per-craft Input or Noise.
+                if "." not in rest:
+                    raise RuntimeError(
+                        f"EKF: tick input {name!r} not in spec and not "
+                        f"in the `<craft>.<part>.<sub>` shape.")
+                part_name, sub = rest.split(".", 1)
+                part = next((p for p in craft.parts
+                             if p.name == part_name), None)
+                if part is None:
+                    raise RuntimeError(
+                        f"EKF: tick input {name!r}: unknown part "
+                        f"{part_name!r} on craft {craft.name!r}.")
+                if sub in part.input_declarations():
+                    self._input_names.append(name)
                     continue
+                self._classify_noise_input(
+                    name, part, sub, owner_label=f"craft '{craft.name}'")
+                continue
+            if dist is not None:
+                # Per-disturbance Noise (state slots already in spec).
+                self._classify_noise_input(
+                    name, dist, rest,
+                    owner_label=f"disturbance '{dist.name}'")
+                continue
             raise RuntimeError(
-                f"EKF: tick input {name!r} is neither an Input "
-                f"nor a recognized Noise channel.")
+                f"EKF: tick input {name!r} doesn't match any craft or "
+                f"registered disturbance.")
 
         # Input defaults: look up each `<craft>.<part>.<input>` on its
         # owning part instance.
@@ -281,16 +278,16 @@ class EKF:
                         "craft":   craft,
                     }
 
-        # Initial state + covariance. Initial state comes from each
-        # craft's add_craft overrides (already PlanetState-resolved),
-        # packed into the joint flat layout in spec order.
+        # Initial state + covariance. Per-owner nested seed (crafts +
+        # disturbances), flattened into the spec's flat layout.
         init_flat: dict[str, Any] = {}
-        for entry in world._crafts:
-            craft = entry["craft"]
-            per_craft = craft.initial_state(**entry["initial_state_overrides"])
-            for k, v in per_craft.items():
-                init_flat[f"{craft.name}.{k}"] = v
-        self._x = self.spec.pack(init_flat)
+        for owner_name, owner_state in world._initial_state_dict().items():
+            for k, v in owner_state.items():
+                init_flat[f"{owner_name}.{k}"] = v
+        # Only pack keys the spec knows about (white noise drivers are
+        # initial-state entries but NOT spec slots).
+        init_for_pack = {k: v for k, v in init_flat.items() if k in self.spec}
+        self._x = self.spec.pack(init_for_pack)
         self._P = np.eye(n_tangent) * 1e-2
 
     # ------------------------------------------------------------------
@@ -348,6 +345,40 @@ class EKF:
             chunks.append(r)
         return ca.vertcat(*chunks)
 
+    def _classify_noise_input(self, full_name: str, owner, sub: str,
+                              owner_label: str) -> None:
+        """Append a noise-spec entry for `<owner>.<sub>` if it matches a
+        white noise channel directly, or for `<owner>.<sub>_driver` if
+        it matches an RW Noise channel via its driver-suffix.
+
+        `owner` can be a Part or a Disturbance — both expose
+        `noise_declarations()` with the same shape.
+        """
+        ndecls = owner.noise_declarations()
+        if sub in ndecls and ndecls[sub].kind == "white":
+            ndecl = ndecls[sub]
+            dim   = 1 if ndecl.shape == "scalar" else 3
+            sigma = float(getattr(owner, f"{sub}_sigma"))
+            self._noise_specs.append({
+                "owner": owner, "name": sub, "full": full_name,
+                "dim": dim, "sigma": sigma,
+            })
+            return
+        if sub.endswith("_driver"):
+            bias_name = sub[: -len("_driver")]
+            if bias_name in ndecls and ndecls[bias_name].kind == "rw":
+                ndecl = ndecls[bias_name]
+                dim   = 1 if ndecl.shape == "scalar" else 3
+                sigma = float(getattr(owner, f"{bias_name}_sigma"))
+                self._noise_specs.append({
+                    "owner": owner, "name": sub, "full": full_name,
+                    "dim": dim, "sigma": sigma,
+                })
+                return
+        raise RuntimeError(
+            f"EKF: tick input {full_name!r} on {owner_label} is neither "
+            f"an Input nor a recognized Noise channel.")
+
     def _lookup_input_default(self, full_name: str) -> float:
         """Resolve `<craft>.<part>.<input>` to its part-instance value."""
         craft_name, rest = full_name.split(".", 1)
@@ -404,14 +435,15 @@ class EKF:
         return self._P.copy()
 
     def state_dict(self) -> dict[str, dict[str, Any]]:
-        """Current estimate as `{craft.name: {slot: value}}` — same
-        nested shape as `CompiledWorld.initial_state()`.
+        """Current estimate as `{owner: {slot: value}}` — owners are
+        the world's crafts and any state-bearing field disturbances.
+        Same nested shape as `CompiledWorld.initial_state()`.
         """
         flat = self.spec.unpack(self._x)
-        nested: dict[str, dict[str, Any]] = {c.name: {} for c in self.crafts}
+        nested: dict[str, dict[str, Any]] = {}
         for full_name, val in flat.items():
-            craft_name, slot = full_name.split(".", 1)
-            nested[craft_name][slot] = val
+            owner_name, slot = full_name.split(".", 1)
+            nested.setdefault(owner_name, {})[slot] = val
         return nested
 
     def reset(self, *,
@@ -427,21 +459,16 @@ class EKF:
         """
         if state is not None:
             full_flat: dict[str, Any] = {}
-            # Seed from the world's per-craft defaults (already
-            # PlanetState-resolved).
-            for entry in self.world._crafts:
-                craft = entry["craft"]
-                per_craft = craft.initial_state(
-                    **entry["initial_state_overrides"])
-                for k, v in per_craft.items():
-                    full_flat[f"{craft.name}.{k}"] = v
-            # Apply user overrides (either flat or nested).
+            for owner_name, owner_state in self.world._initial_state_dict().items():
+                for k, v in owner_state.items():
+                    full_flat[f"{owner_name}.{k}"] = v
             for k, v in state.items():
                 if isinstance(v, dict):
                     for slot, val in v.items():
                         full_flat[f"{k}.{slot}"] = val
                 else:
                     full_flat[k] = v
+            full_flat = {k: v for k, v in full_flat.items() if k in self.spec}
             self._x = self.spec.pack(full_flat)
         if P is not None:
             P = np.asarray(P, dtype=float)

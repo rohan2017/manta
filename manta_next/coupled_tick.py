@@ -108,6 +108,13 @@ def compile_coupled_tick(crafts: list,
         dt = ir.Scalar.input("dt")
         t  = ir.Scalar.input("t")
 
+        # Pass 0: plumb State/Noise declarations on field disturbances.
+        # These rebinds need to be in scope BEFORE any part's update()
+        # queries a field, so they happen first.
+        all_fields = [gravity_field, fluid_field, mag_field, collision_field]
+        dist_saved_attrs, dist_state_outputs = _plumb_field_disturbances(
+            all_fields, dt)
+
         # Pass 1: per-craft inputs, TickContext, part wrench aggregation,
         # state/input rebinds. We keep all the symbolic handles in
         # `per_craft` so we can splice in coupling wrenches between
@@ -133,7 +140,117 @@ def compile_coupled_tick(crafts: list,
             _restore_part_attrs(craft, pc)
             _emit_per_craft_dynamics(g, craft, pc, dt)
 
+        # Disturbance state outputs (deterministic passthrough for plain
+        # State; bias_next = bias + sqrt(dt)·driver for RW Noise).
+        for out_name, out_val in dist_state_outputs:
+            g.output(out_val, out_name)
+
+        # Restore disturbance attributes (so the disturbance instance
+        # stays reusable across compiles).
+        for dist, saved in dist_saved_attrs:
+            for attr_name, attr_val in saved.items():
+                object.__setattr__(dist, attr_name, attr_val)
+
     return g.compile(defaults={"t": 0.0})
+
+
+# ---------------------------------------------------------------------------
+# Field-disturbance state plumbing
+# ---------------------------------------------------------------------------
+
+def _plumb_field_disturbances(fields, dt) -> tuple[list, list[tuple[str, Any]]]:
+    """Walk every disturbance on each field, rebinding its declared
+    State / Noise attributes to symbolic graph inputs. Returns:
+
+      * `saved_attrs` — list of `(disturbance, {attr_name: prev_value})`
+        for the restoration step.
+      * `state_outputs` — list of `(output_name, output_value)` that the
+        caller emits as graph outputs after the part-loop completes.
+    """
+    from .fields.base import Disturbance
+    from .parts.base import Noise, State
+
+    saved_attrs: list = []
+    state_outputs: list[tuple[str, Any]] = []
+    seen_names: set[str] = set()
+
+    for field in fields:
+        if field is None:
+            continue
+        for dist in field._disturbances:
+            if not isinstance(dist, Disturbance):
+                continue
+            sdecls = dist.state_declarations()
+            ndecls = dist.noise_declarations()
+            if not sdecls and not ndecls:
+                continue
+            if dist.name in seen_names:
+                raise ValueError(
+                    f"compile_coupled_tick: duplicate disturbance name "
+                    f"{dist.name!r}. Disturbance names must be unique "
+                    f"within a world.")
+            seen_names.add(dist.name)
+
+            prefix  = f"{dist.name}."
+            saved: dict[str, Any] = {}
+
+            # User-declared State slots: input → identity passthrough.
+            # (Disturbance state advances only via paired RW Noise.)
+            for sname, sdecl in sdecls.items():
+                if sdecl.manifold != "R1":
+                    raise NotImplementedError(
+                        f"{type(dist).__name__}('{dist.name}'): State "
+                        f"manifold {sdecl.manifold!r} not yet supported "
+                        f"on disturbance-declared state.")
+                sym = ir.Scalar.input(prefix + sname)
+                saved[sname] = getattr(dist, sname)
+                object.__setattr__(dist, sname, sym)
+                state_outputs.append((prefix + sname, sym))
+
+            # Noise channels.
+            for nname, ndecl in ndecls.items():
+                frame = ndecl.frame or WorldFrame
+                if ndecl.kind == "white":
+                    if ndecl.shape == "scalar":
+                        sym = ir.Scalar.input(prefix + nname)
+                    else:
+                        sym = ir.Vec3[frame].input(prefix + nname)
+                    saved[nname] = getattr(dist, nname)
+                    object.__setattr__(dist, nname, sym)
+                    continue
+                # kind == "rw".
+                sigma = float(getattr(dist, f"{nname}_sigma"))
+                if sigma <= 0.0:
+                    # Inert: bind to zero, no slot, no driver.
+                    if ndecl.shape == "scalar":
+                        zero_sym = ir.Scalar.from_mx(ca.MX(0.0))
+                    else:
+                        zero_sym = ir.Vec3[frame].from_mx(
+                            ca.MX.zeros(3, 1))
+                    saved[nname] = getattr(dist, nname)
+                    object.__setattr__(dist, nname, zero_sym)
+                    continue
+                # Active RW: bias state + driver input.
+                driver_name = prefix + f"{nname}_driver"
+                if ndecl.shape == "scalar":
+                    bias_sym   = ir.Scalar.input(prefix + nname)
+                    driver_sym = ir.Scalar.input(driver_name)
+                    sqrt_dt    = ca.sqrt(dt._mx)
+                    bias_next  = ir.Scalar.from_mx(
+                        bias_sym._mx + sqrt_dt * driver_sym._mx)
+                else:
+                    bias_sym   = ir.Vec3[frame].input(prefix + nname)
+                    driver_sym = ir.Vec3[frame].input(driver_name)
+                    sqrt_dt    = ca.sqrt(dt._mx)
+                    bias_next  = ir.Vec3[frame].from_mx(
+                        bias_sym._mx + sqrt_dt * driver_sym._mx)
+                saved[nname] = getattr(dist, nname)
+                object.__setattr__(dist, nname, bias_sym)
+                state_outputs.append((prefix + nname, bias_next))
+
+            saved_attrs.append((dist, saved))
+
+    return saved_attrs, state_outputs
 
 
 # ---------------------------------------------------------------------------

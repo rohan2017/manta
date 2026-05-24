@@ -109,7 +109,8 @@ class UniformFluid(Disturbance):
 
     def __init__(self,
                  density: float,
-                 velocity: tuple[float, float, float] = (0.0, 0.0, 0.0)) -> None:
+                 velocity: tuple[float, float, float] = (0.0, 0.0, 0.0), *, name: str | None = None) -> None:
+        super().__init__(name=name)
         self.density  = float(density)
         self.velocity = tuple(float(x) for x in velocity)
         if len(self.velocity) != 3:
@@ -143,7 +144,8 @@ class CurrentFlow(Disturbance):
 
     field_value_shape = FluidState
 
-    def __init__(self, velocity: tuple[float, float, float]) -> None:
+    def __init__(self, velocity: tuple[float, float, float], *, name: str | None = None) -> None:
+        super().__init__(name=name)
         self.velocity = tuple(float(x) for x in velocity)
         if len(self.velocity) != 3:
             raise ValueError(
@@ -195,7 +197,8 @@ class PlanetCoRotatingFluid(Disturbance):
                  density: float,
                  planet_radius: float,
                  bound: str = "below_sea_level",
-                 eps: float = 1.0) -> None:
+                 eps: float = 1.0, *, name: str | None = None) -> None:
+        super().__init__(name=name)
         if bound not in ("below_sea_level", "above_sea_level"):
             raise ValueError(
                 f"PlanetCoRotatingFluid: bound must be "

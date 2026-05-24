@@ -287,15 +287,50 @@ class World:
             mag_field=self._fields.get(MagField),
             collision_field=self._fields.get(CollisionField))
 
-        per_craft_initial: dict[str, dict[str, Any]] = {}
+        initial = self._initial_state_dict()
+        return CompiledWorld(world=self, tick=tick,
+                             initial=initial,
+                             crafts=tuple(all_crafts))
+
+    def _initial_state_dict(self) -> dict[str, dict[str, Any]]:
+        """Nested-by-owner initial state dict. Owners = registered
+        crafts (with their `add_craft` overrides applied, including
+        PlanetState resolution) + each Disturbance with State/Noise
+        declarations. Used by both `compile()` and `EKF(self)`."""
+        from .fields.base import Disturbance
+        out: dict[str, dict[str, Any]] = {}
         for entry in self._crafts:
             craft = entry["craft"]
-            per_craft_initial[craft.name] = craft.initial_state(
+            out[craft.name] = craft.initial_state(
                 **entry["initial_state_overrides"])
-
-        return CompiledWorld(world=self, tick=tick,
-                             initial=per_craft_initial,
-                             crafts=tuple(all_crafts))
+        for field in self.fields:
+            for dist in field._disturbances:
+                if not isinstance(dist, Disturbance):
+                    continue
+                sdecls = dist.state_declarations()
+                ndecls = dist.noise_declarations()
+                if not sdecls and not ndecls:
+                    continue
+                init: dict[str, Any] = {}
+                for sname, sdecl in sdecls.items():
+                    init[sname] = float(sdecl.init)
+                for nname, ndecl in ndecls.items():
+                    shape = 3 if ndecl.shape == "vec3" else 1
+                    zero  = (np.zeros(shape, dtype=float)
+                             if shape > 1 else 0.0)
+                    if ndecl.kind == "white":
+                        init[nname] = zero
+                    else:
+                        sigma = float(getattr(dist, f"{nname}_sigma"))
+                        if sigma <= 0.0:
+                            continue
+                        init[nname] = (np.zeros(shape, dtype=float)
+                                       if shape > 1 else 0.0)
+                        init[f"{nname}_driver"] = (
+                            np.zeros(shape, dtype=float)
+                            if shape > 1 else 0.0)
+                out[dist.name] = init
+        return out
 
     def _resolve_planet_state_overrides(self) -> None:
         """Walk every craft entry and replace any `PlanetState`-wrapped
@@ -420,24 +455,30 @@ class CompiledWorld:
         that don't care about absolute time.
         """
         # Flatten the nested dict into the tick's flat-prefixed inputs.
+        # Owners may be crafts OR field disturbances; both use the same
+        # `<owner>.<slot>` convention in the casadi function.
         flat: dict[str, Any] = {"dt": dt, "t": t}
-        for craft_name, craft_state in state.items():
-            for slot, val in craft_state.items():
-                flat[f"{craft_name}.{slot}"] = val
+        for owner_name, owner_state in state.items():
+            for slot, val in owner_state.items():
+                flat[f"{owner_name}.{slot}"] = val
 
         out = self._tick(**flat)
 
-        # Unflatten the tick's outputs back to nested per-craft dicts.
-        new_state: dict[str, dict[str, Any]] = {c.name: {} for c in self._crafts}
+        # Unflatten the tick's outputs back to nested per-owner dicts.
+        # Initial-state keys define the set of owners; the tick writes
+        # back state slots for crafts + disturbances.
+        new_state: dict[str, dict[str, Any]] = {k: {} for k in state}
         for key, val in out.items():
-            craft_name, slot = key.split(".", 1)
-            new_state[craft_name][slot] = val
+            owner_name, slot = key.split(".", 1)
+            if owner_name not in new_state:
+                new_state[owner_name] = {}
+            new_state[owner_name][slot] = val
         # Preserve any input-only slots (noise drivers, inputs the user
         # set per-tick) that the tick doesn't write back as outputs.
-        for craft_name, craft_state in state.items():
-            for slot, val in craft_state.items():
-                if slot not in new_state[craft_name]:
-                    new_state[craft_name][slot] = val
+        for owner_name, owner_state in state.items():
+            for slot, val in owner_state.items():
+                if slot not in new_state[owner_name]:
+                    new_state[owner_name][slot] = val
         return new_state
 
     def __repr__(self) -> str:

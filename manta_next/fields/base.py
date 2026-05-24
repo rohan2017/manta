@@ -11,34 +11,113 @@ field at the queried world-frame point at world-clock time `t`.
 Implementation is a fixed-shape sum over every registered
 Disturbance's `contribute_at_sym(point, t)`.
 
-Most disturbances are static in time — they accept `t` and ignore it.
-Planet-attached disturbances (ocean rotating with Earth, dipole field
-rotating with the planet) close over the planet's transforms and use
-`t` to compute the current rotation.
+Disturbances may carry State / Noise declarations just like Parts —
+this is how `WindBias` and friends become estimable: the framework
+walks their declarations at compile time, rebinds their attributes
+to symbolic graph inputs, and exposes the slots to the EKF as state
+that gets estimated. See `manta_next.parts.base` for the
+`State`/`Noise`/`Input`/`Parameter`/`Output` declaration sentinels —
+Disturbance reuses the same machinery.
 """
 
 from __future__ import annotations
 
+import itertools
 from abc import ABC, abstractmethod
+from typing import Any
 
 from ..ir.frames import WorldFrame
 from ..ir.types import Vec3
+from ..parts.base import (
+    Input, Noise, Output, Parameter, State, _Declaration,
+)
+
+
+# Global counter for default disturbance names. Disturbances participate
+# in the IR state vector by name, so unique names are required when more
+# than one is registered. The user can pass `name="..."` explicitly; the
+# default is `<ClassName>_<counter>`.
+_DISTURBANCE_NAME_COUNTER = itertools.count()
 
 
 class Disturbance(ABC):
     """Base for one contribution to a Field.
 
-    Subclass and implement `contribute_at_sym(point)`. The returned MX
-    must have the Field's value shape (e.g. Vec3[WorldFrame] for
-    GravityField). Multiple disturbances on the same field are summed.
+    Subclass and implement `contribute_at_sym(point, t)`. The returned
+    MX must have the Field's value shape (e.g. Vec3[WorldFrame] for
+    GravityField). Multiple disturbances on the same field combine
+    according to their `combining` flag (see Phase-3 work).
 
-    Concrete subclasses live with their host Field — e.g.
-    UniformGravity / PointMassGravity in manta_next.fields.gravity.
+    Disturbances may declare State / Noise channels at class scope.
+    The framework picks them up at compile time exactly like it does
+    for Parts:
+      * Each State slot becomes a graph input + output named
+        `<disturbance.name>.<slot>`; the disturbance's attribute is
+        rebound to the symbolic input inside `contribute_at_sym`.
+      * Each white Noise channel becomes a per-tick graph input.
+      * Each RW Noise channel (sigma > 0) synthesizes a bias state +
+        driver, evolving via `bias_next = bias + sqrt(dt)·driver`.
+
+    Args:
+        name — identifier used as the IR-slot prefix. Must be unique
+               across the world's disturbances. Defaults to
+               `<ClassName>_<counter>`.
     """
 
-    # Shape tag the Field uses to type-check disturbances added to it.
-    # Subclasses MUST override.
     field_value_shape: type = type(None)
+
+    def __init__(self, name: str | None = None,
+                 **overrides: Any) -> None:
+        self.name = name if name is not None else (
+            f"{type(self).__name__}_{next(_DISTURBANCE_NAME_COUNTER)}")
+        self._apply_declarations(overrides)
+
+    # --- Declaration walking ------------------------------------------
+
+    def _apply_declarations(self, overrides: dict[str, Any]) -> None:
+        decls = self._declarations()
+        noise_sigma_keys = {
+            f"{n}_sigma" for n, d in decls.items() if isinstance(d, Noise)
+        }
+        unknown = set(overrides) - set(decls) - noise_sigma_keys
+        if unknown:
+            raise TypeError(
+                f"{type(self).__name__}({self.name!r}): unknown "
+                f"parameter(s) {sorted(unknown)}. Declared: "
+                f"{sorted(set(decls) | noise_sigma_keys)}")
+        for attr_name, decl in decls.items():
+            value = overrides.get(attr_name, decl.default)
+            setattr(self, attr_name, value)
+            if isinstance(decl, Noise):
+                setattr(self, f"{attr_name}_sigma",
+                        float(overrides.get(f"{attr_name}_sigma",
+                                            decl.sigma)))
+
+    @classmethod
+    def _declarations(cls) -> dict[str, _Declaration]:
+        decls: dict[str, _Declaration] = {}
+        for klass in reversed(cls.__mro__):
+            for nm, value in vars(klass).items():
+                if isinstance(value, _Declaration):
+                    decls[nm] = value
+        return decls
+
+    @classmethod
+    def state_declarations(cls) -> dict[str, State]:
+        return {n: d for n, d in cls._declarations().items()
+                if isinstance(d, State)}
+
+    @classmethod
+    def noise_declarations(cls) -> dict[str, Noise]:
+        return {n: d for n, d in cls._declarations().items()
+                if isinstance(d, Noise)}
+
+    @classmethod
+    def input_declarations(cls) -> dict[str, Input]:
+        return {n: d for n, d in cls._declarations().items()
+                if isinstance(d, Input)}
+
+    # --- Abstract contract --------------------------------------------
 
     @abstractmethod
     def contribute_at_sym(self, point: "Vec3", t):

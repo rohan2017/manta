@@ -84,7 +84,8 @@ class HalfSpace(Disturbance):
     def __init__(self,
                  origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
                  normal: tuple[float, float, float] = (0.0, 0.0, 1.0),
-                 ) -> None:
+                 *, name: str | None = None) -> None:
+        super().__init__(name=name)
         self.origin = tuple(float(x) for x in origin)
         self.normal = tuple(float(x) for x in normal)
         if len(self.origin) != 3 or len(self.normal) != 3:

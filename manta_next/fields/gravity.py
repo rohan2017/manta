@@ -68,7 +68,8 @@ class UniformGravity(Disturbance):
 
     field_value_shape = _VEC3_ANCHOR
 
-    def __init__(self, g_vec: tuple[float, float, float]) -> None:
+    def __init__(self, g_vec: tuple[float, float, float], *, name: str | None = None) -> None:
+        super().__init__(name=name)
         self.g_vec = tuple(float(x) for x in g_vec)
         if len(self.g_vec) != 3:
             raise ValueError(
@@ -103,7 +104,8 @@ class PointMassGravity(Disturbance):
     def __init__(self,
                  position: tuple[float, float, float],
                  GM: float,
-                 eps: float = 1.0) -> None:
+                 eps: float = 1.0, *, name: str | None = None) -> None:
+        super().__init__(name=name)
         self.position = tuple(float(x) for x in position)
         self.GM = float(GM)
         self.eps = float(eps)
@@ -156,7 +158,8 @@ class J2Gravity(Disturbance):
                  J2: float,
                  eq_radius: float,
                  polar_axis: tuple[float, float, float] = (0.0, 0.0, 1.0),
-                 eps: float = 1.0) -> None:
+                 eps: float = 1.0, *, name: str | None = None) -> None:
+        super().__init__(name=name)
         self.position = tuple(float(x) for x in position)
         self.GM = float(GM)
         self.J2 = float(J2)

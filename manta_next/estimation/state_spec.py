@@ -134,7 +134,41 @@ class StateSpec:
 
         for craft in world.crafts:
             cls._add_craft_slots(craft, f"{craft.name}.", add)
+        for field in world.fields:
+            cls._add_field_disturbance_slots(field, add)
         return cls(slots)
+
+    @staticmethod
+    def _add_field_disturbance_slots(field, add) -> None:
+        """Walk a Field's disturbances; emit a state slot for each User
+        State declaration + each active RW Noise channel. Slot names
+        are prefixed `<disturbance.name>.<slot>`."""
+        from ..fields.base import Disturbance
+        for dist in field._disturbances:
+            if not isinstance(dist, Disturbance):
+                continue
+            sdecls = dist.state_declarations()
+            ndecls = dist.noise_declarations()
+            if not sdecls and not ndecls:
+                continue
+            prefix = f"{dist.name}."
+            for sname, sdecl in sdecls.items():
+                if sdecl.manifold == "R1":
+                    add(prefix + sname, 1, "R1", 1)
+                else:
+                    raise NotImplementedError(
+                        f"StateSpec: Disturbance state manifold "
+                        f"{sdecl.manifold!r} not yet supported.")
+            for nname, ndecl in ndecls.items():
+                if ndecl.kind != "rw":
+                    continue
+                sigma = float(getattr(dist, f"{nname}_sigma"))
+                if sigma <= 0.0:
+                    continue
+                if ndecl.shape == "scalar":
+                    add(prefix + nname, 1, "R1", 1)
+                else:
+                    add(prefix + nname, 3, "R3", 3)
 
     @staticmethod
     def _add_craft_slots(craft, prefix: str, add) -> None:
