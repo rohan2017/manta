@@ -46,7 +46,7 @@ class Disturbance(ABC):
     Subclass and implement `contribute_at_sym(point, t)`. The returned
     MX must have the Field's value shape (e.g. Vec3[WorldFrame] for
     GravityField). Multiple disturbances on the same field combine
-    according to their `combining` flag (see Phase-3 work).
+    according to their `combining` flag (see `Field.state_at_sym`).
 
     Disturbances may declare State / Noise channels at class scope.
     The framework picks them up at compile time exactly like it does
@@ -59,17 +59,41 @@ class Disturbance(ABC):
         driver, evolving via `bias_next = bias + sqrt(dt)·driver`.
 
     Args:
-        name — identifier used as the IR-slot prefix. Must be unique
-               across the world's disturbances. Defaults to
-               `<ClassName>_<counter>`.
+        name      — identifier used as the IR-slot prefix. Must be
+                    unique across the world's disturbances. Defaults
+                    to `<ClassName>_<counter>`.
+        combining — how this disturbance's contribution composes with
+                    others on the same field. See `Field.state_at_sym`
+                    for the per-stage rule. One of:
+                      "additive"  (default) — straight linear sum.
+                      "averaged"  — arithmetic-mean stage; the running
+                                    additive total + every averaged
+                                    contribution are averaged together.
+                      "projected" — only the component of this
+                                    contribution that's orthogonal to
+                                    (or extends) the running sum is
+                                    kept. Order-dependent across
+                                    multiple projected entries; the
+                                    canonical order is insertion.
     """
 
     field_value_shape: type = type(None)
 
-    def __init__(self, name: str | None = None,
+    # Subclasses may override the default combining mode. Each instance
+    # can also override at construction via `combining=`.
+    combining: str = "additive"
+
+    def __init__(self, name: str | None = None, *,
+                 combining: str | None = None,
                  **overrides: Any) -> None:
         self.name = name if name is not None else (
             f"{type(self).__name__}_{next(_DISTURBANCE_NAME_COUNTER)}")
+        if combining is not None:
+            if combining not in ("additive", "averaged", "projected"):
+                raise ValueError(
+                    f"Disturbance: combining must be 'additive', "
+                    f"'averaged', or 'projected'; got {combining!r}")
+            self.combining = combining
         self._apply_declarations(overrides)
 
     # --- Declaration walking ------------------------------------------
@@ -175,17 +199,76 @@ class Field(ABC):
         raise NotImplementedError
 
     def state_at_sym(self, point: "Vec3", t):
-        """Sum every registered disturbance's contribution at `point` at
-        time `t`.
+        """Fold every registered disturbance's contribution at `point`
+        at time `t` according to each disturbance's `combining` flag.
+
+        Three stages, in order:
+
+          1. **additive**: linear sum. The default; correct for
+             gravity, B-field, fluid velocity superposition, collision
+             penetration vectors.
+          2. **averaged**: arithmetic mean. The running additive total
+             plus every averaged contribution are averaged together.
+             Used e.g. when several crafts each maintain a localized
+             wind/current estimate and you want overlapping bubbles to
+             agree.
+          3. **projected**: Gram-Schmidt-style residual. Each
+             contribution is added only by the component orthogonal to
+             the running sum (or extending it along its direction).
+             Vectors aligned-and-smaller than the running sum
+             contribute zero; vectors at 90° pass through unchanged.
+             Order-dependent across multiple projected entries —
+             canonical order is insertion order.
 
         Returns the field value as a CasADi-typed expression in the
-        field's `value_shape`. If no disturbances are registered, returns
-        the field's zero value (a constant).
+        field's `value_shape`. If no disturbances are registered,
+        returns the field's zero value.
         """
+        additive  = [d for d in self._disturbances if d.combining == "additive"]
+        averaged  = [d for d in self._disturbances if d.combining == "averaged"]
+        projected = [d for d in self._disturbances if d.combining == "projected"]
+
         out = self._zero_value()
-        for d in self._disturbances:
+        for d in additive:
             out = out + d.contribute_at_sym(point, t)
+        if averaged:
+            terms = [d.contribute_at_sym(point, t) for d in averaged]
+            for term in terms:
+                out = out + term
+            out = self._scale(out, 1.0 / (1 + len(averaged)))
+        for d in projected:
+            out = self._project_combine(out, d.contribute_at_sym(point, t))
         return out
+
+    # ---- Combining-stage hooks (subclasses can override) -------------
+
+    def _scale(self, value, scalar: float):
+        """Multiply a field value by a scalar (used by the `averaged`
+        stage). Default for Vec3-valued fields uses CasADi's scalar
+        broadcast. Compound fields (FluidState) override."""
+        from ..ir.types import Vec3 as _Vec3
+        if isinstance(value, _Vec3):
+            return _Vec3[value._to_frame].from_mx(scalar * value._mx)
+        return scalar * value
+
+    def _project_combine(self, running, contribution):
+        """Add `contribution` to `running` keeping only the component
+        that's orthogonal to (or extending) the running sum. Default
+        works on Vec3-valued fields. Compound fields override.
+        """
+        import casadi as ca
+        from ..ir.types import Vec3 as _Vec3
+        if not (isinstance(running, _Vec3) and isinstance(contribution, _Vec3)):
+            return running + contribution
+        r_mx = running._mx
+        c_mx = contribution._mx
+        denom = ca.dot(r_mx, r_mx) + 1e-12
+        proj_scalar = ca.dot(c_mx, r_mx) / denom
+        # Cap negative projections at zero so a contribution that
+        # would shrink the running sum gets ignored along the run.
+        proj_clip   = ca.fmax(0.0, proj_scalar)
+        residual    = c_mx - proj_clip * r_mx
+        return _Vec3[running._to_frame].from_mx(r_mx + residual)
 
     def __repr__(self) -> str:
         return (f"<{type(self).__name__} "

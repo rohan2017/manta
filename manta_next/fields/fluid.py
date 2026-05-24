@@ -79,6 +79,26 @@ class FluidField(Field):
             velocity = _VEC3_ANCHOR.constant((0.0, 0.0, 0.0)),
         )
 
+    def _scale(self, value: FluidState, scalar: float) -> FluidState:
+        return FluidState(
+            density  = scalar * value.density,
+            velocity = _VEC3_ANCHOR.from_mx(scalar * value.velocity._mx),
+        )
+
+    def _project_combine(self, running: FluidState,
+                          contribution: FluidState) -> FluidState:
+        """Projected combination for a FluidState. Density adds linearly
+        (no projection); velocity uses the Gram-Schmidt residual rule."""
+        new_density = running.density + contribution.density
+        r_mx = running.velocity._mx
+        c_mx = contribution.velocity._mx
+        denom = ca.dot(r_mx, r_mx) + 1e-12
+        proj_scalar = ca.dot(c_mx, r_mx) / denom
+        proj_clip   = ca.fmax(0.0, proj_scalar)
+        residual    = c_mx - proj_clip * r_mx
+        new_velocity = _VEC3_ANCHOR.from_mx(r_mx + residual)
+        return FluidState(density=new_density, velocity=new_velocity)
+
     def add_uniform(self,
                     density: float,
                     velocity: tuple[float, float, float] = (0.0, 0.0, 0.0)
