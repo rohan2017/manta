@@ -218,20 +218,21 @@ class World:
     # ---- Compile --------------------------------------------------------
 
     def compile(self) -> "CompiledWorld":
-        """Walk the (craft, coupling) graph, compute connected components,
-        and emit one compiled tick per component.
+        """Compile every craft in this world into one shared tick.
 
-        Single-craft components compile via `Craft.compile_tick`;
-        multi-craft components (joined by Couplings) route through
-        `compile_coupled_tick` to share a single tick over their full
-        connected state.
+        Concretely: route through `compile_coupled_tick` with every
+        craft + every coupling. There is no per-component partitioning
+        any more — the World is the unit of simulation, so the entire
+        world's dynamics live in a single CasADi function. This makes
+        field-mediated craft-to-craft coupling automatic (a wake, a
+        wind bubble, or a craft-pose-dependent obstacle is just a
+        disturbance whose graph reads from another craft's state in
+        the same tick).
 
         Before tracing, every registered Planet's
-        `register_disturbances(self)` runs once — attaching the
-        planet's standing contributions to the world's shared fields.
-        Re-compile is idempotent (planets register at most once per
-        world). Then each craft's parts are checked against
-        `requires_fields` / `requires_planet`.
+        `register_disturbances(self)` runs once. Planet-state initial
+        seeds are resolved to WorldFrame. Per-part `requires_fields` /
+        `requires_planet` are verified.
         """
         # Walk planets once, in registration order. A planet may create
         # field instances via `world.get_or_create_field(...)`.
@@ -268,59 +269,33 @@ class World:
                         f"requires a {req_planet.__name__} planet but "
                         f"none is registered with this world.")
 
-        components = self._compute_components()
-        compiled: dict[str, dict] = {}
-        # Field lookups (shared across components).
-        gravity_field   = self._fields.get(GravityField)
-        fluid_field     = self._fields.get(FluidField)
-        mag_field       = self._fields.get(MagField)
-        collision_field = self._fields.get(CollisionField)
+        if not self._crafts:
+            raise ValueError(
+                f"World '{self.name}': no crafts added; nothing to compile.")
 
-        for comp_id, comp_entries in components.items():
-            comp_crafts = [e["craft"] for e in comp_entries]
-            if len(comp_crafts) == 1:
-                craft  = comp_crafts[0]
-                tick = craft.compile_tick(
-                    gravity_field=gravity_field,
-                    fluid_field=fluid_field,
-                    mag_field=mag_field,
-                    collision_field=collision_field)
-                init = craft.initial_state(
-                    **comp_entries[0]["initial_state_overrides"])
-                compiled[comp_id] = {
-                    "crafts":  [craft],
-                    "tick":    tick,
-                    "initial": init,
-                }
-            else:
-                # Multi-craft component — coupled tick over all of them.
-                from .coupled_tick import compile_coupled_tick
-                # Couplings restricted to this component.
-                comp_craft_ids = {id(c) for c in comp_crafts}
-                comp_couplings = [
-                    cp for cp in self._couplings
-                    if id(cp.craft_a) in comp_craft_ids
-                    and id(cp.craft_b) in comp_craft_ids
-                ]
-                tick = compile_coupled_tick(
-                    comp_crafts, comp_couplings,
-                    gravity_field=gravity_field,
-                    fluid_field=fluid_field,
-                    mag_field=mag_field,
-                    collision_field=collision_field)
-                # Build the prefixed initial state.
-                init: dict[str, Any] = {}
-                for entry in comp_entries:
-                    sub = entry["craft"].initial_state(
-                        **entry["initial_state_overrides"])
-                    for k, v in sub.items():
-                        init[f"{entry['craft'].name}.{k}"] = v
-                compiled[comp_id] = {
-                    "crafts":  comp_crafts,
-                    "tick":    tick,
-                    "initial": init,
-                }
-        return CompiledWorld(compiled, self)
+        # One tick, all crafts. compile_coupled_tick already handles the
+        # N=1 case cleanly — the only difference is that slot names get
+        # prefixed with `<craft.name>.` to disambiguate across crafts.
+        # `CompiledWorld.step` translates between the user-facing nested
+        # state dict and that flat-prefixed casadi input naming.
+        from .coupled_tick import compile_coupled_tick
+        all_crafts = [e["craft"] for e in self._crafts]
+        tick = compile_coupled_tick(
+            all_crafts, list(self._couplings),
+            gravity_field=self._fields.get(GravityField),
+            fluid_field=self._fields.get(FluidField),
+            mag_field=self._fields.get(MagField),
+            collision_field=self._fields.get(CollisionField))
+
+        per_craft_initial: dict[str, dict[str, Any]] = {}
+        for entry in self._crafts:
+            craft = entry["craft"]
+            per_craft_initial[craft.name] = craft.initial_state(
+                **entry["initial_state_overrides"])
+
+        return CompiledWorld(world=self, tick=tick,
+                             initial=per_craft_initial,
+                             crafts=tuple(all_crafts))
 
     def _resolve_planet_state_overrides(self) -> None:
         """Walk every craft entry and replace any `PlanetState`-wrapped
@@ -364,47 +339,6 @@ class World:
             overrides["position"] = p_world
             overrides["velocity"] = v_world
 
-    def _compute_components(self) -> dict[str, list[dict]]:
-        """Connected components of (craft, coupling) as an undirected
-        graph. Returns a dict from component id (= first-craft name) to
-        the list of entry dicts in that component. A craft with no
-        couplings is its own singleton component."""
-        # Build adjacency from couplings.
-        craft_id_to_entry = {id(e["craft"]): e for e in self._crafts}
-        adjacency: dict[int, list[int]] = {
-            id(e["craft"]): [] for e in self._crafts}
-        for c in self._couplings:
-            a, b = id(c.craft_a), id(c.craft_b)
-            if a not in adjacency or b not in adjacency:
-                raise ValueError(
-                    "World._compute_components: coupling references a craft "
-                    "not registered in this world.")
-            adjacency[a].append(b)
-            adjacency[b].append(a)
-
-        # DFS to find components.
-        visited: set[int] = set()
-        comps: dict[str, list[dict]] = {}
-        for entry in self._crafts:
-            craft = entry["craft"]
-            if id(craft) in visited:
-                continue
-            # New component, BFS from this craft.
-            comp: list[dict] = []
-            stack = [id(craft)]
-            while stack:
-                node_id = stack.pop()
-                if node_id in visited:
-                    continue
-                visited.add(node_id)
-                comp.append(craft_id_to_entry[node_id])
-                for n in adjacency[node_id]:
-                    if n not in visited:
-                        stack.append(n)
-            comp_id = comp[0]["craft"].name
-            comps[comp_id] = comp
-        return comps
-
     # ---- Repr -----------------------------------------------------------
 
     def __repr__(self) -> str:
@@ -420,12 +354,11 @@ class World:
 # ---------------------------------------------------------------------------
 
 class CompiledWorld:
-    """Runtime wrapper around per-component compiled tick functions.
+    """Runtime wrapper around the World's single compiled tick.
 
-    State layout: `dict[component_id, dict[slot_name, value]]`. For a
-    singleton (no-coupling) component, `component_id == craft.name` and
-    the inner dict uses unprefixed slot names. For multi-craft coupled
-    components, slot names are prefixed `<craft_name>.<slot>`.
+    State layout: `dict[craft.name, dict[slot_name, value]]`. Inner
+    keys use the craft-relative slot names (`position`, `t.throttle`,
+    `imu.gyro_noise`, …) — no craft-name prefix.
 
     Stepping::
 
@@ -435,9 +368,15 @@ class CompiledWorld:
             state = cw.step(state, dt=0.01)
     """
 
-    def __init__(self, components: dict[str, dict], world: World) -> None:
-        self._components = components
-        self._world = world
+    def __init__(self, *,
+                 world: World,
+                 tick,
+                 initial: dict[str, dict[str, Any]],
+                 crafts: tuple[Craft, ...]) -> None:
+        self._world   = world
+        self._tick    = tick
+        self._initial = initial
+        self._crafts  = crafts
 
     # ---- Accessors ------------------------------------------------------
 
@@ -446,56 +385,61 @@ class CompiledWorld:
         return self._world
 
     @property
-    def components(self) -> tuple[str, ...]:
-        return tuple(self._components.keys())
+    def crafts(self) -> tuple[Craft, ...]:
+        return self._crafts
 
-    def craft(self, component_id: str) -> Craft:
-        crafts = self._components[component_id]["crafts"]
-        if len(crafts) != 1:
-            raise ValueError(
-                f"CompiledWorld.craft: component '{component_id}' has "
-                f"{len(crafts)} crafts (coupled). Use `.crafts(component_id)` "
-                f"to get the list.")
-        return crafts[0]
+    @property
+    def tick(self):
+        """The single CompiledGraph driving every craft in this world.
 
-    def crafts(self, component_id: str) -> list:
-        return list(self._components[component_id]["crafts"])
-
-    def tick(self, component_id: str):
-        """Return the CompiledGraph for a component (advanced use)."""
-        return self._components[component_id]["tick"]
+        Inputs are flat-prefixed (`<craft>.position`, `<craft>.dt`, etc.).
+        Most callers use `cw.step(...)` instead and let the wrapper
+        translate the user-facing nested-dict shape.
+        """
+        return self._tick
 
     # ---- State ----------------------------------------------------------
 
     def initial_state(self) -> dict[str, dict[str, Any]]:
-        """Fresh copy of the initial state for every component."""
-        return {
-            comp_id: copy.deepcopy(comp["initial"])
-            for comp_id, comp in self._components.items()
-        }
+        """Fresh copy of the per-craft initial state.
+
+        Shape: `{craft.name: {slot: value, ...}, ...}` — slot keys are
+        craft-relative (no craft-name prefix in the inner dict).
+        """
+        return copy.deepcopy(self._initial)
 
     def step(self,
              state: dict[str, dict[str, Any]],
              dt: float,
              t: float = 0.0) -> dict[str, dict[str, Any]]:
-        """Advance every component by `dt`. Returns a fresh state dict.
+        """Advance every craft by `dt`. Returns a fresh state dict.
 
         `t` is the world-clock time at the start of this step. Most
         disturbances ignore it; planet-attached disturbances use it to
         compute the planet's current rotation. Defaults to 0 for sims
         that don't care about absolute time.
         """
-        new_state: dict[str, dict[str, Any]] = {}
-        for comp_id, comp in self._components.items():
-            comp_state = state[comp_id]
-            out = comp["tick"](t=t, dt=dt, **comp_state)
-            # Output dict only contains slot keys the tick wrote; merge
-            # over the input to preserve any extra metadata the user
-            # may have stashed in there. (Defensive — for clean callers
-            # this is a no-op.)
-            new_state[comp_id] = {**comp_state, **out}
+        # Flatten the nested dict into the tick's flat-prefixed inputs.
+        flat: dict[str, Any] = {"dt": dt, "t": t}
+        for craft_name, craft_state in state.items():
+            for slot, val in craft_state.items():
+                flat[f"{craft_name}.{slot}"] = val
+
+        out = self._tick(**flat)
+
+        # Unflatten the tick's outputs back to nested per-craft dicts.
+        new_state: dict[str, dict[str, Any]] = {c.name: {} for c in self._crafts}
+        for key, val in out.items():
+            craft_name, slot = key.split(".", 1)
+            new_state[craft_name][slot] = val
+        # Preserve any input-only slots (noise drivers, inputs the user
+        # set per-tick) that the tick doesn't write back as outputs.
+        for craft_name, craft_state in state.items():
+            for slot, val in craft_state.items():
+                if slot not in new_state[craft_name]:
+                    new_state[craft_name][slot] = val
         return new_state
 
     def __repr__(self) -> str:
-        ids = ", ".join(self._components)
-        return f"<CompiledWorld components=[{ids}]>"
+        names = ", ".join(c.name for c in self._crafts)
+        return f"<CompiledWorld crafts=[{names}]>"

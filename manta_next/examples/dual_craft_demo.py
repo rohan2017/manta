@@ -47,9 +47,8 @@ def main() -> None:
 
     cw = w.compile()
     state = cw.initial_state()
-    comp = list(cw.components)[0]
-    print(f"Connected component '{comp}' carries both crafts.")
-    print(f"State keys: {sorted(state[comp].keys())[:4]} …")
+    print(f"Crafts in world: {[c.name for c in cw.crafts]}")
+    print(f"State keys (alice): {sorted(state['alice'].keys())[:4]} …")
 
     dt = 0.01
     n  = 1200
@@ -60,8 +59,8 @@ def main() -> None:
         state = cw.step(state, dt=dt)
         if (i + 1) % 100 == 0:
             t = (i + 1) * dt
-            pa = np.array(state[comp]["alice.position"]).ravel()
-            pb = np.array(state[comp]["bob.position"]).ravel()
+            pa = np.array(state["alice"]["position"]).ravel()
+            pb = np.array(state["bob"]["position"]).ravel()
             sep = np.linalg.norm(pb - pa)
             print(f"{t:>6.2f} "
                   f"({pa[0]:>+6.2f},{pa[1]:>+6.2f},{pa[2]:>+6.2f}) "

@@ -42,7 +42,7 @@ def main() -> None:
     ekf = EKF(_ekf_world)
     init = c.initial_state(position=(0.0, 0.0, 4.0),
                            velocity=(0.5, 0.0, 0.0))
-    ekf.reset(state=init,
+    ekf.reset(state={"drone": init},
               P=np.eye(ekf.spec.tangent_dim) * 1e-1)
 
     # Noise models.
@@ -82,7 +82,7 @@ def main() -> None:
             ekf.update(h_pos, pos_meas, R_pos)
 
         if (i + 1) % 200 == 0:
-            est = ekf.state_dict()
+            est = ekf.state_dict()["drone"]
             truth_p = np.array(sim["drone"]["position"]).ravel()
             truth_v = np.array(sim["drone"]["velocity"]).ravel()
             pos_err = float(np.linalg.norm(truth_p - est["position"].ravel()))

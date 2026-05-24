@@ -53,32 +53,43 @@ from .state_spec import StateSpec
 
 
 class EKF:
-    """Error-state EKF wrapping a single-craft `World`."""
+    """Error-state EKF wrapping a `World`.
+
+    Compiles its own world tick (separate from the sim's `cw.tick`)
+    using the same fields + planets + couplings. State spans every
+    craft in the world (`StateSpec.from_world`).
+    """
 
     def __init__(self, world) -> None:
         # Ensure planet disturbances are registered + PlanetState
-        # initial values resolved.
+        # initial values resolved (idempotent).
         if not world._planets_registered:
             for p in world._planets:
                 p.register_disturbances(world)
             world._planets_registered = True
         world._resolve_planet_state_overrides()
 
-        if len(world.crafts) != 1:
-            raise NotImplementedError(
-                f"EKF: only single-craft worlds are supported in v1 "
-                f"(world has {len(world.crafts)} craft(s)). Multi-craft "
-                f"StateSpec lands in a follow-up.")
+        self.world  = world
+        self.crafts = tuple(world.crafts)
+        if not self.crafts:
+            raise ValueError("EKF: world has no crafts.")
+        self.spec   = StateSpec.from_world(world)
 
-        self.world = world
-        self.craft = world.crafts[0]
-        self.spec  = StateSpec.from_craft(self.craft)
+        # Each part belongs to exactly one craft. Cache the lookup so
+        # `ekf.update(part, ...)` can route to the right state slice.
+        self._craft_of_part: dict[int, "Craft"] = {}
+        for craft in self.crafts:
+            for part in craft.parts:
+                self._craft_of_part[id(part)] = craft
 
-        # Compile the est-side tick using the world's registered fields.
+        # Compile the est-side world tick using the world's registered
+        # fields + couplings.
+        from ..coupled_tick import compile_coupled_tick
         from ..fields import (
             CollisionField, FluidField, GravityField, MagField,
         )
-        compiled_tick = self.craft.compile_tick(
+        compiled_tick = compile_coupled_tick(
+            list(self.crafts), list(world._couplings),
             gravity_field=world.get_field(GravityField),
             fluid_field=world.get_field(FluidField),
             mag_field=world.get_field(MagField),
@@ -86,26 +97,32 @@ class EKF:
         )
         cf = compiled_tick.casadi_function
 
-        # Walk the tick signature: collect Inputs (ordered → flat u
-        # vector) and Noise channels (ordered → flat n vector).
-        # Noise channels include both `kind="white"` (raw `<part>.<n>`)
-        # and `kind="rw"` drivers (`<part>.<n>_driver` — the RW bias
-        # itself is a state slot listed by `self.spec`, not a noise).
+        # Walk the tick signature: collect Inputs and Noise channels.
+        # Names are flat-prefixed `<craft>.<part>.<sub>` (or just
+        # `<craft>.<rigid>` for body slots). The EKF's StateSpec uses
+        # the same prefixed names, so spec membership is the
+        # "is this a state?" check.
         self._input_names: list[str] = []
         self._noise_specs: list[dict[str, Any]] = []
         for i in range(cf.n_in()):
             name = cf.name_in(i)
             if name in ("dt", "t") or name in self.spec:
                 continue
-            if "." not in name:
+            # Expect `<craft>.<part>.<sub>` (rigid slots are already in
+            # spec via the prefix; everything else is part-scoped).
+            head, _, rest = name.partition(".")
+            craft = next((c for c in self.crafts if c.name == head), None)
+            if craft is None or "." not in rest:
                 raise RuntimeError(
-                    f"EKF: unrecognized tick input {name!r}.")
-            part_name, sub = name.split(".", 1)
-            part = next((p for p in self.craft.parts
+                    f"EKF: tick input {name!r} not in spec and not in the "
+                    f"`<craft>.<part>.<sub>` shape.")
+            part_name, sub = rest.split(".", 1)
+            part = next((p for p in craft.parts
                          if p.name == part_name), None)
             if part is None:
                 raise RuntimeError(
-                    f"EKF: tick input {name!r} references unknown part.")
+                    f"EKF: tick input {name!r}: unknown part "
+                    f"{part_name!r} on craft {craft.name!r}.")
             if sub in part.input_declarations():
                 self._input_names.append(name)
                 continue
@@ -115,8 +132,8 @@ class EKF:
                 dim   = 1 if ndecl.shape == "scalar" else 3
                 sigma = float(getattr(part, f"{sub}_sigma"))
                 self._noise_specs.append({
-                    "part": part, "name": sub, "full": name,
-                    "dim": dim, "sigma": sigma,
+                    "craft": craft, "part": part, "name": sub,
+                    "full": name, "dim": dim, "sigma": sigma,
                 })
                 continue
             if sub.endswith("_driver"):
@@ -126,19 +143,19 @@ class EKF:
                     dim   = 1 if ndecl.shape == "scalar" else 3
                     sigma = float(getattr(part, f"{bias_name}_sigma"))
                     self._noise_specs.append({
-                        "part": part, "name": sub, "full": name,
-                        "dim": dim, "sigma": sigma,
+                        "craft": craft, "part": part, "name": sub,
+                        "full": name, "dim": dim, "sigma": sigma,
                     })
                     continue
             raise RuntimeError(
                 f"EKF: tick input {name!r} is neither an Input "
                 f"nor a recognized Noise channel.")
 
+        # Input defaults: look up each `<craft>.<part>.<input>` on its
+        # owning part instance.
         self._u_defaults = np.array(
-            [float(getattr(next(p for p in self.craft.parts
-                                if p.name == n.split('.', 1)[0]),
-                           n.split('.', 1)[1]))
-             for n in self._input_names], dtype=float)
+            [self._lookup_input_default(n) for n in self._input_names],
+            dtype=float)
 
         n_ambient = self.spec.ambient_dim
         n_tangent = self.spec.tangent_dim
@@ -215,61 +232,65 @@ class EKF:
         #   * L_h_fn(x, u) → ∂h/∂n at noise=0 (if any noise feeds this output).
         # R is built from L_h_fn @ Σ @ L_h_fnᵀ at update time.
         self._sensors: dict[tuple[str, str], dict[str, Any]] = {}
-        for part in self.craft.parts:
-            outs = part.output_declarations()
-            if not outs:
-                continue
-            for out_name in outs:
-                full = f"{part.name}.{out_name}"
-                if full not in outputs_n:
-                    raise RuntimeError(
-                        f"EKF: tick is missing output {full!r}.")
-                h_n_mx = outputs_n[full]
-                h_dim  = int(h_n_mx.numel())
-                h_n_flat = ca.reshape(h_n_mx, h_dim, 1)
-                # h at noise=0.
-                h_0_flat = ca.substitute(h_n_flat, n_sym, zero_n)
-                # H at noise=0, δ=0.
-                h_pert_mx   = outputs_pert[full]
-                h_pert_flat = ca.reshape(h_pert_mx, h_dim, 1)
-                H_sym = ca.substitute(
-                    ca.jacobian(h_pert_flat, delta_in),
-                    delta_in, ca.MX.zeros(n_tangent, 1))
-                # L_h at noise=0.
-                if n_noise > 0:
-                    L_h_sym = ca.substitute(
-                        ca.jacobian(h_n_flat, n_sym), n_sym, zero_n)
-                    L_h_fn = ca.Function(
-                        f"Lh_{full}".replace(".", "_"),
-                        [x_sym, u_sym, dt_sym, t_sym], [L_h_sym],
-                        ["x", "u", "dt", "t"], ["L_h"])
-                else:
-                    L_h_fn = None
-                # Sensor h / H may symbolically depend on dt and t even
-                # if numerically constant in those args (the compiled
-                # tick threads them through). Declare with all four
-                # inputs; the EKF passes a sentinel dt/t = 0 at update
-                # time since measurements are instantaneous.
-                h_fn = ca.Function(
-                    f"h_{full}".replace(".", "_"),
-                    [x_sym, u_sym, dt_sym, t_sym], [h_0_flat],
-                    ["x", "u", "dt", "t"], ["h"])
-                H_fn = ca.Function(
-                    f"H_{full}".replace(".", "_"),
-                    [x_sym, u_sym, dt_sym, t_sym], [H_sym],
-                    ["x", "u", "dt", "t"], ["H"])
-                self._sensors[(part.name, out_name)] = {
-                    "dim":     h_dim,
-                    "h_fn":    h_fn,
-                    "H_fn":    H_fn,
-                    "L_h_fn":  L_h_fn,
-                    "part":    part,
-                }
+        for craft in self.crafts:
+            for part in craft.parts:
+                outs = part.output_declarations()
+                if not outs:
+                    continue
+                for out_name in outs:
+                    full = f"{craft.name}.{part.name}.{out_name}"
+                    if full not in outputs_n:
+                        raise RuntimeError(
+                            f"EKF: tick is missing output {full!r}.")
+                    h_n_mx = outputs_n[full]
+                    h_dim  = int(h_n_mx.numel())
+                    h_n_flat = ca.reshape(h_n_mx, h_dim, 1)
+                    # h at noise=0.
+                    h_0_flat = ca.substitute(h_n_flat, n_sym, zero_n)
+                    # H at noise=0, δ=0.
+                    h_pert_mx   = outputs_pert[full]
+                    h_pert_flat = ca.reshape(h_pert_mx, h_dim, 1)
+                    H_sym = ca.substitute(
+                        ca.jacobian(h_pert_flat, delta_in),
+                        delta_in, ca.MX.zeros(n_tangent, 1))
+                    if n_noise > 0:
+                        L_h_sym = ca.substitute(
+                            ca.jacobian(h_n_flat, n_sym), n_sym, zero_n)
+                        L_h_fn = ca.Function(
+                            f"Lh_{full}".replace(".", "_"),
+                            [x_sym, u_sym, dt_sym, t_sym], [L_h_sym],
+                            ["x", "u", "dt", "t"], ["L_h"])
+                    else:
+                        L_h_fn = None
+                    h_fn = ca.Function(
+                        f"h_{full}".replace(".", "_"),
+                        [x_sym, u_sym, dt_sym, t_sym], [h_0_flat],
+                        ["x", "u", "dt", "t"], ["h"])
+                    H_fn = ca.Function(
+                        f"H_{full}".replace(".", "_"),
+                        [x_sym, u_sym, dt_sym, t_sym], [H_sym],
+                        ["x", "u", "dt", "t"], ["H"])
+                    # Key on (part identity, output name) — part-name
+                    # collisions across crafts are possible.
+                    self._sensors[(id(part), out_name)] = {
+                        "dim":     h_dim,
+                        "h_fn":    h_fn,
+                        "H_fn":    H_fn,
+                        "L_h_fn":  L_h_fn,
+                        "part":    part,
+                        "craft":   craft,
+                    }
 
-        # Initial state + covariance.
-        entry = world._crafts[0]
-        init = self.craft.initial_state(**entry["initial_state_overrides"])
-        self._x = self.spec.pack(init)
+        # Initial state + covariance. Initial state comes from each
+        # craft's add_craft overrides (already PlanetState-resolved),
+        # packed into the joint flat layout in spec order.
+        init_flat: dict[str, Any] = {}
+        for entry in world._crafts:
+            craft = entry["craft"]
+            per_craft = craft.initial_state(**entry["initial_state_overrides"])
+            for k, v in per_craft.items():
+                init_flat[f"{craft.name}.{k}"] = v
+        self._x = self.spec.pack(init_flat)
         self._P = np.eye(n_tangent) * 1e-2
 
     # ------------------------------------------------------------------
@@ -327,20 +348,47 @@ class EKF:
             chunks.append(r)
         return ca.vertcat(*chunks)
 
+    def _lookup_input_default(self, full_name: str) -> float:
+        """Resolve `<craft>.<part>.<input>` to its part-instance value."""
+        craft_name, rest = full_name.split(".", 1)
+        part_name, input_name = rest.split(".", 1)
+        craft = next(c for c in self.crafts if c.name == craft_name)
+        part  = next(p for p in craft.parts if p.name == part_name)
+        return float(getattr(part, input_name))
+
     def _build_u(self, u: dict[str, float] | None) -> np.ndarray:
+        """Resolve `u` to a flat input vector in `_input_names` order.
+
+        Accepts either full names (`"drone.t.throttle"`) or
+        craft-relative shorthand (`"t.throttle"`) when the shorthand
+        uniquely identifies one input across all crafts.
+        """
         if not self._input_names:
             return np.zeros(0)
         if u is None:
             return self._u_defaults.copy()
-        unknown = set(u) - set(self._input_names)
-        if unknown:
-            raise KeyError(
-                f"EKF.predict: unknown input name(s) {sorted(unknown)}. "
-                f"Available: {sorted(self._input_names)}")
+        # Resolve each user-supplied key to a full input name.
+        resolved: dict[str, float] = {}
+        for user_key, value in u.items():
+            if user_key in self._input_names:
+                resolved[user_key] = float(value)
+                continue
+            candidates = [n for n in self._input_names
+                          if n.endswith("." + user_key)]
+            if len(candidates) == 1:
+                resolved[candidates[0]] = float(value)
+            elif len(candidates) > 1:
+                raise KeyError(
+                    f"EKF.predict: ambiguous input name {user_key!r}; "
+                    f"matches {candidates}. Use the fully-qualified form.")
+            else:
+                raise KeyError(
+                    f"EKF.predict: unknown input name {user_key!r}. "
+                    f"Available: {sorted(self._input_names)}")
         out = self._u_defaults.copy()
         for i, name in enumerate(self._input_names):
-            if name in u:
-                out[i] = float(u[name])
+            if name in resolved:
+                out[i] = resolved[name]
         return out
 
     # ------------------------------------------------------------------
@@ -355,16 +403,46 @@ class EKF:
     def P(self) -> np.ndarray:
         return self._P.copy()
 
-    def state_dict(self) -> dict[str, Any]:
-        return self.spec.unpack(self._x)
+    def state_dict(self) -> dict[str, dict[str, Any]]:
+        """Current estimate as `{craft.name: {slot: value}}` — same
+        nested shape as `CompiledWorld.initial_state()`.
+        """
+        flat = self.spec.unpack(self._x)
+        nested: dict[str, dict[str, Any]] = {c.name: {} for c in self.crafts}
+        for full_name, val in flat.items():
+            craft_name, slot = full_name.split(".", 1)
+            nested[craft_name][slot] = val
+        return nested
 
     def reset(self, *,
               state: dict | None = None,
               P: np.ndarray | None = None) -> None:
+        """Reset the EKF state and/or covariance.
+
+        `state` accepts either:
+          * Flat dict keyed by full slot name (`"<craft>.<slot>"`).
+          * Nested dict `{craft_name: {slot: value}}` (same shape as
+            `state_dict()` returns).
+        Missing entries fall back to the world's add_craft defaults.
+        """
         if state is not None:
-            full = self.craft.initial_state()
-            full.update(state)
-            self._x = self.spec.pack(full)
+            full_flat: dict[str, Any] = {}
+            # Seed from the world's per-craft defaults (already
+            # PlanetState-resolved).
+            for entry in self.world._crafts:
+                craft = entry["craft"]
+                per_craft = craft.initial_state(
+                    **entry["initial_state_overrides"])
+                for k, v in per_craft.items():
+                    full_flat[f"{craft.name}.{k}"] = v
+            # Apply user overrides (either flat or nested).
+            for k, v in state.items():
+                if isinstance(v, dict):
+                    for slot, val in v.items():
+                        full_flat[f"{k}.{slot}"] = val
+                else:
+                    full_flat[k] = v
+            self._x = self.spec.pack(full_flat)
         if P is not None:
             P = np.asarray(P, dtype=float)
             expected = (self.spec.tangent_dim, self.spec.tangent_dim)
@@ -456,12 +534,12 @@ class EKF:
         # them (CasADi can't always prove independence statically).
         dt0, t0 = 0.0, 0.0
         for out_name, z in measurements.items():
-            key = (part.name, out_name)
+            key = (id(part), out_name)
             if key not in self._sensors:
+                avail = [k[1] for k in self._sensors if k[0] == id(part)]
                 raise KeyError(
                     f"EKF.update: part '{part.name}' has no registered "
-                    f"output {out_name!r} (available: "
-                    f"{[k[1] for k in self._sensors if k[0] == part.name]}).")
+                    f"output {out_name!r} (available: {avail}).")
             spec_o = self._sensors[key]
             z_arr  = np.atleast_1d(np.asarray(z, dtype=float)).reshape(-1)
             if z_arr.size != spec_o["dim"]:

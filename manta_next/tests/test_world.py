@@ -60,7 +60,7 @@ def test_two_crafts_fall_independently():
     w.add_craft(b, position=(10.0, 0.0, 100.0))
 
     cw = w.compile()
-    assert set(cw.components) == {"alice", "bob"}
+    assert {c.name for c in cw.crafts} == {"alice", "bob"}
 
     state = cw.initial_state()
     assert state["alice"]["position"][2] == 50.0
@@ -149,15 +149,15 @@ def test_add_coupling_rejects_unregistered_craft():
         w.add_coupling(FakeCoupling(a, b))
 
 
-def test_compile_succeeds_with_zero_couplings():
-    """Just sanity that the component algorithm works for the no-coupling
-    case (degenerate connected-component graph)."""
+def test_compile_handles_multiple_independent_crafts():
+    """A world with multiple crafts and no couplings compiles to a
+    single tick spanning all of them."""
     w = World()
     w.add_craft(_make_craft("a"))
     w.add_craft(_make_craft("b"))
     w.add_craft(_make_craft("c"))
     cw = w.compile()
-    assert set(cw.components) == {"a", "b", "c"}
+    assert {c.name for c in cw.crafts} == {"a", "b", "c"}
 
 
 def _make_craft(name: str) -> Craft:
@@ -170,20 +170,23 @@ def _make_craft(name: str) -> Craft:
 # CompiledWorld accessors
 # ---------------------------------------------------------------------------
 
-def test_compiled_world_exposes_per_craft_tick():
+def test_compiled_world_exposes_world_tick():
+    """`cw.tick` returns the single CompiledGraph driving the world.
+    Direct invocation uses flat-prefixed casadi inputs (`<craft>.slot`)."""
     w = World()
     c = Craft("solo"); c.add(Mass("body", mass=1.0))
     w.add_craft(c)
     cw = w.compile()
-    tick = cw.tick("solo")
+    tick = cw.tick
     assert tick is not None
-    # Direct tick call should work.
+    # Direct tick call uses flat-prefixed names.
     state = cw.initial_state()["solo"]
-    out = tick(dt=0.01, **state)
-    assert "position" in out
+    flat  = {f"solo.{k}": v for k, v in state.items()}
+    out   = tick(dt=0.01, t=0.0, **flat)
+    assert "solo.position" in out
 
 
-def test_compiled_world_repr_lists_components():
+def test_compiled_world_repr_lists_crafts():
     w = World()
     w.add_craft(_make_craft("a"))
     w.add_craft(_make_craft("b"))

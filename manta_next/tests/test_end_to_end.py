@@ -70,7 +70,7 @@ def test_ekf_predict_with_per_tick_input():
         ekf.predict(dt=dt, u={"t.throttle": thrust})
 
     # No measurements, no noise — should agree to round-off.
-    est = ekf.state_dict()
+    est = ekf.state_dict()["hover_ekf"]
     np.testing.assert_allclose(est["position"].ravel(),
                                np.array(sim_state["position"]).ravel(),
                                atol=1e-9)
@@ -93,7 +93,7 @@ def test_ekf_predict_input_default_fallback():
     for _ in range(200):
         ekf.predict(dt=0.005)
 
-    est = ekf.state_dict()
+    est = ekf.state_dict()["default_thrust"]
     # 200 * 0.005 = 1.0s. z ≈ -½·g·t² = -4.905.
     assert np.isclose(est["position"][2], -4.905, atol=1e-2)
 
@@ -145,7 +145,7 @@ def test_hover_with_eskf_tracks_ground_truth():
     init = c.initial_state(position=(0.0, 0.0, 4.0),
                            velocity=(0.5, 0.0, 0.0))
     P0   = np.eye(ekf.spec.tangent_dim) * 1e-1
-    ekf.reset(state=init, P=P0)
+    ekf.reset(state={"drone": init}, P=P0)
 
     # Noise model.
     sigma_gyro = 0.01     # rad/s standard deviation
@@ -191,7 +191,7 @@ def test_hover_with_eskf_tracks_ground_truth():
             ekf.update(h_pos, pos_meas, R_pos)
 
     truth = sim["drone"]
-    est   = ekf.state_dict()
+    est   = ekf.state_dict()["drone"]
     final_pos_err = np.linalg.norm(
         np.array(truth["position"]).ravel() - est["position"].ravel())
     final_vel_err = np.linalg.norm(
@@ -263,7 +263,7 @@ def test_eskf_nees_consistency_over_seeds():
 
         ekf = EKF(_ekf_world)
         init = c.initial_state(position=(0, 0, 4), velocity=(0.5, 0, 0))
-        ekf.reset(state=init, P=np.eye(ekf.spec.tangent_dim) * 1e-1)
+        ekf.reset(state={"drone": init}, P=np.eye(ekf.spec.tangent_dim) * 1e-1)
 
         h_pos  = measurement_slot(ekf.spec, "position")
         h_gyro = measurement_slot(ekf.spec, "angular_velocity")
@@ -288,9 +288,13 @@ def test_eskf_nees_consistency_over_seeds():
 
             # Sample NEES post-convergence only (after t=0.5s).
             if i > 100 and i % 50 == 0:
-                truth_dict = {
-                    k: np.atleast_1d(np.asarray(v, dtype=float))
-                    for k, v in sim["drone"].items() if k in ekf.spec}
+                # World-tick spec uses `<craft>.<slot>` keys.
+                truth_dict = {}
+                for k, v in sim["drone"].items():
+                    full = f"drone.{k}"
+                    if full in ekf.spec:
+                        truth_dict[full] = np.atleast_1d(
+                            np.asarray(v, dtype=float))
                 x_truth = ekf.spec.pack(truth_dict)
                 err_tan = np.asarray(bm_fn(x_truth, ekf.x)).ravel()
                 try:

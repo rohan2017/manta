@@ -106,14 +106,46 @@ class StateSpec:
             offset += dim
             tan_offset += tangent_dim
 
-        add("position",         3, "R3",  3)
-        add("orientation",      4, "SO3", 3)
-        add("velocity",         3, "R3",  3)
-        add("angular_velocity", 3, "R3",  3)
+        cls._add_craft_slots(craft, "", add)
+        return cls(slots)
 
+    @classmethod
+    def from_world(cls, world) -> "StateSpec":
+        """Build the joint state spec for a World — every craft's slots
+        concatenated, each prefixed with `<craft.name>.`.
+
+        Slot ordering: per-craft in world.crafts order; within each
+        craft, the same per-craft layout as `from_craft`.
+        """
+        slots: list[StateSlot] = []
+        offset = 0
+        tan_offset = 0
+
+        def add(name: str, dim: int, manifold: str, tangent_dim: int):
+            nonlocal offset, tan_offset
+            slots.append(StateSlot(name=name,
+                                   offset=offset,
+                                   dim=dim,
+                                   manifold=manifold,
+                                   tangent_dim=tangent_dim,
+                                   tangent_offset=tan_offset))
+            offset += dim
+            tan_offset += tangent_dim
+
+        for craft in world.crafts:
+            cls._add_craft_slots(craft, f"{craft.name}.", add)
+        return cls(slots)
+
+    @staticmethod
+    def _add_craft_slots(craft, prefix: str, add) -> None:
+        """Emit one craft's worth of slots into `add`, optionally prefixed."""
+        add(prefix + "position",         3, "R3",  3)
+        add(prefix + "orientation",      4, "SO3", 3)
+        add(prefix + "velocity",         3, "R3",  3)
+        add(prefix + "angular_velocity", 3, "R3",  3)
         for part in craft.parts:
             for sname, sdecl in part.state_declarations().items():
-                key = f"{part.name}.{sname}"
+                key = prefix + f"{part.name}.{sname}"
                 if sdecl.manifold == "R1":
                     add(key, 1, "R1", 1)
                 else:
@@ -121,23 +153,18 @@ class StateSpec:
                         f"StateSpec: manifold {sdecl.manifold!r} on "
                         f"{part.name}.{sname} not yet supported.")
             # RW Noise declarations synthesize a bias state slot per
-            # channel — `<part>.<name>` is the bias; the driver is a
-            # noise input handled by the EKF auto-Q path. R3 for vec3
-            # channels, R1 for scalar channels. Channels with
-            # sigma == 0 are inert (no bias state created).
+            # active channel.
             for nname, ndecl in part.noise_declarations().items():
                 if ndecl.kind != "rw":
                     continue
                 sigma = float(getattr(part, f"{nname}_sigma"))
                 if sigma <= 0.0:
                     continue
-                key = f"{part.name}.{nname}"
+                key = prefix + f"{part.name}.{nname}"
                 if ndecl.shape == "scalar":
                     add(key, 1, "R1", 1)
                 else:
                     add(key, 3, "R3", 3)
-
-        return cls(slots)
 
     # ----- Accessors -----------------------------------------------------
 
@@ -154,7 +181,25 @@ class StateSpec:
         return self._tangent_dim
 
     def slot(self, name: str) -> StateSlot:
-        return self._slot_by_name[name]
+        """Lookup a slot by name.
+
+        Exact match wins. As a convenience for single-craft worlds, a
+        suffix match also works — `spec.slot("position")` finds
+        `"drone.position"` when there's exactly one such slot. The
+        suffix match raises if ambiguous.
+        """
+        if name in self._slot_by_name:
+            return self._slot_by_name[name]
+        candidates = [s for s in self._slots
+                      if s.name.endswith("." + name)]
+        if len(candidates) == 1:
+            return candidates[0]
+        if len(candidates) > 1:
+            raise KeyError(
+                f"StateSpec.slot: ambiguous slot name {name!r}; "
+                f"matches {[c.name for c in candidates]}. Use the "
+                f"fully-qualified form.")
+        raise KeyError(name)
 
     def __contains__(self, name: str) -> bool:
         return name in self._slot_by_name

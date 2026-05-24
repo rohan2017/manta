@@ -212,13 +212,12 @@ def test_collision_field_reaches_coupled_tick():
 
     cw = w.compile()
     state = cw.initial_state()
-    comp = list(cw.components)[0]
 
     for _ in range(3000):
         state = cw.step(state, dt=0.001)
 
     # Craft `a` rests at the ground-compression equilibrium z = -m·g/k.
-    z_a = float(state[comp]["a.position"][2])
+    z_a = float(state["a"]["position"][2])
     expected = -1.0 * g / 1e5
     assert np.isclose(z_a, expected, atol=2e-4), (
         f"a.z={z_a}, expected≈{expected}; the coupled_tick path is "

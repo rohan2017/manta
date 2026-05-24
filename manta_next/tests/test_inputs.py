@@ -165,7 +165,8 @@ def test_ekf_constructs_with_input_parts():
     ekf = EKF(_ekf_world)
     ekf.predict(dt=0.01)
     # τ=0.3, I=0.05 → α = 6 rad/s² → rate after 0.01s = 0.06.
-    assert np.isclose(ekf.state_dict()["motor.rate"], 0.06, atol=1e-9)
+    assert np.isclose(ekf.state_dict()["driven_ekf"]["motor.rate"], 0.06,
+                      atol=1e-9)
 
 
 # ---------------------------------------------------------------------------

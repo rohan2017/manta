@@ -88,7 +88,7 @@ def test_ekf_predict_alone_matches_tick():
     ekf = EKF(_ekf_world)
 
     state = c.initial_state(position=(0.0, 0.0, 100.0))
-    ekf.reset(state={"position": state["position"]})
+    ekf.reset(state={"predict_only": {"position": state["position"]}})
 
     dt = 0.01
     for _ in range(100):
@@ -100,7 +100,8 @@ def test_ekf_predict_alone_matches_tick():
 
     # Both should now be at z = 100 − 0.5·9.81·1 = 95.095.
     assert np.isclose(state["position"][2],  95.095, atol=1e-5)
-    assert np.isclose(ekf.state_dict()["position"][2], 95.095, atol=1e-5)
+    assert np.isclose(ekf.state_dict()["predict_only"]["position"][2],
+                      95.095, atol=1e-5)
 
 
 def test_ekf_position_sensor_pulls_estimate_toward_truth():
@@ -119,7 +120,7 @@ def test_ekf_position_sensor_pulls_estimate_toward_truth():
     # uncertainty.
     truth = c.initial_state(position=(0.0, 0.0, 100.0))
     P0 = np.eye(ekf.spec.tangent_dim) * 1.0   # broad prior, tangent-dim
-    ekf.reset(state={"position": np.zeros(3)}, P=P0)
+    ekf.reset(state={"oracle_demo": {"position": np.zeros(3)}}, P=P0)
 
     h_z = measurement_component(ekf.spec, "position", component=2)
     R = np.array([[0.01]])          # 10 cm sensor stddev squared
@@ -137,7 +138,7 @@ def test_ekf_position_sensor_pulls_estimate_toward_truth():
         ekf.update(h_z, z=np.array([z]), R=R)
 
     truth_z = truth["position"][2]
-    est_z   = ekf.state_dict()["position"][2]
+    est_z   = ekf.state_dict()["oracle_demo"]["position"][2]
     # Truth has fallen by ½·g·t² = 122.625 → z = -22.625.
     assert np.isclose(truth_z, 100.0 - 0.5 * 9.81 * 25.0, atol=1e-3)
     # Estimate should now track truth tightly.
@@ -157,7 +158,7 @@ def test_ekf_full_position_observation_drives_convergence():
     _ekf_world = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     _ekf_world.add_craft(c)
     ekf = EKF(_ekf_world)   # no gravity
-    ekf.reset(state={"position": np.array([10.0, -5.0, 0.0])},
+    ekf.reset(state={"full_pos": {"position": np.array([10.0, -5.0, 0.0])}},
               P=np.eye(ekf.spec.tangent_dim) * 4.0)
 
     truth_pos = np.array([0.5, 1.0, 80.0])
@@ -170,7 +171,7 @@ def test_ekf_full_position_observation_drives_convergence():
         z = truth_pos + rng.normal(0.0, 0.03, size=3)
         ekf.update(h_p, z=z, R=R)
 
-    est_pos = ekf.state_dict()["position"]
+    est_pos = ekf.state_dict()["full_pos"]["position"]
     assert np.allclose(est_pos, truth_pos, atol=0.05), \
         f"est={est_pos}, truth={truth_pos}"
 
@@ -211,8 +212,8 @@ def test_eskf_attitude_estimation_converges():
     # Bigger prior on the orientation tangent slot (offsets 3..6) — we
     # know our prior is wrong by tens of degrees.
     P0[3:6, 3:6] = np.eye(3) * 0.5
-    ekf.reset(state={"orientation": wrong_q,
-                     "angular_velocity": omega_truth},
+    ekf.reset(state={"attitude_demo": {"orientation":      wrong_q,
+                                       "angular_velocity": omega_truth}},
               P=P0)
 
     # Noisy 4-D quaternion measurements of the orientation.
@@ -229,7 +230,7 @@ def test_eskf_attitude_estimation_converges():
         ekf.update(h_q, z=z, R=R)
 
     # Estimate's orientation should now track truth tightly.
-    est_q   = ekf.state_dict()["orientation"]
+    est_q   = ekf.state_dict()["attitude_demo"]["orientation"]
     truth_q = truth["orientation"]
     # Inner product: |<est, truth>| ≈ 1 when they agree (modulo cover).
     inner = abs(float(np.dot(est_q, truth_q)))
@@ -255,14 +256,15 @@ def test_eskf_state_spec_layout_with_tangent_offsets():
     # Total: rigid-body(13/12) + wheel.angle (1/1) + wheel.rate (1/1)
     assert spec.ambient_dim == 13 + 2
     assert spec.tangent_dim == 12 + 2
-    # Tangent offsets are contiguous in slot order.
+    # Tangent offsets are contiguous in slot order. World-tick slot
+    # names are flat-prefixed with the craft name.
     expected_tan_offsets = {
-        "position": 0,
-        "orientation": 3,
-        "velocity": 6,
-        "angular_velocity": 9,
-        "wheel.angle": 12,
-        "wheel.rate":  13,
+        "with_state.position":          0,
+        "with_state.orientation":       3,
+        "with_state.velocity":          6,
+        "with_state.angular_velocity":  9,
+        "with_state.wheel.angle":      12,
+        "with_state.wheel.rate":       13,
     }
     for slot in spec.slots:
         assert slot.tangent_offset == expected_tan_offsets[slot.name]

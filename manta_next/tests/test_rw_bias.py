@@ -163,7 +163,7 @@ def test_ekf_estimates_rw_bias_from_gyro_readings():
         t += dt
 
     truth_bias = np.array(state["drone"]["g.gyro_bias"])
-    est_bias   = np.array(ekf.state_dict()["g.gyro_bias"])
+    est_bias   = np.array(ekf.state_dict()["drone"]["g.gyro_bias"])
     err        = np.linalg.norm(est_bias - truth_bias)
     # The truth drifts a small amount due to σ=0.02 driver over 5s;
     # the estimate should track within a few hundredths of a rad/s.

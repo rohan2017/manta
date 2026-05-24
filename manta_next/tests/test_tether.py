@@ -31,9 +31,8 @@ def test_at_rest_length_zero_force():
     for _ in range(500):
         state = cw.step(state, dt=0.001)
 
-    comp = list(cw.components)[0]
-    pa = np.array(state[comp]["a.position"]).ravel()
-    pb = np.array(state[comp]["b.position"]).ravel()
+    pa = np.array(state["a"]["position"]).ravel()
+    pb = np.array(state["b"]["position"]).ravel()
     np.testing.assert_allclose(pa, np.zeros(3), atol=1e-9)
     np.testing.assert_allclose(pb, (L, 0, 0), atol=1e-9)
 
@@ -55,9 +54,8 @@ def test_stretched_spring_pulls_crafts_together():
     for _ in range(2000):
         state = cw.step(state, dt=0.001)
 
-    comp = list(cw.components)[0]
-    pa = np.array(state[comp]["a.position"]).ravel()
-    pb = np.array(state[comp]["b.position"]).ravel()
+    pa = np.array(state["a"]["position"]).ravel()
+    pb = np.array(state["b"]["position"]).ravel()
     dist = np.linalg.norm(pb - pa)
     # With damping the system settles to rest length.
     assert np.isclose(dist, L_rest, atol=0.05)
@@ -80,9 +78,8 @@ def test_compressed_spring_pushes_crafts_apart():
     for _ in range(2000):
         state = cw.step(state, dt=0.001)
 
-    comp = list(cw.components)[0]
-    pa = np.array(state[comp]["a.position"]).ravel()
-    pb = np.array(state[comp]["b.position"]).ravel()
+    pa = np.array(state["a"]["position"]).ravel()
+    pb = np.array(state["b"]["position"]).ravel()
     dist = np.linalg.norm(pb - pa)
     assert np.isclose(dist, L_rest, atol=0.05)
 
@@ -100,18 +97,17 @@ def test_momentum_conservation_no_external_forces():
     cw = w.compile()
 
     state = cw.initial_state()
-    comp = list(cw.components)[0]
 
     # Initial momentum
-    va0 = np.array(state[comp]["a.velocity"]).ravel()
-    vb0 = np.array(state[comp]["b.velocity"]).ravel()
+    va0 = np.array(state["a"]["velocity"]).ravel()
+    vb0 = np.array(state["b"]["velocity"]).ravel()
     p0 = 1.0 * va0 + 2.0 * vb0   # m_a·v_a + m_b·v_b
 
     for _ in range(2000):
         state = cw.step(state, dt=0.001)
 
-    va = np.array(state[comp]["a.velocity"]).ravel()
-    vb = np.array(state[comp]["b.velocity"]).ravel()
+    va = np.array(state["a"]["velocity"]).ravel()
+    vb = np.array(state["b"]["velocity"]).ravel()
     p_final = 1.0 * va + 2.0 * vb
     np.testing.assert_allclose(p_final, p0, atol=1e-3)
 
@@ -128,17 +124,16 @@ def test_damping_dissipates_relative_motion():
     cw = w.compile()
 
     state = cw.initial_state()
-    comp = list(cw.components)[0]
 
     # Run with damping.
     energies = []
     for i in range(3000):
         state = cw.step(state, dt=0.001)
         if i % 200 == 0:
-            va = np.array(state[comp]["a.velocity"]).ravel()
-            vb = np.array(state[comp]["b.velocity"]).ravel()
-            pa = np.array(state[comp]["a.position"]).ravel()
-            pb = np.array(state[comp]["b.position"]).ravel()
+            va = np.array(state["a"]["velocity"]).ravel()
+            vb = np.array(state["b"]["velocity"]).ravel()
+            pa = np.array(state["a"]["position"]).ravel()
+            pb = np.array(state["b"]["position"]).ravel()
             ke = 0.5 * (np.dot(va, va) + np.dot(vb, vb))
             pe = 0.5 * 50.0 * (np.linalg.norm(pb - pa) - 5.0) ** 2
             energies.append(ke + pe)
@@ -170,8 +165,7 @@ def test_offset_endpoint_produces_torque():
     state = cw.initial_state()
     state = cw.step(state, dt=0.001)
 
-    comp = list(cw.components)[0]
-    omega = np.array(state[comp]["a.angular_velocity"]).ravel()
+    omega = np.array(state["a"]["angular_velocity"]).ravel()
     # The tether pulls A's hook (at +y, +x relative to body center) toward B
     # (which is at +x in anchor). The force pulls A in +x direction, applied
     # at +y offset → torque about -z. Sign depends on convention.
