@@ -22,11 +22,14 @@ effects (and a co-rotating ocean).
 
 from __future__ import annotations
 
+import casadi as ca
+
 from ..fields import (
     DipoleMag, GravityField, FluidField, J2Gravity, MagField,
-    PlanetCoRotatingFluid, PointMassGravity,
+    PointMassGravity,
 )
 from .base import Planet
+from .disturbances import PlanetFrameFluid
 
 
 class Earth(Planet):
@@ -58,6 +61,10 @@ class Earth(Planet):
     J2:       float = 1.0826267e-3
     DIPOLE:   float = 7.94e22            # A·m²
 
+    # ISA-style atmospheric scale height (m). Density falls off as
+    # exp(-altitude / SCALE_HEIGHT) above sea level.
+    ATMOSPHERE_SCALE_HEIGHT: float = 8500.0
+
     def __init__(self,
                  name: str = "earth",
                  *,
@@ -66,6 +73,7 @@ class Earth(Planet):
                  sea_level: float = 0.0,
                  water_density: float = 1025.0,
                  air_density: float = 1.225,
+                 atmosphere_scale_height: float | None = None,
                  gravity_mu: float = MU,
                  include_j2: bool = False,
                  dipole_moment: float = 0.0) -> None:
@@ -76,6 +84,10 @@ class Earth(Planet):
         self.sea_level     = float(sea_level)
         self.water_density = float(water_density)
         self.air_density   = float(air_density)
+        self.atmosphere_scale_height = float(
+            atmosphere_scale_height
+            if atmosphere_scale_height is not None
+            else self.ATMOSPHERE_SCALE_HEIGHT)
         self.gravity_mu    = float(gravity_mu)
         self.include_j2    = bool(include_j2)
         self.dipole_moment = float(dipole_moment)
@@ -105,18 +117,28 @@ class Earth(Planet):
                     eq_radius=self.R_EQ,
                     polar_axis=tuple(self.axis.tolist())))
 
-        # Fluid: ocean below sea level + atmosphere above.
+        # Fluid: a single PlanetFrameFluid whose density function
+        # branches on altitude (water below sea level, exponential
+        # atmosphere above). The lambda uses `ca.if_else` — a hard
+        # boundary is fine; CasADi's autodiff handles it cleanly
+        # everywhere except the (measure-zero) interface itself.
         ff = world.get_or_create_field(FluidField)
-        ff.add(PlanetCoRotatingFluid(
-            planet=self,
-            density=self.water_density,
-            planet_radius=self.planet_radius,
-            bound="below_sea_level"))
-        ff.add(PlanetCoRotatingFluid(
-            planet=self,
-            density=self.air_density,
-            planet_radius=self.planet_radius,
-            bound="above_sea_level"))
+        R_planet  = self.planet_radius
+        rho_w     = self.water_density
+        rho_air   = self.air_density
+        scale_h   = self.atmosphere_scale_height
+
+        def density_fn(p_planet):
+            # Radial altitude above the sea-level sphere.
+            r = ca.sqrt(ca.dot(p_planet, p_planet) + 1e-30)
+            altitude = r - R_planet
+            return ca.if_else(altitude < 0.0,
+                              rho_w,
+                              rho_air * ca.exp(-altitude / scale_h))
+
+        ff.add(PlanetFrameFluid(planet=self,
+                                density_fn=density_fn,
+                                name=f"{self.name}_fluid"))
 
         # Magnetic dipole along the spin axis (-axis for a planet whose
         # spin axis points away from the geographic-north magnetic dip).

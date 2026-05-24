@@ -28,7 +28,7 @@ User-facing surface::
 from .base import Disturbance, Field
 from .gravity import GravityField, J2Gravity, PointMassGravity, UniformGravity
 from .fluid   import (
-    CurrentFlow, FluidField, FluidState, PlanetCoRotatingFluid, UniformFluid,
+    CurrentFlow, FluidField, FluidState, UniformFluid,
 )
 from .mag     import DipoleMag, MagField, UniformMag
 from .collision import CollisionField, HalfSpace
@@ -37,7 +37,6 @@ __all__ = [
     "Disturbance", "Field",
     "GravityField", "UniformGravity", "PointMassGravity", "J2Gravity",
     "FluidField", "FluidState", "UniformFluid", "CurrentFlow",
-    "PlanetCoRotatingFluid",
     "MagField", "UniformMag", "DipoleMag",
     "CollisionField", "HalfSpace",
 ]
