@@ -108,17 +108,30 @@ def compile_coupled_tick(crafts: list,
         dt = ir.Scalar.input("dt")
         t  = ir.Scalar.input("t")
 
-        # Pass 0: plumb State/Noise declarations on field disturbances.
+        # Pass 0a: rigid-body state inputs for every craft, stashed on
+        # the craft so disturbances (and the per-craft trace below) can
+        # reference any craft's symbolic state. This must precede
+        # disturbance plumbing because a disturbance might close over a
+        # craft's position (e.g. CraftWindBubble).
+        for craft in crafts:
+            prefix = f"{craft.name}."
+            craft._sym_state = {
+                "position":         ir.Vec3[WorldFrame].input(prefix + "position"),
+                "orientation":      ir.Quat[WorldFrame, CraftFrame].input(prefix + "orientation"),
+                "velocity":         ir.Vec3[WorldFrame].input(prefix + "velocity"),
+                "angular_velocity": ir.Vec3[CraftFrame].input(prefix + "angular_velocity"),
+            }
+
+        # Pass 0b: plumb State/Noise declarations on field disturbances.
         # These rebinds need to be in scope BEFORE any part's update()
-        # queries a field, so they happen first.
+        # queries a field.
         all_fields = [gravity_field, fluid_field, mag_field, collision_field]
         dist_saved_attrs, dist_state_outputs = _plumb_field_disturbances(
             all_fields, dt)
 
-        # Pass 1: per-craft inputs, TickContext, part wrench aggregation,
-        # state/input rebinds. We keep all the symbolic handles in
-        # `per_craft` so we can splice in coupling wrenches between
-        # passes.
+        # Pass 1: per-craft trace. The rigid-body state symbols are
+        # already created (Pass 0a); the per-craft helper picks them up
+        # from craft._sym_state.
         per_craft: dict[int, dict[str, Any]] = {}
         for craft in crafts:
             per_craft[id(craft)] = _trace_craft_pass1(
@@ -150,6 +163,11 @@ def compile_coupled_tick(crafts: list,
         for dist, saved in dist_saved_attrs:
             for attr_name, attr_val in saved.items():
                 object.__setattr__(dist, attr_name, attr_val)
+
+    # Clear the per-craft symbolic-state stash; the compiled function
+    # carries the references internally now.
+    for craft in crafts:
+        craft._sym_state = None
 
     return g.compile(defaults={"t": 0.0})
 
@@ -271,11 +289,13 @@ def _trace_craft_pass1(g_ctx,
     later passes need."""
     prefix = f"{craft.name}."
 
-    # State inputs (prefixed).
-    position    = ir.Vec3[WorldFrame].input(prefix + "position")
-    orientation = ir.Quat[WorldFrame, CraftFrame].input(prefix + "orientation")
-    velocity    = ir.Vec3[WorldFrame].input(prefix + "velocity")
-    ang_vel     = ir.Vec3[CraftFrame].input(prefix + "angular_velocity")
+    # Rigid-body state symbols were created in `compile_coupled_tick`'s
+    # Pass 0a and stashed on `craft._sym_state` (so disturbances anchored
+    # to other crafts can reference them). Pick them up here.
+    position    = craft._sym_state["position"]
+    orientation = craft._sym_state["orientation"]
+    velocity    = craft._sym_state["velocity"]
+    ang_vel     = craft._sym_state["angular_velocity"]
     # Placeholder MX symbols for current-tick body acceleration / α
     # (substituted with the real Newton-Euler outputs after the wrench
     # sum is known — see Craft.compile_tick for the rationale).

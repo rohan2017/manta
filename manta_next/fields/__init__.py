@@ -32,11 +32,13 @@ from .fluid   import (
 )
 from .mag     import DipoleMag, MagField, UniformMag
 from .collision import CollisionField, HalfSpace
+from .wind_bubble import CraftWindBubble
 
 __all__ = [
     "Disturbance", "Field",
     "GravityField", "UniformGravity", "PointMassGravity", "J2Gravity",
     "FluidField", "FluidState", "UniformFluid", "CurrentFlow",
+    "CraftWindBubble",
     "MagField", "UniformMag", "DipoleMag",
     "CollisionField", "HalfSpace",
 ]
