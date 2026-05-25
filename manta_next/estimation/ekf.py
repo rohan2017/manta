@@ -278,17 +278,10 @@ class EKF:
                         "craft":   craft,
                     }
 
-        # Initial state + covariance. Per-owner nested seed (crafts +
-        # disturbances), flattened into the spec's flat layout.
-        init_flat: dict[str, Any] = {}
-        for owner_name, owner_state in world._initial_state_dict().items():
-            for k, v in owner_state.items():
-                init_flat[f"{owner_name}.{k}"] = v
-        # Only pack keys the spec knows about (white noise drivers are
-        # initial-state entries but NOT spec slots).
-        init_for_pack = {k: v for k, v in init_flat.items() if k in self.spec}
-        self._x = self.spec.pack(init_for_pack)
-        self._P = np.eye(n_tangent) * 1e-2
+        # Mutable runtime state (`_x`, `_P`) lives on the backend
+        # evaluator (`NumpyEKF`), not on the IR. The IR keeps the
+        # symbolic functions + sensor table; backends instantiate
+        # their own state from `world._initial_state_dict()`.
 
     # ------------------------------------------------------------------
     # Symbolic-tick helpers (build the new-state + outputs MX dict)
@@ -422,213 +415,17 @@ class EKF:
                 out[i] = resolved[name]
         return out
 
-    # ------------------------------------------------------------------
-    # Accessors
-    # ------------------------------------------------------------------
+    # Predict / update / state_dict / reset / x / P live on the
+    # runtime evaluator (`NumpyEKF`), not the IR. The split keeps
+    # EKF as a pure compile-time description that any backend
+    # (numpy, C++, …) can consume. Build a runtime via:
+    #     from manta_next import TargetNumpy
+    #     ekf = TargetNumpy(EKF(world))
+    #     ekf.predict(dt=dt, t=t)
+    #     ekf.update(part, gyro=z)
+    # The IR holds the symbolic functions (_f_fn, _F_fn, _L_fn,
+    # _sensors) the backends need.
 
-    @property
-    def x(self) -> np.ndarray:
-        return self._x.copy()
-
-    @property
-    def P(self) -> np.ndarray:
-        return self._P.copy()
-
-    def state_dict(self) -> dict[str, dict[str, Any]]:
-        """Current estimate as `{owner: {slot: value}}` — owners are
-        the world's crafts and any state-bearing field disturbances.
-        Same nested shape as `CompiledWorld.initial_state()`.
-        """
-        flat = self.spec.unpack(self._x)
-        nested: dict[str, dict[str, Any]] = {}
-        for full_name, val in flat.items():
-            owner_name, slot = full_name.split(".", 1)
-            nested.setdefault(owner_name, {})[slot] = val
-        return nested
-
-    def reset(self, *,
-              state: dict | None = None,
-              P: np.ndarray | None = None) -> None:
-        """Reset the EKF state and/or covariance.
-
-        `state` accepts either:
-          * Flat dict keyed by full slot name (`"<craft>.<slot>"`).
-          * Nested dict `{craft_name: {slot: value}}` (same shape as
-            `state_dict()` returns).
-        Missing entries fall back to the world's add_craft defaults.
-        """
-        if state is not None:
-            full_flat: dict[str, Any] = {}
-            for owner_name, owner_state in self.world._initial_state_dict().items():
-                for k, v in owner_state.items():
-                    full_flat[f"{owner_name}.{k}"] = v
-            for k, v in state.items():
-                if isinstance(v, dict):
-                    for slot, val in v.items():
-                        full_flat[f"{k}.{slot}"] = val
-                else:
-                    full_flat[k] = v
-            full_flat = {k: v for k, v in full_flat.items() if k in self.spec}
-            self._x = self.spec.pack(full_flat)
-        if P is not None:
-            P = np.asarray(P, dtype=float)
-            expected = (self.spec.tangent_dim, self.spec.tangent_dim)
-            if P.shape != expected:
-                raise ValueError(
-                    f"EKF.reset: P shape {P.shape} doesn't match "
-                    f"tangent dim {expected}")
-            self._P = P.copy()
-
-    # ------------------------------------------------------------------
-    # Predict
-    # ------------------------------------------------------------------
-
-    def predict(self,
-                dt: float,
-                *,
-                t: float = 0.0,
-                u: dict[str, float] | None = None,
-                Q: np.ndarray | None = None) -> None:
-        """Advance the nominal state and tangent covariance by `dt`.
-
-        Args:
-            dt    integrator timestep.
-            t     world-clock time at the start of this step (defaults
-                  to 0; matters when planet-attached disturbances are
-                  present).
-            u     dict of `"<part>.<input>"` → float for per-tick input
-                  values. Missing entries fall back to the part-instance
-                  default captured at construction time.
-            Q     process-noise covariance, tangent-dim square. If
-                  None (default), Q is assembled from registered Noise
-                  channels via `L · Σ · Lᵀ` (autodiff).
-        """
-        u_vec = self._build_u(u)
-        x_new = np.asarray(self._f_fn(self._x, u_vec, dt, t)).reshape(-1)
-        F     = np.asarray(self._F_fn(self._x, u_vec, dt, t))
-        n     = self.spec.tangent_dim
-        if Q is None:
-            if self._L_fn is not None:
-                L = np.asarray(self._L_fn(self._x, u_vec, dt, t))
-                Q = L @ self._Sigma @ L.T
-            else:
-                Q = np.zeros((n, n))
-        self._x = x_new
-        self._P = F @ self._P @ F.T + Q
-        self._P = 0.5 * (self._P + self._P.T)
-
-    # ------------------------------------------------------------------
-    # Update
-    # ------------------------------------------------------------------
-
-    def update(self, *args, **kwargs) -> None:
-        """Polymorphic update.
-
-        Sensor form (auto h, H, R):
-            ekf.update(part, gyro=z_gyro, accel=z_accel)
-
-        Low-level form (caller-supplied h, R):
-            ekf.update(h_sym, z, R)
-            ekf.update(h_sym, z=z, R=R)
-        """
-        # Low-level: first arg is a callable h_sym; z and R may be
-        # positional or keyword.
-        if args and callable(args[0]):
-            h_sym = args[0]
-            try:
-                z = args[1] if len(args) > 1 else kwargs["z"]
-                R = args[2] if len(args) > 2 else kwargs["R"]
-            except KeyError as e:
-                raise TypeError(
-                    f"EKF.update: low-level form needs h_sym + z + R; "
-                    f"missing {e}") from None
-            return self._update_low_level(h_sym, z, R)
-        # Sensor form: first arg is a Part.
-        if len(args) == 1 and not callable(args[0]):
-            return self._update_sensor(args[0], kwargs)
-        raise TypeError(
-            "EKF.update: pass (h_sym, z, R) for the low-level form or "
-            "(part, **{output_name: z}) for the sensor form.")
-
-    def _update_sensor(self, part, measurements: dict[str, Any]) -> None:
-        if not measurements:
-            raise ValueError(
-                f"EKF.update: no measurements provided for "
-                f"{type(part).__name__}('{part.name}').")
-        u_vec = self._u_defaults
-        # Measurements are instantaneous; pass sentinel dt/t = 0 to
-        # any h / H / L_h evaluation that may symbolically depend on
-        # them (CasADi can't always prove independence statically).
-        dt0, t0 = 0.0, 0.0
-        for out_name, z in measurements.items():
-            key = (id(part), out_name)
-            if key not in self._sensors:
-                avail = [k[1] for k in self._sensors if k[0] == id(part)]
-                raise KeyError(
-                    f"EKF.update: part '{part.name}' has no registered "
-                    f"output {out_name!r} (available: {avail}).")
-            spec_o = self._sensors[key]
-            z_arr  = np.atleast_1d(np.asarray(z, dtype=float)).reshape(-1)
-            if z_arr.size != spec_o["dim"]:
-                raise ValueError(
-                    f"EKF.update: {part.name}.{out_name}: expected "
-                    f"z of size {spec_o['dim']}, got {z_arr.size}.")
-            h_val = np.asarray(spec_o["h_fn"](self._x, u_vec, dt0, t0)
-                                ).reshape(-1)
-            H     = np.asarray(spec_o["H_fn"](self._x, u_vec, dt0, t0))
-            if spec_o["L_h_fn"] is not None:
-                L_h = np.asarray(spec_o["L_h_fn"](self._x, u_vec, dt0, t0))
-                R   = L_h @ self._Sigma @ L_h.T
-            else:
-                R   = np.zeros((spec_o["dim"], spec_o["dim"]))
-            self._apply_update(z_arr, h_val, H, R)
-
-    def _update_low_level(self,
-                          h_sym: Callable[[ca.MX], ca.MX],
-                          z: np.ndarray,
-                          R: np.ndarray) -> None:
-        """Caller-supplied h(x) callable and R. Used by tests that
-        synthesize bespoke measurements (e.g., observe a single state
-        component directly)."""
-        z = np.asarray(z, dtype=float).reshape(-1)
-        R = np.asarray(R, dtype=float)
-        if R.shape != (z.size, z.size):
-            raise ValueError(
-                f"EKF.update: R shape {R.shape} doesn't match z size {z.size}")
-
-        h_mx = h_sym(self._x_sym)
-        h_mx = ca.reshape(h_mx, h_mx.numel(), 1)
-        delta = ca.MX.sym("delta_h", self.spec.tangent_dim, 1)
-        x_pert = self.spec.boxplus_sym(self._x_sym, delta)
-        h_pert = h_sym(x_pert)
-        h_pert = ca.reshape(h_pert, h_pert.numel(), 1)
-        H_sym = ca.substitute(
-            ca.jacobian(h_pert, delta),
-            delta, ca.MX.zeros(self.spec.tangent_dim, 1))
-
-        h_fn = ca.Function("h_low", [self._x_sym], [h_mx])
-        H_fn = ca.Function("H_low", [self._x_sym], [H_sym])
-        h_x  = np.asarray(h_fn(self._x)).reshape(-1)
-        H    = np.asarray(H_fn(self._x))
-        if h_x.size != z.size:
-            raise ValueError(
-                f"EKF.update: h(x) size {h_x.size} doesn't match z size {z.size}")
-        self._apply_update(z, h_x, H, R)
-
-    def _apply_update(self,
-                      z: np.ndarray,
-                      h_x: np.ndarray,
-                      H: np.ndarray,
-                      R: np.ndarray) -> None:
-        y = z - h_x
-        S = H @ self._P @ H.T + R
-        K = np.linalg.solve(S.T, (self._P @ H.T).T).T
-        delta_x = K @ y
-        self._x = self.spec.boxplus(self._x, delta_x)
-        I = np.eye(self.spec.tangent_dim)
-        IKH = I - K @ H
-        self._P = IKH @ self._P @ IKH.T + K @ R @ K.T
-        self._P = 0.5 * (self._P + self._P.T)
 
 
 # ---------------------------------------------------------------------------

@@ -389,18 +389,19 @@ class World:
 # ---------------------------------------------------------------------------
 
 class CompiledWorld:
-    """Runtime wrapper around the World's single compiled tick.
+    """Compiled-model IR for a World — describes the symbolic graph
+    but doesn't itself evaluate.
 
-    State layout: `dict[craft.name, dict[slot_name, value]]`. Inner
-    keys use the craft-relative slot names (`position`, `t.throttle`,
-    `imu.gyro_noise`, …) — no craft-name prefix.
+    Holds the world's single CasADi function (`tick`), the per-owner
+    initial-state seed, the tuple of registered crafts, and a back-ref
+    to the source World. To actually run ticks, wrap with a backend:
 
-    Stepping::
+        cw  = world.compile()              # IR
+        sim = TargetNumpy(cw)              # native-Python runtime
+        state = sim.initial_state()
+        state = sim.step(state, dt=0.01)
 
-        cw = world.compile()
-        state = cw.initial_state()
-        for _ in range(N):
-            state = cw.step(state, dt=0.01)
+    Future `TargetCpp(cw, ...)` emits C++ source consuming the same IR.
     """
 
     def __init__(self, *,
@@ -427,59 +428,17 @@ class CompiledWorld:
     def tick(self):
         """The single CompiledGraph driving every craft in this world.
 
-        Inputs are flat-prefixed (`<craft>.position`, `<craft>.dt`, etc.).
-        Most callers use `cw.step(...)` instead and let the wrapper
-        translate the user-facing nested-dict shape.
+        Inputs are flat-prefixed (`<owner>.<slot>`, `dt`, `t`).
+        Backends consume this directly; users typically work through
+        a target wrapper (`TargetNumpy(cw).step(...)`).
         """
         return self._tick
 
-    # ---- State ----------------------------------------------------------
-
-    def initial_state(self) -> dict[str, dict[str, Any]]:
-        """Fresh copy of the per-craft initial state.
-
-        Shape: `{craft.name: {slot: value, ...}, ...}` — slot keys are
-        craft-relative (no craft-name prefix in the inner dict).
-        """
-        return copy.deepcopy(self._initial)
-
-    def step(self,
-             state: dict[str, dict[str, Any]],
-             dt: float,
-             t: float = 0.0) -> dict[str, dict[str, Any]]:
-        """Advance every craft by `dt`. Returns a fresh state dict.
-
-        `t` is the world-clock time at the start of this step. Most
-        disturbances ignore it; planet-attached disturbances use it to
-        compute the planet's current rotation. Defaults to 0 for sims
-        that don't care about absolute time.
-        """
-        # Flatten the nested dict into the tick's flat-prefixed inputs.
-        # Owners may be crafts OR field disturbances; both use the same
-        # `<owner>.<slot>` convention in the casadi function.
-        flat: dict[str, Any] = {"dt": dt, "t": t}
-        for owner_name, owner_state in state.items():
-            for slot, val in owner_state.items():
-                flat[f"{owner_name}.{slot}"] = val
-
-        out = self._tick(**flat)
-
-        # Unflatten the tick's outputs back to nested per-owner dicts.
-        # Initial-state keys define the set of owners; the tick writes
-        # back state slots for crafts + disturbances.
-        new_state: dict[str, dict[str, Any]] = {k: {} for k in state}
-        for key, val in out.items():
-            owner_name, slot = key.split(".", 1)
-            if owner_name not in new_state:
-                new_state[owner_name] = {}
-            new_state[owner_name][slot] = val
-        # Preserve any input-only slots (noise drivers, inputs the user
-        # set per-tick) that the tick doesn't write back as outputs.
-        for owner_name, owner_state in state.items():
-            for slot, val in owner_state.items():
-                if slot not in new_state[owner_name]:
-                    new_state[owner_name][slot] = val
-        return new_state
+    @property
+    def initial(self) -> dict[str, dict[str, Any]]:
+        """Raw nested initial-state dict (NOT a deep copy — backends
+        copy as needed)."""
+        return self._initial
 
     def __repr__(self) -> str:
         names = ", ".join(c.name for c in self._crafts)

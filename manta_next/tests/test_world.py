@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from manta_next import World, Coupling, Craft, CompiledWorld
+from manta_next import World, Coupling, Craft, CompiledWorld, TargetNumpy
 from manta_next.fields import GravityField
 from manta_next.parts import Joint, Mass
 
@@ -23,7 +23,7 @@ def test_single_craft_world_matches_direct_compile():
     c2.add(Mass("body", mass=1.0))
     w = World().add_field(GravityField().add_uniform((0.0, 0.0, -9.81)))
     w.add_craft(c2, position=(0.0, 0.0, 100.0))
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
 
     # Direct numerics.
     state_direct = c1.initial_state(position=(0.0, 0.0, 100.0))
@@ -59,7 +59,7 @@ def test_two_crafts_fall_independently():
     b.add(Mass("body", mass=5.0))
     w.add_craft(b, position=(10.0, 0.0, 100.0))
 
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     assert {c.name for c in cw.crafts} == {"alice", "bob"}
 
     state = cw.initial_state()
@@ -92,7 +92,7 @@ def test_world_carries_part_state_through_step():
     c.add(j)
     w.add_craft(c, **{"wheel.angle": 0.5, "wheel.rate": 2.0})
 
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     state = cw.initial_state()
     assert state["with_rotor"]["wheel.angle"] == 0.5
     assert state["with_rotor"]["wheel.rate"]  == 2.0
@@ -156,7 +156,7 @@ def test_compile_handles_multiple_independent_crafts():
     w.add_craft(_make_craft("a"))
     w.add_craft(_make_craft("b"))
     w.add_craft(_make_craft("c"))
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     assert {c.name for c in cw.crafts} == {"a", "b", "c"}
 
 
@@ -176,7 +176,7 @@ def test_compiled_world_exposes_world_tick():
     w = World()
     c = Craft("solo"); c.add(Mass("body", mass=1.0))
     w.add_craft(c)
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     tick = cw.tick
     assert tick is not None
     # Direct tick call uses flat-prefixed names.
@@ -190,6 +190,6 @@ def test_compiled_world_repr_lists_crafts():
     w = World()
     w.add_craft(_make_craft("a"))
     w.add_craft(_make_craft("b"))
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     r = repr(cw)
     assert "a" in r and "b" in r

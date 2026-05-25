@@ -8,7 +8,7 @@ import math
 import numpy as np
 import pytest
 
-from manta_next import World
+from manta_next import World, TargetNumpy
 from manta_next.craft import Craft
 from manta_next.fields import GravityField
 from manta_next.estimation.ekf import EKF, measurement_component, measurement_slot
@@ -85,7 +85,7 @@ def test_ekf_predict_alone_matches_tick():
     tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
     _ekf_world = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
     _ekf_world.add_craft(c)
-    ekf = EKF(_ekf_world)
+    ekf = TargetNumpy(EKF(_ekf_world))
 
     state = c.initial_state(position=(0.0, 0.0, 100.0))
     ekf.reset(state={"predict_only": {"position": state["position"]}})
@@ -114,7 +114,7 @@ def test_ekf_position_sensor_pulls_estimate_toward_truth():
     tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
     _ekf_world = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
     _ekf_world.add_craft(c)
-    ekf = EKF(_ekf_world)
+    ekf = TargetNumpy(EKF(_ekf_world))
 
     # Truth at z=100, EKF prior at z=0 — but covariance reflects the
     # uncertainty.
@@ -157,7 +157,7 @@ def test_ekf_full_position_observation_drives_convergence():
 
     _ekf_world = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     _ekf_world.add_craft(c)
-    ekf = EKF(_ekf_world)   # no gravity
+    ekf = TargetNumpy(EKF(_ekf_world))   # no gravity
     ekf.reset(state={"full_pos": {"position": np.array([10.0, -5.0, 0.0])}},
               P=np.eye(ekf.spec.tangent_dim) * 4.0)
 
@@ -198,7 +198,7 @@ def test_eskf_attitude_estimation_converges():
     tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
     _ekf_world = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     _ekf_world.add_craft(c)
-    ekf = EKF(_ekf_world)
+    ekf = TargetNumpy(EKF(_ekf_world))
 
     # Truth spins at ω = 1 rad/s about +z.
     omega_truth = np.array([0.0, 0.0, 1.0])
@@ -251,7 +251,7 @@ def test_eskf_state_spec_layout_with_tangent_offsets():
     c.add(wheel)
     _ekf_world = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     _ekf_world.add_craft(c)
-    ekf = EKF(_ekf_world)
+    ekf = TargetNumpy(EKF(_ekf_world))
     spec = ekf.spec
     # Total: rigid-body(13/12) + wheel.angle (1/1) + wheel.rate (1/1)
     assert spec.ambient_dim == 13 + 2
@@ -277,11 +277,11 @@ def test_ekf_jacobian_for_constant_velocity_model_is_identity_plus_dt():
     c.add(Mass("body", mass=1.0))
     _ekf_world = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
     _ekf_world.add_craft(c)
-    ekf = EKF(_ekf_world)
+    ekf = TargetNumpy(EKF(_ekf_world))
 
     dt = 0.05
-    u_vec = np.zeros(len(ekf._input_names))   # craft has no Inputs.
-    F = np.asarray(ekf._F_fn(ekf.x, u_vec, dt, 0.0))
+    u_vec = np.zeros(len(ekf.ekf._input_names))   # craft has no Inputs.
+    F = np.asarray(ekf.ekf._F_fn(ekf.x, u_vec, dt, 0.0))
     # Tangent layout: position[0:3], orientation[3:6], velocity[6:9],
     # angular_velocity[9:12]. F is 12×12.
     assert F.shape == (12, 12)

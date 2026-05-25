@@ -13,7 +13,7 @@ Capstone test for the field-bus design:
 import casadi as ca
 import numpy as np
 
-from manta_next import Craft, EKF, World
+from manta_next import Craft, EKF, World, TargetNumpy
 from manta_next.fields import (
     CraftWindBubble, FluidField, GravityField,
 )
@@ -38,7 +38,7 @@ def _build_world(*, n_crafts: int = 1, sigma: float = 1e-3,
 
 def test_compiled_world_exposes_per_craft_wind_state():
     w, crafts = _build_world(n_crafts=2)
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     init = cw.initial_state()
     assert {c.name for c in crafts} <= set(init)
     assert "c0_wind" in init and "c1_wind" in init
@@ -49,7 +49,7 @@ def test_compiled_world_exposes_per_craft_wind_state():
 
 def test_wind_state_evolves_via_rw():
     w, _ = _build_world(n_crafts=1)
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     state = cw.initial_state()
     drv = np.array([0.5, -0.25, 0.1])
     dt = 0.01
@@ -64,14 +64,14 @@ def test_wind_state_evolves_via_rw():
 
 def test_ekf_picks_up_wind_state_per_craft():
     w, crafts = _build_world(n_crafts=2, sigma=2e-3)
-    ekf = EKF(w)
+    ekf = TargetNumpy(EKF(w))
     # 2 crafts × 13 rigid + 2 wind bubbles × 3 = 32 ambient.
     assert ekf.spec.ambient_dim == 32
     names = {s.name for s in ekf.spec.slots}
     assert {"c0_wind.wind", "c1_wind.wind"} <= names
     # Auto-Q assembles dt·σ² on each wind slot.
-    L = np.asarray(ekf._L_fn(ekf.x, np.zeros(0), 0.01, 0.0))
-    Q = L @ ekf._Sigma @ L.T
+    L = np.asarray(ekf.ekf._L_fn(ekf.x, np.zeros(0), 0.01, 0.0))
+    Q = L @ ekf.ekf._Sigma @ L.T
     # Both wind slots get dt·(2e-3)² = 4e-8 on diagonal.
     c0_wind_slot = ekf.spec.slot("c0_wind.wind")
     block = Q[c0_wind_slot.tangent_offset : c0_wind_slot.tangent_offset+3,
@@ -82,7 +82,7 @@ def test_ekf_picks_up_wind_state_per_craft():
 
 def test_state_dict_nests_wind_alongside_crafts():
     w, _ = _build_world(n_crafts=1)
-    ekf = EKF(w)
+    ekf = TargetNumpy(EKF(w))
     sd = ekf.state_dict()
     assert "c0" in sd and "c0_wind" in sd
     assert "wind" in sd["c0_wind"]
@@ -92,6 +92,6 @@ def test_unique_bubble_names_for_distinct_crafts():
     """Two bubbles with auto-generated names from distinct crafts
     don't collide (the default is `<craft.name>_wind`)."""
     w, crafts = _build_world(n_crafts=3)
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     owners = set(cw.initial_state())
     assert {"c0", "c1", "c2", "c0_wind", "c1_wind", "c2_wind"} <= owners

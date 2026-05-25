@@ -1,0 +1,370 @@
+"""TargetNumpy — native-Python runtime evaluator backend.
+
+`TargetNumpy(ir)` dispatches by IR type:
+
+  * `TargetNumpy(CompiledWorld)` → `NumpyWorld` with `.step()` and
+    `.initial_state()`.
+  * `TargetNumpy(EKF)`           → `NumpyEKF` with `.predict()`,
+    `.update()`, `.state_dict()`, `.reset()`, `.x`, `.P`.
+
+The IR objects themselves (`CompiledWorld`, `EKF`) describe the
+compiled symbolic graph but are not directly callable for ticking /
+predicting — choose a target to get the runtime.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Callable
+
+import casadi as ca
+import numpy as np
+
+
+# ---------------------------------------------------------------------------
+# NumpyWorld — runtime for CompiledWorld
+# ---------------------------------------------------------------------------
+
+class NumpyWorld:
+    """Native-Python evaluator wrapping a `CompiledWorld` IR.
+
+    Provides the user-facing tick API: `initial_state()` and
+    `step(state, dt, t=0)`. Internally calls the IR's CasADi function
+    after translating between the user's nested state dict and the
+    flat-prefixed casadi-input names.
+    """
+
+    def __init__(self, cw) -> None:
+        from ..world import CompiledWorld
+        if not isinstance(cw, CompiledWorld):
+            raise TypeError(
+                f"NumpyWorld: expected CompiledWorld, got "
+                f"{type(cw).__name__}")
+        self._cw = cw
+
+    # ---- IR passthroughs ----------------------------------------------
+
+    @property
+    def world(self):
+        return self._cw.world
+
+    @property
+    def crafts(self):
+        return self._cw.crafts
+
+    @property
+    def tick(self):
+        return self._cw.tick
+
+    # ---- State + step --------------------------------------------------
+
+    def initial_state(self) -> dict[str, dict[str, Any]]:
+        """Fresh copy of the per-owner initial state."""
+        import copy
+        return copy.deepcopy(self._cw._initial)
+
+    def step(self,
+             state: dict[str, dict[str, Any]],
+             dt: float,
+             t: float = 0.0) -> dict[str, dict[str, Any]]:
+        """Advance the world by `dt`. Returns a fresh state dict.
+
+        `t` is the world-clock time at the start of this step.
+        Owners may be crafts or field disturbances; both use the same
+        `<owner>.<slot>` convention in the underlying casadi function.
+        """
+        flat: dict[str, Any] = {"dt": dt, "t": t}
+        for owner_name, owner_state in state.items():
+            for slot, val in owner_state.items():
+                flat[f"{owner_name}.{slot}"] = val
+
+        out = self._cw.tick(**flat)
+
+        new_state: dict[str, dict[str, Any]] = {k: {} for k in state}
+        for key, val in out.items():
+            owner_name, slot = key.split(".", 1)
+            if owner_name not in new_state:
+                new_state[owner_name] = {}
+            new_state[owner_name][slot] = val
+        # Preserve input-only slots the tick doesn't write back.
+        for owner_name, owner_state in state.items():
+            for slot, val in owner_state.items():
+                if slot not in new_state[owner_name]:
+                    new_state[owner_name][slot] = val
+        return new_state
+
+    def __repr__(self) -> str:
+        return f"<NumpyWorld over {self._cw!r}>"
+
+
+# ---------------------------------------------------------------------------
+# NumpyEKF — runtime for EKF (mutable state + predict/update)
+# ---------------------------------------------------------------------------
+
+class NumpyEKF:
+    """Native-Python evaluator wrapping an `EKF` IR.
+
+    Holds mutable `_x` (ambient state vector) and `_P` (tangent
+    covariance). Calls the IR's compiled predict / measurement
+    functions during `predict()` and `update()`.
+    """
+
+    def __init__(self, ekf) -> None:
+        from ..estimation.ekf import EKF
+        if not isinstance(ekf, EKF):
+            raise TypeError(
+                f"NumpyEKF: expected EKF, got {type(ekf).__name__}")
+        self._ekf = ekf
+        self._x   = self._initial_x()
+        self._P   = np.eye(ekf.spec.tangent_dim) * 1e-2
+
+    def _initial_x(self) -> np.ndarray:
+        """Pack the world's nested initial-state dict into the spec's
+        flat ambient layout."""
+        ekf = self._ekf
+        init_flat: dict[str, Any] = {}
+        for owner_name, owner_state in ekf.world._initial_state_dict().items():
+            for k, v in owner_state.items():
+                init_flat[f"{owner_name}.{k}"] = v
+        init_for_pack = {k: v for k, v in init_flat.items() if k in ekf.spec}
+        return ekf.spec.pack(init_for_pack)
+
+    # ---- IR passthroughs ----------------------------------------------
+
+    @property
+    def ekf(self):
+        """The wrapped EKF IR (carries the symbolic functions,
+        sensor table, etc.)."""
+        return self._ekf
+
+    @property
+    def spec(self):
+        return self._ekf.spec
+
+    @property
+    def world(self):
+        return self._ekf.world
+
+    @property
+    def crafts(self):
+        return self._ekf.crafts
+
+    @property
+    def x(self) -> np.ndarray:
+        return self._x.copy()
+
+    @property
+    def P(self) -> np.ndarray:
+        return self._P.copy()
+
+    # ---- State view + reset --------------------------------------------
+
+    def state_dict(self) -> dict[str, dict[str, Any]]:
+        """Current estimate nested by owner — same shape as
+        `NumpyWorld.initial_state()`.
+        """
+        flat = self._ekf.spec.unpack(self._x)
+        nested: dict[str, dict[str, Any]] = {}
+        for full_name, val in flat.items():
+            owner_name, slot = full_name.split(".", 1)
+            nested.setdefault(owner_name, {})[slot] = val
+        return nested
+
+    def reset(self, *,
+              state: dict | None = None,
+              P: np.ndarray | None = None) -> None:
+        """Reset the EKF state and/or covariance.
+
+        `state` accepts either:
+          * Nested `{owner: {slot: value}}` (canonical, matches
+            `state_dict()`).
+          * Flat dict keyed by full slot name (`"<owner>.<slot>"`).
+        Missing entries fall back to the world's add_craft defaults.
+        """
+        ekf = self._ekf
+        if state is not None:
+            full_flat: dict[str, Any] = {}
+            for owner_name, owner_state in ekf.world._initial_state_dict().items():
+                for k, v in owner_state.items():
+                    full_flat[f"{owner_name}.{k}"] = v
+            for k, v in state.items():
+                if isinstance(v, dict):
+                    for slot, val in v.items():
+                        full_flat[f"{k}.{slot}"] = val
+                else:
+                    full_flat[k] = v
+            full_flat = {k: v for k, v in full_flat.items() if k in ekf.spec}
+            self._x = ekf.spec.pack(full_flat)
+        if P is not None:
+            P = np.asarray(P, dtype=float)
+            expected = (ekf.spec.tangent_dim, ekf.spec.tangent_dim)
+            if P.shape != expected:
+                raise ValueError(
+                    f"NumpyEKF.reset: P shape {P.shape} doesn't match "
+                    f"tangent dim {expected}")
+            self._P = P.copy()
+
+    # ---- Predict -------------------------------------------------------
+
+    def predict(self,
+                dt: float,
+                *,
+                t: float = 0.0,
+                u: dict[str, float] | None = None,
+                Q: np.ndarray | None = None) -> None:
+        """Advance the nominal state and tangent covariance by `dt`.
+
+        Args mirror `EKF.predict` from the old monolithic class:
+        `dt` (timestep), `t` (world-clock time), `u` (per-tick part
+        Input override dict), `Q` (process-noise override; default is
+        auto-assembly from registered Noise channels).
+        """
+        ekf = self._ekf
+        u_vec = ekf._build_u(u)
+        x_new = np.asarray(ekf._f_fn(self._x, u_vec, dt, t)).reshape(-1)
+        F     = np.asarray(ekf._F_fn(self._x, u_vec, dt, t))
+        n     = ekf.spec.tangent_dim
+        if Q is None:
+            if ekf._L_fn is not None:
+                L = np.asarray(ekf._L_fn(self._x, u_vec, dt, t))
+                Q = L @ ekf._Sigma @ L.T
+            else:
+                Q = np.zeros((n, n))
+        self._x = x_new
+        self._P = F @ self._P @ F.T + Q
+        self._P = 0.5 * (self._P + self._P.T)
+
+    # ---- Update --------------------------------------------------------
+
+    def update(self, *args, **kwargs) -> None:
+        """Polymorphic update.
+
+        Sensor form (auto h, H, R from Noise declarations):
+            ekf.update(part, gyro=z_gyro, accel=z_accel)
+
+        Low-level form (caller-supplied h, R):
+            ekf.update(h_sym, z, R)
+            ekf.update(h_sym, z=z, R=R)
+        """
+        if args and callable(args[0]):
+            h_sym = args[0]
+            try:
+                z = args[1] if len(args) > 1 else kwargs["z"]
+                R = args[2] if len(args) > 2 else kwargs["R"]
+            except KeyError as e:
+                raise TypeError(
+                    f"NumpyEKF.update: low-level form needs h_sym + z + R; "
+                    f"missing {e}") from None
+            return self._update_low_level(h_sym, z, R)
+        if len(args) == 1 and not callable(args[0]):
+            return self._update_sensor(args[0], kwargs)
+        raise TypeError(
+            "NumpyEKF.update: pass (h_sym, z, R) for the low-level form "
+            "or (part, **{output_name: z}) for the sensor form.")
+
+    def _update_sensor(self, part, measurements: dict[str, Any]) -> None:
+        if not measurements:
+            raise ValueError(
+                f"NumpyEKF.update: no measurements provided for "
+                f"{type(part).__name__}('{part.name}').")
+        ekf = self._ekf
+        u_vec = ekf._u_defaults
+        dt0, t0 = 0.0, 0.0
+        for out_name, z in measurements.items():
+            key = (id(part), out_name)
+            if key not in ekf._sensors:
+                avail = [k[1] for k in ekf._sensors if k[0] == id(part)]
+                raise KeyError(
+                    f"NumpyEKF.update: part '{part.name}' has no "
+                    f"registered output {out_name!r} (available: {avail}).")
+            spec_o = ekf._sensors[key]
+            z_arr  = np.atleast_1d(np.asarray(z, dtype=float)).reshape(-1)
+            if z_arr.size != spec_o["dim"]:
+                raise ValueError(
+                    f"NumpyEKF.update: {part.name}.{out_name}: expected "
+                    f"z of size {spec_o['dim']}, got {z_arr.size}.")
+            h_val = np.asarray(spec_o["h_fn"](self._x, u_vec, dt0, t0)
+                                ).reshape(-1)
+            H     = np.asarray(spec_o["H_fn"](self._x, u_vec, dt0, t0))
+            if spec_o["L_h_fn"] is not None:
+                L_h = np.asarray(spec_o["L_h_fn"](self._x, u_vec, dt0, t0))
+                R   = L_h @ ekf._Sigma @ L_h.T
+            else:
+                R   = np.zeros((spec_o["dim"], spec_o["dim"]))
+            self._apply_update(z_arr, h_val, H, R)
+
+    def _update_low_level(self,
+                          h_sym: Callable[[ca.MX], ca.MX],
+                          z: np.ndarray,
+                          R: np.ndarray) -> None:
+        """Caller-supplied h(x) callable + R. Used for direct-slot
+        measurements (`measurement_slot` helpers)."""
+        ekf = self._ekf
+        z = np.asarray(z, dtype=float).reshape(-1)
+        R = np.asarray(R, dtype=float)
+        if R.shape != (z.size, z.size):
+            raise ValueError(
+                f"NumpyEKF.update: R shape {R.shape} doesn't match z size {z.size}")
+
+        h_mx = h_sym(ekf._x_sym)
+        h_mx = ca.reshape(h_mx, h_mx.numel(), 1)
+        delta = ca.MX.sym("delta_h", ekf.spec.tangent_dim, 1)
+        x_pert = ekf.spec.boxplus_sym(ekf._x_sym, delta)
+        h_pert = h_sym(x_pert)
+        h_pert = ca.reshape(h_pert, h_pert.numel(), 1)
+        H_sym = ca.substitute(
+            ca.jacobian(h_pert, delta),
+            delta, ca.MX.zeros(ekf.spec.tangent_dim, 1))
+
+        h_fn = ca.Function("h_low", [ekf._x_sym], [h_mx])
+        H_fn = ca.Function("H_low", [ekf._x_sym], [H_sym])
+        h_x  = np.asarray(h_fn(self._x)).reshape(-1)
+        H    = np.asarray(H_fn(self._x))
+        if h_x.size != z.size:
+            raise ValueError(
+                f"NumpyEKF.update: h(x) size {h_x.size} doesn't match z "
+                f"size {z.size}")
+        self._apply_update(z, h_x, H, R)
+
+    def _apply_update(self,
+                      z: np.ndarray,
+                      h_x: np.ndarray,
+                      H: np.ndarray,
+                      R: np.ndarray) -> None:
+        y = z - h_x
+        S = H @ self._P @ H.T + R
+        K = np.linalg.solve(S.T, (self._P @ H.T).T).T
+        delta_x = K @ y
+        self._x = self._ekf.spec.boxplus(self._x, delta_x)
+        I = np.eye(self._ekf.spec.tangent_dim)
+        IKH = I - K @ H
+        self._P = IKH @ self._P @ IKH.T + K @ R @ K.T
+        self._P = 0.5 * (self._P + self._P.T)
+
+    def __repr__(self) -> str:
+        return f"<NumpyEKF over {self._ekf!r}>"
+
+
+# ---------------------------------------------------------------------------
+# TargetNumpy factory
+# ---------------------------------------------------------------------------
+
+def TargetNumpy(ir):
+    """Native-Python backend factory.
+
+    Lowers a compiled-model IR to a Python-native runtime evaluator.
+    Dispatches by IR type:
+
+      * `CompiledWorld` → `NumpyWorld` (`.step()`, `.initial_state()`).
+      * `EKF`           → `NumpyEKF`   (`.predict()`, `.update()`,
+                                        `.state_dict()`, `.reset()`,
+                                        `.x`, `.P`).
+    """
+    from ..world import CompiledWorld
+    from ..estimation.ekf import EKF
+    if isinstance(ir, CompiledWorld):
+        return NumpyWorld(ir)
+    if isinstance(ir, EKF):
+        return NumpyEKF(ir)
+    raise TypeError(
+        f"TargetNumpy: no handler for IR type {type(ir).__name__}. "
+        f"Expected CompiledWorld or EKF.")

@@ -8,7 +8,7 @@ World.step, EKF.predict).
 import numpy as np
 import pytest
 
-from manta_next import World, Craft
+from manta_next import World, Craft, TargetNumpy
 from manta_next.fields import GravityField
 from manta_next.estimation.ekf import EKF
 from manta_next.parts import (
@@ -137,7 +137,7 @@ def test_world_carries_inputs_through_step():
     c.add(_flywheel("motor", I_axial=0.05))
     w.add_craft(c)
 
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     state = cw.initial_state()
     state["driven"]["motor.torque_cmd"] = 1.0
 
@@ -162,7 +162,7 @@ def test_ekf_constructs_with_input_parts():
 
     _ekf_world = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     _ekf_world.add_craft(c)
-    ekf = EKF(_ekf_world)
+    ekf = TargetNumpy(EKF(_ekf_world))
     ekf.predict(dt=0.01)
     # τ=0.3, I=0.05 → α = 6 rad/s² → rate after 0.01s = 0.06.
     assert np.isclose(ekf.state_dict()["driven_ekf"]["motor.rate"], 0.06,

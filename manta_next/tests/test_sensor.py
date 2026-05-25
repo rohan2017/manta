@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from manta_next import World, Craft
+from manta_next import World, Craft, TargetNumpy
 from manta_next.fields import GravityField
 from manta_next.parts import IMU, Joint, Mass, Output, Part, PartUpdate, Thruster, Wrench
 from manta_next.ir.frames import CraftFrame
@@ -170,7 +170,7 @@ def test_imu_output_appears_in_world_step():
     c.add(IMU("g"))
     w.add_craft(c)
 
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     state = cw.initial_state()
     state["imu_craft"]["angular_velocity"] = np.array([0.0, 0.0, 2.5])
 

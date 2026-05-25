@@ -17,7 +17,7 @@ This file pins the architecture by exercising:
 import numpy as np
 import pytest
 
-from manta_next import Craft, World
+from manta_next import Craft, World, TargetNumpy
 from manta_next.fields import (
     Disturbance, Field, GravityField, PointMassGravity, UniformGravity,
 )
@@ -115,7 +115,7 @@ def test_world_uniform_gravity_matches_direct_compile():
     c2.add(Mass("body", mass=1.0))
     w = World().add_field(GravityField().add_uniform((0.0, 0.0, -9.81)))
     w.add_craft(c2, position=(0.0, 0.0, 50.0))
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
 
     state_d = c1.initial_state(position=(0.0, 0.0, 50.0))
     state_w = cw.initial_state()
@@ -140,7 +140,7 @@ def test_world_point_mass_gravity_orbital_acceleration():
     c = Craft("orbiter")
     c.add(Mass("body", mass=1.0))
     w.add_craft(c, position=(earth_r, 0.0, 0.0))     # on +x surface
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
 
     state = cw.initial_state()
     # Single step: v_x ← -GM/r² · dt.
@@ -159,7 +159,7 @@ def test_world_no_field_is_in_vacuum():
     c = Craft("floater")
     c.add(Mass("body", mass=1.0))
     w.add_craft(c, position=(0, 0, 100), velocity=(1.0, 0, 0))
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
 
     state = cw.initial_state()
     for _ in range(100):
@@ -201,7 +201,7 @@ def test_offset_mass_under_point_mass_gravity_feels_local_g():
     w = World().add_field(gf)
     # Craft origin at anchor (r0, 0, 0) → "probe" sits at anchor (2·r0, 0, 0).
     w.add_craft(c, position=(r0, 0.0, 0.0))
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     state = cw.initial_state()
 
     # One short tick — extract the net body force from the velocity
@@ -232,7 +232,7 @@ def test_uniform_gravity_unchanged_after_offset_fix():
     cA.add(Mass("body", mass=1.0))
     wA = World().add_field(GravityField().add_uniform(g))
     wA.add_craft(cA, position=(0, 0, 10))
-    cwA = wA.compile()
+    cwA = TargetNumpy(wA.compile())
     sA = cwA.initial_state()
 
     # Setup B: Mass at non-zero transform on a zero-mass hub.
@@ -241,7 +241,7 @@ def test_uniform_gravity_unchanged_after_offset_fix():
     cB.add(Mass("body", mass=1.0, transform=(5.0, -3.0, 2.0)))
     wB = World().add_field(GravityField().add_uniform(g))
     wB.add_craft(cB, position=(0, 0, 10))
-    cwB = wB.compile()
+    cwB = TargetNumpy(wB.compile())
     sB = cwB.initial_state()
 
     for _ in range(100):

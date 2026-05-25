@@ -12,7 +12,7 @@ Run::
 
 import numpy as np
 
-from manta_next import Craft, World
+from manta_next import Craft, World, TargetNumpy
 from manta_next.fields import GravityField
 from manta_next.estimation.ekf import EKF, measurement_slot
 from manta_next.parts import IMU, Mass, PositionSensor, Thruster
@@ -33,13 +33,13 @@ def main() -> None:
     # Sim — through the public World/CompiledWorld surface.
     w = World().add_field(GravityField().add_uniform(g_world))
     w.add_craft(c, position=(0.0, 0.0, 5.0))
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     sim = cw.initial_state()
 
     # EKF — start with a deliberate position + velocity offset.
     _ekf_world = World().add_field(GravityField(g=g_world))
     _ekf_world.add_craft(c)
-    ekf = EKF(_ekf_world)
+    ekf = TargetNumpy(EKF(_ekf_world))
     init = c.initial_state(position=(0.0, 0.0, 4.0),
                            velocity=(0.5, 0.0, 0.0))
     ekf.reset(state={"drone": init},

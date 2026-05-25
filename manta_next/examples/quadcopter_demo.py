@@ -18,7 +18,7 @@ Run::
 
 import numpy as np
 
-from manta_next import Craft, World
+from manta_next import Craft, World, TargetNumpy
 from manta_next.fields import GravityField
 from manta_next.parts import IMU, Mass, PositionSensor, Thruster
 
@@ -59,7 +59,7 @@ def main() -> None:
     quad = _build_quadcopter()
     w = World().add_field(GravityField().add_uniform(g))
     w.add_craft(quad, position=(0, 0, 2))
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     state = cw.initial_state()
 
     # 4 rotors × per-rotor max_thrust must collectively counter m·g.

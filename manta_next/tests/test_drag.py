@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from manta_next import Craft, World
+from manta_next import Craft, World, TargetNumpy
 from manta_next.fields import FluidField, GravityField
 from manta_next.parts import DragSurface, Mass, Thruster
 
@@ -26,7 +26,7 @@ def test_terminal_velocity_from_drag_balances_gravity():
     c.add(Mass("body", mass=m, moi=(0.1, 0.1, 0.1)))
     c.add(DragSurface.isotropic_quadratic("hull", area=A, drag_coefficient=Cd))
     w.add_craft(c, position=(0, 0, 0))
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
 
     state = cw.initial_state()
     # Run long enough to settle (well past terminal).
@@ -48,7 +48,7 @@ def test_drag_opposes_motion_through_still_fluid():
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(DragSurface.isotropic_quadratic("hull", area=0.01, drag_coefficient=1.0))
     w.add_craft(c, velocity=(2.0, 0.0, 0.0))
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     state = cw.initial_state()
 
     for _ in range(1000):
@@ -79,8 +79,8 @@ def test_drag_with_following_current_reduces_force():
     c_curr.add(DragSurface.isotropic_quadratic("hull", area=0.01, drag_coefficient=1.0))
     w_curr.add_craft(c_curr, velocity=(2.0, 0.0, 0.0))
 
-    cw_s = w_still.compile(); s = cw_s.initial_state()
-    cw_c = w_curr.compile();  c = cw_c.initial_state()
+    cw_s = TargetNumpy(w_still.compile()); s = cw_s.initial_state()
+    cw_c = TargetNumpy(w_curr.compile());  c = cw_c.initial_state()
     for _ in range(500):
         s = cw_s.step(s, dt=0.001)
         c = cw_c.step(c, dt=0.001)
@@ -106,7 +106,7 @@ def test_offset_drag_surface_produces_torque():
                                            transform=(0.5, 0.0, 0.0)))   # +x offset
     # Craft moving in +y → drag at +x offset → moment about +z (yaw).
     w.add_craft(c, velocity=(0.0, 1.0, 0.0))
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     state = cw.initial_state()
     state = cw.step(state, dt=0.001)
 
@@ -125,7 +125,7 @@ def test_no_fluid_field_means_no_drag():
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(DragSurface.isotropic_quadratic("hull", area=1.0, drag_coefficient=10.0))   # massive A·Cd
     w.add_craft(c, velocity=(1.0, 0.0, 0.0))
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     state = cw.initial_state()
     for _ in range(1000):
         state = cw.step(state, dt=0.001)
@@ -150,7 +150,7 @@ def test_polynomial_drag_quadratic_per_axis_matches_isotropic_helper():
     c1.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c1.add(DragSurface.isotropic_quadratic("d", area=A, drag_coefficient=Cd))
     w1.add_craft(c1, velocity=(3.0, 0.0, 0.0))
-    cw1 = w1.compile()
+    cw1 = TargetNumpy(w1.compile())
     s1 = cw1.initial_state()
 
     # Setup B: hand-built diagonal A_2.
@@ -160,7 +160,7 @@ def test_polynomial_drag_quadratic_per_axis_matches_isotropic_helper():
     A_2 = -0.5 * A * Cd * np.eye(3)
     c2.add(DragSurface("d", force_tensors=[np.zeros((3, 3)), A_2]))
     w2.add_craft(c2, velocity=(3.0, 0.0, 0.0))
-    cw2 = w2.compile()
+    cw2 = TargetNumpy(w2.compile())
     s2 = cw2.initial_state()
 
     for _ in range(200):
@@ -180,7 +180,7 @@ def test_anisotropic_drag_via_diagonal_A1_decelerates_only_x():
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(DragSurface("d", force=(-0.5, 0.0, 0.0)))   # A_1 = diag(-0.5, 0, 0)
     w.add_craft(c, velocity=(2.0, 1.0, 0.5))
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     state = cw.initial_state()
     for _ in range(200):
         state = cw.step(state, dt=0.001)

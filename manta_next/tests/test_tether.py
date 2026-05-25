@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from manta_next import Craft, World
+from manta_next import Craft, World, TargetNumpy
 from manta_next.couplings import Tether
 from manta_next.parts import DragSurface, Mass, TetherEndpoint, Thruster
 
@@ -25,7 +25,7 @@ def test_at_rest_length_zero_force():
     w.add_craft(b, position=(L, 0, 0))
     w.add_coupling(Tether(a, "hook", b, "hook",
                           stiffness=10.0, damping=1.0, rest_length=L))
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
 
     state = cw.initial_state()
     for _ in range(500):
@@ -48,7 +48,7 @@ def test_stretched_spring_pulls_crafts_together():
     w.add_craft(b, position=(L_init, 0, 0))
     w.add_coupling(Tether(a, "hook", b, "hook",
                           stiffness=10.0, damping=5.0, rest_length=L_rest))
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
 
     state = cw.initial_state()
     for _ in range(2000):
@@ -72,7 +72,7 @@ def test_compressed_spring_pushes_crafts_apart():
     w.add_craft(b, position=(L_init, 0, 0))
     w.add_coupling(Tether(a, "hook", b, "hook",
                           stiffness=10.0, damping=5.0, rest_length=L_rest))
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
 
     state = cw.initial_state()
     for _ in range(2000):
@@ -94,7 +94,7 @@ def test_momentum_conservation_no_external_forces():
     w.add_craft(b, position=(7.0, 0, 0))
     w.add_coupling(Tether(a, "hook", b, "hook",
                           stiffness=100.0, damping=0.0, rest_length=5.0))
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
 
     state = cw.initial_state()
 
@@ -121,7 +121,7 @@ def test_damping_dissipates_relative_motion():
     w.add_craft(b, position=(8.0, 0, 0))
     w.add_coupling(Tether(a, "hook", b, "hook",
                           stiffness=50.0, damping=10.0, rest_length=5.0))
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
 
     state = cw.initial_state()
 
@@ -160,7 +160,7 @@ def test_offset_endpoint_produces_torque():
     w.add_craft(b, position=(5.0, 0, 0))
     w.add_coupling(Tether(a, "hook", b, "hook",
                           stiffness=10.0, damping=0.0, rest_length=2.0))
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
 
     state = cw.initial_state()
     state = cw.step(state, dt=0.001)

@@ -3,7 +3,7 @@
 import casadi as ca
 import numpy as np
 
-from manta_next import Craft, World
+from manta_next import Craft, World, TargetNumpy
 from manta_next.fields import CollisionField, HalfSpace, GravityField
 from manta_next.ir.frames import WorldFrame
 from manta_next.ir.types import Vec3
@@ -86,7 +86,7 @@ def test_no_collision_field_means_no_contact_force():
     c.add(Mass("body", mass=1.0, moi=(0.01, 0.01, 0.01)))
     c.add(Collider("contact", stiffness=1e5, damping=10.0))
     w.add_craft(c, position=(0, 0, 5))
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     state = cw.initial_state()
     for _ in range(500):
         state = cw.step(state, dt=0.001)
@@ -109,7 +109,7 @@ def test_ball_rests_on_ground_at_compression_equilibrium():
     cr.add(Mass("body", mass=m, moi=(0.01, 0.01, 0.01)))
     cr.add(Collider("contact", stiffness=k, damping=c_damp))
     w.add_craft(cr, position=(0, 0, 1.0))     # start above ground
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     state = cw.initial_state()
 
     for _ in range(5000):
@@ -133,7 +133,7 @@ def test_dropped_ball_bounces():
     cr.add(Mass("body", mass=1.0, moi=(0.01, 0.01, 0.01)))
     cr.add(Collider("contact", stiffness=2e4, damping=20.0))
     w.add_craft(cr, position=(0, 0, 1.0))
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     state = cw.initial_state()
 
     # Track the maximum +z height attained AFTER the first bounce.
@@ -165,7 +165,7 @@ def test_offset_collider_produces_tip_over_torque():
     # Start just above the ground so the offset foot starts penetrating
     # immediately.
     w.add_craft(cr, position=(0, 0, 0.01))
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     state = cw.initial_state()
     # Long enough to develop body-frame torque about y as body tilts.
     for _ in range(500):
@@ -210,7 +210,7 @@ def test_collision_field_reaches_coupled_tick():
     w.add_coupling(Tether(a, "hook", b, "hook",
                           stiffness=10.0, damping=0.5, rest_length=2.0))
 
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     state = cw.initial_state()
 
     for _ in range(3000):

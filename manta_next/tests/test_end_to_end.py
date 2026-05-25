@@ -22,7 +22,7 @@ The demo proves three things end-to-end:
 import numpy as np
 import pytest
 
-from manta_next import Craft, World
+from manta_next import Craft, World, TargetNumpy
 from manta_next.fields import GravityField
 from manta_next.estimation.ekf import EKF, measurement_slot
 from manta_next.parts import IMU, Mass, PositionSensor, Thruster
@@ -47,7 +47,7 @@ def test_ekf_predict_with_per_tick_input():
     # EKF
     _ekf_world = World().add_field(GravityField(g=g))
     _ekf_world.add_craft(c)
-    ekf = EKF(_ekf_world)
+    ekf = TargetNumpy(EKF(_ekf_world))
 
     # Thrust profile: zero for 0.2s, then m·g (hover) for 0.5s, then 2·m·g.
     dt = 0.005
@@ -89,7 +89,7 @@ def test_ekf_predict_input_default_fallback():
     c.add(Thruster("t", force=(0.0, 0.0, 1.0)))
     _ekf_world = World().add_field(GravityField(g=g))
     _ekf_world.add_craft(c)
-    ekf = EKF(_ekf_world)
+    ekf = TargetNumpy(EKF(_ekf_world))
     for _ in range(200):
         ekf.predict(dt=0.005)
 
@@ -104,7 +104,7 @@ def test_ekf_predict_unknown_input_raises():
     c.add(Thruster("t", force=(0.0, 0.0, 1.0)))
     _ekf_world = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     _ekf_world.add_craft(c)
-    ekf = EKF(_ekf_world)
+    ekf = TargetNumpy(EKF(_ekf_world))
     with pytest.raises(KeyError, match="unknown input"):
         ekf.predict(dt=0.01, u={"nope.bad": 1.0})
 
@@ -133,7 +133,7 @@ def test_hover_with_eskf_tracks_ground_truth():
     # surface used by user code.
     w = World().add_field(GravityField().add_uniform(g_world))
     w.add_craft(c, position=(0.0, 0.0, 5.0))
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     sim = cw.initial_state()
     sim["drone"]["t.throttle"] = m * 9.81   # hover
 
@@ -141,7 +141,7 @@ def test_hover_with_eskf_tracks_ground_truth():
     # in via measurement updates.
     _ekf_world = World().add_field(GravityField(g=g_world))
     _ekf_world.add_craft(c)
-    ekf = EKF(_ekf_world)
+    ekf = TargetNumpy(EKF(_ekf_world))
     init = c.initial_state(position=(0.0, 0.0, 4.0),
                            velocity=(0.5, 0.0, 0.0))
     P0   = np.eye(ekf.spec.tangent_dim) * 1e-1
@@ -254,14 +254,14 @@ def test_eskf_nees_consistency_over_seeds():
         c = make_craft()
         w = World().add_field(GravityField().add_uniform(g_world))
         w.add_craft(c, position=(0, 0, 5))
-        cw = w.compile()
+        cw = TargetNumpy(w.compile())
         sim = cw.initial_state()
 
         _ekf_world = World().add_field(GravityField(g=g_world))
 
         _ekf_world.add_craft(c)
 
-        ekf = EKF(_ekf_world)
+        ekf = TargetNumpy(EKF(_ekf_world))
         init = c.initial_state(position=(0, 0, 4), velocity=(0.5, 0, 0))
         ekf.reset(state={"drone": init}, P=np.eye(ekf.spec.tangent_dim) * 1e-1)
 

@@ -16,7 +16,7 @@ disturbance that adds a globally-constant velocity to the FluidField.
 import casadi as ca
 import numpy as np
 
-from manta_next import Craft, EKF, World
+from manta_next import Craft, EKF, TargetNumpy, World
 from manta_next.fields import (
     Disturbance, FluidField, FluidState, GravityField,
 )
@@ -54,7 +54,7 @@ def _build_world():
 
 def test_compiled_world_has_disturbance_state_slot():
     w, _ = _build_world()
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     init = cw.initial_state()
     assert "wind" in init
     assert "velocity"        in init["wind"]
@@ -68,7 +68,7 @@ def test_bias_advances_by_sqrt_dt_times_driver():
     """With a constant driver each tick, the wind velocity evolves
     exactly as the documented model `next = bias + sqrt(dt)·driver`."""
     w, _ = _build_world()
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     state = cw.initial_state()
     drv = np.array([0.5, -0.25, 0.1])
     dt = 0.01
@@ -106,7 +106,7 @@ def test_ekf_has_disturbance_state_and_noise_channel():
 
 def test_ekf_state_dict_nests_disturbance_state():
     w, _ = _build_world()
-    ekf = EKF(w)
+    ekf = TargetNumpy(EKF(w))
     sd = ekf.state_dict()
     assert "drone" in sd and "wind" in sd
     assert "velocity" in sd["wind"]

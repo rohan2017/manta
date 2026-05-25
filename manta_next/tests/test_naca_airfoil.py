@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from manta_next import Craft, World
+from manta_next import Craft, World, TargetNumpy
 from manta_next.fields import FluidField, GravityField
 from manta_next.parts import Mass, Naca00xx, Thruster
 
@@ -20,7 +20,7 @@ def test_zero_aoa_no_lift_only_drag():
                    chord_axis=(1.0, 0.0, 0.0),
                    normal_axis=(0.0, 0.0, 1.0)))
     w.add_craft(c, velocity=(10.0, 0.0, 0.0))   # wind from front along chord
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     state = cw.initial_state()
     state = cw.step(state, dt=0.001)
 
@@ -57,7 +57,7 @@ def test_positive_aoa_produces_upward_lift():
     # wind is OPPOSITE the velocity direction. So v_rel · normal = -1
     # (negative AoA) and v_rel · chord = -10.
     w.add_craft(c, velocity=(10.0, 0.0, 1.0))
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     state = cw.initial_state()
     state = cw.step(state, dt=0.001)
 
@@ -80,7 +80,7 @@ def test_no_fluid_field_means_no_aero():
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(Naca00xx("wing", area=100.0, CL_max=10.0))   # huge wing
     w.add_craft(c, velocity=(10.0, 0.0, 0.0))
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     state = cw.initial_state()
     for _ in range(100):
         state = cw.step(state, dt=0.001)
@@ -104,7 +104,7 @@ def test_drag_dominates_at_high_angle():
     # Velocity at 45° to the chord: equal v_chord and v_normal magnitudes.
     v_mag = 10.0
     w.add_craft(c, velocity=(v_mag, 0.0, v_mag))
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     state = cw.initial_state()
     state = cw.step(state, dt=0.0001)   # short tick
 
@@ -132,7 +132,7 @@ def test_lift_zero_at_alpha_zero_and_90():
                    area=1.0, CL_max=1.2, CD_0=0.01, induced_k=0.1))
     # Velocity purely along normal (z). v_chord = 0 → sin(2α) = 0.
     w.add_craft(c, velocity=(0.0, 0.0, 10.0))
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     state = cw.initial_state()
     state = cw.step(state, dt=0.001)
 
@@ -163,7 +163,7 @@ def test_offset_airfoil_produces_torque():
                    transform=(1.0, 0.0, 0.0)))
     # Forward + upward velocity → positive AoA → lift along +z at wing.
     w.add_craft(c, velocity=(10.0, 0.0, 1.0))
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     state = cw.initial_state()
     state = cw.step(state, dt=0.001)
 

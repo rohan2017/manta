@@ -28,7 +28,9 @@ from .world import World, CompiledWorld
 from .planets import Planet
 from .couplings import Coupling
 from .estimation.ekf import EKF
+from .targets import TargetNumpy
 
 __all__ = [
     "ir", "Craft", "World", "Coupling", "CompiledWorld", "Planet", "EKF",
+    "TargetNumpy",
 ]

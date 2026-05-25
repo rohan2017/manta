@@ -17,7 +17,7 @@ Run::
 
 import numpy as np
 
-from manta_next import Craft, World
+from manta_next import Craft, World, TargetNumpy
 from manta_next.fields import FluidField, GravityField
 from manta_next.parts import (
     DVL, DragSurface, IMU, Mass, PointBuoy, PositionSensor, Thruster,
@@ -60,7 +60,7 @@ def main() -> None:
          .add_field(GravityField().add_uniform(g_world))
          .add_field(FluidField().add_uniform(density=rho_sea)))
     w.add_craft(sub, position=(0.0, 0.0, -10.0))    # 10 m depth
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     state = cw.initial_state()
 
     dt = 0.01

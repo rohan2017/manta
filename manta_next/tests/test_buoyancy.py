@@ -3,7 +3,7 @@
 import casadi as ca
 import numpy as np
 
-from manta_next import Craft, World
+from manta_next import Craft, World, TargetNumpy
 from manta_next.fields import (
     CurrentFlow, FluidField, FluidState, GravityField, UniformFluid,
 )
@@ -80,7 +80,7 @@ def test_buoy_neutral_when_displaced_weight_equals_craft_weight():
     c.add(Mass("body", mass=m, moi=(0.1, 0.1, 0.1)))
     c.add(PointBuoy("buoy", volume=V))
     w.add_craft(c, position=(0, 0, 10))
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
 
     state = cw.initial_state()
     for _ in range(500):
@@ -106,7 +106,7 @@ def test_buoy_sinks_when_displaced_weight_less_than_craft_weight():
     c.add(Mass("body", mass=m, moi=(0.1, 0.1, 0.1)))
     c.add(PointBuoy("buoy", volume=V))
     w.add_craft(c, position=(0, 0, 10))
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
 
     state = cw.initial_state()
     # Net upward force per kg of craft: F = -ρVg + mg → on z, F = ρV·9.81 − m·9.81.
@@ -133,7 +133,7 @@ def test_buoy_rises_when_displaced_weight_greater_than_craft_weight():
     c.add(Mass("body", mass=m, moi=(0.1, 0.1, 0.1)))
     c.add(PointBuoy("buoy", volume=V))
     w.add_craft(c, position=(0, 0, 10))
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
 
     state = cw.initial_state()
     for _ in range(500):
@@ -150,7 +150,7 @@ def test_no_fluid_field_means_no_buoyancy():
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(PointBuoy("buoy", volume=1.0))   # would normally float a lot
     w.add_craft(c, position=(0, 0, 10))
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
 
     state = cw.initial_state()
     for _ in range(500):
@@ -181,7 +181,7 @@ def test_buoy_offset_produces_righting_torque():
     phi = np.pi / 4
     q = (np.cos(phi/2), 0, np.sin(phi/2), 0)
     w.add_craft(c, position=(0, 0, 0), orientation=q)
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
 
     state = cw.initial_state()
     state_after = cw.step(state, dt=0.001)

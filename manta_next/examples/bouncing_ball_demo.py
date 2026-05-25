@@ -11,7 +11,7 @@ Run::
 
 import numpy as np
 
-from manta_next import Craft, World
+from manta_next import Craft, World, TargetNumpy
 from manta_next.fields import CollisionField, HalfSpace, GravityField
 from manta_next.parts import Collider, Mass
 
@@ -31,7 +31,7 @@ def main() -> None:
     ball.add(Mass("body", mass=1.0, moi=(0.01, 0.01, 0.01)))
     ball.add(Collider("contact", stiffness=k, damping=c_damp))
     w.add_craft(ball, position=(0, 0, 2.0))
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     state = cw.initial_state()
 
     dt = 0.001

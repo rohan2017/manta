@@ -13,7 +13,7 @@ Validates:
 import casadi as ca
 import numpy as np
 
-from manta_next import Craft, World
+from manta_next import Craft, World, TargetNumpy
 from manta_next.fields import FluidField, FluidState
 from manta_next.ir.frames import WorldFrame
 from manta_next.ir.types import Vec3
@@ -83,7 +83,7 @@ def test_co_rotating_at_rest_in_planet_frame():
     c = Craft("buoy"); c.add(Mass("body", mass=1.0))
     w.add_craft(c, position=earth.position(earth.R_EQ, 0, 0),
                    velocity=earth.at_rest())
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     state = cw.initial_state()
     expected_v_y = Earth.SIDEREAL * earth.R_EQ
     np.testing.assert_allclose(

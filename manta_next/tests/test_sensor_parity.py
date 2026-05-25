@@ -9,7 +9,7 @@ they actually work.
 import casadi as ca
 import numpy as np
 
-from manta_next import Craft, World
+from manta_next import Craft, World, TargetNumpy
 from manta_next.fields import DipoleMag, MagField, UniformMag, GravityField
 from manta_next.ir.frames import WorldFrame
 from manta_next.ir.types import Vec3
@@ -129,7 +129,7 @@ def test_magnetometer_reads_uniform_field_when_unrotated():
     c.add(Magnetometer("m"))
     w = World().add_field(MagField().add_uniform((1.0, 2.0, 3.0)))
     w.add_craft(c)
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     state = cw.initial_state()
     state = cw.step(state, dt=0.001)
     np.testing.assert_allclose(
@@ -145,7 +145,7 @@ def test_magnetometer_reads_rotated_field_under_craft_rotation():
     c.add(Magnetometer("m"))
     w = World().add_field(MagField().add_uniform((1.0, 0.0, 0.0)))
     w.add_craft(c, orientation=(np.cos(np.pi/4), 0, 0, np.sin(np.pi/4)))
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     state = cw.initial_state()
     out = cw.step(state, dt=0.001)
     # R^T · (1,0,0) with R = +90° about z → (0, -1, 0) in body frame.
@@ -178,7 +178,7 @@ def test_magnetometer_picks_up_dipole_at_local_position():
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(Magnetometer("m"))
     w.add_craft(c, position=(0, 0, 1e7))
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     state = cw.initial_state()
     out   = cw.step(state, dt=0.001)
     expected_z = 1e-7 * 2 * m / (1e7) ** 3

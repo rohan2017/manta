@@ -23,7 +23,7 @@ import numpy as np
 import casadi as ca
 import pytest
 
-from manta_next import World, Craft, EKF
+from manta_next import World, Craft, EKF, TargetNumpy
 from manta_next.fields import GravityField
 from manta_next.parts import Mass
 from manta_next.parts.base import Noise, Output, Part, PartUpdate
@@ -107,7 +107,7 @@ def test_bias_advances_by_sqrt_dt_times_driver_in_sim():
     """With a deterministic driver, the bias state evolves exactly
     as the documented model `bias_next = bias + sqrt(dt) · driver`."""
     w, c = _build_world()
-    cw = w.compile()
+    cw = TargetNumpy(w.compile())
     dt = 0.01
     state = cw.initial_state()
     # Inject a constant driver each tick.
@@ -133,8 +133,8 @@ def test_ekf_estimates_rw_bias_from_gyro_readings():
 
     sim_w, sim_c = _build_world()
     est_w, est_c = _build_world()
-    cw  = sim_w.compile()
-    ekf = EKF(est_w)
+    cw = TargetNumpy(sim_w.compile())
+    ekf = TargetNumpy(EKF(est_w))
 
     # Truth: a fixed initial bias, no further drift (zero driver).
     initial_bias = np.array([0.05, -0.03, 0.02])
@@ -182,11 +182,11 @@ def test_auto_Q_for_rw_bias_scales_as_dt_sigma_squared():
     _, c = _build_world()
     w = World().add_field(GravityField().add_uniform((0.0, 0.0, -9.81)))
     w.add_craft(c, position=(0.0, 0.0, 5.0))
-    ekf = EKF(w)
+    ekf = TargetNumpy(EKF(w))
     # The bias slot is tangent index 12-14 (after pos, ori, vel, ω).
     dt = 0.01
-    L = np.asarray(ekf._L_fn(ekf.x, np.zeros(0), dt, 0.0))
-    Q = L @ ekf._Sigma @ L.T
+    L = np.asarray(ekf.ekf._L_fn(ekf.x, np.zeros(0), dt, 0.0))
+    Q = L @ ekf.ekf._Sigma @ L.T
     bias_block = Q[12:15, 12:15]
     expected = dt * (0.02 ** 2) * np.eye(3)
     np.testing.assert_allclose(bias_block, expected, atol=1e-12)
