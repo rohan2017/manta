@@ -41,7 +41,6 @@ from typing import Any
 import casadi as ca
 import numpy as np
 
-from ..parts.base import Part, State
 
 
 @dataclass(frozen=True)

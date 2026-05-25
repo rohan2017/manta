@@ -11,7 +11,7 @@ import pytest
 from manta_next import World, TargetNumpy
 from manta_next.craft import Craft
 from manta_next.fields import GravityField
-from manta_next.estimation.ekf import EKF, measurement_component, measurement_slot
+from manta_next.estimation import EKF, measurement_component, measurement_slot
 from manta_next.parts import Mass
 from manta_next.estimation.state_spec import StateSpec
 

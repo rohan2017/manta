@@ -15,7 +15,6 @@ sits next to. Nothing else.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterator
 
 from ..estimation.state_spec import StateSlot, StateSpec
 from .extract import CraftFunctions, OutputSpec

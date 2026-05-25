@@ -21,9 +21,7 @@ Run::
 
 from __future__ import annotations
 
-import numpy as np
-
-from manta_next import Craft
+from manta_next import Craft, TargetNumpy, World
 from manta_next.fields import GravityField
 from manta_next.parts import Joint, Mass
 
@@ -57,46 +55,45 @@ def _build_gimbal() -> Craft:
     return c
 
 
+def _print_row(t: float, st: dict) -> None:
+    body = st["gimbal"]
+    print(f"{t:6.2f} "
+          f"{body['pan.angle']:10.4f} {body['pan.rate']:10.4f} "
+          f"{body['tilt.angle']:11.4f} {body['tilt.rate']:10.4f} "
+          f"{body['angular_velocity'][2]:10.4f}")
+
+
 def main() -> None:
-    c = _build_gimbal()
-    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
-    state = c.initial_state()
+    w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
+    w.add_craft(_build_gimbal())
+    sim = TargetNumpy(w.compile())
+    state = sim.initial_state()
 
     # Phase 1: drive PAN only (no tilt command) — pan accelerates, body
     # gets a small counter-yaw reaction.
-    state["pan.torque_cmd"]  = 0.3
-    state["tilt.torque_cmd"] = 0.0
+    state["gimbal"]["pan.torque_cmd"]  = 0.3
+    state["gimbal"]["tilt.torque_cmd"] = 0.0
     print("=== Phase 1: pan.torque_cmd = 0.3, tilt.torque_cmd = 0 ===")
     print(f"{'t (s)':>6} {'pan.angle':>10} {'pan.rate':>10} "
           f"{'tilt.angle':>11} {'tilt.rate':>10} {'body ω_z':>10}")
     for step in range(1, 501):
-        out = tick(dt=0.001, **state)
-        state = {**state, **out}
+        state = sim.step(state, dt=0.001)
         if step % 100 == 0:
-            t = step * 0.001
-            print(f"{t:6.2f} "
-                  f"{state['pan.angle']:10.4f} {state['pan.rate']:10.4f} "
-                  f"{state['tilt.angle']:11.4f} {state['tilt.rate']:10.4f} "
-                  f"{state['angular_velocity'][2]:10.4f}")
+            _print_row(step * 0.001, state)
 
     # Phase 2: zero pan, drive TILT — tilt accelerates, pan rotor is
     # nudged by the tilt reaction (because the tilt actuator pushes on
     # the pan rotor's frame). Watch pan.rate move a touch.
-    state["pan.torque_cmd"]  = 0.0
-    state["tilt.torque_cmd"] = 0.2
+    state["gimbal"]["pan.torque_cmd"]  = 0.0
+    state["gimbal"]["tilt.torque_cmd"] = 0.2
     print()
     print("=== Phase 2: pan.torque_cmd = 0, tilt.torque_cmd = 0.2 ===")
     print(f"{'t (s)':>6} {'pan.angle':>10} {'pan.rate':>10} "
           f"{'tilt.angle':>11} {'tilt.rate':>10} {'body ω_z':>10}")
     for step in range(501, 1001):
-        out = tick(dt=0.001, **state)
-        state = {**state, **out}
+        state = sim.step(state, dt=0.001)
         if step % 100 == 0:
-            t = step * 0.001
-            print(f"{t:6.2f} "
-                  f"{state['pan.angle']:10.4f} {state['pan.rate']:10.4f} "
-                  f"{state['tilt.angle']:11.4f} {state['tilt.rate']:10.4f} "
-                  f"{state['angular_velocity'][2]:10.4f}")
+            _print_row(step * 0.001, state)
 
 
 if __name__ == "__main__":

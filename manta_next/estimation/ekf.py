@@ -1,54 +1,57 @@
-"""EKF — Error-state (manifold-aware) Extended Kalman Filter wrapping a World.
+"""EKF — Error-state (manifold-aware) Extended Kalman Filter IR.
 
-Design:
+`EKF(world)` walks the world's crafts + fields, building:
+  * `StateSpec.from_world` (joint state across every craft + every
+    state-bearing disturbance).
+  * Symbolic predict (`_f_fn`), tangent-space F (`_F_fn`), and
+    process-noise gain L (`_L_fn`) — all CasADi functions.
+  * Per-sensor measurement bundles: `_sensors[(id(part), output_name)]`
+    holds the cached h/H/L_h ca.Function objects, the sensor dim,
+    and a back-ref to the owning part + craft.
 
-  * The user builds a World containing the est-side Craft plus any
-    fields / planets the craft's parts query. `EKF(world)` compiles a
-    predict + per-sensor measurement bundle out of that World; the
-    EKF then ticks alongside the sim:
+The result is an IR — a description of the symbolic predict/measurement
+graph. Lower to a backend to actually run::
 
-        cw  = sim_world.compile()
-        ekf = EKF(est_world)
-        for _ in range(N):
-            state = cw.step(state, t=t, dt=dt)
-            ekf.predict(t=t, dt=dt, u={"thrust.throttle": cmd})
-            ekf.update(est_imu, gyro=measured_gyro, accel=measured_accel)
-            ekf.update(est_gps, position=measured_pos)
-            t += dt
+    from manta_next import TargetNumpy, EKF
 
-  * Q is assembled automatically from every Noise channel that affects
-    the next-tick state (via autodiff). The user can override with an
-    explicit `Q=` argument to predict.
+    cw  = TargetNumpy(sim_world.compile())
+    ekf = TargetNumpy(EKF(est_world))
+    for _ in range(N):
+        state = cw.step(state, t=t, dt=dt)
+        ekf.predict(t=t, dt=dt, u={"thrust.throttle": cmd})
+        ekf.update(est_imu, gyro=measured_gyro, accel=measured_accel)
+        ekf.update(est_gps, position=measured_pos)
+        t += dt
 
-  * R is assembled automatically per sensor output from the Noise
-    channels feeding that output. `ekf.update(part, **measurements)`
-    routes each measurement through its sensor's cached (h_fn, H_fn,
-    R_builder).
+Auto-assembly contracts:
 
-  * `predict` / `update` mutate the EKF in place; the user reads the
-    current estimate via `ekf.state_dict()`, `ekf.x`, `ekf.P`.
+  * Q is built from every Noise channel that affects the next-tick
+    state (via autodiff). The runtime can override with an explicit
+    `Q=` argument to predict.
 
-  * Initial state seeds from `world.add_craft(c, position=..., ...)`.
-    PlanetState wrappers in those overrides have already been resolved
-    to WorldFrame seeds by `world.compile()` at EKF construction.
+  * R is built per sensor output from the Noise channels feeding that
+    output. `ekf.update(part, **measurements)` routes each measurement
+    through its sensor's cached (h_fn, H_fn, R_builder).
+
+  * Initial state seeds from `world._initial_state_dict()` (already
+    PlanetState-resolved by `world.compile()`). The runtime instantiates
+    `_x` and `_P` from this seed.
 
 Scope notes:
-  * Single craft only in v1 (raises if the world has more than one).
-    Multi-craft StateSpec generalization extends this trivially later.
-  * Random-walk bias channels (`Noise(kind="rw", ...)`) deferred to a
-    follow-up; only white-Gaussian channels are wired today.
-  * Couplings are not yet observed by the EKF — the World's compile()
-    builds coupled ticks but the EKF compiles a per-craft tick.
+  * Couplings between crafts are honored by the world-tick (which the
+    EKF reuses) — F propagates through them automatically.
+  * RW bias channels are first-class (`Noise(kind="rw", ...)` on Parts
+    or Disturbances synthesize a state slot + a driver input with
+    `bias_next = bias + sqrt(dt)·driver`).
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any
 
 import casadi as ca
 import numpy as np
 
-from .. import ir
 from .state_spec import StateSpec
 
 

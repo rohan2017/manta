@@ -1,25 +1,50 @@
-"""manta_next — Python-first, CasADi-backed manta IR.
+"""manta_next — Python-first, CasADi-backed rigid-body sim + EKF.
 
-Authoring API at the top level:
+Three layers:
 
-    from manta_next import ir
-    from manta_next.ir.frames import WorldFrame, CraftFrame
+  1. **Model** — declarative. Build a `World` containing `Craft`s,
+     `Planet`s, `Coupling`s, and shared `Field`s with `Disturbance`s.
+     Parts declare `Parameter` / `State` / `Input` / `Output` /
+     `Noise` channels at class scope.
 
-    with ir.Graph() as g:
-        p = ir.Vec3[WorldFrame].input("p")
-        v = ir.Vec3[CraftFrame].input("v")
-        q = ir.Quat[WorldFrame, CraftFrame].input("q")
-        dt = ir.Scalar.input("dt")
+  2. **IR** — compile to symbolic. `World.compile()` returns a
+     `CompiledWorld` (one CasADi tick function over every craft +
+     every coupling). `EKF(world)` returns an EKF carrying the
+     symbolic predict + auto-built per-sensor measurement bundles.
+     Neither is directly callable.
 
-        p_next = p + q.apply(v) * dt
-        g.output(p_next, "p_next")
+  3. **Target** — lower IR to a backend. `TargetNumpy(cw)` returns
+     a `NumpyWorld` you `.step()`; `TargetNumpy(ekf)` returns a
+     `NumpyEKF` you `.predict()` / `.update()`. Future
+     `TargetCpp(...)` will emit C++ for embedded use.
 
-    fn = g.compile()              # casadi.Function wrapped for kwarg I/O
-    print(fn(p=[0,0,5], v=[1,0,0], q=[1,0,0,0], dt=0.001)["p_next"])
+Standard usage::
 
-Nothing executes eagerly. User code always builds a graph; to run it, you
-compile to a CasADi Function (= the implicit "Python backend") or hand
-the graph to a different backend (C++/Eigen, C/embedded).
+    from manta_next import World, Craft, EKF, TargetNumpy
+    from manta_next.fields import GravityField
+    from manta_next.parts import IMU, Mass, Thruster
+
+    drone = Craft("drone")
+    drone.add(Mass("body", mass=1.5))
+    drone.add(Thruster("t", force=(0,0,1)))
+    drone.add(IMU("imu", gyro_noise_sigma=0.005, gyro_bias_sigma=1e-4))
+
+    w = World().add_field(GravityField(g=(0,0,-9.81)))
+    w.add_craft(drone, position=(0,0,5))
+
+    sim = TargetNumpy(w.compile())
+    ekf = TargetNumpy(EKF(w))
+
+    state = sim.initial_state()
+    for _ in range(N):
+        state = sim.step(state, dt=dt, t=t)
+        ekf.predict(dt=dt, t=t)
+        ekf.update(drone.parts[-1], gyro=state["drone"]["imu.gyro"])
+        t += dt
+
+The low-level IR (`manta_next.ir`) is still exported for advanced use
+(building bare CasADi graphs directly), but the typical user works
+through the World/Target API above.
 """
 
 from . import ir

@@ -2,20 +2,18 @@
 
 A World holds:
   * Crafts (each registered with optional initial state overrides).
-  * Couplings (inter-craft constraints, e.g. `Tether`). Couplings force
-    the two endpoint crafts into the same connected component → one
-    shared compiled tick.
+  * Couplings (inter-craft constraints, e.g. `Tether`).
+  * Planets (each contributing standing disturbances to the shared
+    fields at compile time).
   * Fields (GravityField, FluidField, MagField, CollisionField). One
     instance per field kind; per-source variation is expressed as
     `Disturbance` subclasses added to that instance.
 
-At `world.compile()` time the framework walks (craft, coupling) as an
-undirected graph and computes connected components. Each component
-becomes one IR tick graph: single-craft components use
-`Craft.compile_tick`, multi-craft components route through
-`compile_coupled_tick` in `manta_next.coupled_tick`.
+`world.compile()` returns a `CompiledWorld` — the symbolic IR (a
+single CasADi tick function covering every craft + every coupling).
+Lower to a backend to actually run ticks::
 
-User-facing API::
+    from manta_next import TargetNumpy
 
     w = World()
     w.add_field(GravityField().add_uniform((0, 0, -9.81)))
@@ -24,19 +22,18 @@ User-facing API::
     drone.add(Mass("body", mass=1.0))
     w.add_craft(drone, position=(0, 0, 100))
 
-    cw = w.compile()
-    state = cw.initial_state()
+    sim = TargetNumpy(w.compile())       # native-Python runtime
+    state = sim.initial_state()
     for _ in range(N):
-        state = cw.step(state, dt=0.01)
+        state = sim.step(state, dt=0.01, t=t)
 
-For multi-craft worlds, `state` is a dict keyed by component id; each
-value is the per-component state dict (slot names prefixed with the
-craft name when the component contains more than one craft).
+State is nested by owner: `state["drone"]["position"]`, plus one
+top-level key per state-bearing disturbance (e.g. a CraftWindBubble's
+estimated wind appears at `state["drone_wind"]["wind"]`).
 """
 
 from __future__ import annotations
 
-import copy
 from typing import Any
 
 import numpy as np

@@ -14,7 +14,7 @@ import numpy as np
 
 from manta_next import Craft, World, TargetNumpy
 from manta_next.fields import GravityField
-from manta_next.estimation.ekf import EKF, measurement_slot
+from manta_next.estimation import EKF, measurement_slot
 from manta_next.parts import IMU, Mass, PositionSensor, Thruster
 
 

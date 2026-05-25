@@ -25,13 +25,14 @@ Each planet's disturbances are summed into the world's shared fields.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import casadi as ca
 import numpy as np
 
 if TYPE_CHECKING:
     from ..world import World
+    from .state import PlanetState
 
 
 class Planet:

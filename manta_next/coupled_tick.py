@@ -1,20 +1,26 @@
-"""Multi-craft coupled tick compilation.
+"""World-tick compilation: one shared CasADi function over every craft.
 
-When World.compile discovers a connected component with more than one
-craft (via registered Couplings), it routes the component through
-`compile_coupled_tick`. The resulting CompiledGraph takes the
-concatenated state of all crafts in the component (with `<craft_name>.`
-prefixed slot names) and advances them by one tick. Coupling forces
+`World.compile()` always routes through `compile_coupled_tick` —
+there's no per-component partitioning. The resulting CompiledGraph
+takes the concatenated state of every craft (with `<craft_name>.`
+prefixed slot names) plus every state-bearing disturbance and
+advances all of them by one tick. Coupling wrenches (e.g. Tether)
 are computed symbolically inside the graph and injected into each
 craft's net wrench BEFORE Newton-Euler, so the per-craft dynamics see
 the full inter-craft coupling.
 
-This function shares the per-craft physics pipeline with
-Craft.compile_tick (inertials → state inputs → TickContext → part
+Field-mediated craft-to-craft coupling (e.g. a `CraftWindBubble`
+anchored to craft A whose contribution another craft B's DragSurface
+samples) also Just Works — both crafts' symbolic state is in scope
+during the single tick compile.
+
+The per-craft physics pipeline mirrors the original
+`Craft.compile_tick` (inertials → state inputs → TickContext → part
 wrench aggregation → Newton-Euler → symplectic integration → outputs).
 It diverges by: (a) prefixing all per-craft IO names with the craft
-name, (b) sharing one `dt` input across all crafts, and (c) splicing
-in coupling wrenches between the part-aggregation and N-E steps.
+name, (b) sharing one `dt` + `t` input across all crafts, and (c)
+splicing in coupling wrenches between the part-aggregation and N-E
+steps.
 """
 
 from __future__ import annotations
@@ -30,8 +36,7 @@ from .inertia import symbolic_inertia_rollup
 from .kinematics import kinematic_pass
 from .ir.frames import WorldFrame, CraftFrame
 from .ir.manifold import SO3
-from .ir.types import Mat3, Quat, Scalar, Vec3
-from .parts.base import Part, PartUpdate, State
+from .parts.base import Part, PartUpdate
 from .ir.wrench import Wrench
 
 
@@ -186,7 +191,6 @@ def _plumb_field_disturbances(fields, dt) -> tuple[list, list[tuple[str, Any]]]:
         caller emits as graph outputs after the part-loop completes.
     """
     from .fields.base import Disturbance
-    from .parts.base import Noise, State
 
     saved_attrs: list = []
     state_outputs: list[tuple[str, Any]] = []

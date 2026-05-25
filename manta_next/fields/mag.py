@@ -18,8 +18,6 @@ Shipped disturbances:
 
 from __future__ import annotations
 
-import math
-
 import casadi as ca
 
 from ..ir.frames import WorldFrame

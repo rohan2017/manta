@@ -42,7 +42,6 @@ tensor rotates with the rotor, as it should.
 
 from __future__ import annotations
 
-from typing import Any
 
 import casadi as ca
 import numpy as np

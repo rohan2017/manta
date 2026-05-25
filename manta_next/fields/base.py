@@ -26,11 +26,8 @@ import itertools
 from abc import ABC, abstractmethod
 from typing import Any
 
-from ..ir.frames import WorldFrame
 from ..ir.types import Vec3
-from ..parts.base import (
-    Input, Noise, Output, Parameter, State, _Declaration,
-)
+from ..parts.base import Input, Noise, State, _Declaration
 
 
 # Global counter for default disturbance names. Disturbances participate

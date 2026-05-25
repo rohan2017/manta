@@ -10,7 +10,7 @@ import pytest
 
 from manta_next import World, Craft, TargetNumpy
 from manta_next.fields import GravityField
-from manta_next.estimation.ekf import EKF
+from manta_next.estimation import EKF
 from manta_next.parts import (
     Input, Joint, Mass, Parameter, Part, PartUpdate, State, Wrench,
 )

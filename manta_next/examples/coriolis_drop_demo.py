@@ -23,10 +23,7 @@ Run::
 
 from __future__ import annotations
 
-import numpy as np
-
-from manta_next import Craft, Planet
-from manta_next.fields import GravityField
+from manta_next import Craft, Planet, TargetNumpy, World
 from manta_next.parts import Mass
 
 
@@ -40,31 +37,33 @@ def main() -> None:
     # PlanetFrame velocity = 2 m/s along +x. Sitting on the rotation
     # axis means p × ω = 0, so there's no tangential velocity to add —
     # WorldFrame velocity equals PlanetFrame velocity.
-    p_planet0 = (0.0, 0.0, 0.0)
-    v_planet0 = (2.0, 0.0, 0.0)
-    p_world0, v_world0 = planet.planet_to_world(p_planet0, v_planet0, t=0.0)
-
     c = Craft("ball")
     c.add(Mass("body", mass=1.0))
-    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))   # no forces
-    state = c.initial_state(position=tuple(p_world0),
-                              velocity=tuple(v_world0))
+
+    w = World()
+    w.add_planet(planet)
+    w.add_craft(c,
+                position=planet.position(0.0, 0.0, 0.0),
+                velocity=planet.velocity(2.0, 0.0, 0.0))
+
+    sim   = TargetNumpy(w.compile())
+    state = sim.initial_state()
 
     print(f"planet: {planet}")
-    print(f"initial PlanetFrame: p={p_planet0}, v={v_planet0}")
+    print(f"initial PlanetFrame: p=(0,0,0), v=(2,0,0)")
     print()
     print(f"{'t (s)':>6} {'p_world_x':>11} {'p_world_y':>11} "
           f"{'p_planet_x':>11} {'p_planet_y':>11}")
 
     dt = 0.001
+    t  = 0.0
     print_every = 200   # every 0.2 s
     for step in range(1, 2001):  # 2 s
-        out = tick(dt=dt, **state)
-        state = {**state, **out}
+        state = sim.step(state, dt=dt, t=t)
+        t += dt
         if step % print_every == 0:
-            t = step * dt
-            p_w = state["position"]
-            p_p, _ = planet.world_to_planet(p_w, state["velocity"], t)
+            p_w = state["ball"]["position"]
+            p_p, _ = planet.world_to_planet(p_w, state["ball"]["velocity"], t)
             print(f"{t:6.2f} {p_w[0]:11.4f} {p_w[1]:11.4f} "
                   f"{p_p[0]:11.4f} {p_p[1]:11.4f}")
 
