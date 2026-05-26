@@ -1,0 +1,428 @@
+"""Eigen-shaped C++ wrapper around the flat-C math kernels.
+
+Emits two files:
+
+  <basename>.hpp — public class header with State / Inputs structs and
+                   typed predict / measurement methods.
+  <basename>.cpp — implementation: pack/unpack Eigen → flat double[N],
+                   call into the CasADi-generated kernels, unpack result.
+
+The wrapper class lives in `namespace manta_gen`. It depends on
+Eigen (Eigen::Vector{3,4}d, Eigen::Matrix) and the C kernel header it
+sits next to. Nothing else.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from ..estimation.state_spec import StateSlot, StateSpec
+from .extract import OutputSpec, WorldFunctions
+
+
+# ---------------------------------------------------------------------------
+# Identifier helpers
+# ---------------------------------------------------------------------------
+
+def _cpp_ident(name: str) -> str:
+    """Convert a manta slot/output name (dot-separated) into a valid
+    C++ identifier (underscore-separated)."""
+    return name.replace(".", "_")
+
+
+def _eigen_type_for(slot: StateSlot) -> str:
+    if slot.manifold == "R1":
+        return "double"
+    if slot.manifold == "R3":
+        return "Eigen::Vector3d"
+    if slot.manifold == "SO3":
+        return "Eigen::Vector4d"
+    raise NotImplementedError(
+        f"wrapper: no Eigen mapping for manifold {slot.manifold!r}")
+
+
+def _state_field_init(slot: StateSlot, world) -> str:
+    """C++ initializer expression for a world State-struct field.
+
+    Slot names are `<craft>.<sub>` where `<sub>` is either:
+      * a rigid-body slot (`position`/`orientation`/`velocity`/
+        `angular_velocity`) → manifold default,
+      * a User State `<part>.<state>` → declaration's `init` value,
+      * an RW-bias `<part>.<bias>` → zero (matches `initial_state`),
+      * a Disturbance state — handled by the disturbance branch below.
+    """
+    head, _, rest = slot.name.partition(".")
+    # Per-craft slot?
+    craft = next((c for c in world.crafts if c.name == head), None)
+    if craft is not None:
+        if "." in rest:
+            part_name, sub = rest.split(".", 1)
+            part = next(p for p in craft.parts if p.name == part_name)
+            if sub in part.state_declarations():
+                sdecl = part.state_declarations()[sub]
+                if sdecl.manifold == "R1":
+                    return repr(float(getattr(part, sub)))
+                if sdecl.manifold == "R3":
+                    vec = getattr(part, sub)
+                    return (f"Eigen::Vector3d({float(vec[0])!r}, "
+                            f"{float(vec[1])!r}, {float(vec[2])!r})")
+                raise NotImplementedError(sdecl.manifold)
+            if (sub in part.noise_declarations()
+                    and part.noise_declarations()[sub].kind == "rw"):
+                return "Eigen::Vector3d::Zero()" if slot.manifold == "R3" else "0.0"
+            raise RuntimeError(
+                f"wrapper: per-craft slot {slot.name!r} is not a State "
+                f"or RW bias.")
+        # Rigid-body slot — manifold default.
+        return _manifold_default(slot.manifold)
+    # Per-disturbance slot.
+    from ..fields.base import Disturbance
+    for field in world.fields:
+        for dist in field._disturbances:
+            if isinstance(dist, Disturbance) and dist.name == head:
+                if (rest in dist.noise_declarations()
+                        and dist.noise_declarations()[rest].kind == "rw"):
+                    return "Eigen::Vector3d::Zero()" if slot.manifold == "R3" else "0.0"
+                if rest in dist.state_declarations():
+                    sdecl = dist.state_declarations()[rest]
+                    if sdecl.manifold == "R1":
+                        return repr(float(getattr(dist, rest)))
+                    if sdecl.manifold == "R3":
+                        vec = getattr(dist, rest)
+                        return (f"Eigen::Vector3d({float(vec[0])!r}, "
+                                f"{float(vec[1])!r}, {float(vec[2])!r})")
+    raise RuntimeError(
+        f"wrapper: slot {slot.name!r} doesn't resolve to a known owner.")
+
+
+def _manifold_default(manifold: str) -> str:
+    if manifold == "R3": return "Eigen::Vector3d::Zero()"
+    if manifold == "SO3": return "Eigen::Vector4d(1.0, 0.0, 0.0, 0.0)"
+    if manifold == "R1": return "0.0"
+    raise NotImplementedError(manifold)
+
+
+# ---------------------------------------------------------------------------
+# Code generation
+# ---------------------------------------------------------------------------
+
+def emit_wrapper(funcs: WorldFunctions,
+                 world,
+                 out_dir: str | Path,
+                 *,
+                 class_name: str,
+                 basename: str | None = None,
+                 namespace: str = "manta_gen") -> dict[str, Path]:
+    """Emit the typed Eigen-shaped wrapper.
+
+    Args:
+        funcs       — output of `extract.extract(craft)`.
+        craft       — the originating Craft (for default-state lookups).
+        out_dir     — destination directory.
+        class_name  — C++ class name (e.g. "Drone").
+        basename    — filename stem; defaults to the lowercased class name.
+        namespace   — C++ namespace to enclose the class in.
+
+    Returns:
+        Dict with absolute paths to the emitted `.hpp` and `.cpp` files.
+    """
+    out_dir = Path(out_dir).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    base = basename or class_name.lower()
+
+    hpp_path = out_dir / f"{base}.hpp"
+    cpp_path = out_dir / f"{base}.cpp"
+
+    hpp_text = _build_hpp(funcs, world, class_name=class_name,
+                           namespace=namespace, kernels_header=f"{base}_kernels.h")
+    cpp_text = _build_cpp(funcs, world, class_name=class_name,
+                           namespace=namespace, hpp_header=hpp_path.name,
+                           kernels_header=f"{base}_kernels.h")
+
+    hpp_path.write_text(hpp_text)
+    cpp_path.write_text(cpp_text)
+    return {"hpp": hpp_path, "cpp": cpp_path}
+
+
+# ---------------------------------------------------------------------------
+# HPP
+# ---------------------------------------------------------------------------
+
+def _build_hpp(funcs: WorldFunctions,
+                 world,
+               *,
+               class_name: str,
+               namespace: str,
+               kernels_header: str) -> str:
+    spec = funcs.spec
+    lines: list[str] = []
+    lines.append("// Generated by manta.codegen. Do not edit by hand.")
+    lines.append("")
+    lines.append("#pragma once")
+    lines.append("")
+    lines.append("#include <Eigen/Dense>")
+    lines.append("")
+    lines.append(f"namespace {namespace} {{")
+    lines.append("")
+    lines.append(f"class {class_name} {{")
+    lines.append("public:")
+    lines.append(f"    static constexpr int ambient_dim = {spec.ambient_dim};")
+    lines.append(f"    static constexpr int tangent_dim = {spec.tangent_dim};")
+    lines.append(f"    static constexpr int n_inputs    = {funcs.n_inputs};")
+    lines.append("")
+
+    # ----- State struct -----
+    lines.append("    struct State {")
+    for slot in spec.slots:
+        ident = _cpp_ident(slot.name)
+        ty    = _eigen_type_for(slot)
+        init  = _state_field_init(slot, world)
+        lines.append(f"        {ty} {ident} = {init};")
+    lines.append("    };")
+    lines.append("")
+
+    # ----- Inputs struct -----
+    lines.append("    struct Inputs {")
+    for inp in funcs.input_names:
+        ident = _cpp_ident(inp)
+        default = _input_default(inp, world)
+        lines.append(f"        double {ident} = {default!r};")
+    if not funcs.input_names:
+        lines.append("        // (no inputs declared on this craft)")
+    lines.append("    };")
+    lines.append("")
+
+    # ----- Methods -----
+    lines.append("    State initial_state() const;")
+    lines.append("")
+    lines.append("    State predict(const State& x, const Inputs& u, double dt) const;")
+    lines.append(
+        f"    Eigen::Matrix<double, tangent_dim, tangent_dim> "
+        f"predict_jacobian(const State& x, const Inputs& u, double dt) const;")
+    lines.append("")
+    for o in funcs.outputs:
+        ret_ty = _eigen_vec_type(o.out_dim)
+        lines.append(
+            f"    {ret_ty} measure_{_cpp_ident(o.full_name)}("
+            f"const State& x, const Inputs& u) const;")
+        lines.append(
+            f"    Eigen::Matrix<double, {o.out_dim}, tangent_dim> "
+            f"measure_{_cpp_ident(o.full_name)}_jacobian("
+            f"const State& x, const Inputs& u) const;")
+        lines.append("")
+
+    lines.append("};")
+    lines.append("")
+    lines.append(f"}}  // namespace {namespace}")
+    return "\n".join(lines) + "\n"
+
+
+def _eigen_vec_type(dim: int) -> str:
+    if dim == 1:
+        return "double"
+    if dim == 3:
+        return "Eigen::Vector3d"
+    if dim == 4:
+        return "Eigen::Vector4d"
+    return f"Eigen::Matrix<double, {dim}, 1>"
+
+
+def _input_default(input_full_name: str, world) -> float:
+    """Resolve `<craft>.<part>.<input>` to its part-instance value."""
+    craft_name, rest = input_full_name.split(".", 1)
+    part_name, input_name = rest.split(".", 1)
+    craft = next(c for c in world.crafts if c.name == craft_name)
+    part = next(p for p in craft.parts if p.name == part_name)
+    return float(getattr(part, input_name))
+
+
+# ---------------------------------------------------------------------------
+# CPP
+# ---------------------------------------------------------------------------
+
+def _build_cpp(funcs: WorldFunctions,
+                 world,
+               *,
+               class_name: str,
+               namespace: str,
+               hpp_header: str,
+               kernels_header: str) -> str:
+    spec = funcs.spec
+    cls = f"{class_name}"
+    qcls = cls   # already inside namespace
+
+    lines: list[str] = []
+    lines.append("// Generated by manta.codegen. Do not edit by hand.")
+    lines.append("")
+    lines.append(f'#include "{hpp_header}"')
+    lines.append("")
+    lines.append("#include <cstring>")
+    lines.append("#include <vector>")
+    lines.append("")
+    lines.append('extern "C" {')
+    lines.append(f'#include "{kernels_header}"')
+    lines.append("}")
+    lines.append("")
+    lines.append(f"namespace {namespace} {{")
+    lines.append("")
+
+    # ----- pack_state -----
+    lines.append(
+        f"static void pack_state(const {qcls}::State& s, double* x) {{")
+    for slot in spec.slots:
+        ident = _cpp_ident(slot.name)
+        if slot.dim == 1:
+            lines.append(f"    x[{slot.offset}] = s.{ident};")
+        else:
+            for i in range(slot.dim):
+                lines.append(f"    x[{slot.offset + i}] = s.{ident}[{i}];")
+    lines.append("}")
+    lines.append("")
+
+    # ----- unpack_state -----
+    lines.append(
+        f"static void unpack_state(const double* x, {qcls}::State& s) {{")
+    for slot in spec.slots:
+        ident = _cpp_ident(slot.name)
+        if slot.dim == 1:
+            lines.append(f"    s.{ident} = x[{slot.offset}];")
+        else:
+            for i in range(slot.dim):
+                lines.append(f"    s.{ident}[{i}] = x[{slot.offset + i}];")
+    lines.append("}")
+    lines.append("")
+
+    # ----- pack_inputs -----
+    lines.append(
+        f"static void pack_inputs(const {qcls}::Inputs& u, double* uflat) {{")
+    if funcs.n_inputs == 0:
+        lines.append("    (void)u; (void)uflat;")
+    else:
+        for i, inp in enumerate(funcs.input_names):
+            lines.append(f"    uflat[{i}] = u.{_cpp_ident(inp)};")
+    lines.append("}")
+    lines.append("")
+
+    # ----- initial_state -----
+    lines.append(f"{qcls}::State {qcls}::initial_state() const {{")
+    lines.append("    return State{};")
+    lines.append("}")
+    lines.append("")
+
+    # ----- predict -----
+    pname = funcs.predict_fn.name()
+    lines.append(
+        f"{qcls}::State {qcls}::predict(const State& x, const Inputs& u, double dt) const {{")
+    lines.append(f"    double x_in[{spec.ambient_dim}], x_out[{spec.ambient_dim}];")
+    if funcs.n_inputs > 0:
+        lines.append(f"    double u_in[{funcs.n_inputs}];")
+    else:
+        lines.append("    double u_in[1] = {0.0};   // placeholder, never read")
+    lines.append("    double t = 0.0;   // world-clock time; not yet plumbed through C++ wrapper")
+    lines.append("    pack_state(x, x_in);")
+    lines.append("    pack_inputs(u, u_in);")
+    # CasADi's SZ_ARG / SZ_RES are the FULL working sizes (named inputs +
+    # internal scratch slots). Allocate the buffers at those sizes and fill
+    # only the named slots. The kernel may write to the extra slots during
+    # evaluation.
+    lines.append(f"    const double* arg[{pname}_SZ_ARG] = {{0}};")
+    lines.append("    arg[0] = x_in; arg[1] = u_in; arg[2] = &dt; arg[3] = &t;")
+    lines.append(f"    double* res[{pname}_SZ_RES] = {{0}};")
+    lines.append("    res[0] = x_out;")
+    lines.append(f"    long long iw[{pname}_SZ_IW > 0 ? {pname}_SZ_IW : 1];")
+    lines.append(f"    double    w [{pname}_SZ_W  > 0 ? {pname}_SZ_W  : 1];")
+    lines.append(f"    {pname}(arg, res, iw, w, 0);")
+    lines.append("    State out;")
+    lines.append("    unpack_state(x_out, out);")
+    lines.append("    return out;")
+    lines.append("}")
+    lines.append("")
+
+    # ----- predict_jacobian -----
+    fn = funcs.predict_jacobian_fn.name()
+    lines.append(
+        f"Eigen::Matrix<double, {qcls}::tangent_dim, {qcls}::tangent_dim> "
+        f"{qcls}::predict_jacobian(const State& x, const Inputs& u, double dt) const {{")
+    lines.append(f"    double x_in[{spec.ambient_dim}];")
+    if funcs.n_inputs > 0:
+        lines.append(f"    double u_in[{funcs.n_inputs}];")
+    else:
+        lines.append("    double u_in[1] = {0.0};")
+    lines.append(f"    Eigen::Matrix<double, {qcls}::tangent_dim, {qcls}::tangent_dim, Eigen::ColMajor> F;")
+    lines.append("    double t = 0.0;")
+    lines.append("    pack_state(x, x_in);")
+    lines.append("    pack_inputs(u, u_in);")
+    lines.append(f"    const double* arg[{fn}_SZ_ARG] = {{0}};")
+    lines.append("    arg[0] = x_in; arg[1] = u_in; arg[2] = &dt; arg[3] = &t;")
+    lines.append(f"    double* res[{fn}_SZ_RES] = {{0}};")
+    lines.append("    res[0] = F.data();")
+    lines.append(f"    long long iw[{fn}_SZ_IW > 0 ? {fn}_SZ_IW : 1];")
+    lines.append(f"    double    w [{fn}_SZ_W  > 0 ? {fn}_SZ_W  : 1];")
+    lines.append(f"    {fn}(arg, res, iw, w, 0);")
+    lines.append("    return F;")
+    lines.append("}")
+    lines.append("")
+
+    # ----- per-Output (h, H) -----
+    for o in funcs.outputs:
+        ident = _cpp_ident(o.full_name)
+        ret_ty = _eigen_vec_type(o.out_dim)
+        h_fn = o.h_fn.name()
+        H_fn = o.H_fn.name()
+
+        lines.append(
+            f"{ret_ty} {qcls}::measure_{ident}(const State& x, const Inputs& u) const {{")
+        lines.append(f"    double x_in[{spec.ambient_dim}];")
+        if funcs.n_inputs > 0:
+            lines.append(f"    double u_in[{funcs.n_inputs}];")
+        else:
+            lines.append("    double u_in[1] = {0.0};")
+        lines.append("    double dt = 0.0;")    # h doesn't depend on dt in our parts
+        lines.append("    double t  = 0.0;")
+        if o.out_dim == 1:
+            lines.append("    double y = 0.0;")
+        else:
+            lines.append(f"    {ret_ty} y = {ret_ty}::Zero();")
+        lines.append("    pack_state(x, x_in);")
+        lines.append("    pack_inputs(u, u_in);")
+        lines.append(f"    const double* arg[{h_fn}_SZ_ARG] = {{0}};")
+        lines.append("    arg[0] = x_in; arg[1] = u_in; arg[2] = &dt; arg[3] = &t;")
+        lines.append(f"    double* res[{h_fn}_SZ_RES] = {{0}};")
+        if o.out_dim == 1:
+            lines.append("    res[0] = &y;")
+        else:
+            lines.append("    res[0] = y.data();")
+        lines.append(f"    long long iw[{h_fn}_SZ_IW > 0 ? {h_fn}_SZ_IW : 1];")
+        lines.append(f"    double    w [{h_fn}_SZ_W  > 0 ? {h_fn}_SZ_W  : 1];")
+        lines.append(f"    {h_fn}(arg, res, iw, w, 0);")
+        lines.append("    return y;")
+        lines.append("}")
+        lines.append("")
+
+        lines.append(
+            f"Eigen::Matrix<double, {o.out_dim}, {qcls}::tangent_dim> "
+            f"{qcls}::measure_{ident}_jacobian(const State& x, const Inputs& u) const {{")
+        lines.append(f"    double x_in[{spec.ambient_dim}];")
+        if funcs.n_inputs > 0:
+            lines.append(f"    double u_in[{funcs.n_inputs}];")
+        else:
+            lines.append("    double u_in[1] = {0.0};")
+        lines.append("    double dt = 0.0;")
+        lines.append("    double t  = 0.0;")
+        lines.append(
+            f"    Eigen::Matrix<double, {o.out_dim}, {qcls}::tangent_dim, Eigen::ColMajor> H;")
+        lines.append("    pack_state(x, x_in);")
+        lines.append("    pack_inputs(u, u_in);")
+        lines.append(f"    const double* arg[{H_fn}_SZ_ARG] = {{0}};")
+        lines.append("    arg[0] = x_in; arg[1] = u_in; arg[2] = &dt; arg[3] = &t;")
+        lines.append(f"    double* res[{H_fn}_SZ_RES] = {{0}};")
+        lines.append("    res[0] = H.data();")
+        lines.append(f"    long long iw[{H_fn}_SZ_IW > 0 ? {H_fn}_SZ_IW : 1];")
+        lines.append(f"    double    w [{H_fn}_SZ_W  > 0 ? {H_fn}_SZ_W  : 1];")
+        lines.append(f"    {H_fn}(arg, res, iw, w, 0);")
+        lines.append("    return H;")
+        lines.append("}")
+        lines.append("")
+
+    lines.append(f"}}  // namespace {namespace}")
+    return "\n".join(lines) + "\n"
