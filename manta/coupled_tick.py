@@ -402,23 +402,20 @@ def _trace_craft_pass1(g_ctx,
 
     # Symbolic kinematic + inertia passes over the part tree.
     kin_states = kinematic_pass(
-        craft.root, position, orientation, velocity, ang_vel,
-        gravity_field, t,
+        craft.root, position, orientation, velocity, ang_vel, t,
         body_acceleration_world=a_world_placeholder,
         body_angular_acceleration=alpha_placeholder)
     inertia = symbolic_inertia_rollup(craft.root)
+
+    fields_tuple = (gravity_field, fluid_field, mag_field, collision_field)
 
     # Per-craft TickContext (root-body view) for couplings to read. Per-
     # part TickContexts are built per part below for `update()`.
     root_kin = kin_states[craft.root]
     ctx = TickContext(
-        gravity=root_kin.gravity_in_craft,
-        gravity_field=gravity_field,
-        fluid_field=fluid_field,
-        mag_field=mag_field,
-        collision_field=collision_field,
         t=t,
         dt=dt,
+        fields=fields_tuple,
         world=getattr(craft, "_world", None),
         position=position,
         orientation=orientation,
@@ -438,13 +435,10 @@ def _trace_craft_pass1(g_ctx,
     for part in craft._parts:
         kin = kin_states[part]
         ctx_part = TickContext(
-            gravity=kin.gravity_in_craft,
-            gravity_field=gravity_field,
-            fluid_field=fluid_field,
-            mag_field=mag_field,
-            collision_field=collision_field,
             t=t,
             dt=dt,
+            fields=fields_tuple,
+            world=getattr(craft, "_world", None),
             position=kin.origin_in_world,
             orientation=orientation,
             velocity=kin.velocity_origin,

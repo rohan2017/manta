@@ -18,7 +18,7 @@ Usage::
 
     drone = Craft("drone")
     drone.add(Mass("body", mass=1.0))
-    drone.add(DragSurface("drag", ...))   # reads ctx.fluid_field
+    drone.add(DragSurface("drag", ...))   # reads ctx.field(FluidField)
 
     w = World()
     w.add_craft(drone, position=(0, 0, 5))

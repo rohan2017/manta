@@ -181,7 +181,10 @@ def test_multiple_inputs_on_one_part():
         scale_b: float = Input(default=2.0)
 
         def update(self, ctx):
-            f = ctx.gravity * (self.scale_a + self.scale_b)
+            from manta.fields import GravityField
+            g_world = ctx.field(GravityField).state_at_sym(ctx.position, ctx.t)
+            g_body  = ctx.orientation.conjugate().apply(g_world)
+            f = g_body * (self.scale_a + self.scale_b)
             zero = Vec3[CraftFrame].constant((0.0, 0.0, 0.0))
             return Wrench(force=f, torque=zero)
 

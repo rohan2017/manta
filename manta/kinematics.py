@@ -25,7 +25,7 @@ on a/α are rejected at compile time (no implicit-equation solver).
   * World-frame fields (`origin_in_world`, `velocity_origin`,
     `orientation_anchor_from_*`) carry the part's actual absolute pose.
   * "In CraftFrame" fields (`angular_velocity_input/output`,
-    `velocity_body_in_craft`, `gravity_in_craft`, `r_in_craft`,
+    `velocity_body_in_craft`, `r_in_craft`,
     `R_craft_from_input/output`) are expressed in the **body's
     CraftFrame coords** even for nested parts whose own frame differs
     by the joint chain. Wrench aggregation lifts each part's emitted
@@ -77,9 +77,6 @@ class KinematicState:
         velocity_body_in_craft        — Vec3[CraftFrame]: body-frame
                                          linear velocity at the origin
                                          (= R_body^T · velocity_origin).
-        gravity_in_craft              — Vec3[CraftFrame]: gravity sampled
-                                         at the part's anchor position,
-                                         expressed in body-frame coords.
         orientation_anchor_from_input — Quat: world-frame orientation of
                                          the part's input frame.
         orientation_anchor_from_output — Quat: same for the output frame.
@@ -107,7 +104,6 @@ class KinematicState:
     angular_velocity_input:         Any   # Vec3[CraftFrame]
     angular_velocity_output:        Any   # Vec3[CraftFrame]
     velocity_body_in_craft:         Any   # Vec3[CraftFrame]
-    gravity_in_craft:               Any   # Vec3[CraftFrame]
     orientation_anchor_from_input:  Any   # Quat
     orientation_anchor_from_output: Any   # Quat
     r_in_craft:                     Any   # Vec3[CraftFrame]
@@ -157,7 +153,6 @@ def kinematic_pass(root_part,
                    body_orientation,
                    body_velocity,
                    body_angular_velocity,
-                   gravity_field,
                    t,
                    *,
                    body_acceleration_world,
@@ -182,8 +177,6 @@ def kinematic_pass(root_part,
 
     # ----- root state (coincides with body) -----------------------------
     body_v_in_body = body_orientation.conjugate().apply(body_velocity)
-    g_world_body  = gravity_field.state_at_sym(body_position, t)
-    g_body         = body_orientation.conjugate().apply(g_world_body)
 
     eye3_mat = Mat3[CraftFrame, CraftFrame].from_mx(ca.MX.eye(3))
     zero_r   = Vec3[CraftFrame].from_mx(ca.MX.zeros(3, 1))
@@ -201,7 +194,6 @@ def kinematic_pass(root_part,
         angular_velocity_input=body_angular_velocity,
         angular_velocity_output=body_angular_velocity,
         velocity_body_in_craft=body_v_in_body,
-        gravity_in_craft=g_body,
         orientation_anchor_from_input=body_orientation,
         orientation_anchor_from_output=body_orientation,
         r_in_craft=zero_r,
@@ -219,7 +211,7 @@ def kinematic_pass(root_part,
             return
         for child in parent.children:
             child_state = _compute_child_state(
-                parent_state, child, body_orientation, gravity_field, t,
+                parent_state, child, body_orientation, t,
                 body_acceleration_world=body_acceleration_world,
                 body_angular_acceleration=body_angular_acceleration,
                 body_angular_velocity=body_angular_velocity)
@@ -231,7 +223,7 @@ def kinematic_pass(root_part,
 
 
 def _compute_child_state(parent_state: KinematicState, child,
-                         body_orientation, gravity_field, t,
+                         body_orientation, t,
                          *,
                          body_acceleration_world,
                          body_angular_acceleration,
@@ -327,11 +319,6 @@ def _compute_child_state(parent_state: KinematicState, child,
     child_velocity_body_in_craft = body_orientation.conjugate().apply(
         child_velocity_origin)
 
-    # ctx.gravity: gravity at the child's anchor position, in body-frame
-    # coords. Same convention as the body's root for backward compat.
-    g_world_at_child = gravity_field.state_at_sym(child_origin_in_world, t)
-    g_at_child_in_craft = body_orientation.conjugate().apply(g_world_at_child)
-
     # ----- acceleration at the child's mount point ---------------------
     # Body a / α come in as compile-time placeholder MX symbols (or
     # any caller-supplied expression). After the wrench-collection
@@ -351,7 +338,6 @@ def _compute_child_state(parent_state: KinematicState, child,
         angular_velocity_input=child_omega_input_in_craft,
         angular_velocity_output=child_omega_output_in_craft,
         velocity_body_in_craft=child_velocity_body_in_craft,
-        gravity_in_craft=g_at_child_in_craft,
         orientation_anchor_from_input=q_anchor_from_input,
         orientation_anchor_from_output=q_anchor_from_output,
         r_in_craft=child_r_in_craft,

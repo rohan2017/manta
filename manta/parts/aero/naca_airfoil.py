@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import casadi as ca
 
+from ...fields import FluidField
 from ...ir.frames import CraftFrame
 from ...ir.types import Vec3
 from ..base import Parameter, Part, PartUpdate
@@ -79,7 +80,7 @@ class Naca00xx(Part):
         v_rot_world = ctx.orientation.apply(v_rot_craft)
         v_surface_anchor = ctx.velocity + v_rot_world
 
-        fluid = ctx.fluid_field.state_at_sym(p_world, ctx.t)
+        fluid = ctx.field(FluidField).state_at_sym(p_world, ctx.t)
         rho   = fluid.density
         v_rel = v_surface_anchor - fluid.velocity   # Vec3[WorldFrame]
 

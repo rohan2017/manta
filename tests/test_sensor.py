@@ -251,7 +251,7 @@ def test_accel_picks_up_thruster_acceleration():
     the accelerometer: F/m in the thrust direction, in body frame.
     Single tick — the IMU reads the same-tick a, not a prev-tick echo."""
     c = Craft("powered")
-    c.add(Mass("body", mass=2.0, moi=(0.1, 0.1, 0.1), apply_gravity=False))
+    c.add(Mass("body", mass=2.0, moi=(0.1, 0.1, 0.1)))
     c.add(Thruster("t", force=(10.0, 0.0, 0.0)))   # 10 N along +x at throttle=1
     c.add(IMU("g"))
     tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
@@ -270,7 +270,7 @@ def test_accel_offset_imu_reads_centripetal_under_rotation():
     other forces (no gravity, no thrust), `accel` IS the lever-arm
     term — proves the framework does the lift, not the IMU."""
     c = Craft("spinner")
-    c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1), apply_gravity=False))
+    c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(IMU("imu", transform=(1.0, 0.0, 0.0)))
     tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
     state = c.initial_state()

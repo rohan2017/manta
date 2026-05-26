@@ -58,37 +58,20 @@ from .ir.wrench import Wrench
 class TickContext:
     """The per-tick context passed to each `Part.update(ctx)` call.
 
-    Exposes the symbolic craft body state + environment to part code so
-    a Part's `update()` can read everything it physically depends on:
+    Exposes the symbolic per-part state + environment to part code so a
+    Part's `update()` can read everything it physically depends on:
 
-      gravity          : Vec3[CraftFrame]            — gravity at the
-                                                       craft origin,
-                                                       rotated into craft
-                                                       frame. Convenience
-                                                       for Mass-like parts
-                                                       that don't care
-                                                       about field spatial
-                                                       variation across
-                                                       the body.
-      gravity_field    : GravityField                — registered field
-                                                       instance. Use for
-                                                       position-sensitive
-                                                       queries (e.g.
-                                                       point-mass-gravity
-                                                       sampled at a
-                                                       buoyancy point).
-                                                       Always non-None —
-                                                       empty when
-                                                       unregistered.
-      fluid_field      : FluidField                  — registered fluid
-                                                       field. Same idiom
-                                                       as gravity_field.
+      t                : Scalar                      — world clock.
       dt               : Scalar                      — integrator timestep.
-      position         : Vec3[WorldFrame]           — craft origin in
-                                                       world frame.
+      position         : Vec3[WorldFrame]           — the PART's mount-
+                                                       point position in
+                                                       world frame (chain-
+                                                       composed for parts
+                                                       on a joint subtree).
       orientation      : Quat[WorldFrame,CraftFrame]— craft attitude.
       velocity         : Vec3[WorldFrame]           — world-frame linear
-                                                       velocity.
+                                                       velocity at the
+                                                       part's mount point.
       angular_velocity : Vec3[CraftFrame]            — body angular velocity
                                                        ω. What a rate gyro
                                                        reads.
@@ -109,7 +92,6 @@ class TickContext:
                                                        Joint, carries
                                                        the outer joint's
                                                        angle.
-
       acceleration_world  : Vec3[WorldFrame]      — world-frame
                                                        inertial accel
                                                        at the part's
@@ -120,8 +102,20 @@ class TickContext:
                                                        (accelerometer
                                                        reading) is
                                                        `acceleration_body
-                                                       - gravity`.
+                                                       - g_body` where
+                                                       `g_body` is sampled
+                                                       via `ctx.field(...)`
+                                                       and rotated to
+                                                       body frame.
       angular_acceleration : Vec3[CraftFrame]        — body α.
+
+    Field access:
+      ctx.field(FieldCls) → registered field of that class, or an empty
+      default instance if none is registered. The empty default's
+      `state_at_sym(p, t)` returns the zero contribution, so a part can
+      call `ctx.field(GravityField).state_at_sym(p, t)` regardless of
+      whether a GravityField is attached to the world.
+      ctx.has_field(FieldCls) → True iff a matching field is registered.
 
     Note on the acceleration fields: these reflect the **current**
     tick's Newton-Euler output (`α`, `a_origin`) with the lever-arm
@@ -133,22 +127,15 @@ class TickContext:
     step validates and raises otherwise.
     """
 
-    __slots__ = ("gravity", "gravity_field", "fluid_field", "mag_field",
-                 "collision_field",
-                 "t", "dt", "position", "orientation", "velocity",
+    __slots__ = ("t", "dt", "position", "orientation", "velocity",
                  "angular_velocity", "velocity_body",
                  "R_craft_from_input",
                  "acceleration_world", "acceleration_body",
                  "angular_acceleration",
-                 "_world")
+                 "_world", "_fields")
 
     def __init__(self,
                  *,
-                 gravity: Vec3,
-                 gravity_field,
-                 fluid_field,
-                 mag_field,
-                 collision_field,
                  t: Scalar,
                  dt: Scalar,
                  position: Vec3,
@@ -160,12 +147,8 @@ class TickContext:
                  acceleration_world: Vec3,
                  acceleration_body: Vec3,
                  angular_acceleration: Vec3,
+                 fields=(),
                  world=None) -> None:
-        self.gravity = gravity
-        self.gravity_field = gravity_field
-        self.fluid_field = fluid_field
-        self.mag_field = mag_field
-        self.collision_field = collision_field
         self.t = t
         self.dt = dt
         self.position = position
@@ -174,6 +157,7 @@ class TickContext:
         self.angular_velocity = angular_velocity
         self.velocity_body = velocity_body
         self._world = world
+        self._fields = tuple(fields)
         # Body-frame rotation of the part's INPUT frame. Identity for any
         # part mounted directly on the craft root; for a Mass / Joint
         # child of an outer Joint, this carries the outer joint's angle.
@@ -184,27 +168,43 @@ class TickContext:
         self.acceleration_body    = acceleration_body
         self.angular_acceleration = angular_acceleration
 
-    # ----- World introspection helpers ----------------------------------
+    # ----- Field / world introspection ----------------------------------
+
+    def _iter_fields(self):
+        """Yield every field visible to this tick. World-attached fields
+        come first; per-tick fields (set when there is no world) come
+        next. Either source can satisfy a `field(cls)` lookup."""
+        if self._world is not None:
+            yield from self._world.fields
+        yield from self._fields
 
     def has_field(self, cls: type) -> bool:
-        """True iff a field of type `cls` (or a subclass) is registered
-        on the world driving this tick. Returns False when no World is
-        attached (e.g., a bare `Craft.compile_tick()` call with no
-        world)."""
-        if self._world is None:
-            return False
-        for f in self._world.fields:
+        """True iff a field of type `cls` (or a subclass) is registered.
+        Use this for parts whose behaviour is gated on a field's
+        presence (rather than just returning zero on a missing field)."""
+        for f in self._iter_fields():
             if isinstance(f, cls):
                 return True
         return False
 
+    def field(self, cls: type):
+        """Return the registered field of type `cls` (or subclass), or
+        an empty default instance `cls()` if none is registered. Calling
+        `state_at_sym` on the empty default returns the field's zero
+        value, so a part can write
+            `ctx.field(GravityField).state_at_sym(p, t)`
+        unconditionally — missing field ⇒ zero contribution."""
+        for f in self._iter_fields():
+            if isinstance(f, cls):
+                return f
+        return cls()
+
     def get_field(self, cls: type):
         """Return the registered field of type `cls`, or None.
-        Symmetric to `World.get_field`. Convenient for parts that want
-        to enable extra behavior if a field is present."""
-        if self._world is None:
-            return None
-        for f in self._world.fields:
+        Symmetric to `World.get_field`. Use `field(cls)` instead when
+        you want a never-None lookup that falls back to an empty
+        default."""
+        for f in self._iter_fields():
             if isinstance(f, cls):
                 return f
         return None
@@ -570,8 +570,7 @@ class Craft:
             # chain.
             from .kinematics import kinematic_pass
             kin_states = kinematic_pass(
-                self.root, position, orientation, velocity, ang_vel,
-                gravity_field, t,
+                self.root, position, orientation, velocity, ang_vel, t,
                 body_acceleration_world=a_world_placeholder,
                 body_angular_acceleration=alpha_placeholder)
 
@@ -597,19 +596,16 @@ class Craft:
                 # ctx.orientation stays the body's orientation so wrenches
                 # the part emits remain in CraftFrame (the existing
                 # aggregation expects that). ctx.position / velocity /
-                # gravity / angular_velocity are the PART's effective
-                # values — for a flat craft these equal `body + lever arm
-                # from part.transform`, matching what every part used to
+                # angular_velocity are the PART's effective values — for
+                # a flat craft these equal `body + lever arm from
+                # part.transform`, matching what every part used to
                 # compute manually.
                 kin = kin_states[part]
                 ctx = TickContext(
-                    gravity=kin.gravity_in_craft,
-                    gravity_field=gravity_field,
-                    fluid_field=fluid_field,
-                    mag_field=mag_field,
-                    collision_field=collision_field,
                     t=t,
                     dt=dt,
+                    fields=(gravity_field, fluid_field, mag_field,
+                            collision_field),
                     world=self._world,
                     position=kin.origin_in_world,
                     orientation=orientation,

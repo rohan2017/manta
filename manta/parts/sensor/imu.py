@@ -26,6 +26,7 @@ no lag.
 
 from __future__ import annotations
 
+from ...fields import GravityField
 from ...ir.frames import CraftFrame
 from ...ir.types import Vec3
 from ..base import Output, Part, PartUpdate, RandomWalkNoise, WhiteNoise
@@ -55,13 +56,17 @@ class IMU(Part):
 
     def update(self, ctx) -> PartUpdate:
         zero_v = Vec3[CraftFrame].constant((0.0, 0.0, 0.0))
+        # Gravity at the IMU's mount point, rotated into body frame.
+        # With no GravityField registered, this folds to zero.
+        g_world = ctx.field(GravityField).state_at_sym(ctx.position, ctx.t)
+        g_body  = ctx.orientation.conjugate().apply(g_world)
         return PartUpdate(
             wrench=Wrench(force=zero_v, torque=zero_v),
             outputs={
                 "gyro":  (ctx.angular_velocity
                           + self.gyro_bias
                           + self.gyro_noise),
-                "accel": (ctx.acceleration_body - ctx.gravity
+                "accel": (ctx.acceleration_body - g_body
                           + self.accel_bias
                           + self.accel_noise),
             },

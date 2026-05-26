@@ -21,6 +21,7 @@ samples + a smooth water/air boundary, surface-crossing torques (the
 
 from __future__ import annotations
 
+from ...fields import FluidField, GravityField
 from ...ir.frames import CraftFrame
 from ...ir.types import Vec3
 from ..base import Parameter, Part, PartUpdate
@@ -49,8 +50,8 @@ class PointBuoy(Part):
         # Field queries at the buoy's actual position. For uniform fields
         # this is the same as querying at the craft origin; for spatially
         # varying fields it captures the correct local value.
-        fluid    = ctx.fluid_field.state_at_sym(p_world, ctx.t)
-        g_anchor = ctx.gravity_field.state_at_sym(p_world, ctx.t)
+        fluid    = ctx.field(FluidField).state_at_sym(p_world, ctx.t)
+        g_anchor = ctx.field(GravityField).state_at_sym(p_world, ctx.t)
 
         # F_anchor = -ρ·V·g  (opposes gravity, scaled by displaced mass).
         scale = fluid.density * self.volume

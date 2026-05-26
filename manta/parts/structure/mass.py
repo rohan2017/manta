@@ -1,10 +1,11 @@
 """Mass — a lump of mass that contributes m·g to the craft's wrench
-under the registered GravityField. Diagonal MOI feeds into the body's
+when a GravityField is registered. Diagonal MOI feeds into the body's
 inertia aggregation via parallel-axis lifts at Craft.compile_tick time.
 """
 
 from __future__ import annotations
 
+from ...fields import GravityField
 from ...ir.frames import CraftFrame
 from ...ir.types import Vec3
 from ..base import Part, Parameter
@@ -12,16 +13,20 @@ from ...ir.wrench import Wrench
 
 
 class Mass(Part):
-    """A lump of mass with diagonal inertia tensor and optional gravity.
+    """A lump of mass with diagonal inertia tensor.
 
     Parameters:
-        mass            (float)              — kilograms.
-        moi             (3-tuple)            — diagonal MOI tensor (Ixx, Iyy, Izz)
-                                              about the part's own COM, in
-                                              part frame. Defaults to zero
-                                              (point mass).
-        apply_gravity   (bool)               — if True, applies `mass · gravity`
-                                              at the part's origin. Default True.
+        mass — kilograms.
+        moi  — 3-tuple, diagonal MOI tensor (Ixx, Iyy, Izz) about the
+               part's own COM, in part frame. Defaults to zero (point
+               mass).
+
+    Gravity contribution is applied automatically whenever a
+    `GravityField` is registered on the world: `F = m · g(p_world)`,
+    sampled at the part's anchor position. With no `GravityField`
+    registered, `ctx.field(GravityField)` returns an empty default and
+    the contribution is identically zero — no special-case opt-out
+    needed.
 
     The part's spatial location is set via its `transform` parameter
     (inherited from Part). Aggregation at the Craft level rolls these
@@ -29,21 +34,18 @@ class Mass(Part):
     origin via parallel-axis lifts.
     """
 
-    mass:          float                       = Parameter(1.0)
-    moi:           "tuple[float, float, float]" = Parameter((0.0, 0.0, 0.0))
-    apply_gravity: bool                        = Parameter(True)
+    mass: float                              = Parameter(1.0)
+    moi:  "tuple[float, float, float]"       = Parameter((0.0, 0.0, 0.0))
 
     def update(self, ctx) -> Wrench:
-        if not self.apply_gravity:
-            return Wrench.zero(CraftFrame)
-        # `ctx.gravity` is the GravityField sampled at THIS part's anchor
-        # position (computed by the kinematic pass), then rotated into
-        # body-frame coords. For a flat craft with a uniform field this
-        # folds to the constant body-frame gravity; for a spatially
-        # varying field (e.g. PointMassGravity) it picks up the right
-        # local g for parts mounted far from the craft origin.
-        force = ctx.gravity * self.mass
+        # ctx.position is the part's mount-point in WorldFrame (chain-
+        # composed by the kinematic pass). Querying the GravityField at
+        # the part's actual position picks up non-uniform fields (e.g.
+        # point-mass gravity) correctly when the part is mounted at a
+        # non-zero transform on the craft.
+        g_world = ctx.field(GravityField).state_at_sym(ctx.position, ctx.t)
+        g_body  = ctx.orientation.conjugate().apply(g_world)
         return Wrench(
-            force=force,
+            force=g_body * self.mass,
             torque=Vec3[CraftFrame].constant((0.0, 0.0, 0.0)),
         )

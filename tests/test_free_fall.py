@@ -77,22 +77,6 @@ def test_multi_mass_aggregates_correctly():
     assert np.isclose(state["velocity"][2], -9.81,    atol=1e-5)
 
 
-def test_apply_gravity_false_makes_part_inert():
-    c = Craft("partially_inert")
-    c.add(Mass("ballast", mass=10.0, apply_gravity=False))
-    c.add(Mass("active",  mass=1.0))
-
-    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
-
-    state = _initial_at_rest(c)
-    out = tick(dt=0.1, **state)
-    # F_total = 1·g (only the active mass contributes).
-    # a = F / m_total = -9.81 / 11.
-    # v(0.1) = a·dt.
-    expected_vz = -9.81 / 11.0 * 0.1
-    assert np.isclose(out["velocity"][2], expected_vz, atol=1e-9)
-
-
 def test_horizontal_gravity():
     """Gravity along +x produces +x acceleration of the origin."""
     c = Craft("sideways")
@@ -131,9 +115,8 @@ def test_zero_mass_craft_raises():
 
 
 def test_parameter_introspection():
-    m = Mass("body", mass=2.5, apply_gravity=False, transform=(0.1, 0.2, 0.3))
+    m = Mass("body", mass=2.5, transform=(0.1, 0.2, 0.3))
     assert m.mass == 2.5
-    assert m.apply_gravity is False
     assert m.transform == (0.1, 0.2, 0.3)
     r = repr(m)
     assert "mass=2.5" in r
