@@ -47,7 +47,7 @@ from . import ir
 from .ir.frames import WorldFrame, CraftFrame
 from .ir.manifold import SO3
 from .ir.types import Mat3, Quat, Scalar, Vec3
-from .parts.base import Part, PartUpdate
+from .parts.base import Part, PartUpdate, RandomWalkNoise, WhiteNoise
 from .ir.wrench import Wrench
 
 
@@ -499,9 +499,10 @@ class Craft:
 
             # --- Per-part Noise plumbing ---------------------------------
             # Each Noise declaration becomes a graph input vector. For
-            # `kind="white"`, this is a per-tick noise driver input the
+            # `WhiteNoise`, this is a per-tick noise driver input the
             # part reads directly (e.g. inside a sensor expression).
-            # For `kind="rw"` with sigma > 0, the framework synthesizes:
+            # For `RandomWalkNoise` with sigma > 0, the framework
+            # synthesizes:
             #   * a STATE input `<part>.<name>` (the bias);
             #   * a NOISE input `<part>.<name>_driver` (per-tick).
             # `self.<name>` is rebound to the bias state inside
@@ -520,7 +521,7 @@ class Craft:
                 for nname, ndecl in ndecls.items():
                     input_name = f"{part.name}.{nname}"
                     frame = ndecl.frame or CraftFrame
-                    if ndecl.kind == "white":
+                    if isinstance(ndecl, WhiteNoise):
                         if ndecl.shape == "scalar":
                             sym = ir.Scalar.input(input_name)
                         else:
@@ -528,7 +529,7 @@ class Craft:
                         saved[nname] = getattr(part, nname)
                         object.__setattr__(part, nname, sym)
                         continue
-                    # kind == "rw"
+                    # RandomWalkNoise
                     sigma = float(getattr(part, f"{nname}_sigma"))
                     if sigma <= 0.0:
                         # Inert RW channel: bind `self.<nname>` to a
@@ -823,7 +824,7 @@ class Craft:
         for part in self._parts:
             for nname, ndecl in part.noise_declarations().items():
                 sigma = float(getattr(part, f"{nname}_sigma"))
-                if ndecl.kind == "white":
+                if isinstance(ndecl, WhiteNoise):
                     key = f"{part.name}.{nname}"
                 else:
                     # Inert RW channels (sigma == 0) aren't in the
@@ -881,7 +882,7 @@ class Craft:
                 shape = 3 if ndecl.shape == "vec3" else 1
                 zero  = (np.zeros(shape, dtype=float)
                          if shape > 1 else 0.0)
-                if ndecl.kind == "white":
+                if isinstance(ndecl, WhiteNoise):
                     state[f"{part.name}.{nname}"] = zero
                 else:
                     sigma = float(getattr(part, f"{nname}_sigma"))

@@ -40,8 +40,8 @@ Auto-assembly contracts:
 Scope notes:
   * Couplings between crafts are honored by the world-tick (which the
     EKF reuses) — F propagates through them automatically.
-  * RW bias channels are first-class (`Noise(kind="rw", ...)` on Parts
-    or Disturbances synthesize a state slot + a driver input with
+  * RW bias channels are first-class (`RandomWalkNoise` declarations on
+    Parts or Disturbances synthesize a state slot + a driver input with
     `bias_next = bias + sqrt(dt)·driver`).
 """
 
@@ -350,8 +350,9 @@ class EKF:
         `owner` can be a Part or a Disturbance — both expose
         `noise_declarations()` with the same shape.
         """
+        from ..parts.base import RandomWalkNoise, WhiteNoise
         ndecls = owner.noise_declarations()
-        if sub in ndecls and ndecls[sub].kind == "white":
+        if sub in ndecls and isinstance(ndecls[sub], WhiteNoise):
             ndecl = ndecls[sub]
             dim   = 1 if ndecl.shape == "scalar" else 3
             sigma = float(getattr(owner, f"{sub}_sigma"))
@@ -362,7 +363,8 @@ class EKF:
             return
         if sub.endswith("_driver"):
             bias_name = sub[: -len("_driver")]
-            if bias_name in ndecls and ndecls[bias_name].kind == "rw":
+            if (bias_name in ndecls
+                    and isinstance(ndecls[bias_name], RandomWalkNoise)):
                 ndecl = ndecls[bias_name]
                 dim   = 1 if ndecl.shape == "scalar" else 3
                 sigma = float(getattr(owner, f"{bias_name}_sigma"))

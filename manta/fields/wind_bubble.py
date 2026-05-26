@@ -8,7 +8,7 @@ estimates — so a craft passing through another's bubble samples that
 other craft's belief and can pull its own estimate toward it via the
 EKF measurement updates.
 
-The wind state is a Noise(kind="rw") declaration on the Disturbance,
+The wind state is a RandomWalkNoise declaration on the Disturbance,
 which the framework picks up as an R3 state slot named
 `<bubble.name>.wind`. The EKF auto-Q assembles dt·σ² on that slot,
 and the bubble's `contribute_at_sym` exposes the wind to any
@@ -33,7 +33,7 @@ import casadi as ca
 
 from ..ir.frames import WorldFrame
 from ..ir.types import Vec3
-from ..parts.base import Noise
+from ..parts.base import RandomWalkNoise
 from .base import Disturbance
 from .fluid import FluidState
 
@@ -49,7 +49,7 @@ class CraftWindBubble(Disturbance):
     bubble (where `|point - craft.position| < radius`) and zero
     outside, gated by a hard `ca.if_else`.
 
-    The wind itself is a `Noise(kind="rw")` channel — the framework
+    The wind itself is a `RandomWalkNoise` channel — the framework
     synthesizes a state slot named `<bubble.name>.wind` and an RW
     driver, evolving the wind via `wind_next = wind + sqrt(dt)·driver`.
 
@@ -71,7 +71,7 @@ class CraftWindBubble(Disturbance):
     # Overlapping bubbles average instead of summing.
     combining = "averaged"
 
-    wind = Noise(shape="vec3", kind="rw", frame=WorldFrame, sigma=0.0)
+    wind = RandomWalkNoise(shape="vec3", frame=WorldFrame, sigma=0.0)
 
     def __init__(self,
                  craft,

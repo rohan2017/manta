@@ -36,7 +36,7 @@ from .inertia import symbolic_inertia_rollup
 from .kinematics import kinematic_pass
 from .ir.frames import WorldFrame, CraftFrame
 from .ir.manifold import SO3
-from .parts.base import Part, PartUpdate
+from .parts.base import Part, PartUpdate, RandomWalkNoise, WhiteNoise
 from .ir.wrench import Wrench
 
 
@@ -232,7 +232,7 @@ def _plumb_field_disturbances(fields, dt) -> tuple[list, list[tuple[str, Any]]]:
             # Noise channels.
             for nname, ndecl in ndecls.items():
                 frame = ndecl.frame or WorldFrame
-                if ndecl.kind == "white":
+                if isinstance(ndecl, WhiteNoise):
                     if ndecl.shape == "scalar":
                         sym = ir.Scalar.input(prefix + nname)
                     else:
@@ -240,7 +240,7 @@ def _plumb_field_disturbances(fields, dt) -> tuple[list, list[tuple[str, Any]]]:
                     saved[nname] = getattr(dist, nname)
                     object.__setattr__(dist, nname, sym)
                     continue
-                # kind == "rw".
+                # RandomWalkNoise.
                 sigma = float(getattr(dist, f"{nname}_sigma"))
                 if sigma <= 0.0:
                     # Inert: bind to zero, no slot, no driver.
@@ -364,7 +364,7 @@ def _trace_craft_pass1(g_ctx,
         for nname, ndecl in ndecls.items():
             input_name = prefix + f"{part.name}.{nname}"
             frame = ndecl.frame or CraftFrame
-            if ndecl.kind == "white":
+            if isinstance(ndecl, WhiteNoise):
                 if ndecl.shape == "scalar":
                     sym = ir.Scalar.input(input_name)
                 else:
@@ -372,7 +372,7 @@ def _trace_craft_pass1(g_ctx,
                 saved_n[nname] = getattr(part, nname)
                 object.__setattr__(part, nname, sym)
                 continue
-            # kind == "rw"
+            # RandomWalkNoise
             sigma = float(getattr(part, f"{nname}_sigma"))
             if sigma <= 0.0:
                 if ndecl.shape == "scalar":

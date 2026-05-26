@@ -1,7 +1,7 @@
-"""Random-walk bias channels — Noise(kind="rw") end-to-end.
+"""Random-walk bias channels — RandomWalkNoise end-to-end.
 
 Validates:
-  * `Noise(kind="rw")` declarations synthesize a bias state slot AND a
+  * `RandomWalkNoise` declarations synthesize a bias state slot AND a
     driver noise input.
   * Inside `update()`, `self.<noise_name>` reads the bias state MX
     (not the per-tick driver).
@@ -26,7 +26,7 @@ import pytest
 from manta import World, Craft, EKF, TargetNumpy
 from manta.fields import GravityField
 from manta.parts import Mass
-from manta.parts.base import Noise, Output, Part, PartUpdate
+from manta.parts.base import Output, Part, PartUpdate, RandomWalkNoise, WhiteNoise
 from manta.ir.frames import CraftFrame
 from manta.ir.types import Vec3
 from manta.ir.wrench import Wrench
@@ -34,8 +34,8 @@ from manta.ir.wrench import Wrench
 
 class BiasedGyro(Part):
     """A minimal gyro sensor with both white noise + RW bias."""
-    gyro_noise = Noise(shape="vec3", kind="white", sigma=0.001)
-    gyro_bias  = Noise(shape="vec3", kind="rw",    sigma=0.02)
+    gyro_noise = WhiteNoise(     shape="vec3", sigma=0.001)
+    gyro_bias  = RandomWalkNoise(shape="vec3", sigma=0.02)
     gyro = Output(shape="vec3")
 
     def update(self, ctx):

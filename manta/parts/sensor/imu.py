@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from ...ir.frames import CraftFrame
 from ...ir.types import Vec3
-from ..base import Noise, Output, Part, PartUpdate
+from ..base import Output, Part, PartUpdate, RandomWalkNoise, WhiteNoise
 from ...ir.wrench import Wrench
 
 
@@ -45,10 +45,10 @@ class IMU(Part):
     skip them by leaving sigma at 0.
     """
 
-    gyro_noise  = Noise(shape="vec3", kind="white", frame=CraftFrame, sigma=0.0)
-    accel_noise = Noise(shape="vec3", kind="white", frame=CraftFrame, sigma=0.0)
-    gyro_bias   = Noise(shape="vec3", kind="rw",    frame=CraftFrame, sigma=0.0)
-    accel_bias  = Noise(shape="vec3", kind="rw",    frame=CraftFrame, sigma=0.0)
+    gyro_noise  = WhiteNoise(     shape="vec3", frame=CraftFrame, sigma=0.0)
+    accel_noise = WhiteNoise(     shape="vec3", frame=CraftFrame, sigma=0.0)
+    gyro_bias   = RandomWalkNoise(shape="vec3", frame=CraftFrame, sigma=0.0)
+    accel_bias  = RandomWalkNoise(shape="vec3", frame=CraftFrame, sigma=0.0)
 
     gyro  = Output(shape="vec3")
     accel = Output(shape="vec3")

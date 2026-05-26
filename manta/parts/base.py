@@ -119,52 +119,62 @@ class Input(_Declaration):
 
 
 class Noise(_Declaration):
-    """Per-tick noise channel declared at class scope.
+    """Abstract base for noise-channel declarations.
 
-    Two kinds:
+    Concrete subclasses:
 
-      * `kind="white"` (default) — per-tick i.i.d. Gaussian.
-        The framework creates a graph input named
-        `<part>.<noise_name>`, rebinds the part attribute to that
-        input, and the part adds it directly into its sensor reading
-        (or process expression). σ is the per-tick measurement stddev.
+      * `WhiteNoise` — per-tick i.i.d. Gaussian. The framework creates a
+        graph input named `<part>.<noise_name>`, rebinds the part
+        attribute to that input, and the part adds it directly into its
+        sensor reading (or process expression). σ is the per-tick
+        measurement stddev.
 
-      * `kind="rw"` — random-walk bias. The framework synthesizes:
+      * `RandomWalkNoise` — random-walk bias. The framework synthesizes:
           - A **state slot** `<part>.<noise_name>` holding the bias.
           - A driver noise input `<part>.<noise_name>_driver`.
           - A state update each tick:
                 bias_next = bias + sqrt(dt) · driver,    driver ~ N(0, σ²).
         Inside `update()`, `self.<noise_name>` reads the bias state
-        (the slowly-drifting current value) — typically added into
-        the sensor signal alongside a separate white channel. σ has
+        (the slowly-drifting current value) — typically added into the
+        sensor signal alongside a separate `WhiteNoise` channel. σ has
         continuous σ/√Hz semantics; per-tick bias variance is dt·σ².
+
+    Custom noise types can subclass `Noise` directly; the framework
+    dispatches on `isinstance(decl, WhiteNoise)` / `RandomWalkNoise` in
+    the compile pipeline.
 
     Args:
         shape — "scalar" or "vec3". Default "vec3".
-        kind  — "white" (default) or "rw".
         frame — Frame class for the vec3 form. Default `CraftFrame`.
                 Ignored for scalar shape.
         sigma — 1-σ standard deviation, scalar (isotropic across axes).
-                White: per-tick measurement stddev. RW: σ/√Hz drift
-                density.
+                See subclass docstrings for unit conventions.
     """
 
-    __slots__ = ("shape", "kind", "frame", "sigma")
+    __slots__ = ("shape", "frame", "sigma")
 
-    def __init__(self, shape: str = "vec3", kind: str = "white",
-                 frame=None,
+    def __init__(self, shape: str = "vec3", frame=None,
                  sigma: float = 0.0) -> None:
         super().__init__(default=None)
         if shape not in ("scalar", "vec3"):
             raise ValueError(
-                f"Noise: shape must be 'scalar' or 'vec3'; got {shape!r}")
-        if kind not in ("white", "rw"):
-            raise ValueError(
-                f"Noise: kind must be 'white' or 'rw'; got {kind!r}")
+                f"{type(self).__name__}: shape must be 'scalar' or 'vec3'; "
+                f"got {shape!r}")
         self.shape = shape
-        self.kind  = kind
         self.frame = frame
         self.sigma = float(sigma)
+
+
+class WhiteNoise(Noise):
+    """Per-tick i.i.d. Gaussian noise channel. σ is the per-tick stddev."""
+
+    __slots__ = ()
+
+
+class RandomWalkNoise(Noise):
+    """Random-walk bias channel. σ has σ/√Hz drift-density units."""
+
+    __slots__ = ()
 
 
 class State(_Declaration):

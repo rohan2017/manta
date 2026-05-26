@@ -160,8 +160,9 @@ class StateSpec:
                     raise NotImplementedError(
                         f"StateSpec: Disturbance state manifold "
                         f"{sdecl.manifold!r} not yet supported.")
+            from ..parts.base import RandomWalkNoise
             for nname, ndecl in ndecls.items():
-                if ndecl.kind != "rw":
+                if not isinstance(ndecl, RandomWalkNoise):
                     continue
                 sigma = float(getattr(dist, f"{nname}_sigma"))
                 if sigma <= 0.0:
@@ -189,10 +190,11 @@ class StateSpec:
                     raise NotImplementedError(
                         f"StateSpec: manifold {sdecl.manifold!r} on "
                         f"{part.name}.{sname} not yet supported.")
-            # RW Noise declarations synthesize a bias state slot per
-            # active channel.
+            # RandomWalkNoise declarations synthesize a bias state slot
+            # per active channel.
+            from ..parts.base import RandomWalkNoise
             for nname, ndecl in part.noise_declarations().items():
-                if ndecl.kind != "rw":
+                if not isinstance(ndecl, RandomWalkNoise):
                     continue
                 sigma = float(getattr(part, f"{nname}_sigma"))
                 if sigma <= 0.0:
