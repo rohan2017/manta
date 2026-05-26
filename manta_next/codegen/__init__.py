@@ -1,29 +1,16 @@
-"""C++ codegen for manta_next Crafts.
+"""C++ codegen internals.
 
-Public API:
-  emit_cpp(craft, out_dir, class_name) — generate a self-contained C++
-  static-library project that exposes the craft's predict, predict
-  Jacobian, and per-Output measurement + measurement Jacobian as typed
-  Eigen-shaped methods. Math kernels come from CasADi's built-in
-  Function.generate() (flat C, CSE-optimized); the typed wrapper is a
-  thin pack/unpack layer.
+The public entry point is `TargetCpp(cw, out_dir, class_name)` in
+`manta_next.targets`; this package houses the pipeline pieces it
+calls into:
 
-Architecture:
-  manta_next/codegen/
-    extract.py  — Craft → per-function ca.Function objects
-    kernels.py  — ca.Function → flat C source
-    wrapper.py  — typed Eigen-shaped C++ class
-    cmake.py    — CMakeLists.txt fragment
-    cpp.py      — top-level emit_cpp() orchestration
+  extract.py  — CompiledWorld → per-function ca.Function objects
+  kernels.py  — ca.Function → flat C source
+  wrapper.py  — typed Eigen-shaped C++ class
+  cmake.py    — CMakeLists.txt fragment
+  cpp.py      — `_emit_world_cpp()` orchestration (TargetCpp's body)
+
+Math kernels come from CasADi's built-in `Function.generate()` (flat
+C, CSE-optimized); the typed wrapper is a thin pack/unpack layer
+over a typed `State` / `Inputs` struct.
 """
-
-def __getattr__(name):
-    # Lazy attribute so individual sub-modules can be imported without
-    # forcing the whole codegen pipeline through.
-    if name == "emit_cpp":
-        from .cpp import emit_cpp as _e
-        return _e
-    raise AttributeError(f"module 'manta_next.codegen' has no attribute {name!r}")
-
-
-__all__ = ["emit_cpp"]

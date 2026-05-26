@@ -1,44 +1,45 @@
-"""Tests for manta_next.codegen.kernels — flat-C kernel emission."""
+"""Tests for `manta_next.codegen.kernels` — flat-C kernel emission."""
 
-import os
 import re
 from pathlib import Path
 
 import pytest
 
-from manta_next import Craft
+from manta_next import Craft, World
 from manta_next.fields import GravityField
 from manta_next.codegen.extract import extract
 from manta_next.codegen.kernels import emit_kernels, kernel_function_names
 from manta_next.parts import IMU, Mass, PositionSensor, Thruster
 
 
-def _hover_craft():
+def _hover_world() -> "CompiledWorld":
     c = Craft("drone")
     c.add(Mass("body", mass=1.5, moi=(0.05, 0.05, 0.08)))
     c.add(Thruster("t", force=(0.0, 0.0, 1.0)))
     c.add(IMU("g"))
     c.add(PositionSensor("gps"))
-    return c
+    w = World(name="hover_world")
+    w.add_field(GravityField(g=(0.0, 0.0, -9.81)))
+    w.add_craft(c)
+    return w.compile()
 
 
 def test_emit_kernels_produces_c_and_h(tmp_path: Path):
-    funcs = extract(_hover_craft(), gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
+    funcs = extract(_hover_world())
     paths = emit_kernels(funcs, tmp_path)
     assert paths["c"].exists()
     assert paths["h"].exists()
-    assert paths["c"].stat().st_size > 1000     # actually emitted real code
+    assert paths["c"].stat().st_size > 1000
     assert paths["h"].stat().st_size > 100
 
 
 def test_kernel_header_declares_every_function(tmp_path: Path):
-    funcs = extract(_hover_craft(), gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
+    funcs = extract(_hover_world())
     paths = emit_kernels(funcs, tmp_path)
     header_text = paths["h"].read_text()
 
     expected_names = kernel_function_names(funcs).values()
     for name in expected_names:
-        # CasADi's header declares each function with extern C int.
         pattern = rf"\b{re.escape(name)}\b"
         assert re.search(pattern, header_text), (
             f"function {name!r} missing from generated header.\n"
@@ -54,7 +55,7 @@ def test_kernel_c_compiles_with_cc(tmp_path: Path):
     if cc is None:
         pytest.skip("no C compiler on PATH")
 
-    funcs = extract(_hover_craft(), gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
+    funcs = extract(_hover_world())
     paths = emit_kernels(funcs, tmp_path)
 
     obj = tmp_path / "kernels.o"

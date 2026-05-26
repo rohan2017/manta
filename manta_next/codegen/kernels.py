@@ -1,6 +1,6 @@
 """Flat-C math kernels emitted by CasADi's CodeGenerator.
 
-Bundles every ca.Function from a `CraftFunctions` (predict, predict
+Bundles every ca.Function from a `WorldFunctions` (predict, predict
 Jacobian, per-Output h/H pairs) into a single C source + header pair.
 
 The emitted C is:
@@ -22,10 +22,10 @@ from pathlib import Path
 
 import casadi as ca
 
-from .extract import CraftFunctions
+from .extract import WorldFunctions
 
 
-def emit_kernels(funcs: CraftFunctions,
+def emit_kernels(funcs: WorldFunctions,
                  out_dir: str | Path,
                  *,
                  basename: str | None = None) -> dict[str, Path]:
@@ -34,14 +34,14 @@ def emit_kernels(funcs: CraftFunctions,
     Args:
         funcs    — the per-function bundle from `extract.extract(craft)`.
         out_dir  — destination directory; created if missing.
-        basename — filename stem. Defaults to `funcs.craft_name`.
+        basename — filename stem. Defaults to `funcs.world_name`.
 
     Returns:
         Dict with absolute paths to the emitted `.c` and `.h` files.
     """
     out_dir  = Path(out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    base = basename or funcs.craft_name
+    base = basename or funcs.world_name
 
     gen = ca.CodeGenerator(
         f"{base}_kernels.c",
@@ -69,8 +69,8 @@ def emit_kernels(funcs: CraftFunctions,
     return {"c": c_path, "h": h_path}
 
 
-def kernel_function_names(funcs: CraftFunctions) -> dict[str, str]:
-    """Return the canonical kernel-function names for one CraftFunctions
+def kernel_function_names(funcs: WorldFunctions) -> dict[str, str]:
+    """Return the canonical kernel-function names for one WorldFunctions
     bundle. Keys: 'predict', 'predict_jacobian', and 'h_<part>_<output>',
     'H_<part>_<output>' per Output. Values are the C symbol names
     matching what CasADi's CodeGenerator produces (the ca.Function's name)."""

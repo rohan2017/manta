@@ -17,7 +17,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..estimation.state_spec import StateSlot, StateSpec
-from .extract import CraftFunctions, OutputSpec
+from .extract import OutputSpec, WorldFunctions
 
 
 # ---------------------------------------------------------------------------
@@ -41,47 +41,73 @@ def _eigen_type_for(slot: StateSlot) -> str:
         f"wrapper: no Eigen mapping for manifold {slot.manifold!r}")
 
 
-def _state_field_init(slot: StateSlot, craft) -> str:
-    """C++ initializer expression for the State field's default value.
+def _state_field_init(slot: StateSlot, world) -> str:
+    """C++ initializer expression for a world State-struct field.
 
-    For R3/R1 the default is zero; SO3 default is (1, 0, 0, 0); part
-    User-State slots take their declaration's init value (which may be
-    non-zero). RW-bias state slots (synthesized from Noise(kind="rw"))
-    take zero, matching the bias seed in `Craft.initial_state()`.
+    Slot names are `<craft>.<sub>` where `<sub>` is either:
+      * a rigid-body slot (`position`/`orientation`/`velocity`/
+        `angular_velocity`) → manifold default,
+      * a User State `<part>.<state>` → declaration's `init` value,
+      * an RW-bias `<part>.<bias>` → zero (matches `initial_state`),
+      * a Disturbance state — handled by the disturbance branch below.
     """
-    if "." in slot.name:
-        part_name, sub = slot.name.split(".", 1)
-        part = next(p for p in craft.parts if p.name == part_name)
-        # User-declared State slot — its init is the declaration's
-        # `init` value (scalar).
-        if sub in part.state_declarations():
-            init = float(getattr(part, sub))
-            return repr(init)
-        # RW-bias state slot — synthesized from a Noise(kind="rw")
-        # declaration; the bias starts at zero.
-        if sub in part.noise_declarations() \
-                and part.noise_declarations()[sub].kind == "rw":
-            if slot.manifold == "R3":
-                return "Eigen::Vector3d::Zero()"
-            return "0.0"
-        raise RuntimeError(
-            f"wrapper: state slot {slot.name!r} is neither a user "
-            f"State nor an RW bias.")
-    if slot.manifold == "R3":
-        return "Eigen::Vector3d::Zero()"
-    if slot.manifold == "SO3":
-        return "Eigen::Vector4d(1.0, 0.0, 0.0, 0.0)"
-    if slot.manifold == "R1":
-        return "0.0"
-    raise NotImplementedError(slot.manifold)
+    head, _, rest = slot.name.partition(".")
+    # Per-craft slot?
+    craft = next((c for c in world.crafts if c.name == head), None)
+    if craft is not None:
+        if "." in rest:
+            part_name, sub = rest.split(".", 1)
+            part = next(p for p in craft.parts if p.name == part_name)
+            if sub in part.state_declarations():
+                sdecl = part.state_declarations()[sub]
+                if sdecl.manifold == "R1":
+                    return repr(float(getattr(part, sub)))
+                if sdecl.manifold == "R3":
+                    vec = getattr(part, sub)
+                    return (f"Eigen::Vector3d({float(vec[0])!r}, "
+                            f"{float(vec[1])!r}, {float(vec[2])!r})")
+                raise NotImplementedError(sdecl.manifold)
+            if (sub in part.noise_declarations()
+                    and part.noise_declarations()[sub].kind == "rw"):
+                return "Eigen::Vector3d::Zero()" if slot.manifold == "R3" else "0.0"
+            raise RuntimeError(
+                f"wrapper: per-craft slot {slot.name!r} is not a State "
+                f"or RW bias.")
+        # Rigid-body slot — manifold default.
+        return _manifold_default(slot.manifold)
+    # Per-disturbance slot.
+    from ..fields.base import Disturbance
+    for field in world.fields:
+        for dist in field._disturbances:
+            if isinstance(dist, Disturbance) and dist.name == head:
+                if (rest in dist.noise_declarations()
+                        and dist.noise_declarations()[rest].kind == "rw"):
+                    return "Eigen::Vector3d::Zero()" if slot.manifold == "R3" else "0.0"
+                if rest in dist.state_declarations():
+                    sdecl = dist.state_declarations()[rest]
+                    if sdecl.manifold == "R1":
+                        return repr(float(getattr(dist, rest)))
+                    if sdecl.manifold == "R3":
+                        vec = getattr(dist, rest)
+                        return (f"Eigen::Vector3d({float(vec[0])!r}, "
+                                f"{float(vec[1])!r}, {float(vec[2])!r})")
+    raise RuntimeError(
+        f"wrapper: slot {slot.name!r} doesn't resolve to a known owner.")
+
+
+def _manifold_default(manifold: str) -> str:
+    if manifold == "R3": return "Eigen::Vector3d::Zero()"
+    if manifold == "SO3": return "Eigen::Vector4d(1.0, 0.0, 0.0, 0.0)"
+    if manifold == "R1": return "0.0"
+    raise NotImplementedError(manifold)
 
 
 # ---------------------------------------------------------------------------
 # Code generation
 # ---------------------------------------------------------------------------
 
-def emit_wrapper(funcs: CraftFunctions,
-                 craft,
+def emit_wrapper(funcs: WorldFunctions,
+                 world,
                  out_dir: str | Path,
                  *,
                  class_name: str,
@@ -107,9 +133,9 @@ def emit_wrapper(funcs: CraftFunctions,
     hpp_path = out_dir / f"{base}.hpp"
     cpp_path = out_dir / f"{base}.cpp"
 
-    hpp_text = _build_hpp(funcs, craft, class_name=class_name,
+    hpp_text = _build_hpp(funcs, world, class_name=class_name,
                            namespace=namespace, kernels_header=f"{base}_kernels.h")
-    cpp_text = _build_cpp(funcs, craft, class_name=class_name,
+    cpp_text = _build_cpp(funcs, world, class_name=class_name,
                            namespace=namespace, hpp_header=hpp_path.name,
                            kernels_header=f"{base}_kernels.h")
 
@@ -122,8 +148,8 @@ def emit_wrapper(funcs: CraftFunctions,
 # HPP
 # ---------------------------------------------------------------------------
 
-def _build_hpp(funcs: CraftFunctions,
-               craft,
+def _build_hpp(funcs: WorldFunctions,
+                 world,
                *,
                class_name: str,
                namespace: str,
@@ -150,7 +176,7 @@ def _build_hpp(funcs: CraftFunctions,
     for slot in spec.slots:
         ident = _cpp_ident(slot.name)
         ty    = _eigen_type_for(slot)
-        init  = _state_field_init(slot, craft)
+        init  = _state_field_init(slot, world)
         lines.append(f"        {ty} {ident} = {init};")
     lines.append("    };")
     lines.append("")
@@ -159,7 +185,7 @@ def _build_hpp(funcs: CraftFunctions,
     lines.append("    struct Inputs {")
     for inp in funcs.input_names:
         ident = _cpp_ident(inp)
-        default = _input_default(inp, craft)
+        default = _input_default(inp, world)
         lines.append(f"        double {ident} = {default!r};")
     if not funcs.input_names:
         lines.append("        // (no inputs declared on this craft)")
@@ -201,8 +227,11 @@ def _eigen_vec_type(dim: int) -> str:
     return f"Eigen::Matrix<double, {dim}, 1>"
 
 
-def _input_default(input_full_name: str, craft) -> float:
-    part_name, input_name = input_full_name.split(".", 1)
+def _input_default(input_full_name: str, world) -> float:
+    """Resolve `<craft>.<part>.<input>` to its part-instance value."""
+    craft_name, rest = input_full_name.split(".", 1)
+    part_name, input_name = rest.split(".", 1)
+    craft = next(c for c in world.crafts if c.name == craft_name)
     part = next(p for p in craft.parts if p.name == part_name)
     return float(getattr(part, input_name))
 
@@ -211,8 +240,8 @@ def _input_default(input_full_name: str, craft) -> float:
 # CPP
 # ---------------------------------------------------------------------------
 
-def _build_cpp(funcs: CraftFunctions,
-               craft,
+def _build_cpp(funcs: WorldFunctions,
+                 world,
                *,
                class_name: str,
                namespace: str,

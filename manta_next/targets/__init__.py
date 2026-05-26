@@ -18,6 +18,7 @@ state; you choose a target and the target hands you a callable runtime
 (`NumpyWorld`, `NumpyEKF`) you `.step()`, `.predict()`, `.update()` on.
 """
 
+from .cpp   import TargetCpp
 from .numpy import NumpyEKF, NumpyWorld, TargetNumpy
 
-__all__ = ["TargetNumpy", "NumpyWorld", "NumpyEKF"]
+__all__ = ["TargetNumpy", "TargetCpp", "NumpyWorld", "NumpyEKF"]
