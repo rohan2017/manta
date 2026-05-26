@@ -32,7 +32,7 @@ from dataclasses import dataclass
 
 import casadi as ca
 
-from ..estimation.state_spec import StateSpec
+from ...estimation.state_spec import StateSpec
 
 
 @dataclass(frozen=True)
@@ -89,7 +89,7 @@ def extract(cw) -> WorldFunctions:
     Returns:
         A `WorldFunctions` bundle.
     """
-    from ..world import CompiledWorld
+    from ...world import CompiledWorld
     if not isinstance(cw, CompiledWorld):
         raise TypeError(
             f"extract: expected CompiledWorld, got {type(cw).__name__}")
@@ -218,7 +218,7 @@ def extract(cw) -> WorldFunctions:
 
 def _build_dist_lookup(world) -> dict:
     """Index every state-bearing disturbance by name for noise routing."""
-    from ..fields.base import Disturbance
+    from ...fields.base import Disturbance
     out = {}
     for field in world.fields:
         for d in field._disturbances:
@@ -283,14 +283,15 @@ def _discover_input_names(cf: ca.Function,
 
 
 def _is_known_noise_input(owner, sub: str) -> bool:
-    """True if `<owner>.<sub>` matches a white Noise channel or an RW
-    Noise driver (`<bias>_driver`)."""
+    """True if `<owner>.<sub>` matches a WhiteNoise channel or a
+    RandomWalkNoise driver (`<bias>_driver`)."""
+    from ...parts.base import RandomWalkNoise, WhiteNoise
     ndecls = owner.noise_declarations()
-    if sub in ndecls and ndecls[sub].kind == "white":
+    if sub in ndecls and isinstance(ndecls[sub], WhiteNoise):
         return True
     if sub.endswith("_driver"):
         bias = sub[: -len("_driver")]
-        if bias in ndecls and ndecls[bias].kind == "rw":
+        if bias in ndecls and isinstance(ndecls[bias], RandomWalkNoise):
             return True
     return False
 
@@ -298,14 +299,15 @@ def _is_known_noise_input(owner, sub: str) -> bool:
 def _noise_zero(owner, sub: str):
     """Return the zero MX of the right shape for a Noise input.
     Raises if the input doesn't match a known channel."""
+    from ...parts.base import RandomWalkNoise, WhiteNoise
     ndecls = owner.noise_declarations()
-    if sub in ndecls and ndecls[sub].kind == "white":
+    if sub in ndecls and isinstance(ndecls[sub], WhiteNoise):
         ndecl = ndecls[sub]
         dim = 1 if ndecl.shape == "scalar" else 3
         return ca.MX.zeros(dim, 1)
     if sub.endswith("_driver"):
         bias = sub[: -len("_driver")]
-        if bias in ndecls and ndecls[bias].kind == "rw":
+        if bias in ndecls and isinstance(ndecls[bias], RandomWalkNoise):
             ndecl = ndecls[bias]
             dim = 1 if ndecl.shape == "scalar" else 3
             return ca.MX.zeros(dim, 1)
@@ -346,7 +348,7 @@ def _evaluate_tick_flat(cf: ca.Function,
         if owner is None:
             raise RuntimeError(f"extract: tick input {name!r} not handled.")
         # Per-craft noise lives at `<craft>.<part>.<sub>`.
-        from ..craft import Craft as _Craft
+        from ...craft import Craft as _Craft
         if isinstance(owner, _Craft) and "." in rest:
             part_name, sub = rest.split(".", 1)
             part = next((p for p in owner.parts if p.name == part_name), None)

@@ -4,7 +4,7 @@ import numpy as np
 
 from manta import Craft, World
 from manta.fields import GravityField
-from manta.codegen.extract import extract
+from manta.codegen.cpp.extract import extract
 from manta.parts import IMU, Mass, PositionSensor, Thruster
 
 

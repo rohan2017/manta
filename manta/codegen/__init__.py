@@ -1,16 +1,29 @@
-"""C++ codegen internals.
+"""manta backends (codegen targets).
 
-The public entry point is `TargetCpp(cw, out_dir, class_name)` in
-`manta.targets`; this package houses the pipeline pieces it
-calls into:
+The pipeline:
 
-  extract.py  — CompiledWorld → per-function ca.Function objects
-  kernels.py  — ca.Function → flat C source
-  wrapper.py  — typed Eigen-shaped C++ class
-  cmake.py    — CMakeLists.txt fragment
-  cpp.py      — `_emit_world_cpp()` orchestration (TargetCpp's body)
+  1. **Model**: declarative — `World`, `Craft`, `EKF`, fields, parts,
+     planets.
+  2. **IR**: result of compiling the model. `World.compile()` returns
+     a `CompiledWorld` (a CasADi function + metadata); `EKF(world)`
+     returns an `EKF` object that holds the symbolic predict /
+     measurement bundle. These are *descriptions*, not runtimes.
+  3. **Target**: lowers an IR to a backend-specific runtime. The
+     native-Python `TargetNumpy(...)` is the default. `TargetCpp(...)`
+     emits C++ source for embedding in firmware / other binaries.
 
-Math kernels come from CasADi's built-in `Function.generate()` (flat
-C, CSE-optimized); the typed wrapper is a thin pack/unpack layer
-over a typed `State` / `Inputs` struct.
+Each backend is a self-contained subpackage under `manta.codegen`:
+
+    codegen/
+      numpy/          TargetNumpy + NumpyWorld + NumpyEKF
+      cpp/            TargetCpp + extract / kernels / wrapper / cmake
+      <future>/       new languages slot in here
+
+Adding a backend (TensorFlow, raw embedded C, CUDA, …) is one new
+`Target*` constructor consuming the same IR.
 """
+
+from .cpp   import TargetCpp
+from .numpy import NumpyEKF, NumpyWorld, TargetNumpy
+
+__all__ = ["TargetNumpy", "TargetCpp", "NumpyWorld", "NumpyEKF"]

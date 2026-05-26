@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..estimation.state_spec import StateSlot, StateSpec
+from ...estimation.state_spec import StateSlot, StateSpec
 from .extract import OutputSpec, WorldFunctions
 
 
@@ -67,8 +67,10 @@ def _state_field_init(slot: StateSlot, world) -> str:
                     return (f"Eigen::Vector3d({float(vec[0])!r}, "
                             f"{float(vec[1])!r}, {float(vec[2])!r})")
                 raise NotImplementedError(sdecl.manifold)
+            from ...parts.base import RandomWalkNoise
             if (sub in part.noise_declarations()
-                    and part.noise_declarations()[sub].kind == "rw"):
+                    and isinstance(part.noise_declarations()[sub],
+                                   RandomWalkNoise)):
                 return "Eigen::Vector3d::Zero()" if slot.manifold == "R3" else "0.0"
             raise RuntimeError(
                 f"wrapper: per-craft slot {slot.name!r} is not a State "
@@ -76,12 +78,14 @@ def _state_field_init(slot: StateSlot, world) -> str:
         # Rigid-body slot — manifold default.
         return _manifold_default(slot.manifold)
     # Per-disturbance slot.
-    from ..fields.base import Disturbance
+    from ...fields.base import Disturbance
     for field in world.fields:
         for dist in field._disturbances:
             if isinstance(dist, Disturbance) and dist.name == head:
+                from ...parts.base import RandomWalkNoise
                 if (rest in dist.noise_declarations()
-                        and dist.noise_declarations()[rest].kind == "rw"):
+                        and isinstance(dist.noise_declarations()[rest],
+                                       RandomWalkNoise)):
                     return "Eigen::Vector3d::Zero()" if slot.manifold == "R3" else "0.0"
                 if rest in dist.state_declarations():
                     sdecl = dist.state_declarations()[rest]

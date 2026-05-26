@@ -53,7 +53,7 @@ from .world import World, CompiledWorld
 from .planets import Planet
 from .couplings import Coupling
 from .estimation.ekf import EKF
-from .targets import TargetCpp, TargetNumpy
+from .codegen import TargetCpp, TargetNumpy
 
 __all__ = [
     "ir", "Craft", "World", "Coupling", "CompiledWorld", "Planet", "EKF",

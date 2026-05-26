@@ -162,7 +162,7 @@ new `Target*` constructor consuming the same IR.
 ## Layout
 
 ```
-manta/
+manta/                     library package
     __init__.py            World / Craft / EKF / Target* surface
     craft.py               Craft + TickContext + Newton-Euler integrator
     world.py               World + CompiledWorld (IR)
@@ -175,30 +175,31 @@ manta/
     planets/               Planet ABC, Earth, PlanetFrameFluid, PlanetState
     couplings/             Coupling ABC + Tether
     estimation/            EKF (IR) + StateSpec + measurement helpers
-    targets/               TargetNumpy + TargetCpp
-    codegen/               Internals of TargetCpp (extract / kernels / wrapper / cmake)
-    tests/                 274 tests
-    examples/              9 runnable demos
+    codegen/               Backends (one subpackage per target language)
+        numpy/             TargetNumpy + NumpyWorld + NumpyEKF
+        cpp/               TargetCpp + extract / kernels / wrapper / cmake
+tests/                     274 tests
+examples/                  9 runnable demos
 ```
 
 ## Demos
 
 ```bash
-.venv/bin/python -m manta.examples.hover_demo            # IMU + EKF, RW bias
-.venv/bin/python -m manta.examples.submarine_demo        # PointBuoy + DragSurface
-.venv/bin/python -m manta.examples.spinning_top_demo     # gyroscopic precession
-.venv/bin/python -m manta.examples.dual_craft_demo       # multi-craft + Tether
-.venv/bin/python -m manta.examples.quadcopter_demo       # polynomial Thruster
-.venv/bin/python -m manta.examples.glider_demo           # NACA airfoil
-.venv/bin/python -m manta.examples.bouncing_ball_demo    # CollisionField
-.venv/bin/python -m manta.examples.pan_tilt_gimbal_demo  # nested Joints
-.venv/bin/python -m manta.examples.coriolis_drop_demo    # Planet-frame init
+.venv/bin/python -m examples.hover_demo            # IMU + EKF, RW bias
+.venv/bin/python -m examples.submarine_demo        # PointBuoy + DragSurface
+.venv/bin/python -m examples.spinning_top_demo     # gyroscopic precession
+.venv/bin/python -m examples.dual_craft_demo       # multi-craft + Tether
+.venv/bin/python -m examples.quadcopter_demo       # polynomial Thruster
+.venv/bin/python -m examples.glider_demo           # NACA airfoil
+.venv/bin/python -m examples.bouncing_ball_demo    # CollisionField
+.venv/bin/python -m examples.pan_tilt_gimbal_demo  # nested Joints
+.venv/bin/python -m examples.coriolis_drop_demo    # Planet-frame init
 ```
 
 ## Running tests
 
 ```bash
-.venv/bin/python -m pytest manta/tests/
+.venv/bin/python -m pytest tests/
 ```
 
 ## Status

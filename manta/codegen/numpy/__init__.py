@@ -34,7 +34,7 @@ class NumpyWorld:
     """
 
     def __init__(self, cw) -> None:
-        from ..world import CompiledWorld
+        from ...world import CompiledWorld
         if not isinstance(cw, CompiledWorld):
             raise TypeError(
                 f"NumpyWorld: expected CompiledWorld, got "
@@ -109,7 +109,7 @@ class NumpyEKF:
     """
 
     def __init__(self, ekf) -> None:
-        from ..estimation.ekf import EKF
+        from ...estimation.ekf import EKF
         if not isinstance(ekf, EKF):
             raise TypeError(
                 f"NumpyEKF: expected EKF, got {type(ekf).__name__}")
@@ -359,8 +359,8 @@ def TargetNumpy(ir):
                                         `.state_dict()`, `.reset()`,
                                         `.x`, `.P`).
     """
-    from ..world import CompiledWorld
-    from ..estimation.ekf import EKF
+    from ...world import CompiledWorld
+    from ...estimation.ekf import EKF
     if isinstance(ir, CompiledWorld):
         return NumpyWorld(ir)
     if isinstance(ir, EKF):
