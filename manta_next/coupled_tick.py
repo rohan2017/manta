@@ -324,11 +324,17 @@ def _trace_craft_pass1(g_ctx,
             part_states: dict[str, Any] = {}
             saved: dict[str, Any] = {}
             for sname, sdecl in decls.items():
-                if sdecl.manifold != "R1":
+                input_name = prefix + f"{part.name}.{sname}"
+                if sdecl.manifold == "R1":
+                    sym = ir.Scalar.input(input_name)
+                elif sdecl.manifold == "R3":
+                    frame = sdecl.frame or CraftFrame
+                    sym = ir.Vec3[frame].input(input_name)
+                else:
                     raise NotImplementedError(
                         f"{type(part).__name__}('{part.name}'): "
-                        f"State manifold {sdecl.manifold!r} unsupported.")
-                sym = ir.Scalar.input(prefix + f"{part.name}.{sname}")
+                        f"State manifold {sdecl.manifold!r} not yet "
+                        f"wired through compile_coupled_tick.")
                 part_states[sname] = sym
                 saved[sname] = getattr(part, sname)
                 object.__setattr__(part, sname, sym)

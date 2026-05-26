@@ -154,6 +154,8 @@ class StateSpec:
             for sname, sdecl in sdecls.items():
                 if sdecl.manifold == "R1":
                     add(prefix + sname, 1, "R1", 1)
+                elif sdecl.manifold == "R3":
+                    add(prefix + sname, 3, "R3", 3)
                 else:
                     raise NotImplementedError(
                         f"StateSpec: Disturbance state manifold "
@@ -181,6 +183,8 @@ class StateSpec:
                 key = prefix + f"{part.name}.{sname}"
                 if sdecl.manifold == "R1":
                     add(key, 1, "R1", 1)
+                elif sdecl.manifold == "R3":
+                    add(key, 3, "R3", 3)
                 else:
                     raise NotImplementedError(
                         f"StateSpec: manifold {sdecl.manifold!r} on "

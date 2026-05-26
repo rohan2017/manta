@@ -464,13 +464,16 @@ class Craft:
                 saved: dict[str, Any] = {}
                 for sname, sdecl in decls.items():
                     input_name = f"{part.name}.{sname}"
-                    if sdecl.manifold != "R1":
+                    if sdecl.manifold == "R1":
+                        sym = ir.Scalar.input(input_name)
+                    elif sdecl.manifold == "R3":
+                        frame = sdecl.frame or CraftFrame
+                        sym = ir.Vec3[frame].input(input_name)
+                    else:
                         raise NotImplementedError(
                             f"{type(part).__name__}('{part.name}'): "
                             f"State manifold {sdecl.manifold!r} not yet "
-                            f"supported on part-declared state. Only 'R1' "
-                            f"is wired through compile_tick today.")
-                    sym = ir.Scalar.input(input_name)
+                            f"wired through compile_tick.")
                     part_states[sname] = sym
                     saved[sname] = getattr(part, sname)
                     object.__setattr__(part, sname, sym)
@@ -853,7 +856,14 @@ class Craft:
         }
         for part in self._parts:
             for sname, sdecl in part.state_declarations().items():
-                state[f"{part.name}.{sname}"] = float(sdecl.init)
+                if sdecl.manifold == "R1":
+                    state[f"{part.name}.{sname}"] = float(sdecl.init)
+                else:
+                    # R3 — `init` is a 3-tuple, validated at declaration
+                    # time. Store as ndarray for symmetry with rigid-body
+                    # slots.
+                    state[f"{part.name}.{sname}"] = np.asarray(
+                        sdecl.init, dtype=float)
             # Input slots: seed from the part's current attribute (which
             # is either the constructor-time override or the declaration
             # default). These pass through CompiledWorld.step's merge so

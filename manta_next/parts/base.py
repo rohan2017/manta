@@ -180,26 +180,42 @@ class State(_Declaration):
 
     Args:
         init      Python value (default initial value across compiles).
-        manifold  Tag describing how the state composes / what its
-                  tangent space looks like. Today only `'R1'` (scalar)
-                  is wired through `Craft.compile_tick` for part-declared
-                  State; the rigid-body slots use 'R3' and 'SO3'
-                  internally but those manifolds aren't yet selectable
-                  from a user Part. See `manta_next.ir.manifold`.
+                  For R1 a float; for R3 a length-3 tuple / ndarray.
+        manifold  Tag describing how the state composes:
+                    'R1' (default) — scalar; tangent = same.
+                    'R3'           — 3-vector in WorldFrame; tangent = 3.
+                  'SO3' (quaternion) requires the dual-frame parametrization
+                  and isn't yet user-selectable; rigid-body slots use it
+                  internally.
+        frame     Frame tag for R3 state. Default `CraftFrame`. Ignored
+                  for R1.
     """
 
-    __slots__ = ("init", "manifold")
+    __slots__ = ("init", "manifold", "frame")
 
-    def __init__(self, init, manifold: str = "R1") -> None:
-        if manifold not in ("R1",):
+    def __init__(self, init, manifold: str = "R1", frame=None) -> None:
+        if manifold not in ("R1", "R3"):
             raise NotImplementedError(
-                f"State.manifold={manifold!r}: only 'R1' is currently "
-                f"supported on user-declared Part state. 'R3'/'SO3'/"
-                f"'RigidBody' are defined in manta_next.ir.manifold "
-                f"but not yet selectable here.")
+                f"State.manifold={manifold!r}: only 'R1' (scalar) and "
+                f"'R3' (vec3) are wired through compile_tick today. SO3 "
+                f"requires the dual-frame parametrization (orientation "
+                f"= Quat[from, to]) and isn't yet user-selectable.")
+        if manifold == "R3":
+            try:
+                t = tuple(float(x) for x in init)
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"State(manifold='R3'): init must be a 3-element "
+                    f"sequence, got {init!r}")
+            if len(t) != 3:
+                raise ValueError(
+                    f"State(manifold='R3'): init must be length-3, got "
+                    f"{init!r}")
+            init = t
         super().__init__(default=init)
         self.init = init
         self.manifold = manifold
+        self.frame = frame
 
 
 # ---------------------------------------------------------------------------
