@@ -1,80 +1,57 @@
-"""Polynomial Thruster tests — exercises orders 0..4 and the
-torque-coefficient pattern used by quadcopter rotors."""
+"""Thruster tests — linear + quadratic in throttle, plus reaction torque."""
 
 import numpy as np
-import pytest
 
 from manta import Craft
 from manta.fields import GravityField
 from manta.parts import Mass, Thruster
 
 
-def test_zeroth_order_constant_force():
-    """F_0 alone: constant force regardless of throttle (a passive lift,
-    bias, etc.)."""
-    c = Craft("c")
-    c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
-    c.add(Thruster("t", forces=((0.0, 0.0, 5.0),)))   # F_0 only
-    tick = c.compile_tick(gravity_field=GravityField(g=(0, 0, 0)))
-    state = c.initial_state()
-    state["t.throttle"] = 0.0
-    for _ in range(100):
-        out = tick(dt=0.001, **state)
-        state = {**state, **out}
-    # After 0.1s with 5 N constant force on 1 kg: v_z = 5·0.1 = 0.5 m/s.
-    assert np.isclose(state["velocity"][2], 0.5, atol=1e-3)
-
-
-def test_first_order_linear_in_throttle():
-    """Standard linear thruster: F = throttle · F_1, built via the
-    one-vector `force=…` shortcut."""
+def test_linear_in_throttle():
+    """F = throttle · force_vec — the standard linear case."""
     c = Craft("c")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(Thruster("t", force=(0.0, 0.0, 10.0)))
     tick = c.compile_tick(gravity_field=GravityField(g=(0, 0, 0)))
     state = c.initial_state()
-    state["t.throttle"] = 0.5    # half throttle = 5 N
+    state["t.throttle"] = 0.5    # half throttle ⇒ 5 N
     for _ in range(100):
         out = tick(dt=0.001, **state)
         state = {**state, **out}
-    # v_z = 5·0.1 = 0.5 m/s.
     assert np.isclose(state["velocity"][2], 0.5, atol=1e-3)
 
 
-def test_second_order_quadratic_in_throttle():
-    """F = F_2 · throttle² — RPM²-style propeller thrust."""
+def test_quadratic_in_throttle():
+    """F = force_quad · throttle² — rotor-blade form."""
     c = Craft("c")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
-    # F_0 = 0, F_1 = 0, F_2 = (0, 0, 4) → at throttle=0.5 → F = 4·0.25 = 1.0 N
-    c.add(Thruster("t", forces=((0,0,0), (0,0,0), (0,0,4.0))))
+    # K_T = 4 N/throttle². At throttle=0.5 → F = 4·0.25 = 1.0 N.
+    c.add(Thruster("t", force_quad=(0.0, 0.0, 4.0)))
     tick = c.compile_tick(gravity_field=GravityField(g=(0, 0, 0)))
     state = c.initial_state()
     state["t.throttle"] = 0.5
     for _ in range(100):
         out = tick(dt=0.001, **state)
         state = {**state, **out}
-    # v_z = 1.0 · 0.1 = 0.1 m/s
     assert np.isclose(state["velocity"][2], 0.1, atol=1e-3)
 
 
-def test_fourth_order_polynomial():
-    """All four orders combined. Validates the loop unrolls correctly."""
+def test_linear_plus_quadratic_combine():
+    """F = force·t + force_quad·t². At throttle=2, force=(0,0,3),
+    force_quad=(0,0,1): F_z = 3·2 + 1·4 = 10 N. After 1 ms on 1 kg:
+    v_z = 0.01 m/s."""
     c = Craft("c")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
-    # F(t) = (0, 0, 1 + t + t² + t³ + t⁴)
-    c.add(Thruster("t",
-                   forces=((0,0,1), (0,0,1), (0,0,1), (0,0,1), (0,0,1))))
+    c.add(Thruster("t", force=(0, 0, 3.0), force_quad=(0, 0, 1.0)))
     tick = c.compile_tick(gravity_field=GravityField(g=(0, 0, 0)))
     state = c.initial_state()
     state["t.throttle"] = 2.0
     out = tick(dt=0.001, **state)
-    # F_z = 1 + 2 + 4 + 8 + 16 = 31 N → a = 31 m/s² → v_z after 1 ms = 0.031
-    assert np.isclose(out["velocity"][2], 0.031, atol=1e-6)
+    assert np.isclose(out["velocity"][2], 0.01, atol=1e-6)
 
 
-def test_torque_coefficient_yaw_reaction():
-    """Quadcopter prop: linear thrust along +z with linear yaw torque about z.
-    Both come from the one-vector shortcut."""
+def test_linear_reaction_torque():
+    """Prop reaction torque: τ = throttle · torque_vec along z."""
     c = Craft("c")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(Thruster("prop",
@@ -88,30 +65,16 @@ def test_torque_coefficient_yaw_reaction():
     assert np.isclose(out["angular_velocity"][2], 0.001, atol=1e-6)
 
 
-def test_polynomial_order_cap_enforced():
-    with pytest.raises(ValueError, match="exceeds the cap"):
-        Thruster("t", forces=tuple([(0,0,0)] * 6))   # 5th-order → too high
-
-
-def test_invalid_coefficient_shape_raises():
-    with pytest.raises(ValueError, match="length-3"):
-        Thruster("t", forces=((0, 0),))
-
-
-def test_one_vector_shortcut_matches_explicit_polynomial():
-    """The `force=(x,y,z)` shortcut produces the same forces tuple as
-    explicit `forces=[(0,0,0), (x,y,z)]`."""
-    t1 = Thruster("a",
-                   force=(0.0, 0.0, 10.0),
-                   torque=(0.0, 0.0, 0.05))
-    t2 = Thruster("a",
-                   forces=((0,0,0), (0,0,10.0)),
-                   torques=((0,0,0), (0,0,0.05)))
-    assert t1.forces == t2.forces
-    assert t1.torques == t2.torques
-
-
-def test_force_and_forces_mutually_exclusive():
-    """Passing both `force` and `forces` is a construction error."""
-    with pytest.raises(ValueError, match="not both"):
-        Thruster("a", force=(0, 0, 1), forces=[(0, 0, 0), (0, 0, 1)])
+def test_quadratic_reaction_torque():
+    """Rotor reaction torque proportional to throttle² — the standard
+    K_Q model alongside K_T thrust."""
+    c = Craft("c")
+    c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
+    c.add(Thruster("rotor",
+                   force_quad=(0, 0, 10.0),
+                   torque_quad=(0, 0, 0.4)))
+    tick = c.compile_tick(gravity_field=GravityField(g=(0, 0, 0)))
+    state = c.initial_state()
+    state["rotor.throttle"] = 0.5      # τ = 0.4 · 0.25 = 0.1 N·m
+    out = tick(dt=0.001, **state)
+    assert np.isclose(out["angular_velocity"][2], 0.001, atol=1e-6)
