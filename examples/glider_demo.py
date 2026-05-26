@@ -6,7 +6,7 @@ with a steady descent.
 
 Run::
 
-    .venv/bin/python -m manta.examples.glider_demo
+    .venv/bin/python -m examples.glider_demo
 """
 
 import numpy as np

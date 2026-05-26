@@ -13,7 +13,7 @@ Demonstrates:
 
 Run::
 
-    .venv/bin/python -m manta.examples.quadcopter_demo
+    .venv/bin/python -m examples.quadcopter_demo
 """
 
 import numpy as np

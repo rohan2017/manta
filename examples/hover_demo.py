@@ -7,7 +7,7 @@ summary so you can watch the filter pull in from its initial offset.
 
 Run::
 
-    .venv/bin/python -m manta.examples.hover_demo
+    .venv/bin/python -m examples.hover_demo
 """
 
 import numpy as np

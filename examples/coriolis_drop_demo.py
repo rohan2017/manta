@@ -18,7 +18,7 @@ else.
 
 Run::
 
-    .venv/bin/python -m manta.examples.coriolis_drop_demo
+    .venv/bin/python -m examples.coriolis_drop_demo
 """
 
 from __future__ import annotations

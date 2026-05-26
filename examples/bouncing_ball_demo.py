@@ -6,7 +6,7 @@ until the ball settles at the compression-equilibrium depth (m·g/k).
 
 Run::
 
-    .venv/bin/python -m manta.examples.bouncing_ball_demo
+    .venv/bin/python -m examples.bouncing_ball_demo
 """
 
 import numpy as np

@@ -7,7 +7,7 @@ a coupled motion, and drag damps it out.
 
 Run::
 
-    .venv/bin/python -m manta.examples.dual_craft_demo
+    .venv/bin/python -m examples.dual_craft_demo
 """
 
 import numpy as np

@@ -12,7 +12,7 @@ forward velocity at intervals.
 
 Run::
 
-    .venv/bin/python -m manta.examples.submarine_demo
+    .venv/bin/python -m examples.submarine_demo
 """
 
 import numpy as np

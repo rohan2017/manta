@@ -17,7 +17,7 @@ Two scenarios, same rig:
 
 Run::
 
-    .venv/bin/python -m manta.examples.spinning_top_demo
+    .venv/bin/python -m examples.spinning_top_demo
 """
 
 import numpy as np

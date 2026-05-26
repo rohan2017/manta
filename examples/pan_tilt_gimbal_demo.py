@@ -16,7 +16,7 @@ Demonstrates the articulation primitives:
 
 Run::
 
-    .venv/bin/python -m manta.examples.pan_tilt_gimbal_demo
+    .venv/bin/python -m examples.pan_tilt_gimbal_demo
 """
 
 from __future__ import annotations
