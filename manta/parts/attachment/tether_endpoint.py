@@ -13,7 +13,7 @@ correct rotational dynamics from off-axis tether attachments.
 
 from __future__ import annotations
 
-from ...ir.frames import CraftFrame
+from ...ir.frames import PartFrame
 from ...ir.types import Vec3
 from ..base import Part, PartUpdate
 from ...ir.wrench import Wrench
@@ -25,5 +25,5 @@ class TetherEndpoint(Part):
     as the attachment offset."""
 
     def update(self, ctx) -> PartUpdate:
-        zero_v = Vec3[CraftFrame].constant((0.0, 0.0, 0.0))
+        zero_v = Vec3[PartFrame].constant((0.0, 0.0, 0.0))
         return PartUpdate(wrench=Wrench(force=zero_v, torque=zero_v))

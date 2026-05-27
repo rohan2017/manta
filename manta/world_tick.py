@@ -34,7 +34,7 @@ from . import ir
 from .craft import TickContext, _aggregate_inertials, _wrench_to_craft
 from .inertia import symbolic_inertia_rollup
 from .kinematics import kinematic_pass
-from .ir.frames import WorldFrame, CraftFrame
+from .ir.frames import WorldFrame, CraftFrame, PartFrame
 from .ir.manifold import SO3
 from .parts.base import Part, PartUpdate, WhiteNoise
 from .ir.wrench import Wrench
@@ -426,23 +426,23 @@ def _trace_craft_pass1(g_ctx,
 
     fields_tuple = (gravity_field, fluid_field, mag_field, collision_field)
 
-    # Per-craft TickContext (root-body view) for couplings to read. Per-
-    # part TickContexts are built per part below for `update()`.
+    # Per-craft TickContext (root view) for couplings to read. The root's
+    # own frame IS CraftFrame, so its frame-indexed views + body attitude
+    # come straight from the root kinematic state.
     root_kin = kin_states[craft.root]
+    fv_root = root_kin.frame_views
     ctx = TickContext(
         t=t,
         dt=dt,
         fields=fields_tuple,
         world=getattr(craft, "_world", None),
-        position=position,
-        orientation=orientation,
-        velocity=velocity,
-        angular_velocity=ang_vel,
-        velocity_body=root_kin.velocity_body_in_craft,
+        orientation=orientation,                 # Quat[WorldFrame, CraftFrame]
+        position=fv_root["position"],
+        velocity=fv_root["velocity"],
+        acceleration=fv_root["acceleration"],
+        angular_velocity=fv_root["angular_velocity"],
+        angular_acceleration=fv_root["angular_acceleration"],
         R_craft_from_input=root_kin.R_craft_from_input,
-        acceleration_world=root_kin.acceleration_world,
-        acceleration_body=root_kin.acceleration_body,
-        angular_acceleration=root_kin.angular_acceleration,
     )
 
     # Aggregate wrenches + collect state/sensor outputs.
@@ -457,28 +457,28 @@ def _trace_craft_pass1(g_ctx,
     joint_accel_reals: list[tuple[Any, Any]] = []
     for part in craft._parts:
         kin = kin_states[part]
-        # A part's update() works entirely in its OWN (input) frame. The
-        # kinematic pass produces the directional quantities in body coords;
-        # rotate them into the part frame here (body → input via R.T), and
-        # hand the part its own world attitude. R_craft_from_input is
-        # identity for a part on the craft root, so a root-mounted part sees
-        # exactly the body-frame ctx it always did. The framework rotates the
-        # returned wrench back to body in `_wrench_to_craft`.
-        R_input_from_craft = kin.R_craft_from_input.transpose()
+        # A part's update() works entirely in its OWN frame. ctx exposes
+        # each kinematic quantity as a frame-indexed view (X[Frame] = the
+        # value relative to Frame, in Frame coords), the part's own world
+        # attitude, and the Craft←Part rotation. The wrench the part returns
+        # is in PartFrame; `_wrench_to_craft` maps it back to body coords.
+        orientation_part = ir.Quat[WorldFrame, PartFrame].from_mx(
+            kin.orientation_anchor_from_input._mx)
+        R_craft_from_part = ir.Mat3[CraftFrame, PartFrame].from_mx(
+            kin.R_craft_from_input._mx)
+        fv = kin.frame_views
         ctx_part = TickContext(
             t=t,
             dt=dt,
             fields=fields_tuple,
             world=getattr(craft, "_world", None),
-            position=kin.origin_in_world,
-            orientation=kin.orientation_anchor_from_input,
-            velocity=kin.velocity_origin,
-            angular_velocity=R_input_from_craft @ kin.angular_velocity_input,
-            velocity_body=R_input_from_craft @ kin.velocity_body_in_craft,
-            R_craft_from_input=kin.R_craft_from_input,
-            acceleration_world=kin.acceleration_world,
-            acceleration_body=R_input_from_craft @ kin.acceleration_body,
-            angular_acceleration=R_input_from_craft @ kin.angular_acceleration,
+            orientation=orientation_part,
+            position=fv["position"],
+            velocity=fv["velocity"],
+            acceleration=fv["acceleration"],
+            angular_velocity=fv["angular_velocity"],
+            angular_acceleration=fv["angular_acceleration"],
+            R_craft_from_input=R_craft_from_part,
         )
         result = part.update(ctx_part)
         if isinstance(result, Wrench):
@@ -489,11 +489,11 @@ def _trace_craft_pass1(g_ctx,
             raise TypeError(
                 f"{type(part).__name__}('{part.name}').update(): must "
                 f"return Wrench or PartUpdate, got {type(result).__name__}")
-        if w_part.frame is not CraftFrame:
+        if w_part.frame is not PartFrame:
             from .ir.frames import FrameError, _capture_user_source
             raise FrameError(
                 f"{type(part).__name__}.update",
-                expected="Wrench in CraftFrame",
+                expected="Wrench in PartFrame",
                 got=f"frame={w_part.frame.__name__}",
                 source=_capture_user_source(),
             )
@@ -525,8 +525,7 @@ def _trace_craft_pass1(g_ctx,
             sensor_outputs.append((prefix + f"{part.name}.{oname}", oval))
 
         # Part-frame wrench → rotate to body coords + lift to craft origin.
-        w_craft = _wrench_to_craft(w_part, kin.r_in_craft,
-                                   kin.R_craft_from_input)
+        w_craft = _wrench_to_craft(w_part, kin.r_in_craft, R_craft_from_part)
         net = net + w_craft
 
         # Resolve this joint's θ̈ placeholder to its real state-function.

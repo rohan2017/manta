@@ -13,7 +13,7 @@ from manta.estimation import EKF
 from manta.parts import (
     Input, Joint, Mass, Parameter, Part, PartUpdate, State, Wrench,
 )
-from manta.ir.frames import CraftFrame
+from manta.ir.frames import PartFrame, WorldFrame
 
 
 def _flywheel(name: str, I_axial: float, **kw) -> Joint:
@@ -182,10 +182,11 @@ def test_multiple_inputs_on_one_part():
 
         def update(self, ctx):
             from manta.fields import GravityField
-            g_world = ctx.field(GravityField).state_at_sym(ctx.position, ctx.t)
-            g_body  = ctx.orientation.conjugate().apply(g_world)
-            f = g_body * (self.scale_a + self.scale_b)
-            zero = Vec3[CraftFrame].constant((0.0, 0.0, 0.0))
+            g_world = ctx.field(GravityField).state_at_sym(
+                ctx.position[WorldFrame], ctx.t)
+            g_part  = ctx.orientation.conjugate().apply(g_world)
+            f = g_part * (self.scale_a + self.scale_b)
+            zero = Vec3[PartFrame].constant((0.0, 0.0, 0.0))
             return Wrench(force=f, torque=zero)
 
     c = Craft("two_in")

@@ -218,7 +218,7 @@ def test_unknown_state_slot_raises():
         def update(self, ctx):
             return PartUpdate(
                 wrench=__import__("manta").parts.Wrench.zero(
-                    __import__("manta").ir.frames.CraftFrame),
+                    __import__("manta").ir.frames.PartFrame),
                 new_state={"a": 1.0, "b": 2.0},   # 'b' not declared
             )
 

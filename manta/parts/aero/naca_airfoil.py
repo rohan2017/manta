@@ -34,7 +34,7 @@ from __future__ import annotations
 import casadi as ca
 
 from ...fields import FluidField
-from ...ir.frames import CraftFrame
+from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3
 from ..base import Parameter, Part, PartUpdate
 from ...ir.wrench import Wrench
@@ -75,8 +75,8 @@ class Naca00xx(Part):
         # ctx.position / ctx.velocity are already the airfoil's world-frame
         # pose + velocity (kinematic pass composed the transform + lever arm,
         # incl. any joint motion above it).
-        p_world          = ctx.position
-        v_surface_anchor = ctx.velocity
+        p_world          = ctx.position[WorldFrame]
+        v_surface_anchor = ctx.velocity[WorldFrame]
 
         fluid = ctx.field(FluidField).state_at_sym(p_world, ctx.t)
         rho   = fluid.density
@@ -87,8 +87,8 @@ class Naca00xx(Part):
         # conjugate maps world → that frame; chord/normal axes live there.
         v_rel_craft = ctx.orientation.conjugate().apply(v_rel)
 
-        chord_b  = Vec3[CraftFrame].constant(tuple(self.chord_axis))
-        normal_b = Vec3[CraftFrame].constant(tuple(self.normal_axis))
+        chord_b  = Vec3[PartFrame].constant(tuple(self.chord_axis))
+        normal_b = Vec3[PartFrame].constant(tuple(self.normal_axis))
 
         # Work in raw MX from here — CasADi's sqrt/div/etc. want MX, not
         # the typed Scalar/Vec3 wrappers.
@@ -146,7 +146,7 @@ class Naca00xx(Part):
                      + normal_mx * (v_chord_mx  / v2d))
 
         F_body_mx = D_mag * d_hat_mx + L_mag * l_hat_mx
-        F_craft   = Vec3[CraftFrame].from_mx(F_body_mx)
+        F_part    = Vec3[PartFrame].from_mx(F_body_mx)
 
-        zero_t = Vec3[CraftFrame].constant((0.0, 0.0, 0.0))
-        return PartUpdate(wrench=Wrench(force=F_craft, torque=zero_t))
+        zero_t = Vec3[PartFrame].constant((0.0, 0.0, 0.0))
+        return PartUpdate(wrench=Wrench(force=F_part, torque=zero_t))

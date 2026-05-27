@@ -51,7 +51,7 @@ from typing import Any
 
 import casadi as ca
 
-from .ir.frames import WorldFrame, CraftFrame
+from .ir.frames import WorldFrame, CraftFrame, ParentFrame, PartFrame
 from .ir.types import Mat3, Quat, Vec3
 
 
@@ -133,11 +133,76 @@ class KinematicState:
     acceleration_rel_body:          Any   # Vec3[CraftFrame]: r̈|_body
     omega_rel_output:               Any   # Vec3[CraftFrame]: relative ω
     alpha_rel_output:               Any   # Vec3[CraftFrame]: relative α
+    # --- Frame-indexed views for the part's TickContext -----------------
+    # frame_views[quantity][Frame] → Vec3, for quantity in
+    # {position, velocity, acceleration, angular_velocity,
+    # angular_acceleration} and Frame in {World, Craft, Parent, Part}.
+    # X[F] is the quantity measured RELATIVE TO frame F, in F's coords —
+    # X[PartFrame] is 0, X[WorldFrame] is the absolute/inertial value,
+    # X[CraftFrame] is the joint-induced motion w.r.t. the craft (0 if
+    # rigidly mounted), X[ParentFrame] is motion w.r.t. the immediate
+    # parent. `TickContext` wraps each in a `_FrameView`.
+    frame_views:                    Any   # dict[str, dict[type, Vec3]]
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _assemble_frame_views(*,
+                          body_orientation,
+                          # WorldFrame (absolute) quantities:
+                          origin_in_world, velocity_origin, acceleration_world,
+                          # CraftFrame: r_in_craft + relative-to-craft motion:
+                          r_in_craft, velocity_rel_body, acceleration_rel_body,
+                          # part-frame (= input frame) angular, craft coords:
+                          angular_velocity_input, omega_rel_input,
+                          alpha_rel_input, alpha_abs_input,
+                          # ParentFrame quantities (parent-frame coords):
+                          pos_rel_parent, velocity_rel_parent,
+                          acceleration_rel_parent, omega_rel_parent,
+                          alpha_rel_parent) -> dict:
+    """Bundle the per-frame views a part's TickContext exposes. Each
+    `X[F]` is the quantity relative to frame F, in F's coords (see
+    `KinematicState.frame_views`). The WorldFrame angular quantities are
+    the part-frame (input) ω/α rotated from craft coords into world."""
+    zero_part = Vec3[PartFrame].from_mx(ca.MX.zeros(3, 1))
+    ang_vel_world = body_orientation.apply(angular_velocity_input)
+    ang_acc_world = body_orientation.apply(alpha_abs_input)
+    # Retag world-frame angular outputs as WorldFrame (apply already does).
+    return {
+        "position": {
+            WorldFrame: origin_in_world,
+            CraftFrame: r_in_craft,
+            ParentFrame: pos_rel_parent,
+            PartFrame: zero_part,
+        },
+        "velocity": {
+            WorldFrame: velocity_origin,
+            CraftFrame: velocity_rel_body,
+            ParentFrame: velocity_rel_parent,
+            PartFrame: zero_part,
+        },
+        "acceleration": {
+            WorldFrame: acceleration_world,
+            CraftFrame: acceleration_rel_body,
+            ParentFrame: acceleration_rel_parent,
+            PartFrame: zero_part,
+        },
+        "angular_velocity": {
+            WorldFrame: ang_vel_world,
+            CraftFrame: omega_rel_input,
+            ParentFrame: omega_rel_parent,
+            PartFrame: zero_part,
+        },
+        "angular_acceleration": {
+            WorldFrame: ang_acc_world,
+            CraftFrame: alpha_rel_input,
+            ParentFrame: alpha_rel_parent,
+            PartFrame: zero_part,
+        },
+    }
+
 
 def _quat_from_axis_angle_mx(axis_local_mx, angle_mx):
     """(w, x, y, z) MX quaternion from a length-3 axis MX in the local
@@ -242,6 +307,26 @@ def kinematic_pass(root_part,
         acceleration_rel_body=zero_vec,
         omega_rel_output=zero_vec,
         alpha_rel_output=zero_vec,
+        frame_views=_assemble_frame_views(
+            body_orientation=body_orientation,
+            origin_in_world=body_position,
+            velocity_origin=body_velocity,
+            acceleration_world=body_acceleration_world,
+            r_in_craft=zero_r,
+            velocity_rel_body=zero_vec,
+            acceleration_rel_body=zero_vec,
+            angular_velocity_input=body_angular_velocity,
+            omega_rel_input=zero_vec,
+            alpha_rel_input=zero_vec,
+            alpha_abs_input=body_angular_acceleration,
+            # Root has no parent — ParentFrame views coincide with the
+            # craft (zero relative motion). Tagged ParentFrame for shape.
+            pos_rel_parent=Vec3[ParentFrame].from_mx(ca.MX.zeros(3, 1)),
+            velocity_rel_parent=Vec3[ParentFrame].from_mx(ca.MX.zeros(3, 1)),
+            acceleration_rel_parent=Vec3[ParentFrame].from_mx(ca.MX.zeros(3, 1)),
+            omega_rel_parent=Vec3[ParentFrame].from_mx(ca.MX.zeros(3, 1)),
+            alpha_rel_parent=Vec3[ParentFrame].from_mx(ca.MX.zeros(3, 1)),
+        ),
     )
 
     states: dict = {root_part: root_state}
@@ -251,7 +336,7 @@ def kinematic_pass(root_part,
             return
         for child in parent.children:
             child_state = _compute_child_state(
-                parent_state, child, body_orientation, t,
+                parent_state, parent, child, body_orientation, t,
                 body_acceleration_world=body_acceleration_world,
                 body_angular_acceleration=body_angular_acceleration,
                 body_angular_velocity=body_angular_velocity,
@@ -263,7 +348,7 @@ def kinematic_pass(root_part,
     return states
 
 
-def _compute_child_state(parent_state: KinematicState, child,
+def _compute_child_state(parent_state: KinematicState, parent_part, child,
                          body_orientation, t,
                          *,
                          body_acceleration_world,
@@ -430,6 +515,66 @@ def _compute_child_state(parent_state: KinematicState, child,
                                   + body_angular_velocity.cross(
                                       child_omega_rel_output))
 
+    # ----- ParentFrame views: motion relative to the immediate parent ---
+    # The part's frame is its INPUT frame (= parent's OUTPUT frame). The
+    # part's origin is rigidly fixed in the parent's OUTPUT frame, so the
+    # only relative motion w.r.t. the parent's PartFrame comes from the
+    # PARENT joint's rotation (zero if the parent is the root or a static
+    # composite). All in ParentFrame (= parent input-frame) coords.
+    transform_parentframe_mx = transform_mx     # parent OUTPUT coords
+    if isinstance(parent_part, Joint):
+        p_axis_mx = ca.MX(list(parent_part.axis))
+        p_angle_mx = (parent_part.angle._mx
+                      if hasattr(parent_part.angle, "_mx")
+                      else ca.MX(float(parent_part.angle)))
+        p_rate_mx = (parent_part.rate._mx
+                     if hasattr(parent_part.rate, "_mx")
+                     else ca.MX(float(parent_part.rate)))
+        p_accel_mx = joint_angular_accels.get(parent_part, ca.MX(0.0))
+        # transform is in the parent's OUTPUT coords; express in the
+        # parent's INPUT (= ParentFrame) coords via the joint rotation.
+        R_pin_from_pout = _R_from_axis_angle_mx(p_axis_mx, p_angle_mx)
+        r_pf_mx = ca.mtimes(R_pin_from_pout, transform_parentframe_mx)
+        omega_pf_mx = p_rate_mx * p_axis_mx
+        alpha_pf_mx = p_accel_mx * p_axis_mx
+        v_pf_mx = ca.cross(omega_pf_mx, r_pf_mx)
+        a_pf_mx = (ca.cross(alpha_pf_mx, r_pf_mx)
+                   + ca.cross(omega_pf_mx, ca.cross(omega_pf_mx, r_pf_mx)))
+    else:
+        r_pf_mx     = transform_parentframe_mx
+        omega_pf_mx = ca.MX.zeros(3, 1)
+        alpha_pf_mx = ca.MX.zeros(3, 1)
+        v_pf_mx     = ca.MX.zeros(3, 1)
+        a_pf_mx     = ca.MX.zeros(3, 1)
+
+    # ----- absolute α of the part's (INPUT) frame, in craft coords ------
+    # α_abs_input = α_body + α_rel_input + ω_body × ω_rel_input. Used for
+    # the WorldFrame angular-acceleration view (the part frame is the
+    # input frame, not the output frame).
+    alpha_abs_input = (body_angular_acceleration
+                       + Vec3[CraftFrame].from_mx(alpha_rel_input_mx)
+                       + body_angular_velocity.cross(
+                           Vec3[CraftFrame].from_mx(omega_rel_input_mx)))
+
+    frame_views = _assemble_frame_views(
+        body_orientation=body_orientation,
+        origin_in_world=child_origin_in_world,
+        velocity_origin=child_velocity_origin,
+        acceleration_world=child_a_world,
+        r_in_craft=child_r_in_craft,
+        velocity_rel_body=child_velocity_rel_body,
+        acceleration_rel_body=child_acceleration_rel_body,
+        angular_velocity_input=child_omega_input_in_craft,
+        omega_rel_input=Vec3[CraftFrame].from_mx(omega_rel_input_mx),
+        alpha_rel_input=Vec3[CraftFrame].from_mx(alpha_rel_input_mx),
+        alpha_abs_input=alpha_abs_input,
+        pos_rel_parent=Vec3[ParentFrame].from_mx(r_pf_mx),
+        velocity_rel_parent=Vec3[ParentFrame].from_mx(v_pf_mx),
+        acceleration_rel_parent=Vec3[ParentFrame].from_mx(a_pf_mx),
+        omega_rel_parent=Vec3[ParentFrame].from_mx(omega_pf_mx),
+        alpha_rel_parent=Vec3[ParentFrame].from_mx(alpha_pf_mx),
+    )
+
     return KinematicState(
         origin_in_world=child_origin_in_world,
         velocity_origin=child_velocity_origin,
@@ -448,6 +593,7 @@ def _compute_child_state(parent_state: KinematicState, child,
         acceleration_rel_body=child_acceleration_rel_body,
         omega_rel_output=child_omega_rel_output,
         alpha_rel_output=child_alpha_rel_output,
+        frame_views=frame_views,
     )
 
 

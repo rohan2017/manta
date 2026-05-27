@@ -27,23 +27,26 @@ from manta import World, Craft, EKF, TargetNumpy
 from manta.fields import GravityField
 from manta.parts import Mass
 from manta.parts.base import Output, Part, PartUpdate, RandomWalkNoise, WhiteNoise
-from manta.ir.frames import CraftFrame
+from manta.ir.frames import PartFrame, WorldFrame
 from manta.ir.types import Vec3
 from manta.ir.wrench import Wrench
 
 
 class BiasedGyro(Part):
     """A minimal gyro sensor with both white noise + RW bias."""
-    gyro_noise = WhiteNoise(     shape="vec3", sigma=0.001)
-    gyro_bias  = RandomWalkNoise(shape="vec3", sigma=0.02)
+    gyro_noise = WhiteNoise(     shape="vec3", frame=PartFrame, sigma=0.001)
+    gyro_bias  = RandomWalkNoise(shape="vec3", frame=PartFrame, sigma=0.02)
     gyro = Output(shape="vec3")
 
     def update(self, ctx):
-        zero = Vec3[CraftFrame].constant((0.0, 0.0, 0.0))
+        zero = Vec3[PartFrame].constant((0.0, 0.0, 0.0))
+        # Inertial ω rotated into the sensor's own frame (mirrors IMU.gyro).
+        omega = ctx.orientation.conjugate().apply(
+            ctx.angular_velocity[WorldFrame])
         return PartUpdate(
             wrench=Wrench(force=zero, torque=zero),
             outputs={
-                "gyro": ctx.angular_velocity + self.gyro_bias + self.gyro_noise,
+                "gyro": omega + self.gyro_bias + self.gyro_noise,
             },
         )
 

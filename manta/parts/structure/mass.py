@@ -6,7 +6,7 @@ inertia aggregation via parallel-axis lifts at world-compile time.
 from __future__ import annotations
 
 from ...fields import GravityField
-from ...ir.frames import CraftFrame
+from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3
 from ..base import Part, Parameter
 from ...ir.wrench import Wrench
@@ -38,14 +38,15 @@ class Mass(Part):
     moi:  "tuple[float, float, float]"       = Parameter((0.0, 0.0, 0.0))
 
     def update(self, ctx) -> Wrench:
-        # ctx.position is the part's mount-point in WorldFrame (chain-
-        # composed by the kinematic pass). Querying the GravityField at
-        # the part's actual position picks up non-uniform fields (e.g.
-        # point-mass gravity) correctly when the part is mounted at a
-        # non-zero transform on the craft.
-        g_world = ctx.field(GravityField).state_at_sym(ctx.position, ctx.t)
-        g_body  = ctx.orientation.conjugate().apply(g_world)
+        # ctx.position[WorldFrame] is the part's mount-point (chain-composed
+        # by the kinematic pass). Querying the GravityField there picks up
+        # non-uniform fields (e.g. point-mass gravity) correctly for a part
+        # mounted at a non-zero transform. Gravity in the part's own frame
+        # via ctx.orientation; the framework rotates the wrench to body.
+        g_world = ctx.field(GravityField).state_at_sym(
+            ctx.position[WorldFrame], ctx.t)
+        g_part  = ctx.orientation.conjugate().apply(g_world)
         return Wrench(
-            force=g_body * self.mass,
-            torque=Vec3[CraftFrame].constant((0.0, 0.0, 0.0)),
+            force=g_part * self.mass,
+            torque=Vec3[PartFrame].constant((0.0, 0.0, 0.0)),
         )

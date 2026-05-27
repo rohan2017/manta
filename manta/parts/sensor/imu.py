@@ -27,7 +27,7 @@ no lag.
 from __future__ import annotations
 
 from ...fields import GravityField
-from ...ir.frames import CraftFrame
+from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3
 from ..base import Output, Part, PartUpdate, RandomWalkNoise, WhiteNoise
 from ...ir.wrench import Wrench
@@ -46,30 +46,35 @@ class IMU(Part):
     skip them by leaving sigma at 0.
     """
 
-    gyro_noise  = WhiteNoise(     shape="vec3", frame=CraftFrame, sigma=0.0)
-    accel_noise = WhiteNoise(     shape="vec3", frame=CraftFrame, sigma=0.0)
-    gyro_bias   = RandomWalkNoise(shape="vec3", frame=CraftFrame, sigma=0.0)
-    accel_bias  = RandomWalkNoise(shape="vec3", frame=CraftFrame, sigma=0.0)
+    gyro_noise  = WhiteNoise(     shape="vec3", frame=PartFrame, sigma=0.0)
+    accel_noise = WhiteNoise(     shape="vec3", frame=PartFrame, sigma=0.0)
+    gyro_bias   = RandomWalkNoise(shape="vec3", frame=PartFrame, sigma=0.0)
+    accel_bias  = RandomWalkNoise(shape="vec3", frame=PartFrame, sigma=0.0)
 
     gyro  = Output(shape="vec3")
     accel = Output(shape="vec3")
 
     def update(self, ctx) -> PartUpdate:
-        zero_v = Vec3[CraftFrame].constant((0.0, 0.0, 0.0))
-        # ctx is already in the IMU's own frame (the framework rotated it),
-        # so the reads below are the physical sensor-frame quantities — for a
-        # root-mounted IMU that frame is the body frame; on a rotor it spins
-        # with the joint. Gravity at the mount point folds to zero with no
-        # GravityField registered. Bias/noise live in the sensor frame.
-        g_world = ctx.field(GravityField).state_at_sym(ctx.position, ctx.t)
-        g_sensor = ctx.orientation.conjugate().apply(g_world)
+        zero_v = Vec3[PartFrame].constant((0.0, 0.0, 0.0))
+        # A real IMU measures inertial ω and specific force in its own case
+        # frame. Read the inertial (WorldFrame) quantities and rotate into
+        # the sensor's own frame via ctx.orientation — for a root-mounted IMU
+        # that frame is the body frame; on a rotor it spins with the joint.
+        # Gravity at the mount point folds to zero with no GravityField.
+        # Bias/noise live in the sensor frame.
+        g_world = ctx.field(GravityField).state_at_sym(
+            ctx.position[WorldFrame], ctx.t)
+        R_part_from_world = ctx.orientation.conjugate()
+        omega_sensor = R_part_from_world.apply(ctx.angular_velocity[WorldFrame])
+        accel_sensor = R_part_from_world.apply(
+            ctx.acceleration[WorldFrame] - g_world)
         return PartUpdate(
             wrench=Wrench(force=zero_v, torque=zero_v),
             outputs={
-                "gyro":  (ctx.angular_velocity
+                "gyro":  (omega_sensor
                           + self.gyro_bias
                           + self.gyro_noise),
-                "accel": (ctx.acceleration_body - g_sensor
+                "accel": (accel_sensor
                           + self.accel_bias
                           + self.accel_noise),
             },

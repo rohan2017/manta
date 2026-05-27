@@ -6,7 +6,7 @@ import pytest
 from manta import World, Craft, TargetNumpy
 from manta.fields import GravityField
 from manta.parts import IMU, Joint, Mass, Output, Part, PartUpdate, Thruster, Wrench
-from manta.ir.frames import CraftFrame
+from manta.ir.frames import PartFrame
 from manta.ir.types import Vec3
 
 
@@ -188,7 +188,7 @@ def test_missing_output_write_raises():
         reading = Output(shape="vec3")
 
         def update(self, ctx):
-            zero = Vec3[CraftFrame].constant((0.0, 0.0, 0.0))
+            zero = Vec3[PartFrame].constant((0.0, 0.0, 0.0))
             return PartUpdate(wrench=Wrench(force=zero, torque=zero))
 
     c = Craft("broken")
@@ -203,7 +203,7 @@ def test_missing_output_write_raises():
 def test_unknown_output_write_raises():
     class UnknownOutput(Part):
         def update(self, ctx):
-            zero = Vec3[CraftFrame].constant((0.0, 0.0, 0.0))
+            zero = Vec3[PartFrame].constant((0.0, 0.0, 0.0))
             return PartUpdate(
                 wrench=Wrench(force=zero, torque=zero),
                 outputs={"surprise": zero},

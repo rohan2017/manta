@@ -94,11 +94,14 @@ class Tether(Coupling):
         off_a_craft = Vec3[CraftFrame].constant(tuple(ep_a.transform))
         off_b_craft = Vec3[CraftFrame].constant(tuple(ep_b.transform))
 
-        # Endpoint positions in world frame.
+        # Endpoint positions in world frame. The coupling reads each craft's
+        # root ctx (root frame = CraftFrame): orientation is
+        # Quat[WorldFrame, CraftFrame] and position[WorldFrame] is the craft
+        # origin in world.
         off_a_anchor = ctx_a.orientation.apply(off_a_craft)
         off_b_anchor = ctx_b.orientation.apply(off_b_craft)
-        p_a_anchor = ctx_a.position + off_a_anchor
-        p_b_anchor = ctx_b.position + off_b_anchor
+        p_a_anchor = ctx_a.position[WorldFrame] + off_a_anchor
+        p_b_anchor = ctx_b.position[WorldFrame] + off_b_anchor
 
         # Vector from A to B; instantaneous length with softened sqrt.
         r = p_b_anchor - p_a_anchor
@@ -109,11 +112,18 @@ class Tether(Coupling):
         r_hat = Vec3[WorldFrame].from_mx(r_hat_mx)
 
         # Endpoint velocities in world frame:
-        #   v_endpoint_anchor = v_origin + R · (ω × r_endpoint_body)
-        v_rot_a_craft = ctx_a.angular_velocity.cross(off_a_craft)
-        v_rot_b_craft = ctx_b.angular_velocity.cross(off_b_craft)
-        v_a_anchor = ctx_a.velocity + ctx_a.orientation.apply(v_rot_a_craft)
-        v_b_anchor = ctx_b.velocity + ctx_b.orientation.apply(v_rot_b_craft)
+        #   v_endpoint_anchor = v_origin + R · (ω_body × r_endpoint_body)
+        # ω_body (craft inertial ω, in craft coords) = R^T · ω[WorldFrame].
+        omega_a_craft = ctx_a.orientation.conjugate().apply(
+            ctx_a.angular_velocity[WorldFrame])
+        omega_b_craft = ctx_b.orientation.conjugate().apply(
+            ctx_b.angular_velocity[WorldFrame])
+        v_rot_a_craft = omega_a_craft.cross(off_a_craft)
+        v_rot_b_craft = omega_b_craft.cross(off_b_craft)
+        v_a_anchor = (ctx_a.velocity[WorldFrame]
+                      + ctx_a.orientation.apply(v_rot_a_craft))
+        v_b_anchor = (ctx_b.velocity[WorldFrame]
+                      + ctx_b.orientation.apply(v_rot_b_craft))
         v_rel = v_b_anchor - v_a_anchor
 
         # Tension positive when stretched; positive v_along means A and

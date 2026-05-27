@@ -13,7 +13,7 @@ part code is a one-liner.
 
 from __future__ import annotations
 
-from ...ir.frames import CraftFrame
+from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3
 from ..base import Output, Part, PartUpdate
 from ...ir.wrench import Wrench
@@ -31,8 +31,8 @@ class PositionSensor(Part):
     position = Output(shape="vec3")
 
     def update(self, ctx) -> PartUpdate:
-        zero_v = Vec3[CraftFrame].constant((0.0, 0.0, 0.0))
+        zero_v = Vec3[PartFrame].constant((0.0, 0.0, 0.0))
         return PartUpdate(
             wrench=Wrench(force=zero_v, torque=zero_v),
-            outputs={"position": ctx.position},
+            outputs={"position": ctx.position[WorldFrame]},
         )

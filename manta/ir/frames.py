@@ -63,8 +63,19 @@ class CraftFrame(Frame):
     WorldFrame."""
 
 class PartFrame(Frame):
-    """A part's local frame, rigidly attached to its parent (which may be
-    CraftFrame or another PartFrame via a static or joint transform)."""
+    """A part's own body frame — origin at the part's mount point, axes
+    fixed to the part. Equals CraftFrame for a part mounted on the craft
+    root. Inside a `Part.update()` it denotes *this* part's frame; the
+    framework maps it to CraftFrame (and on to WorldFrame) afterwards.
+    Vectors a part authors natively (thrust, sensor axes) live here."""
+
+
+class ParentFrame(Frame):
+    """The frame of a part's immediate parent (the parent's PartFrame).
+    For a part on the craft root this is CraftFrame; for a part on a
+    Joint's rotor it is the joint's own frame. Used by the relative-motion
+    accessors (`ctx.velocity[ParentFrame]` = how the part moves relative
+    to its parent)."""
 
 
 # ----- Error type -----------------------------------------------------------

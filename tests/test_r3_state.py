@@ -13,7 +13,7 @@ import pytest
 
 from manta import Craft, EKF, TargetNumpy, World
 from manta.fields import GravityField
-from manta.ir.frames import CraftFrame, WorldFrame
+from manta.ir.frames import CraftFrame, PartFrame, WorldFrame
 from manta.ir.types import Vec3
 from manta.ir.wrench import Wrench
 from manta.parts import Mass
@@ -27,7 +27,7 @@ class _R3StatePart(Part):
     bias_out = Output(shape="vec3")
 
     def update(self, ctx) -> PartUpdate:
-        zero = Vec3[CraftFrame].constant((0.0, 0.0, 0.0))
+        zero = Vec3[PartFrame].constant((0.0, 0.0, 0.0))
         return PartUpdate(
             wrench=Wrench(force=zero, torque=zero),
             outputs={"bias_out": self.bias},

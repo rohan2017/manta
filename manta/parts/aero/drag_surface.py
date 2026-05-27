@@ -49,7 +49,7 @@ import casadi as ca
 import numpy as np
 
 from ...fields import FluidField
-from ...ir.frames import CraftFrame
+from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3
 from ..base import Parameter, Part, PartUpdate
 from ...ir.wrench import Wrench
@@ -160,8 +160,8 @@ class DragSurface(Part):
         # ctx.position / ctx.velocity are already the surface point's
         # world-frame pose + velocity (kinematic pass composed the transform
         # and the rotational lever arm, incl. any joint motion above it).
-        p_world          = ctx.position
-        v_surface_anchor = ctx.velocity
+        p_world          = ctx.position[WorldFrame]
+        v_surface_anchor = ctx.velocity[WorldFrame]
 
         fluid = ctx.field(FluidField).state_at_sym(p_world, ctx.t)
         rho   = fluid.density
@@ -202,6 +202,6 @@ class DragSurface(Part):
             B_mx = ca.MX(B_k)
             τ_mx = τ_mx + rho * (B_mx @ v_powers[k])
 
-        F_craft = Vec3[CraftFrame].from_mx(F_mx)
-        τ_craft = Vec3[CraftFrame].from_mx(τ_mx)
-        return PartUpdate(wrench=Wrench(force=F_craft, torque=τ_craft))
+        F_part = Vec3[PartFrame].from_mx(F_mx)
+        τ_part = Vec3[PartFrame].from_mx(τ_mx)
+        return PartUpdate(wrench=Wrench(force=F_part, torque=τ_part))

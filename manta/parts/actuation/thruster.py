@@ -19,7 +19,7 @@ produce correct body torques automatically.
 
 from __future__ import annotations
 
-from ...ir.frames import CraftFrame
+from ...ir.frames import PartFrame
 from ...ir.types import Vec3
 from ..base import Input, Parameter, Part
 from ...ir.wrench import Wrench
@@ -52,10 +52,10 @@ class Thruster(Part):
         t  = self.throttle
         t2 = t * t
 
-        c1F = Vec3[CraftFrame].constant(self.force)
-        c2F = Vec3[CraftFrame].constant(self.force_quad)
-        c1τ = Vec3[CraftFrame].constant(self.torque)
-        c2τ = Vec3[CraftFrame].constant(self.torque_quad)
+        c1F = Vec3[PartFrame].constant(self.force)
+        c2F = Vec3[PartFrame].constant(self.force_quad)
+        c1τ = Vec3[PartFrame].constant(self.torque)
+        c2τ = Vec3[PartFrame].constant(self.torque_quad)
 
         return Wrench(
             force =c1F * t + c2F * t2,

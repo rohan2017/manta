@@ -22,7 +22,7 @@ samples + a smooth water/air boundary, surface-crossing torques (the
 from __future__ import annotations
 
 from ...fields import FluidField, GravityField
-from ...ir.frames import CraftFrame
+from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3
 from ..base import Parameter, Part, PartUpdate
 from ...ir.wrench import Wrench
@@ -47,7 +47,7 @@ class PointBuoy(Part):
         # kinematic pass composed the transform + any joints). Field queries
         # there capture the correct local value for spatially varying fields;
         # for uniform fields it's the same as the craft origin.
-        p_world = ctx.position
+        p_world = ctx.position[WorldFrame]
         fluid    = ctx.field(FluidField).state_at_sym(p_world, ctx.t)
         g_world  = ctx.field(GravityField).state_at_sym(p_world, ctx.t)
 
@@ -58,5 +58,5 @@ class PointBuoy(Part):
         f_world = g_world * (-1.0) * scale
         f_part  = ctx.orientation.conjugate().apply(f_world)
 
-        zero_t = Vec3[CraftFrame].constant((0.0, 0.0, 0.0))
+        zero_t = Vec3[PartFrame].constant((0.0, 0.0, 0.0))
         return PartUpdate(wrench=Wrench(force=f_part, torque=zero_t))

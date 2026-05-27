@@ -22,7 +22,7 @@ from __future__ import annotations
 import casadi as ca
 
 from ...fields import CollisionField
-from ...ir.frames import WorldFrame, CraftFrame
+from ...ir.frames import WorldFrame, PartFrame
 from ...ir.types import Vec3
 from ..base import Parameter, Part, PartUpdate
 from ...ir.wrench import Wrench
@@ -47,8 +47,8 @@ class Collider(Part):
         # world-frame mount-point pose + velocity (kinematic pass composed
         # the transform and the rotational lever arm, including any joint
         # motion above the part).
-        p_world        = ctx.position
-        v_point_anchor = ctx.velocity
+        p_world        = ctx.position[WorldFrame]
+        v_point_anchor = ctx.velocity[WorldFrame]
 
         # Penetration vector from the CollisionField.
         pen = ctx.field(CollisionField).state_at_sym(p_world, ctx.t)
@@ -69,5 +69,5 @@ class Collider(Part):
         # body and lifts force-at-offset → torque.
         F_part      = ctx.orientation.conjugate().apply(F_anchor)
 
-        zero_t = Vec3[CraftFrame].constant((0.0, 0.0, 0.0))
+        zero_t = Vec3[PartFrame].constant((0.0, 0.0, 0.0))
         return PartUpdate(wrench=Wrench(force=F_part, torque=zero_t))

@@ -17,7 +17,7 @@ local gradient.
 from __future__ import annotations
 
 from ...fields import MagField
-from ...ir.frames import CraftFrame
+from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3
 from ..base import Output, Part, PartUpdate
 from ...ir.wrench import Wrench
@@ -44,10 +44,11 @@ class Magnetometer(Part):
         # attitude (the framework composed any joint rotation in), so its
         # conjugate maps world → sensor frame directly — for a root-mounted
         # magnetometer that's CraftFrame; on a rotor it spins with the joint.
-        B_world  = ctx.field(MagField).state_at_sym(ctx.position, ctx.t)
+        B_world  = ctx.field(MagField).state_at_sym(
+            ctx.position[WorldFrame], ctx.t)
         B_sensor = ctx.orientation.conjugate().apply(B_world)
 
-        zero_v = Vec3[CraftFrame].constant((0.0, 0.0, 0.0))
+        zero_v = Vec3[PartFrame].constant((0.0, 0.0, 0.0))
         return PartUpdate(
             wrench=Wrench(force=zero_v, torque=zero_v),
             outputs={"B": B_sensor},

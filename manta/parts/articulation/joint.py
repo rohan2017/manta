@@ -45,7 +45,7 @@ from __future__ import annotations
 import casadi as ca
 import numpy as np
 
-from ...ir.frames import CraftFrame
+from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Scalar, Vec3
 from ..base import CompositePart, Input, Parameter, PartUpdate, State
 from ...ir.wrench import Wrench
@@ -171,12 +171,10 @@ class Joint(CompositePart):
 
     def update(self, ctx) -> PartUpdate:
         I_ax = self.I_axial
-        # The Joint works in its INPUT frame: its axis is given there, its
-        # ctx (ω etc.) arrives there, and it emits its wrench there. The
-        # framework rotates the wrench to body coords (the inverse of the
-        # rotation it applied to ctx), so no R_craft_from_input appears here
-        # — for a top-level joint that frame IS body; for a nested inner
-        # joint it's the outer joint's output frame.
+        # The Joint works in its own (PartFrame): its axis is given there
+        # and it emits its wrench there; the framework rotates the wrench to
+        # body coords. For a top-level joint PartFrame IS the body frame;
+        # for a nested inner joint it's the outer joint's output frame.
         axis_local_mx = ca.MX(list(self.axis))
 
         # Torque per mode. We work in MX so the saturating clamp can use
@@ -194,9 +192,11 @@ class Joint(CompositePart):
         rate_mx  = self.rate._mx
         angle_mx = self.angle._mx
         dt_mx    = ctx.dt._mx
-        # Mount's absolute angular velocity, in the joint's input frame
-        # (ctx is already expressed there). Feeds the gyro + Coriolis terms.
-        omega_mx = ctx.angular_velocity._mx
+        # Mount's inertial angular velocity, expressed in the joint's own
+        # frame (rotate the world-frame inertial ω through ctx.orientation).
+        # Feeds the gyro + Coriolis terms, both built in PartFrame.
+        omega_mx = ctx.orientation.conjugate().apply(
+            ctx.angular_velocity[WorldFrame])._mx
         if I_ax > 0.0:
             # Coriolis joint torque from base rotation through the full
             # rotor inertia: τ_corio = −[ω_rotor × (I_joint·ω_rotor)]·axis,
@@ -234,13 +234,13 @@ class Joint(CompositePart):
         # ca.cross handles 3-vec × 3-vec.
         tau_gyro_mx = -ca.cross(omega_mx, L_rotor_mx)
         torque_mx = reaction_mx + tau_gyro_mx
-        torque = Vec3[CraftFrame].from_mx(torque_mx)
+        torque = Vec3[PartFrame].from_mx(torque_mx)
 
         # The Joint itself contributes no translational force: children
         # are in the craft's part walk and each Mass child applies its
         # own gravity via Mass.update(). Joint only emits the reaction
         # torque on the body plus the rotor's gyroscopic correction.
-        zero_force = Vec3[CraftFrame].constant((0.0, 0.0, 0.0))
+        zero_force = Vec3[PartFrame].constant((0.0, 0.0, 0.0))
 
         return PartUpdate(
             wrench=Wrench(force=zero_force, torque=torque),

@@ -11,7 +11,7 @@ require no fields and no part-frame physics.
 
 from __future__ import annotations
 
-from ...ir.frames import CraftFrame
+from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3
 from ..base import Output, Part, PartUpdate
 from ...ir.wrench import Wrench
@@ -29,11 +29,13 @@ class DVL(Part):
     velocity = Output(shape="vec3")
 
     def update(self, ctx) -> PartUpdate:
-        zero_v = Vec3[CraftFrame].constant((0.0, 0.0, 0.0))
-        # ctx.velocity_body is the mount-point velocity in the sensor's own
-        # frame (the framework rotated it) — for a root-mounted DVL that's
-        # the body frame; on a rotor it spins with the joint.
+        zero_v = Vec3[PartFrame].constant((0.0, 0.0, 0.0))
+        # A DVL reads the platform's inertial velocity (rel. to the ground)
+        # in its own case frame: rotate the world-frame velocity through
+        # ctx.orientation. For a root-mounted DVL that frame is the body
+        # frame; on a rotor it spins with the joint.
+        v_sensor = ctx.orientation.conjugate().apply(ctx.velocity[WorldFrame])
         return PartUpdate(
             wrench=Wrench(force=zero_v, torque=zero_v),
-            outputs={"velocity": ctx.velocity_body},
+            outputs={"velocity": v_sensor},
         )
