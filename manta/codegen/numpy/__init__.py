@@ -232,21 +232,35 @@ class NumpyEKF:
         `dt` (timestep), `t` (world-clock time), `u` (per-tick part
         Input override dict), `Q` (process-noise override; default is
         auto-assembly from registered Noise channels).
+
+        The covariance is propagated per independent-subsystem block
+        (`ekf._blocks`): with one block this is the usual dense
+        `F P Fᵀ + Q`; with several (uncoupled crafts estimated jointly)
+        each block propagates on its own — Σ O(n_b³) instead of O(n³).
+        Off-diagonal (cross-block) covariance stays zero by construction
+        of the partition, so it is never touched.
         """
         ekf = self._ekf
         u_vec = ekf._build_u(u)
         x_new = np.asarray(ekf._f_fn(self._x, u_vec, dt, t)).reshape(-1)
         F     = np.asarray(ekf._F_fn(self._x, u_vec, dt, t))
-        n     = ekf.spec.tangent_dim
-        if Q is None:
-            if ekf._L_fn is not None:
-                L = np.asarray(ekf._L_fn(self._x, u_vec, dt, t))
-                Q = L @ ekf._Sigma @ L.T
+        L = None
+        if Q is None and ekf._L_fn is not None:
+            L = np.asarray(ekf._L_fn(self._x, u_vec, dt, t))
+        P = self._P
+        for idx in ekf._blocks:
+            sub = np.ix_(idx, idx)
+            Fbb = F[sub]
+            if Q is not None:
+                Qbb = Q[sub]
+            elif L is not None:
+                Lb  = L[idx, :]
+                Qbb = Lb @ ekf._Sigma @ Lb.T
             else:
-                Q = np.zeros((n, n))
+                Qbb = 0.0
+            P[sub] = Fbb @ P[sub] @ Fbb.T + Qbb
         self._x = x_new
-        self._P = F @ self._P @ F.T + Q
-        self._P = 0.5 * (self._P + self._P.T)
+        self._P = 0.5 * (P + P.T)
 
     # ---- Update --------------------------------------------------------
 

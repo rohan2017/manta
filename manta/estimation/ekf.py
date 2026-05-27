@@ -282,11 +282,22 @@ class EKF:
         self._L_fn    = g["L_fn"]
         self._Sigma   = g["Sigma"]
         self._sensors = g["sensors"]
+        # Independent-subsystem partition of the tangent state. With one
+        # block the predict is the usual dense propagation; with several
+        # (e.g. uncoupled crafts estimated jointly) each propagates on its
+        # own, turning the O(n³) covariance step into Σ O(n_b³).
+        self._blocks  = g["blocks"]
 
         # Mutable runtime state (`_x`, `_P`) lives on the backend
         # evaluator (`NumpyEKF`), not on the IR. The IR keeps the
         # symbolic functions + sensor table; backends instantiate
         # their own state from `world._initial_state_dict()`.
+
+    @property
+    def n_blocks(self) -> int:
+        """Number of independent subsystems in the tangent state. >1 means
+        the predict propagates each block separately (see `_blocks`)."""
+        return len(self._blocks)
 
     # ------------------------------------------------------------------
     # Symbolic graph construction
@@ -337,8 +348,10 @@ class EKF:
             "x_sym": x_sym, "u_sym": u_sym, "n_sym": n_sym,
             "n_noise": n_noise, "F_sym": F_sym,
             "f_fn": None, "F_fn": None, "L_fn": None,
-            "Sigma": None, "sensors": {},
+            "Sigma": None, "sensors": {}, "blocks": [],
         }
+        L_pattern = None             # tangent × noise sparsity (for blocks)
+        h_supports: list = []        # per-sensor observed tangent columns
 
         if build_functions:
             result["f_fn"] = ca.Function(
@@ -351,6 +364,7 @@ class EKF:
                 delta_out_n = spec.boxminus_sym(x_new_n, x_new_0)
                 L_sym = ca.substitute(
                     ca.jacobian(delta_out_n, n_sym), n_sym, zero_n)
+                L_pattern = np.array(ca.DM(L_sym.sparsity()))
                 result["L_fn"] = ca.Function(
                     "ekf_L", [x_sym, u_sym, dt_sym, t_sym], [L_sym],
                     ["x", "u", "dt", "t"], ["L"])
@@ -375,8 +389,10 @@ class EKF:
                 ca.jacobian(h_pert_flat, delta_in),
                 delta_in, ca.MX.zeros(n_tangent, 1))
             Hpat = np.array(ca.DM(H_sym.sparsity()))
-            for j in np.flatnonzero(Hpat.any(axis=0)):
+            cols_touched = np.flatnonzero(Hpat.any(axis=0))
+            for j in cols_touched:
                 observed.add(slot_of_tan[int(j)])
+            h_supports.append(cols_touched)
             if not build_functions:
                 continue
             h_0_flat = ca.substitute(h_n_flat, n_sym, zero_n)
@@ -406,7 +422,57 @@ class EKF:
             }
         result["sensors"] = sensors
         result["observed_slots"] = observed
+        if build_functions:
+            result["blocks"] = self._compute_blocks(
+                n_tangent, F_sym, L_pattern, h_supports)
         return result
+
+    @staticmethod
+    def _compute_blocks(n_tangent, F_sym, L_pattern, h_supports) -> list:
+        """Partition the tangent state into independent subsystems.
+
+        Two tangent indices land in the same block if they're coupled by
+        the dynamics (`F`), share a process-noise channel (`L` column), or
+        are jointly observed by one sensor (`H` support). Under this
+        partition the covariance stays block-diagonal forever (from a
+        block-diagonal start) — nothing creates a cross-block term — so the
+        predict can propagate each block independently. Returns a list of
+        sorted tangent-index arrays, ordered by first index.
+        """
+        parent = list(range(n_tangent))
+
+        def find(a: int) -> int:
+            while parent[a] != a:
+                parent[a] = parent[parent[a]]
+                a = parent[a]
+            return a
+
+        def union(a: int, b: int) -> None:
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[ra] = rb
+
+        # Dynamics coupling (F[i, j] != 0 ⇒ i and j interact).
+        rows, cols = np.nonzero(np.array(ca.DM(F_sym.sparsity())))
+        for i, j in zip(rows.tolist(), cols.tolist()):
+            union(i, j)
+        # Shared process noise: a noise column feeding rows {r} ties them.
+        if L_pattern is not None:
+            for k in range(L_pattern.shape[1]):
+                rws = np.flatnonzero(L_pattern[:, k])
+                for r in rws[1:]:
+                    union(int(rws[0]), int(r))
+        # Joint observation: a sensor touching columns {c} ties them.
+        for cols_touched in h_supports:
+            for c in cols_touched[1:]:
+                union(int(cols_touched[0]), int(c))
+
+        groups: dict[int, list[int]] = {}
+        for i in range(n_tangent):
+            groups.setdefault(find(i), []).append(i)
+        blocks = [np.array(sorted(v)) for v in groups.values()]
+        blocks.sort(key=lambda b: int(b[0]))
+        return blocks
 
     @staticmethod
     def _slot_of_tan(spec) -> list[str]:
