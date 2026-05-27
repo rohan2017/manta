@@ -72,20 +72,19 @@ class Naca00xx(Part):
 
     def update(self, ctx) -> PartUpdate:
         # --- relative wind at the airfoil's mount point (world frame) ---
-        offset_craft = Vec3[CraftFrame].constant(tuple(self.transform))
-        offset_anchor = ctx.orientation.apply(offset_craft)
-        p_world = ctx.position + offset_anchor
-
-        v_rot_craft = ctx.angular_velocity.cross(offset_craft)
-        v_rot_world = ctx.orientation.apply(v_rot_craft)
-        v_surface_anchor = ctx.velocity + v_rot_world
+        # ctx.position / ctx.velocity are already the airfoil's world-frame
+        # pose + velocity (kinematic pass composed the transform + lever arm,
+        # incl. any joint motion above it).
+        p_world          = ctx.position
+        v_surface_anchor = ctx.velocity
 
         fluid = ctx.field(FluidField).state_at_sym(p_world, ctx.t)
         rho   = fluid.density
         v_rel = v_surface_anchor - fluid.velocity   # Vec3[WorldFrame]
 
-        # --- decompose v_rel into the airfoil's body-frame axes -----------
-        # Rotate v_rel into CraftFrame.
+        # --- decompose v_rel into the airfoil's own-frame axes ------------
+        # ctx.orientation is the airfoil's own world attitude, so its
+        # conjugate maps world → that frame; chord/normal axes live there.
         v_rel_craft = ctx.orientation.conjugate().apply(v_rel)
 
         chord_b  = Vec3[CraftFrame].constant(tuple(self.chord_axis))

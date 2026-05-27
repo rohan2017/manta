@@ -43,15 +43,12 @@ class Collider(Part):
     damping:   float = Parameter(50.0)
 
     def update(self, ctx) -> PartUpdate:
-        offset_craft  = Vec3[CraftFrame].constant(tuple(self.transform))
-        offset_anchor = ctx.orientation.apply(offset_craft)
-        p_world      = ctx.position + offset_anchor
-
-        # Velocity of the collider point in world frame (includes the
-        # rotational lever arm).
-        v_rot_craft = ctx.angular_velocity.cross(offset_craft)
-        v_rot_world = ctx.orientation.apply(v_rot_craft)
-        v_point_anchor = ctx.velocity + v_rot_world
+        # ctx.position / ctx.velocity are already the collider point's
+        # world-frame mount-point pose + velocity (kinematic pass composed
+        # the transform and the rotational lever arm, including any joint
+        # motion above the part).
+        p_world        = ctx.position
+        v_point_anchor = ctx.velocity
 
         # Penetration vector from the CollisionField.
         pen = ctx.field(CollisionField).state_at_sym(p_world, ctx.t)
@@ -68,7 +65,9 @@ class Collider(Part):
 
         F_anchor_mx = F_spring_mx + F_damp_mx
         F_anchor    = Vec3[WorldFrame].from_mx(F_anchor_mx)
-        F_craft     = ctx.orientation.conjugate().apply(F_anchor)
+        # Rotate into the collider's own frame; framework rotates back to
+        # body and lifts force-at-offset → torque.
+        F_part      = ctx.orientation.conjugate().apply(F_anchor)
 
         zero_t = Vec3[CraftFrame].constant((0.0, 0.0, 0.0))
-        return PartUpdate(wrench=Wrench(force=F_craft, torque=zero_t))
+        return PartUpdate(wrench=Wrench(force=F_part, torque=zero_t))

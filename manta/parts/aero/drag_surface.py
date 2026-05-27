@@ -156,21 +156,21 @@ class DragSurface(Part):
         super().__init__(name, **overrides)
 
     def update(self, ctx) -> PartUpdate:
-        # --- v_rel at the mount point, in CraftFrame -------------------------
-        offset_craft = Vec3[CraftFrame].constant(tuple(self.transform))
-        offset_anchor = ctx.orientation.apply(offset_craft)
-        p_world      = ctx.position + offset_anchor
-
-        # Velocity of the surface point in world frame.
-        v_rot_craft = ctx.angular_velocity.cross(offset_craft)
-        v_rot_world = ctx.orientation.apply(v_rot_craft)
-        v_surface_anchor = ctx.velocity + v_rot_world
+        # --- v_rel at the mount point, in the surface's own frame -----------
+        # ctx.position / ctx.velocity are already the surface point's
+        # world-frame pose + velocity (kinematic pass composed the transform
+        # and the rotational lever arm, incl. any joint motion above it).
+        p_world          = ctx.position
+        v_surface_anchor = ctx.velocity
 
         fluid = ctx.field(FluidField).state_at_sym(p_world, ctx.t)
         rho   = fluid.density
         v_rel_world = v_surface_anchor - fluid.velocity
 
-        # Polynomial drag/lift is expressed in CraftFrame; rotate v_rel.
+        # The polynomial tensors are in the surface's own frame; rotate v_rel
+        # there. ctx.orientation is the part's own world attitude, so its
+        # conjugate maps world → that frame. The framework rotates the
+        # returned wrench back to body.
         v_rel_craft = ctx.orientation.conjugate().apply(v_rel_world)
         v_rel_mx    = v_rel_craft._mx
 

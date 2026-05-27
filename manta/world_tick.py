@@ -457,20 +457,28 @@ def _trace_craft_pass1(g_ctx,
     joint_accel_reals: list[tuple[Any, Any]] = []
     for part in craft._parts:
         kin = kin_states[part]
+        # A part's update() works entirely in its OWN (input) frame. The
+        # kinematic pass produces the directional quantities in body coords;
+        # rotate them into the part frame here (body → input via R.T), and
+        # hand the part its own world attitude. R_craft_from_input is
+        # identity for a part on the craft root, so a root-mounted part sees
+        # exactly the body-frame ctx it always did. The framework rotates the
+        # returned wrench back to body in `_wrench_to_craft`.
+        R_input_from_craft = kin.R_craft_from_input.transpose()
         ctx_part = TickContext(
             t=t,
             dt=dt,
             fields=fields_tuple,
             world=getattr(craft, "_world", None),
             position=kin.origin_in_world,
-            orientation=orientation,
+            orientation=kin.orientation_anchor_from_input,
             velocity=kin.velocity_origin,
-            angular_velocity=kin.angular_velocity_input,
-            velocity_body=kin.velocity_body_in_craft,
+            angular_velocity=R_input_from_craft @ kin.angular_velocity_input,
+            velocity_body=R_input_from_craft @ kin.velocity_body_in_craft,
             R_craft_from_input=kin.R_craft_from_input,
             acceleration_world=kin.acceleration_world,
-            acceleration_body=kin.acceleration_body,
-            angular_acceleration=kin.angular_acceleration,
+            acceleration_body=R_input_from_craft @ kin.acceleration_body,
+            angular_acceleration=R_input_from_craft @ kin.angular_acceleration,
         )
         result = part.update(ctx_part)
         if isinstance(result, Wrench):
@@ -516,8 +524,9 @@ def _trace_craft_pass1(g_ctx,
         for oname, oval in outputs.items():
             sensor_outputs.append((prefix + f"{part.name}.{oname}", oval))
 
-        # Wrench at-part-offset → at-craft-origin via symbolic position.
-        w_craft = _wrench_to_craft(w_part, kin.r_in_craft)
+        # Part-frame wrench → rotate to body coords + lift to craft origin.
+        w_craft = _wrench_to_craft(w_part, kin.r_in_craft,
+                                   kin.R_craft_from_input)
         net = net + w_craft
 
         # Resolve this joint's θ̈ placeholder to its real state-function.

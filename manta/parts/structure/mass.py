@@ -34,11 +34,6 @@ class Mass(Part):
     origin via parallel-axis lifts.
     """
 
-    # Gravity is sampled in world frame and rotated to body via
-    # ctx.orientation, independent of any rotor angle — so a Mass reads
-    # correctly on a moving rotor without an R_craft_from_input rotation.
-    articulation_aware = True
-
     mass: float                              = Parameter(1.0)
     moi:  "tuple[float, float, float]"       = Parameter((0.0, 0.0, 0.0))
 

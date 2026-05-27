@@ -163,23 +163,19 @@ def test_joint_accepts_mass_child_with_nonzero_transform():
     assert j.children[0].transform == (0.0, 0.0, 0.1)
 
 
-def test_joint_accepts_articulation_aware_child():
-    """Articulation-aware leaf parts (IMU, Thruster, …) ride a rotor:
-    their update() rotates input-frame quantities via R_craft_from_input."""
-    from manta.parts import IMU
+def test_joint_accepts_any_part_child():
+    """Any Part rides a rotor — the framework expresses each child's ctx in
+    its spinning frame and rotates its wrench back to the body, so no part
+    needs special handling. There is no longer an allowlist."""
+    from manta.parts import IMU, Thruster, DVL, Magnetometer, DragSurface
+    from manta.parts import PointBuoy, Collider, PositionSensor
     j = Joint("axle", mode="passive")
-    j.add(IMU("g"))
-    assert j.children[0].name == "g"
-
-
-def test_joint_rejects_non_articulation_aware_child():
-    """A part that hasn't been made articulation-aware would read/emit in
-    the wrong frame on a spinning rotor — the guard catches it at
-    construction. DragSurface is not yet articulation-aware."""
-    from manta.parts import DragSurface
-    j = Joint("axle", mode="passive")
-    with pytest.raises(TypeError, match="articulation-aware"):
-        j.add(DragSurface("fin"))
+    for part in (Mass("rotor", mass=0.1), IMU("imu"), Thruster("jet"),
+                 DVL("dvl"), Magnetometer("mag"), DragSurface("fin"),
+                 PointBuoy("buoy"), Collider("foot"), PositionSensor("gps"),
+                 Joint("inner")):
+        j.add(part)
+    assert len(j.children) == 10
 
 
 def test_joint_unknown_mode_raises():

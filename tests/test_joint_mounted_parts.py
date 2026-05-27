@@ -10,8 +10,8 @@ transfer alone misses. These tests pin both against closed-form values.
 import numpy as np
 
 from manta import World, Craft, TargetNumpy
-from manta.fields import GravityField, MagField
-from manta.parts import Joint, Mass, Thruster, IMU, Magnetometer
+from manta.fields import GravityField, MagField, FluidField
+from manta.parts import Joint, Mass, Thruster, IMU, Magnetometer, DragSurface
 
 
 def _free_world(craft, **overrides):
@@ -147,3 +147,35 @@ def test_rotor_magnetometer_reads_in_sensor_frame():
     np.testing.assert_allclose(
         np.asarray(state["compass"]["mag.B"]).ravel(),
         (0.0, -1.0, 0.0), atol=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# A previously-blocked force part (DragSurface) on a rotor: its drag tracks
+# the rotor frame, with no part-side frame handling.
+# ---------------------------------------------------------------------------
+
+def test_rotor_dragsurface_drag_tracks_rotor_frame():
+    """A linear-drag fin on a z-axis joint locked at θ=π/2, with the craft
+    translating at +x through still fluid. The fin's drag tensor is in its
+    own frame; at θ=π/2 the body-frame drag is the θ-rotated tensor acting on
+    the body-frame relative wind. With A_1 = -c·I (isotropic) the drag is
+    -ρ·c·v_rel regardless of rotor angle, so it opposes +x motion → a_x<0,
+    and stays purely along x (no spurious lateral force)."""
+    rho, c, V0, M = 1.0, 0.5, 3.0, 50.0
+    w = (World()
+         .add_field(GravityField().add_uniform((0.0, 0.0, 0.0)))
+         .add_field(FluidField().add_uniform(density=rho)))
+    craft = Craft("sub")
+    craft.add(Mass("hull", mass=M, moi=(5.0, 5.0, 5.0)))
+    j = Joint("yaw", mode="passive", axis=(0.0, 0.0, 1.0))
+    j.add(Mass("rotor", mass=0.01, moi=(1e-3, 1e-3, 1e-3)))
+    j.add(DragSurface("fin", force=(-c, -c, -c)))   # isotropic linear drag
+    craft.add(j)
+    w.add_craft(craft, **{"yaw.angle": np.pi / 2}, velocity=(V0, 0.0, 0.0))
+    sim = TargetNumpy(w.compile())
+    state = sim.step(sim.initial_state(), dt=1e-3)
+
+    v = np.asarray(state["sub"]["velocity"]).ravel()
+    # Isotropic drag opposes motion: decelerates +x, no lateral kick.
+    assert v[0] < V0
+    np.testing.assert_allclose(v[1:], (0.0, 0.0), atol=1e-9)

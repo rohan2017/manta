@@ -43,23 +43,20 @@ class PointBuoy(Part):
     volume: float = Parameter(1e-3)     # m³
 
     def update(self, ctx) -> PartUpdate:
-        # World-frame position of the buoyancy center.
-        offset_craft = Vec3[CraftFrame].constant(tuple(self.transform))
-        p_world = ctx.position + ctx.orientation.apply(offset_craft)
-
-        # Field queries at the buoy's actual position. For uniform fields
-        # this is the same as querying at the craft origin; for spatially
-        # varying fields it captures the correct local value.
+        # ctx.position is already the buoy's world-frame mount point (the
+        # kinematic pass composed the transform + any joints). Field queries
+        # there capture the correct local value for spatially varying fields;
+        # for uniform fields it's the same as the craft origin.
+        p_world = ctx.position
         fluid    = ctx.field(FluidField).state_at_sym(p_world, ctx.t)
-        g_anchor = ctx.field(GravityField).state_at_sym(p_world, ctx.t)
+        g_world  = ctx.field(GravityField).state_at_sym(p_world, ctx.t)
 
-        # F_anchor = -ρ·V·g  (opposes gravity, scaled by displaced mass).
+        # F = -ρ·V·g  (opposes gravity, scaled by displaced mass), rotated
+        # into the buoy's own frame for the wrench return (the framework
+        # rotates it back to body and lifts force-at-offset → torque).
         scale = fluid.density * self.volume
-        # We want F = -scale * g_anchor. Vec3 supports scalar*Vec3 and
-        # negation via *(-1.0).
-        f_world = g_anchor * (-1.0) * scale
-        # Rotate into CraftFrame for the wrench return.
-        f_craft  = ctx.orientation.conjugate().apply(f_world)
+        f_world = g_world * (-1.0) * scale
+        f_part  = ctx.orientation.conjugate().apply(f_world)
 
         zero_t = Vec3[CraftFrame].constant((0.0, 0.0, 0.0))
-        return PartUpdate(wrench=Wrench(force=f_craft, torque=zero_t))
+        return PartUpdate(wrench=Wrench(force=f_part, torque=zero_t))

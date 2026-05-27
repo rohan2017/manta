@@ -1,16 +1,18 @@
 """Joint — 1-DOF revolute joint (mirrors legacy `Motor` in motor.hpp).
 
 A `Joint` is a `CompositePart`: one rotational degree of freedom about
-an input-frame `axis`, with internal `angle` and `rate` state. It
-hosts a subtree of children whose inertial properties become the
-joint's rotor. Children may be `Mass` parts at any offset, or further
-nested `Joint`s (e.g., pan–tilt gimbals). The symbolic kinematic and
-inertia passes lift child positions and tensors through the joint
-chain, so a rotor's body-frame COM and inertia track the joint angle.
+an input-frame `axis`, with internal `angle` and `rate` state. It hosts
+a subtree of children that ride the rotor — any Part: `Mass` parts (the
+rotor's inertia), nested `Joint`s (pan–tilt gimbals), thrusters, and
+sensors. The symbolic kinematic and inertia passes lift each child's
+position, velocity, acceleration, and tensors through the joint chain
+(so a rotor's COM/inertia track the joint angle), and the framework
+expresses each child's TickContext in its own spinning frame and rotates
+its emitted wrench back to the body — so a part needs no awareness of
+being on a rotor.
 
-The joint emits:
-  * Reaction torque on the mount frame (Newton's 3rd): `-τ_cmd · axis`,
-    rotated through `ctx.R_craft_from_input` into body-frame coords.
+The joint emits (in its own input frame; the framework rotates to body):
+  * Reaction torque on the mount frame (Newton's 3rd): `-τ_cmd · axis`.
   * Gyroscopic correction: `-ω_input × (I_axial · rate · axis)`, where
     `ω_input` is the joint's input-frame angular velocity (the body's
     ω for a top-level joint; the outer joint's output ω for a nested
@@ -45,7 +47,7 @@ import numpy as np
 
 from ...ir.frames import CraftFrame
 from ...ir.types import Scalar, Vec3
-from ..base import CompositePart, Input, Parameter, Part, PartUpdate, State
+from ..base import CompositePart, Input, Parameter, PartUpdate, State
 from ...ir.wrench import Wrench
 
 
@@ -102,8 +104,6 @@ class Joint(CompositePart):
                         rad/s.
     """
 
-    articulation_aware = True   # rotates its axis via ctx.R_craft_from_input
-
     axis:          tuple = Parameter((0.0, 0.0, 1.0))
     mode:          str   = Parameter(_PASSIVE)
     stall_torque:  float = Parameter(1.0)
@@ -120,36 +120,6 @@ class Joint(CompositePart):
         super().__init__(name, **overrides)
 
     # ----- Child Masses ----------------------------------------------------
-
-    def add(self, child) -> Part:
-        """Attach a Part to the rotor.
-
-        Any articulation-aware Part may ride a rotor: `Mass` (inertia),
-        nested `Joint`s (pan–tilt gimbals), thrusters, and sensors. The
-        symbolic kinematic and inertia passes lift each child's position,
-        velocity, and acceleration through the joint chain, so a sensor
-        reads the rotor's true specific force and a thruster's thrust
-        rotates with the rotor.
-
-        Children must set `articulation_aware = True` — meaning their
-        `update()` rotates input-frame wrenches into body coords (and
-        directional sensor outputs into their own frame) via
-        `ctx.R_craft_from_input`. A part that doesn't would silently
-        read/emit in the wrong frame on a spinning rotor, so it is
-        rejected here with guidance.
-
-        Returns the child (so chained construction reads naturally,
-        matching `CompositePart.add`).
-        """
-        if not getattr(child, "articulation_aware", False):
-            raise TypeError(
-                f"Joint.add: child {type(child).__name__}"
-                f"('{getattr(child, 'name', '?')}') is not "
-                f"articulation-aware. A part on a moving rotor must rotate "
-                f"its input-frame quantities through ctx.R_craft_from_input "
-                f"and set `articulation_aware = True`. Stock Mass, Joint, "
-                f"Thruster, IMU, DVL, and PositionSensor already do.")
-        return super().add(child)
 
     # ----- Rotor I_axial computed from children ---------------------------
 
@@ -201,15 +171,13 @@ class Joint(CompositePart):
 
     def update(self, ctx) -> PartUpdate:
         I_ax = self.I_axial
-        # The Joint's spin axis is given in its INPUT-frame coords.
-        # Rotate to body-frame via R_craft_from_input so the reaction
-        # torque and gyroscopic term land in the same coords the body
-        # aggregation expects. For a Joint mounted directly on root
-        # this matrix is identity; for a nested inner Joint it carries
-        # the outer joint's angle.
+        # The Joint works in its INPUT frame: its axis is given there, its
+        # ctx (ω etc.) arrives there, and it emits its wrench there. The
+        # framework rotates the wrench to body coords (the inverse of the
+        # rotation it applied to ctx), so no R_craft_from_input appears here
+        # — for a top-level joint that frame IS body; for a nested inner
+        # joint it's the outer joint's output frame.
         axis_local_mx = ca.MX(list(self.axis))
-        R_in_mx = ctx.R_craft_from_input._mx
-        axis_mx = ca.mtimes(R_in_mx, axis_local_mx)
 
         # Torque per mode. We work in MX so the saturating clamp can use
         # ca.fmin / ca.fmax for a branch-free symbolic clip.
@@ -226,14 +194,14 @@ class Joint(CompositePart):
         rate_mx  = self.rate._mx
         angle_mx = self.angle._mx
         dt_mx    = ctx.dt._mx
-        # Mount's absolute angular velocity (input-frame ω, in craft-frame
-        # coords; see the gyro note below). Also feeds the Coriolis term.
+        # Mount's absolute angular velocity, in the joint's input frame
+        # (ctx is already expressed there). Feeds the gyro + Coriolis terms.
         omega_mx = ctx.angular_velocity._mx
         if I_ax > 0.0:
             # Coriolis joint torque from base rotation through the full
             # rotor inertia: τ_corio = −[ω_rotor × (I_joint·ω_rotor)]·axis,
-            # with ω_rotor = ω_mount + θ̇·axis. Built in the joint's input
-            # frame, where I_joint_tensor lives — rotate ω_mount in via Rᵀ.
+            # with ω_rotor = ω_mount + θ̇·axis — all in the joint's input
+            # frame, where I_joint_tensor lives, so no rotation is needed.
             # Identically zero for an axisymmetric rotor whose COM sits on
             # the joint axis; nonzero for off-axis or asymmetric rotors. It
             # drives only the joint's own acceleration: the body-side
@@ -243,8 +211,7 @@ class Joint(CompositePart):
             axis_unit_np = np.array(self.axis, dtype=float)
             axis_unit_np = axis_unit_np / np.linalg.norm(axis_unit_np)
             axis_unit_in = ca.MX(axis_unit_np.tolist())
-            omega_mount_in = ca.mtimes(R_in_mx.T, omega_mx)
-            omega_rotor_in = omega_mount_in + rate_mx * axis_unit_in
+            omega_rotor_in = omega_mx + rate_mx * axis_unit_in
             I_joint_dm     = ca.DM(self.I_joint_tensor)
             Iw_in          = ca.mtimes(I_joint_dm, omega_rotor_in)
             tau_corio_mx   = -ca.dot(ca.cross(omega_rotor_in, Iw_in),
@@ -256,17 +223,14 @@ class Joint(CompositePart):
         new_angle_mx = (angle_mx + rate_mx * dt_mx
                         + 0.5 * accel_mx * dt_mx * dt_mx)
 
-        # --- Wrench on the mount ---
-        # Reaction torque (Newton's 3rd, only meaningful in saturating
-        # mode where commanded torque is nonzero). Expressed in body
-        # frame via the body-rotated axis.
-        reaction_mx = axis_mx * (-tau_mx)
+        # --- Wrench on the mount (input frame; framework rotates to body) ---
+        # Reaction torque (Newton's 3rd, only meaningful in saturating mode
+        # where commanded torque is nonzero).
+        reaction_mx = axis_local_mx * (-tau_mx)
         # Gyroscopic correction: a spinning rotor that the body tries to
-        # tilt off-axis pushes back via -ω × L_rotor. ω is the joint's
-        # INPUT-frame ω (kinematic_pass gives us this directly in
-        # body-frame coords) — for a top-level joint that's body ω; for
-        # a nested joint it's the outer joint's output ω.
-        L_rotor_mx = axis_mx * (I_ax * rate_mx)
+        # tilt off-axis pushes back via -ω × L_rotor, with the rotor's
+        # angular momentum L_rotor = I_axial·θ̇·axis.
+        L_rotor_mx = axis_local_mx * (I_ax * rate_mx)
         # ca.cross handles 3-vec × 3-vec.
         tau_gyro_mx = -ca.cross(omega_mx, L_rotor_mx)
         torque_mx = reaction_mx + tau_gyro_mx

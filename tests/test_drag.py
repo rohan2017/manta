@@ -8,6 +8,32 @@ from manta.fields import FluidField, GravityField
 from manta.parts import DragSurface, Mass, Thruster
 
 
+def test_offset_drag_uses_mount_velocity_not_double_lever_arm():
+    """Regression: ctx.velocity is already the surface point's velocity
+    (kinematic pass includes the rotational lever arm), so DragSurface must
+    NOT re-add ω×offset. A linear-drag fin offset d along +x on a craft
+    spinning at ω about +z sees relative wind ω·d along +y, giving drag
+    force −ρ·c·ω·d along y → a_y = −ρ·c·ω·d / M. The old double-lever bug
+    doubled the wind (and the force)."""
+    rho, c, d, omega, M = 1.0, 0.5, 1.0, 2.0, 100.0
+    dt = 1e-3
+
+    w = (World()
+         .add_field(GravityField().add_uniform((0.0, 0.0, 0.0)))   # free
+         .add_field(FluidField().add_uniform(density=rho)))        # still
+    craft = Craft("spinner")
+    craft.add(Mass("core", mass=M, moi=(10.0, 10.0, 10.0)))        # COM at origin
+    craft.add(DragSurface("fin", force=(-c, -c, -c), transform=(d, 0.0, 0.0)))
+    w.add_craft(craft, angular_velocity=(0.0, 0.0, omega))
+    sim = TargetNumpy(w.compile())
+    state = sim.step(sim.initial_state(), dt=dt)
+
+    vy = float(np.asarray(state["spinner"]["velocity"]).ravel()[1])
+    expected = -rho * c * omega * d / M * dt          # single lever arm
+    np.testing.assert_allclose(vy, expected, rtol=1e-3)
+    assert abs(vy - 2.0 * expected) > 0.4 * abs(expected)   # not the 2× bug
+
+
 def test_terminal_velocity_from_drag_balances_gravity():
     """Sphere of mass m falling in a fluid of density ρ with drag area A
     and Cd reaches terminal velocity where ½ρACd·v² = m·|g|, so

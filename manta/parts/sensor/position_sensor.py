@@ -28,11 +28,6 @@ class PositionSensor(Part):
                                          or mocap marker reads.
     """
 
-    # ctx.position is the mount point in WorldFrame, already chain-composed
-    # through any joints above the sensor — frame-invariant, so correct on a
-    # rotor with no extra rotation.
-    articulation_aware = True
-
     position = Output(shape="vec3")
 
     def update(self, ctx) -> PartUpdate:

@@ -35,20 +35,17 @@ class Magnetometer(Part):
                                 with the rotor.
     """
 
-    articulation_aware = True   # outputs in the sensor's own (input) frame
-
     B = Output(shape="vec3")
 
     def update(self, ctx) -> PartUpdate:
         # ctx.position is already the sensor's world-frame mount point
         # (chain-composed through transform + any joints), so sample the
-        # field there directly.
-        B_world = ctx.field(MagField).state_at_sym(ctx.position, ctx.t)
-        # World → body, then body → sensor (input) frame. R_craft_from_input
-        # is identity for a root-mounted magnetometer; on a rotor it carries
-        # the joint angle, so the reading rotates with the sensor.
-        B_body   = ctx.orientation.conjugate().apply(B_world)
-        B_sensor = ctx.R_craft_from_input.transpose() @ B_body
+        # field there directly. ctx.orientation is the sensor's own world
+        # attitude (the framework composed any joint rotation in), so its
+        # conjugate maps world → sensor frame directly — for a root-mounted
+        # magnetometer that's CraftFrame; on a rotor it spins with the joint.
+        B_world  = ctx.field(MagField).state_at_sym(ctx.position, ctx.t)
+        B_sensor = ctx.orientation.conjugate().apply(B_world)
 
         zero_v = Vec3[CraftFrame].constant((0.0, 0.0, 0.0))
         return PartUpdate(

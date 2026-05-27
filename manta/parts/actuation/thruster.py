@@ -28,21 +28,19 @@ from ...ir.wrench import Wrench
 class Thruster(Part):
     """Polynomial-in-throttle thruster (linear + quadratic).
 
-    Coefficients are 3-vectors in the thruster's own INPUT frame. For a
-    thruster mounted directly on the craft root that frame is CraftFrame,
-    so `Thruster("t", force=(0,0,1))` is a pure +z thrust in body coords.
-    Mounted on a Joint's rotor, the input frame spins with the rotor, so
-    the emitted wrench is rotated into body coords each tick via
-    `ctx.R_craft_from_input` — a gimballed thruster's thrust direction
-    tracks the joint angle automatically. Any unset coefficient defaults
-    to zero.
+    Coefficients are 3-vectors in the thruster's own frame. For a thruster
+    mounted directly on the craft root that frame is CraftFrame, so
+    `Thruster("t", force=(0,0,1))` is a pure +z thrust in body coords.
+    Mounted on a Joint's rotor, the thruster's frame spins with the rotor
+    and the framework rotates the emitted wrench into body coords — a
+    gimballed thruster's thrust direction tracks the joint angle
+    automatically, with no frame handling here. Any unset coefficient
+    defaults to zero.
 
     Input:
         throttle — scalar control input. Units depend on the scaling
                    of the coefficients.
     """
-
-    articulation_aware = True   # rotates thrust via ctx.R_craft_from_input
 
     force:       "tuple[float, float, float]" = Parameter((0.0, 0.0, 0.0))
     force_quad:  "tuple[float, float, float]" = Parameter((0.0, 0.0, 0.0))
@@ -54,14 +52,10 @@ class Thruster(Part):
         t  = self.throttle
         t2 = t * t
 
-        # Coefficients live in the thruster's input frame; rotate the
-        # resulting wrench into body (craft) coords. R_craft_from_input is
-        # identity for a root-mounted thruster, so this is a no-op there.
-        R = ctx.R_craft_from_input
-        c1F = R @ Vec3[CraftFrame].constant(self.force)
-        c2F = R @ Vec3[CraftFrame].constant(self.force_quad)
-        c1τ = R @ Vec3[CraftFrame].constant(self.torque)
-        c2τ = R @ Vec3[CraftFrame].constant(self.torque_quad)
+        c1F = Vec3[CraftFrame].constant(self.force)
+        c2F = Vec3[CraftFrame].constant(self.force_quad)
+        c1τ = Vec3[CraftFrame].constant(self.torque)
+        c2τ = Vec3[CraftFrame].constant(self.torque_quad)
 
         return Wrench(
             force =c1F * t + c2F * t2,

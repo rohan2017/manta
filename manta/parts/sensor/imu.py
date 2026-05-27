@@ -46,8 +46,6 @@ class IMU(Part):
     skip them by leaving sigma at 0.
     """
 
-    articulation_aware = True   # outputs in the sensor's own (input) frame
-
     gyro_noise  = WhiteNoise(     shape="vec3", frame=CraftFrame, sigma=0.0)
     accel_noise = WhiteNoise(     shape="vec3", frame=CraftFrame, sigma=0.0)
     gyro_bias   = RandomWalkNoise(shape="vec3", frame=CraftFrame, sigma=0.0)
@@ -58,25 +56,20 @@ class IMU(Part):
 
     def update(self, ctx) -> PartUpdate:
         zero_v = Vec3[CraftFrame].constant((0.0, 0.0, 0.0))
-        # Gravity at the IMU's mount point, rotated into body frame.
-        # With no GravityField registered, this folds to zero.
+        # ctx is already in the IMU's own frame (the framework rotated it),
+        # so the reads below are the physical sensor-frame quantities — for a
+        # root-mounted IMU that frame is the body frame; on a rotor it spins
+        # with the joint. Gravity at the mount point folds to zero with no
+        # GravityField registered. Bias/noise live in the sensor frame.
         g_world = ctx.field(GravityField).state_at_sym(ctx.position, ctx.t)
-        g_body  = ctx.orientation.conjugate().apply(g_world)
-        # ctx.angular_velocity / acceleration_body are in body coords; a real
-        # IMU measures in its own (mount) frame. On a rotor the mount frame
-        # spins with the joint, so rotate body → input via R_craft_from_input
-        # transposed. Identity for a root-mounted IMU. Bias/noise are added
-        # in the sensor frame (where the physical errors live).
-        R_in_from_craft = ctx.R_craft_from_input.transpose()
-        omega_sensor = R_in_from_craft @ ctx.angular_velocity
-        accel_sensor = R_in_from_craft @ (ctx.acceleration_body - g_body)
+        g_sensor = ctx.orientation.conjugate().apply(g_world)
         return PartUpdate(
             wrench=Wrench(force=zero_v, torque=zero_v),
             outputs={
-                "gyro":  (omega_sensor
+                "gyro":  (ctx.angular_velocity
                           + self.gyro_bias
                           + self.gyro_noise),
-                "accel": (accel_sensor
+                "accel": (ctx.acceleration_body - g_sensor
                           + self.accel_bias
                           + self.accel_noise),
             },

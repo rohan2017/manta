@@ -63,8 +63,15 @@ from .ir.wrench import Wrench
 class TickContext:
     """The per-tick context passed to each `Part.update(ctx)` call.
 
-    Exposes the symbolic per-part state + environment to part code so a
-    Part's `update()` can read everything it physically depends on:
+    A part's `update()` works entirely in the part's OWN frame. Every
+    directional quantity below is expressed in that frame, and the Wrench
+    the part returns is interpreted there too — the framework rotates it
+    back to body coords (and lifts it to the craft origin) afterwards. For
+    a part mounted directly on the craft root the part frame IS the body
+    frame (CraftFrame), so the fields tagged CraftFrame below are literally
+    body-frame there; on a Joint's rotor the frame spins with the joint and
+    the framework handles the rotation, so no part needs to touch
+    `R_craft_from_input`.
 
       t                : Scalar                      — world clock.
       dt               : Scalar                      — integrator timestep.
@@ -73,46 +80,54 @@ class TickContext:
                                                        world frame (chain-
                                                        composed for parts
                                                        on a joint subtree).
-      orientation      : Quat[WorldFrame,CraftFrame]— craft attitude.
+                                                       Already includes the
+                                                       part's transform —
+                                                       use it directly.
+      orientation      : Quat[WorldFrame,*]         — the PART's own world
+                                                       attitude (body
+                                                       attitude composed
+                                                       with any joint
+                                                       rotations above it).
       velocity         : Vec3[WorldFrame]           — world-frame linear
                                                        velocity at the
-                                                       part's mount point.
-      angular_velocity : Vec3[CraftFrame]            — body angular velocity
-                                                       ω. What a rate gyro
-                                                       reads.
-      velocity_body    : Vec3[CraftFrame]            — body linear velocity
-                                                       (R^T · v_anchor).
-                                                       What a DVL reads.
+                                                       part's mount point
+                                                       (includes the body +
+                                                       joint lever arms —
+                                                       use it directly).
+      angular_velocity : Vec3[CraftFrame]            — the part's angular
+                                                       velocity ω in its own
+                                                       frame. What a rate
+                                                       gyro on the part reads.
+      velocity_body    : Vec3[CraftFrame]            — linear velocity at the
+                                                       mount point in the
+                                                       part's frame. What a
+                                                       DVL reads.
       R_craft_from_input : Mat3[CraftFrame, CraftFrame]
-                                                     — rotates a vector
-                                                       in the part's
-                                                       INPUT-frame coords
-                                                       into body-frame
-                                                       coords. Identity
-                                                       for parts mounted
-                                                       directly on the
-                                                       craft root; for a
-                                                       Joint nested
-                                                       inside another
-                                                       Joint, carries
-                                                       the outer joint's
-                                                       angle.
+                                                     — rotates a vector from
+                                                       the part's frame into
+                                                       body coords. Identity
+                                                       for a root-mounted
+                                                       part. Rarely needed
+                                                       now that the framework
+                                                       rotates wrenches/reads
+                                                       — exposed for advanced
+                                                       use.
       acceleration_world  : Vec3[WorldFrame]      — world-frame
                                                        inertial accel
                                                        at the part's
                                                        mount point.
-      acceleration_body    : Vec3[CraftFrame]        — same, in body-
-                                                       frame coords.
-                                                       Specific force
+      acceleration_body    : Vec3[CraftFrame]        — same, in the part's
+                                                       frame. Specific force
                                                        (accelerometer
                                                        reading) is
                                                        `acceleration_body
-                                                       - g_body` where
-                                                       `g_body` is sampled
+                                                       - g_part` where
+                                                       `g_part` is sampled
                                                        via `ctx.field(...)`
-                                                       and rotated to
-                                                       body frame.
-      angular_acceleration : Vec3[CraftFrame]        — body α.
+                                                       and rotated through
+                                                       `ctx.orientation`.
+      angular_acceleration : Vec3[CraftFrame]        — the part's α in its
+                                                       own frame.
 
     Field access:
       ctx.field(FieldCls) → registered field of that class, or an empty
@@ -123,13 +138,13 @@ class TickContext:
       ctx.has_field(FieldCls) → True iff a matching field is registered.
 
     Note on the acceleration fields: these reflect the **current**
-    tick's Newton-Euler output (`α`, `a_origin`) with the lever-arm
-    contribution lifted to this part's mount point using current-tick
-    ω and `r_in_craft`. At compile time the framework hands `update()`
-    MX placeholder symbols for a/α and substitutes the real
-    expressions after Newton-Euler. Wrenches must not depend on these
-    fields (the substitute pass doesn't solve fixpoints); the compile
-    step validates and raises otherwise.
+    tick's Newton-Euler output (`α`, `a_origin`) lifted to this part's
+    mount point (rigid lever arm + any joint-relative Coriolis/relative
+    terms), then expressed in the part frame. At compile time the
+    framework hands `update()` MX placeholder symbols for a/α (and each
+    joint's θ̈) and substitutes the real expressions after Newton-Euler.
+    Wrenches must not depend on these fields (the substitute pass doesn't
+    solve fixpoints); the compile step validates and raises otherwise.
     """
 
     __slots__ = ("t", "dt", "position", "orientation", "velocity",
@@ -282,23 +297,28 @@ def _aggregate_inertials(parts: list[Part]) -> dict[str, Any]:
 # Wrench transformation (part frame → craft frame)
 # ---------------------------------------------------------------------------
 
-def _wrench_to_craft(wrench_part: Wrench, r_in_craft: Vec3) -> Wrench:
+def _wrench_to_craft(wrench_part: Wrench, r_in_craft: Vec3,
+                     R_craft_from_input: Mat3) -> Wrench:
     """Lift a part-emitted wrench to a wrench acting at the craft origin.
 
-    The part's wrench is assumed already expressed in body-frame
-    (CraftFrame) coords — any part whose native quantities live in a
-    rotated input frame (Joint axis, articulated thruster, …) is
-    responsible for rotating them into body-frame inside its own
-    `update()` using `ctx.R_craft_from_input`. The lift here is
-    purely the parallel-axis-style force-to-torque coupling:
+    A part's `update()` works entirely in its OWN (input) frame: it reads
+    a TickContext whose directional quantities are already expressed in
+    that frame and returns its wrench there too. This function does the
+    two framework-side steps that put it on the body:
 
-        F_at_origin = F_at_part
-        τ_at_origin = τ_at_part + r × F_at_part
+      1. Rotate force and torque from the part's input frame into
+         body-frame coords:  F_body = R · F_input,  τ_body = R · τ_input,
+         where `R = R_craft_from_input` (identity for a part mounted
+         directly on the craft root; the joint angle for a part on a
+         rotor chain).
+      2. Lift the force from the part's offset to the craft origin:
+             F_at_origin = F_body
+             τ_at_origin = τ_body + r × F_body
 
-    `r_in_craft` is the part's body-frame position (from the
-    symbolic kinematic pass), which for a flat craft simplifies to
-    `part.transform` and for a part on a joint chain composes through
-    the chain.
+    `r_in_craft` is the part's body-frame position (from the symbolic
+    kinematic pass) — `part.transform` for a flat craft, joint-chain-
+    composed otherwise. Because the rotation lives here, no part needs to
+    touch `R_craft_from_input`; any part rides any joint correctly.
     """
     if wrench_part.frame is not CraftFrame:
         from .ir.frames import FrameError, _capture_user_source
@@ -308,10 +328,12 @@ def _wrench_to_craft(wrench_part: Wrench, r_in_craft: Vec3) -> Wrench:
             got=f"frame={wrench_part.frame.__name__}",
             source=_capture_user_source(),
         )
-    extra_torque = r_in_craft.cross(wrench_part.force)
+    force_body  = R_craft_from_input @ wrench_part.force
+    torque_body = R_craft_from_input @ wrench_part.torque
+    extra_torque = r_in_craft.cross(force_body)
     return Wrench(
-        force=wrench_part.force,
-        torque=wrench_part.torque + extra_torque,
+        force=force_body,
+        torque=torque_body + extra_torque,
     )
 
 
