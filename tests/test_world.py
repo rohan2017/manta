@@ -9,40 +9,6 @@ from manta.parts import Joint, Mass
 
 
 # ---------------------------------------------------------------------------
-# Single-craft world matches direct Craft.compile_tick
-# ---------------------------------------------------------------------------
-
-def test_single_craft_world_matches_direct_compile():
-    """Compiling through World should produce identical numerics to
-    directly compiling the craft."""
-    c1 = Craft("solo_a")
-    c1.add(Mass("body", mass=1.0))
-    direct_tick = c1.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
-
-    c2 = Craft("solo_b")
-    c2.add(Mass("body", mass=1.0))
-    w = World().add_field(GravityField().add_uniform((0.0, 0.0, -9.81)))
-    w.add_craft(c2, position=(0.0, 0.0, 100.0))
-    cw = TargetNumpy(w.compile())
-
-    # Direct numerics.
-    state_direct = c1.initial_state(position=(0.0, 0.0, 100.0))
-    for _ in range(100):
-        out = direct_tick(dt=0.01, **state_direct)
-        state_direct = {k: out[k] for k in state_direct}
-
-    # World numerics.
-    state_world = cw.initial_state()
-    for _ in range(100):
-        state_world = cw.step(state_world, dt=0.01)
-
-    assert np.allclose(state_world["solo_b"]["position"],
-                       state_direct["position"], atol=1e-12)
-    assert np.allclose(state_world["solo_b"]["velocity"],
-                       state_direct["velocity"], atol=1e-12)
-
-
-# ---------------------------------------------------------------------------
 # Multi-craft world: independent free-falls
 # ---------------------------------------------------------------------------
 

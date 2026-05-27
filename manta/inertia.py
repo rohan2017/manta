@@ -18,7 +18,7 @@ craft with a Joint, the symbolic I_com varies with the joint angle —
 e.g. a long thin rotor swinging out shifts the body's COM and rolls
 its MOI tensor through R · diag · R^T.
 
-Used at compile time by `Craft.compile_tick`: the symbolic com and I_com
+Used at compile time by the world tick (`compile_coupled_tick`): the symbolic com and I_com
 feed straight into Newton-Euler, with `ca.solve(I_com_mx, τ)` replacing
 the precomputed numpy inverse. The legacy numpy `_aggregate_inertials`
 is kept as a non-symbolic introspection helper (`Craft.aggregate_inertials`)

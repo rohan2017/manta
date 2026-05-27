@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from manta.craft import Craft
+from manta import World, TargetNumpy
 from manta.fields import GravityField
 from manta.parts import (
     Joint,
@@ -31,17 +32,18 @@ def test_passive_joint_spins_at_initial_rate():
     j.add(Mass("rotor", mass=0.1, moi=(0.01, 0.01, 0.05)))
     c.add(j)
 
-    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
-    state = c.initial_state(**{"wheel.rate": 1.0})
-    assert state["wheel.angle"] == 0.0
-    assert state["wheel.rate"]  == 1.0
+    w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
+    w.add_craft(c, **{"wheel.rate": 1.0})
+    sim = TargetNumpy(w.compile())
+    state = sim.initial_state()
+    assert state["passive_demo"]["wheel.angle"] == 0.0
+    assert state["passive_demo"]["wheel.rate"]  == 1.0
 
     for _ in range(1000):
-        out = tick(dt=0.001, **state)
-        state = {**state, **out}
+        state = sim.step(state, dt=0.001)
 
-    assert np.isclose(state["wheel.angle"], 1.0, atol=1e-9)
-    assert np.isclose(state["wheel.rate"],  1.0, atol=1e-9)
+    assert np.isclose(state["passive_demo"]["wheel.angle"], 1.0, atol=1e-9)
+    assert np.isclose(state["passive_demo"]["wheel.rate"],  1.0, atol=1e-9)
 
 
 def test_multiple_joints_have_independent_state():
@@ -54,14 +56,15 @@ def test_multiple_joints_have_independent_state():
     c.add(fast)
     c.add(slow)
 
-    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
-    state = c.initial_state(**{"fast.rate": 5.0, "slow.rate": 1.0})
+    w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
+    w.add_craft(c, **{"fast.rate": 5.0, "slow.rate": 1.0})
+    sim = TargetNumpy(w.compile())
+    state = sim.initial_state()
     for _ in range(1000):
-        out = tick(dt=0.001, **state)
-        state = {**state, **out}
+        state = sim.step(state, dt=0.001)
 
-    assert np.isclose(state["fast.angle"], 5.0, atol=1e-9)
-    assert np.isclose(state["slow.angle"], 1.0, atol=1e-9)
+    assert np.isclose(state["twin"]["fast.angle"], 5.0, atol=1e-9)
+    assert np.isclose(state["twin"]["slow.angle"], 1.0, atol=1e-9)
 
 
 # ---------------------------------------------------------------------------
@@ -76,16 +79,16 @@ def test_saturating_joint_below_stall_accelerates_rotor():
     j.add(Mass("rotor", mass=0.5, moi=(0.025, 0.025, 0.05)))
     c.add(j)
 
-    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
-    state = c.initial_state()
-    state["wheel.torque_cmd"] = 0.5
+    w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
+    w.add_craft(c, **{"wheel.torque_cmd": 0.5})
+    sim = TargetNumpy(w.compile())
+    state = sim.initial_state()
     for _ in range(1000):
-        out = tick(dt=0.001, **state)
-        state = {**state, **out}
+        state = sim.step(state, dt=0.001)
 
     # I_axial = 0.05 (rotor's I_zz, axis defaults to +z).
     # α = 0.5 / 0.05 = 10 rad/s² over 1 s → ω = 10.
-    assert np.isclose(state["wheel.rate"], 10.0, atol=1e-6)
+    assert np.isclose(state["flywheel"]["wheel.rate"], 10.0, atol=1e-6)
 
 
 def test_saturating_joint_clamps_at_stall():
@@ -97,15 +100,15 @@ def test_saturating_joint_clamps_at_stall():
     j.add(Mass("rotor", mass=0.5, moi=(0.025, 0.025, 0.05)))
     c.add(j)
 
-    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
-    state = c.initial_state()
-    state["wheel.torque_cmd"] = 5.0   # way above stall=0.2
+    w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
+    w.add_craft(c, **{"wheel.torque_cmd": 5.0})   # way above stall=0.2
+    sim = TargetNumpy(w.compile())
+    state = sim.initial_state()
     for _ in range(1000):
-        out = tick(dt=0.001, **state)
-        state = {**state, **out}
+        state = sim.step(state, dt=0.001)
 
     # Effective τ = 0.2; α = 0.2 / 0.05 = 4 rad/s² → ω after 1s = 4.
-    assert np.isclose(state["wheel.rate"], 4.0, atol=1e-6)
+    assert np.isclose(state["clamped"]["wheel.rate"], 4.0, atol=1e-6)
 
 
 def test_saturating_joint_reaction_spins_body_counter():
@@ -120,16 +123,17 @@ def test_saturating_joint_reaction_spins_body_counter():
     j.add(Mass("rotor", mass=0.1, moi=(0.005, 0.005, 0.05)))
     c.add(j)
 
-    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
-    state = c.initial_state()
-    state["wheel.torque_cmd"] = 0.5
+    w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
+    w.add_craft(c, **{"wheel.torque_cmd": 0.5})
+    sim = TargetNumpy(w.compile())
+    state = sim.initial_state()
     for _ in range(1000):
-        out = tick(dt=0.001, **state)
-        state = {**state, **out}
+        state = sim.step(state, dt=0.001)
 
     # ω after 1 s under constant α = -0.5/0.15. Loose tolerance because
     # the gyroscopic coupling (rotor spin × body ω) feeds back as ω grows.
-    assert np.isclose(state["angular_velocity"][2], -0.5 / 0.15, atol=0.2)
+    assert np.isclose(state["conservation"]["angular_velocity"][2],
+                      -0.5 / 0.15, atol=0.2)
 
 
 # ---------------------------------------------------------------------------
@@ -182,17 +186,17 @@ def test_joint_doesnt_break_free_fall():
     j.add(Mass("rotor", mass=0.1, moi=(0.001, 0.001, 0.01)))
     c.add(j)
 
-    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
-    state = c.initial_state(position=(0.0, 0.0, 100.0),
-                             **{"wheel.rate": 10.0})
+    w = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
+    w.add_craft(c, position=(0.0, 0.0, 100.0), **{"wheel.rate": 10.0})
+    sim = TargetNumpy(w.compile())
+    state = sim.initial_state()
     for _ in range(1000):
-        out = tick(dt=0.001, **state)
-        state = {**state, **out}
+        state = sim.step(state, dt=0.001)
 
     # ½·g·t² = 4.905; z = 100 - 4.905 = 95.095.
-    assert np.isclose(state["position"][2],   95.095, atol=1e-5)
-    assert np.isclose(state["velocity"][2],   -9.81,  atol=1e-5)
-    assert np.isclose(state["wheel.angle"],   10.0,   atol=1e-9)
+    assert np.isclose(state["fall_with_joint"]["position"][2],   95.095, atol=1e-5)
+    assert np.isclose(state["fall_with_joint"]["velocity"][2],   -9.81,  atol=1e-5)
+    assert np.isclose(state["fall_with_joint"]["wheel.angle"],   10.0,   atol=1e-9)
 
 
 # ---------------------------------------------------------------------------
@@ -216,8 +220,10 @@ def test_unknown_state_slot_raises():
     c = Craft("bad")
     c.add(Mass("m", mass=1.0))
     c.add(BadPart("bad"))
+    w = World()
+    w.add_craft(c)
     with pytest.raises(KeyError, match="unknown state slot"):
-        c.compile_tick()
+        w.compile()
 
 
 def test_initial_state_unknown_slot_raises():
@@ -254,14 +260,15 @@ def test_nested_passive_joints_each_track_their_own_rate():
     outer.add(inner)
     c.add(outer)
 
-    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
-    state = c.initial_state(**{"pan.rate": 2.0, "tilt.rate": 1.0})
+    w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
+    w.add_craft(c, **{"pan.rate": 2.0, "tilt.rate": 1.0})
+    sim = TargetNumpy(w.compile())
+    state = sim.initial_state()
     for _ in range(1000):
-        out = tick(dt=0.001, **state)
-        state = {**state, **out}
+        state = sim.step(state, dt=0.001)
 
-    assert np.isclose(state["pan.angle"],  2.0, atol=1e-6)
-    assert np.isclose(state["tilt.angle"], 1.0, atol=1e-6)
+    assert np.isclose(state["gimbal_two_dof"]["pan.angle"],  2.0, atol=1e-6)
+    assert np.isclose(state["gimbal_two_dof"]["tilt.angle"], 1.0, atol=1e-6)
 
 
 def test_nested_joint_saturating_drives_inner_rotor():
@@ -278,19 +285,19 @@ def test_nested_joint_saturating_drives_inner_rotor():
     outer.add(inner)
     c.add(outer)
 
-    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
-    state = c.initial_state()
-    state["tilt.torque_cmd"] = 0.5
+    w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
+    w.add_craft(c, **{"tilt.torque_cmd": 0.5})
+    sim = TargetNumpy(w.compile())
+    state = sim.initial_state()
     for _ in range(1000):
-        out = tick(dt=0.001, **state)
-        state = {**state, **out}
+        state = sim.step(state, dt=0.001)
 
     # Tilt rotor MOI about y-axis = 0.005 from the tilt_disk only;
     # α = 0.5 / 0.005 = 100 rad/s² → ω after 1s ≈ 100 rad/s.
     # Some tolerance for the heavy body's small angular response feeding
     # back into the gyroscopic correction.
-    assert np.isclose(state["tilt.rate"], 100.0, atol=0.5)
-    assert np.isclose(state["pan.rate"], 0.0, atol=0.5)
+    assert np.isclose(state["gimbal_drive"]["tilt.rate"], 100.0, atol=0.5)
+    assert np.isclose(state["gimbal_drive"]["pan.rate"], 0.0, atol=0.5)
 
 
 def test_offset_rotor_at_pi_over_2_shows_com_in_y():
@@ -305,25 +312,25 @@ def test_offset_rotor_at_pi_over_2_shows_com_in_y():
                transform=(1.0, 0.0, 0.0)))
     c.add(j)
 
-    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
-    state = c.initial_state()
     # Set arm.angle = π/2 directly (rate = 0 → angle stays put under no
     # torque). The first tick exercises Newton-Euler with the rotated
     # COM in the body frame.
-    state["arm.angle"] = float(np.pi / 2)
-    out = tick(dt=0.001, **state)
+    w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
+    w.add_craft(c, **{"arm.angle": float(np.pi / 2)})
+    sim = TargetNumpy(w.compile())
+    state = sim.step(sim.initial_state(), dt=0.001)
     # Body should still be at rest after one tick (no external wrench,
     # rotor at rest); just verify the compile produced a valid graph
     # for the at-angle case.
-    assert np.allclose(out["angular_velocity"], 0.0, atol=1e-9)
-    assert np.isclose(out["arm.angle"], float(np.pi / 2), atol=1e-12)
+    assert np.allclose(state["arm_swept"]["angular_velocity"], 0.0, atol=1e-9)
+    assert np.isclose(state["arm_swept"]["arm.angle"], float(np.pi / 2), atol=1e-12)
 
 
 def test_offset_rotor_changes_body_com():
     """A spinning arm with an off-axis mass: the symbolic inertia rollup
     sees the rotor at its current angle, so the body's effective COM
-    moves with the joint angle. Drive the joint to π/2 and check the
-    body experiences a torque that reflects the new COM under gravity."""
+    moves with the joint angle. Confirm the offset rotor compiles and
+    that aggregate mass + COM make sense."""
     c = Craft("arm")
     c.add(Mass("body", mass=10.0, moi=(0.5, 0.5, 0.5)))
     j = Joint("arm", mode="passive", axis=(0.0, 0.0, 1.0))
@@ -332,12 +339,11 @@ def test_offset_rotor_changes_body_com():
                transform=(1.0, 0.0, 0.0)))
     c.add(j)
 
-    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
-    # Run once at angle = 0 (tip at +x in body frame) vs angle = π/2
-    # (tip at +y). The body's COM differs; under gravity (-z anchor)
-    # this rolls the body's angular velocity differently if the body
-    # is free-floating with non-trivial moment arm. Simpler test: just
-    # confirm aggregate mass + COM make sense at compile time.
+    # Smoke: the offset rotor compiles under gravity.
+    w = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
+    w.add_craft(c)
+    TargetNumpy(w.compile())
+
     inertials = c.aggregate_inertials()
     assert np.isclose(inertials["m_total"], 11.0)
     # Numpy snapshot uses transform values directly: tip at +x, so

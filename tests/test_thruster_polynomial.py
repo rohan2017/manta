@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from manta import Craft
+from manta import Craft, World, TargetNumpy
 from manta.fields import GravityField
 from manta.parts import Mass, Thruster
 
@@ -12,13 +12,13 @@ def test_linear_in_throttle():
     c = Craft("c")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(Thruster("t", force=(0.0, 0.0, 10.0)))
-    tick = c.compile_tick(gravity_field=GravityField(g=(0, 0, 0)))
-    state = c.initial_state()
-    state["t.throttle"] = 0.5    # half throttle ⇒ 5 N
+    w = World().add_field(GravityField(g=(0, 0, 0)))
+    w.add_craft(c, **{"t.throttle": 0.5})    # half throttle ⇒ 5 N
+    sim = TargetNumpy(w.compile())
+    state = sim.initial_state()
     for _ in range(100):
-        out = tick(dt=0.001, **state)
-        state = {**state, **out}
-    assert np.isclose(state["velocity"][2], 0.5, atol=1e-3)
+        state = sim.step(state, dt=0.001)
+    assert np.isclose(state["c"]["velocity"][2], 0.5, atol=1e-3)
 
 
 def test_quadratic_in_throttle():
@@ -27,13 +27,13 @@ def test_quadratic_in_throttle():
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     # K_T = 4 N/throttle². At throttle=0.5 → F = 4·0.25 = 1.0 N.
     c.add(Thruster("t", force_quad=(0.0, 0.0, 4.0)))
-    tick = c.compile_tick(gravity_field=GravityField(g=(0, 0, 0)))
-    state = c.initial_state()
-    state["t.throttle"] = 0.5
+    w = World().add_field(GravityField(g=(0, 0, 0)))
+    w.add_craft(c, **{"t.throttle": 0.5})
+    sim = TargetNumpy(w.compile())
+    state = sim.initial_state()
     for _ in range(100):
-        out = tick(dt=0.001, **state)
-        state = {**state, **out}
-    assert np.isclose(state["velocity"][2], 0.1, atol=1e-3)
+        state = sim.step(state, dt=0.001)
+    assert np.isclose(state["c"]["velocity"][2], 0.1, atol=1e-3)
 
 
 def test_linear_plus_quadratic_combine():
@@ -43,11 +43,12 @@ def test_linear_plus_quadratic_combine():
     c = Craft("c")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(Thruster("t", force=(0, 0, 3.0), force_quad=(0, 0, 1.0)))
-    tick = c.compile_tick(gravity_field=GravityField(g=(0, 0, 0)))
-    state = c.initial_state()
-    state["t.throttle"] = 2.0
-    out = tick(dt=0.001, **state)
-    assert np.isclose(out["velocity"][2], 0.01, atol=1e-6)
+    w = World().add_field(GravityField(g=(0, 0, 0)))
+    w.add_craft(c, **{"t.throttle": 2.0})
+    sim = TargetNumpy(w.compile())
+    state = sim.initial_state()
+    state = sim.step(state, dt=0.001)
+    assert np.isclose(state["c"]["velocity"][2], 0.01, atol=1e-6)
 
 
 def test_linear_reaction_torque():
@@ -57,12 +58,13 @@ def test_linear_reaction_torque():
     c.add(Thruster("prop",
                    force=(0.0, 0.0, 10.0),
                    torque=(0.0, 0.0, 0.1)))
-    tick = c.compile_tick(gravity_field=GravityField(g=(0, 0, 0)))
-    state = c.initial_state()
-    state["prop.throttle"] = 1.0
-    out = tick(dt=0.001, **state)
+    w = World().add_field(GravityField(g=(0, 0, 0)))
+    w.add_craft(c, **{"prop.throttle": 1.0})
+    sim = TargetNumpy(w.compile())
+    state = sim.initial_state()
+    state = sim.step(state, dt=0.001)
     # 0.1 N·m / 0.1 kg·m² → α = 1 rad/s². After 1 ms ω_z ≈ 0.001 rad/s.
-    assert np.isclose(out["angular_velocity"][2], 0.001, atol=1e-6)
+    assert np.isclose(state["c"]["angular_velocity"][2], 0.001, atol=1e-6)
 
 
 def test_quadratic_reaction_torque():
@@ -73,8 +75,9 @@ def test_quadratic_reaction_torque():
     c.add(Thruster("rotor",
                    force_quad=(0, 0, 10.0),
                    torque_quad=(0, 0, 0.4)))
-    tick = c.compile_tick(gravity_field=GravityField(g=(0, 0, 0)))
-    state = c.initial_state()
-    state["rotor.throttle"] = 0.5      # τ = 0.4 · 0.25 = 0.1 N·m
-    out = tick(dt=0.001, **state)
-    assert np.isclose(out["angular_velocity"][2], 0.001, atol=1e-6)
+    w = World().add_field(GravityField(g=(0, 0, 0)))
+    w.add_craft(c, **{"rotor.throttle": 0.5})      # τ = 0.4 · 0.25 = 0.1 N·m
+    sim = TargetNumpy(w.compile())
+    state = sim.initial_state()
+    state = sim.step(state, dt=0.001)
+    assert np.isclose(state["c"]["angular_velocity"][2], 0.001, atol=1e-6)

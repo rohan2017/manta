@@ -1,6 +1,6 @@
 """Mass — a lump of mass that contributes m·g to the craft's wrench
 when a GravityField is registered. Diagonal MOI feeds into the body's
-inertia aggregation via parallel-axis lifts at Craft.compile_tick time.
+inertia aggregation via parallel-axis lifts at world-compile time.
 """
 
 from __future__ import annotations

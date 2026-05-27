@@ -109,7 +109,9 @@ def test_world_uniform_gravity_matches_direct_compile():
     direct gravity_world escape hatch."""
     c1 = Craft("solo_a")
     c1.add(Mass("body", mass=1.0))
-    direct = c1.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
+    wd = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
+    wd.add_craft(c1, position=(0.0, 0.0, 50.0))
+    cwd = TargetNumpy(wd.compile())
 
     c2 = Craft("solo_b")
     c2.add(Mass("body", mass=1.0))
@@ -117,15 +119,14 @@ def test_world_uniform_gravity_matches_direct_compile():
     w.add_craft(c2, position=(0.0, 0.0, 50.0))
     cw = TargetNumpy(w.compile())
 
-    state_d = c1.initial_state(position=(0.0, 0.0, 50.0))
+    state_d = cwd.initial_state()
     state_w = cw.initial_state()
     for _ in range(200):
-        out = direct(dt=0.005, **state_d)
-        state_d = {**state_d, **out}
+        state_d = cwd.step(state_d, dt=0.005)
         state_w = cw.step(state_w, dt=0.005)
 
     np.testing.assert_allclose(state_w["solo_b"]["position"],
-                               state_d["position"], atol=1e-12)
+                               state_d["solo_a"]["position"], atol=1e-12)
 
 
 def test_world_point_mass_gravity_orbital_acceleration():

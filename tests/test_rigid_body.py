@@ -5,6 +5,7 @@ import math
 
 import numpy as np
 
+from manta import World, TargetNumpy
 from manta.craft import Craft
 from manta.fields import GravityField
 from manta.parts import Mass
@@ -68,23 +69,24 @@ def test_free_spinning_body_conserves_angular_momentum_z():
     # Spherical inertia so ω×(I·ω) = 0 even off-axis; clean check.
     c.add(Mass("body", mass=1.0, moi=(1.0, 1.0, 1.0)))
 
-    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))  # no gravity
-
     omega_0 = 2.0  # rad/s about +z
-    state = c.initial_state(angular_velocity=(0.0, 0.0, omega_0))
+    w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))  # no gravity
+    w.add_craft(c, angular_velocity=(0.0, 0.0, omega_0))
+    sim = TargetNumpy(w.compile())
+
+    state = sim.initial_state()
     for _ in range(1000):
-        out = tick(dt=0.001, **state)
-        state = {**state, **out}
+        state = sim.step(state, dt=0.001)
 
     # ω should still be ~(0, 0, 2.0) after 1 s.
-    assert np.allclose(state["angular_velocity"], [0.0, 0.0, omega_0], atol=1e-6)
+    assert np.allclose(state["spinner"]["angular_velocity"], [0.0, 0.0, omega_0], atol=1e-6)
     # Body should have rotated by 2 rad. The quaternion at angle θ about +z
     # is (cos(θ/2), 0, 0, sin(θ/2)).
     expected_w = math.cos(1.0)
     expected_z = math.sin(1.0)
-    assert np.isclose(state["orientation"][0], expected_w, atol=1e-3)
-    assert np.isclose(state["orientation"][3], expected_z, atol=1e-3)
-    assert np.allclose(state["orientation"][1:3], [0.0, 0.0], atol=1e-9)
+    assert np.isclose(state["spinner"]["orientation"][0], expected_w, atol=1e-3)
+    assert np.isclose(state["spinner"]["orientation"][3], expected_z, atol=1e-3)
+    assert np.allclose(state["spinner"]["orientation"][1:3], [0.0, 0.0], atol=1e-9)
 
 
 def test_free_spinning_anisotropic_intermediate_axis():
@@ -93,15 +95,16 @@ def test_free_spinning_anisotropic_intermediate_axis():
     c = Craft("ellipsoid")
     c.add(Mass("body", mass=1.0, moi=(0.5, 1.0, 2.0)))   # Izz > Iyy > Ixx
 
-    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
+    w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
+    w.add_craft(c, angular_velocity=(0.0, 0.0, 1.0))
+    sim = TargetNumpy(w.compile())
 
-    state = c.initial_state(angular_velocity=(0.0, 0.0, 1.0))
+    state = sim.initial_state()
     for _ in range(500):
-        out = tick(dt=0.001, **state)
-        state = {**state, **out}
+        state = sim.step(state, dt=0.001)
 
     # Rotation about the largest-MOI axis is stable: ω stays at (0,0,1).
-    assert np.allclose(state["angular_velocity"], [0.0, 0.0, 1.0], atol=1e-6)
+    assert np.allclose(state["ellipsoid"]["angular_velocity"], [0.0, 0.0, 1.0], atol=1e-6)
 
 
 def test_no_position_drift_from_pure_rotation():
@@ -116,15 +119,16 @@ def test_no_position_drift_from_pure_rotation():
     c.add(Mass("a", mass=1.0, transform=(+r, 0.0, 0.0)))
     c.add(Mass("b", mass=1.0, transform=(-r, 0.0, 0.0)))
 
-    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
-    state = c.initial_state(angular_velocity=(0.0, 0.0, 5.0))
+    w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
+    w.add_craft(c, angular_velocity=(0.0, 0.0, 5.0))
+    sim = TargetNumpy(w.compile())
+    state = sim.initial_state()
     for _ in range(1000):
-        out = tick(dt=0.001, **state)
-        state = {**state, **out}
+        state = sim.step(state, dt=0.001)
 
     # No external forces, COM at origin → origin shouldn't move.
-    assert np.allclose(state["position"], [0.0, 0.0, 0.0], atol=1e-6)
-    assert np.allclose(state["velocity"], [0.0, 0.0, 0.0], atol=1e-6)
+    assert np.allclose(state["rotating_offset"]["position"], [0.0, 0.0, 0.0], atol=1e-6)
+    assert np.allclose(state["rotating_offset"]["velocity"], [0.0, 0.0, 0.0], atol=1e-6)
 
 
 def test_gravity_creates_no_torque_at_balanced_com():
@@ -135,18 +139,19 @@ def test_gravity_creates_no_torque_at_balanced_com():
     c.add(Mass("a", mass=1.0, transform=(+0.5, 0.0, 0.0)))
     c.add(Mass("b", mass=1.0, transform=(-0.5, 0.0, 0.0)))
     # COM = (0,0,0) by symmetry.
-    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
+    w = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
+    w.add_craft(c)
+    sim = TargetNumpy(w.compile())
 
-    state = c.initial_state()
+    state = sim.initial_state()
     for _ in range(100):
-        out = tick(dt=0.01, **state)
-        state = {**state, **out}
+        state = sim.step(state, dt=0.01)
 
     # Free-fall: vz = -9.81 after 1 s.
-    assert np.isclose(state["velocity"][2], -9.81, atol=1e-5)
+    assert np.isclose(state["balanced"]["velocity"][2], -9.81, atol=1e-5)
     # No angular dynamics imparted by symmetric gravity.
-    assert np.allclose(state["angular_velocity"], [0.0, 0.0, 0.0], atol=1e-9)
-    assert np.allclose(state["orientation"], [1.0, 0.0, 0.0, 0.0], atol=1e-9)
+    assert np.allclose(state["balanced"]["angular_velocity"], [0.0, 0.0, 0.0], atol=1e-9)
+    assert np.allclose(state["balanced"]["orientation"], [1.0, 0.0, 0.0, 0.0], atol=1e-9)
 
 
 def test_quaternion_normalization_holds_over_long_run():
@@ -154,12 +159,13 @@ def test_quaternion_normalization_holds_over_long_run():
     thanks to the .normalize() call inside the tick."""
     c = Craft("long_spin")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.2, 0.3)))
-    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
+    w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
+    w.add_craft(c, angular_velocity=(0.3, 0.5, 0.7))
+    sim = TargetNumpy(w.compile())
 
-    state = c.initial_state(angular_velocity=(0.3, 0.5, 0.7))
+    state = sim.initial_state()
     for _ in range(10_000):
-        out = tick(dt=0.001, **state)
-        state = {**state, **out}
+        state = sim.step(state, dt=0.001)
 
-    q = state["orientation"]
+    q = state["long_spin"]["orientation"]
     assert np.isclose(np.linalg.norm(q), 1.0, atol=1e-9)

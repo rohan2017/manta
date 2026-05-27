@@ -24,10 +24,12 @@ def test_dvl_stationary_craft_reads_zero():
     c = Craft("dvl_test")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(DVL("d"))
-    tick = c.compile_tick(gravity_field=GravityField(g=(0, 0, 0)))
-    state = c.initial_state()
-    out = tick(dt=0.001, **state)
-    np.testing.assert_allclose(np.array(out["d.velocity"]).ravel(),
+    w = World().add_field(GravityField(g=(0, 0, 0)))
+    w.add_craft(c)
+    sim = TargetNumpy(w.compile())
+    state = sim.initial_state()
+    state = sim.step(state, dt=0.001)
+    np.testing.assert_allclose(np.array(state["dvl_test"]["d.velocity"]).ravel(),
                                np.zeros(3), atol=1e-12)
 
 
@@ -36,11 +38,12 @@ def test_dvl_moving_craft_reads_anchor_velocity_when_unrotated():
     c = Craft("dvl_move")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(DVL("d"))
-    tick = c.compile_tick(gravity_field=GravityField(g=(0, 0, 0)))
-    state = c.initial_state()
-    state["velocity"] = np.array([1.5, -0.3, 2.0])
-    out = tick(dt=0.001, **state)
-    np.testing.assert_allclose(np.array(out["d.velocity"]).ravel(),
+    w = World().add_field(GravityField(g=(0, 0, 0)))
+    w.add_craft(c, velocity=np.array([1.5, -0.3, 2.0]))
+    sim = TargetNumpy(w.compile())
+    state = sim.initial_state()
+    state = sim.step(state, dt=0.001)
+    np.testing.assert_allclose(np.array(state["dvl_move"]["d.velocity"]).ravel(),
                                (1.5, -0.3, 2.0), atol=1e-12)
 
 
@@ -61,15 +64,17 @@ def test_dvl_rotated_craft_reads_rotated_velocity():
     c = Craft("dvl_rot")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(DVL("d"))
-    tick = c.compile_tick(gravity_field=GravityField(g=(0, 0, 0)))
-    state = c.initial_state()
-    state["orientation"] = np.array([np.cos(np.pi/4), 0, 0, np.sin(np.pi/4)])
-    state["velocity"]    = np.array([1.0, 0.0, 0.0])
-    out = tick(dt=0.001, **state)
+    w = World().add_field(GravityField(g=(0, 0, 0)))
+    w.add_craft(c,
+                orientation=np.array([np.cos(np.pi/4), 0, 0, np.sin(np.pi/4)]),
+                velocity=np.array([1.0, 0.0, 0.0]))
+    sim = TargetNumpy(w.compile())
+    state = sim.initial_state()
+    state = sim.step(state, dt=0.001)
     # body velocity = R^T · anchor velocity.
     # R^T · (1,0,0) for +90° about z: R = [[0,-1,0],[1,0,0],[0,0,1]]
     # so R^T = [[0,1,0],[-1,0,0],[0,0,1]] and R^T·(1,0,0) = (0, -1, 0).
-    np.testing.assert_allclose(np.array(out["d.velocity"]).ravel(),
+    np.testing.assert_allclose(np.array(state["dvl_rot"]["d.velocity"]).ravel(),
                                (0.0, -1.0, 0.0), atol=1e-9)
 
 
@@ -158,10 +163,12 @@ def test_magnetometer_with_no_field_reads_zero():
     c = Craft("nomag")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(Magnetometer("m"))
-    tick = c.compile_tick(gravity_field=GravityField(g=(0, 0, 0)))
-    state = c.initial_state()
-    out = tick(dt=0.001, **state)
-    np.testing.assert_allclose(np.array(out["m.B"]).ravel(),
+    w = World().add_field(GravityField(g=(0, 0, 0)))
+    w.add_craft(c)
+    sim = TargetNumpy(w.compile())
+    state = sim.initial_state()
+    state = sim.step(state, dt=0.001)
+    np.testing.assert_allclose(np.array(state["nomag"]["m.B"]).ravel(),
                                np.zeros(3), atol=1e-12)
 
 

@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from manta import Craft, World
+from manta import Craft, World, TargetNumpy
 from manta.fields import GravityField
 from manta.parts import Mass, Thruster
 
@@ -18,17 +18,17 @@ def test_hover_thrust_cancels_gravity():
     c.add(Mass("body", mass=m, moi=(0.1, 0.1, 0.1)))
     c.add(Thruster("t", force=(0.0, 0.0, 1.0)))
 
-    tick = c.compile_tick(gravity_field=GravityField(g=g_world))
-    state = c.initial_state()
-    state["t.throttle"] = m * 9.81           # exactly counters gravity
+    w = World().add_field(GravityField(g=g_world))
+    w.add_craft(c, **{"t.throttle": m * 9.81})   # exactly counters gravity
+    sim = TargetNumpy(w.compile())
 
+    state = sim.initial_state()
     for _ in range(1000):
-        out = tick(dt=0.001, **state)
-        state = {**state, **out}
+        state = sim.step(state, dt=0.001)
 
-    np.testing.assert_allclose(np.array(state["position"]).ravel(),
+    np.testing.assert_allclose(np.array(state["hover"]["position"]).ravel(),
                                np.zeros(3), atol=1e-6)
-    np.testing.assert_allclose(np.array(state["velocity"]).ravel(),
+    np.testing.assert_allclose(np.array(state["hover"]["velocity"]).ravel(),
                                np.zeros(3), atol=1e-6)
 
 
@@ -43,18 +43,18 @@ def test_excess_thrust_accelerates_up():
     c.add(Mass("body", mass=m, moi=(0.1, 0.1, 0.1)))
     c.add(Thruster("t", force=(0.0, 0.0, 1.0)))
 
-    tick = c.compile_tick(gravity_field=GravityField(g=g_world))
-    state = c.initial_state()
-    state["t.throttle"] = m * 9.81 + 1.0     # net = +1 N upward → a = 1 m/s²
+    w = World().add_field(GravityField(g=g_world))
+    w.add_craft(c, **{"t.throttle": m * 9.81 + 1.0})   # net = +1 N up → a = 1 m/s²
+    sim = TargetNumpy(w.compile())
 
+    state = sim.initial_state()
     for _ in range(1000):
-        out = tick(dt=0.001, **state)
-        state = {**state, **out}
+        state = sim.step(state, dt=0.001)
 
     # v(1s) = 1 m/s; z(1s) = ½·1·1² = 0.5 m. Symplectic-Euler has tiny
     # bias but well within tolerance.
-    assert np.isclose(np.array(state["velocity"]).ravel()[2], 1.0, atol=1e-3)
-    assert np.isclose(np.array(state["position"]).ravel()[2], 0.5, atol=1e-3)
+    assert np.isclose(np.array(state["ascent"]["velocity"]).ravel()[2], 1.0, atol=1e-3)
+    assert np.isclose(np.array(state["ascent"]["position"]).ravel()[2], 0.5, atol=1e-3)
 
 
 # ---------------------------------------------------------------------------
@@ -68,17 +68,15 @@ def test_offset_thruster_produces_torque():
     # Thruster mounted at (+1, 0, 0), pointing +z → torque about body y.
     c.add(Thruster("t", force=(0.0, 0.0, 1.0), transform=(1.0, 0.0, 0.0)))
 
-    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
-    state = c.initial_state()
-    state["t.throttle"] = 1.0     # 1 N at 1 m → τ = +1 N·m about body y.
+    w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
+    w.add_craft(c, **{"t.throttle": 1.0})     # 1 N at 1 m → τ = +1 N·m about body y.
+    sim = TargetNumpy(w.compile())
 
+    state = sim.initial_state()
     for _ in range(100):
-        out = tick(dt=0.001, **state)
-        state = {**state, **out}
+        state = sim.step(state, dt=0.001)
 
     # α_y = τ / I_y = 1 / 0.1 = 10 rad/s². After 0.1 s → ω_y ≈ -1.0
-    # (negative because r × F = (1,0,0) × (0,0,1) = (0, +1, 0)? wait
-    # let me check: cross product (1,0,0)×(0,0,1) = (0·1-0·0, 0·0-1·1, 1·0-0·0) = (0, -1, 0).
-    # So torque is -y direction → ω_y becomes negative.
-    assert np.isclose(np.array(state["angular_velocity"]).ravel()[1],
+    # (cross product (1,0,0)×(0,0,1) = (0, -1, 0) → torque is -y direction).
+    assert np.isclose(np.array(state["rolling"]["angular_velocity"]).ravel()[1],
                       -1.0, atol=1e-3)

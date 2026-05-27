@@ -10,14 +10,10 @@ in test_rigid_body.py.
 import numpy as np
 import pytest
 
-from manta import ir
+from manta import ir, World, TargetNumpy
 from manta.fields import GravityField
 from manta.craft import Craft
 from manta.parts import Mass
-
-
-def _initial_at_rest(c: Craft, z=0.0):
-    return c.initial_state(position=(0.0, 0.0, z))
 
 
 # ---------------------------------------------------------------------------
@@ -29,27 +25,28 @@ def test_single_mass_free_fall_numerics():
     c = Craft("free_fall")
     c.add(Mass("body", mass=1.0))
 
-    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
+    w = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
+    w.add_craft(c, position=(0.0, 0.0, 100.0))
+    sim = TargetNumpy(w.compile())
 
-    state = _initial_at_rest(c, z=100.0)
+    state = sim.initial_state()
     dt = 0.001
     n_steps = 1000   # 1 second
 
     for _ in range(n_steps):
-        out = tick(dt=dt, **state)
-        state = {**state, **out}
+        state = sim.step(state, dt=dt)
 
     expected_z  = 100.0 - 0.5 * 9.81 * 1.0      # 95.095
     expected_vz = -9.81
 
-    assert np.isclose(state["position"][2], expected_z,  atol=1e-5)
-    assert np.isclose(state["velocity"][2], expected_vz, atol=1e-5)
-    assert np.allclose(state["position"][:2],         [0.0, 0.0], atol=1e-9)
-    assert np.allclose(state["velocity"][:2],         [0.0, 0.0], atol=1e-9)
+    assert np.isclose(state["free_fall"]["position"][2], expected_z,  atol=1e-5)
+    assert np.isclose(state["free_fall"]["velocity"][2], expected_vz, atol=1e-5)
+    assert np.allclose(state["free_fall"]["position"][:2],         [0.0, 0.0], atol=1e-9)
+    assert np.allclose(state["free_fall"]["velocity"][:2],         [0.0, 0.0], atol=1e-9)
     # No external torques, no initial angular velocity, identity initial q —
     # the body should not rotate.
-    assert np.allclose(state["orientation"],          [1.0, 0.0, 0.0, 0.0], atol=1e-9)
-    assert np.allclose(state["angular_velocity"],     [0.0, 0.0, 0.0],      atol=1e-9)
+    assert np.allclose(state["free_fall"]["orientation"],          [1.0, 0.0, 0.0, 0.0], atol=1e-9)
+    assert np.allclose(state["free_fall"]["angular_velocity"],     [0.0, 0.0, 0.0],      atol=1e-9)
 
 
 def test_multi_mass_aggregates_correctly():
@@ -61,35 +58,37 @@ def test_multi_mass_aggregates_correctly():
     c.add(Mass("third", mass=0.5, transform=(0.0, 0.5, 0.0)))
     assert c.total_mass == 3.5
 
-    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
-    state = _initial_at_rest(c)
+    w = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
+    w.add_craft(c, position=(0.0, 0.0, 0.0))
+    sim = TargetNumpy(w.compile())
+    state = sim.initial_state()
     for _ in range(100):
-        out = tick(dt=0.01, **state)
-        state = {**state, **out}
+        state = sim.step(state, dt=0.01)
 
     # After 1 s: vz = -9.81, body origin z depends on offsets — but the
     # COM falls by exactly 0.5·g·t² regardless of COM location.
     inertials = c.aggregate_inertials()
     com_init = np.array([0.0, 0.0, 0.0]) + inertials["com"]
-    com_after = state["position"] + inertials["com"]
+    com_after = state["multi_mass"]["position"] + inertials["com"]
     expected_com_z = com_init[2] - 0.5 * 9.81 * 1.0   # -4.905
     assert np.isclose(com_after[2], expected_com_z, atol=1e-5)
-    assert np.isclose(state["velocity"][2], -9.81,    atol=1e-5)
+    assert np.isclose(state["multi_mass"]["velocity"][2], -9.81,    atol=1e-5)
 
 
 def test_horizontal_gravity():
     """Gravity along +x produces +x acceleration of the origin."""
     c = Craft("sideways")
     c.add(Mass("body", mass=1.0))
-    tick = c.compile_tick(gravity_field=GravityField(g=(2.0, 0.0, 0.0)))
+    w = World().add_field(GravityField(g=(2.0, 0.0, 0.0)))
+    w.add_craft(c, position=(0.0, 0.0, 0.0))
+    sim = TargetNumpy(w.compile())
 
-    state = _initial_at_rest(c)
+    state = sim.initial_state()
     for _ in range(100):
-        out = tick(dt=0.01, **state)
-        state = {**state, **out}
+        state = sim.step(state, dt=0.01)
 
-    assert np.isclose(state["velocity"][0], 2.0, atol=1e-5)
-    assert np.isclose(state["position"][0], 1.0, atol=1e-5)
+    assert np.isclose(state["sideways"]["velocity"][0], 2.0, atol=1e-5)
+    assert np.isclose(state["sideways"]["position"][0], 1.0, atol=1e-5)
 
 
 # ---------------------------------------------------------------------------
@@ -103,15 +102,22 @@ def test_unknown_parameter_raises():
 
 def test_empty_craft_compile_raises():
     c = Craft("empty")
-    with pytest.raises(ValueError, match="no parts"):
-        c.compile_tick()
+    w = World()
+    w.add_craft(c)
+    # An empty craft has zero total mass; the World compile path surfaces
+    # the mass-positivity guard ("total mass") rather than a separate
+    # "no parts" check.
+    with pytest.raises(ValueError, match="total mass"):
+        w.compile()
 
 
 def test_zero_mass_craft_raises():
     c = Craft("massless")
     c.add(Mass("body", mass=0.0))
+    w = World()
+    w.add_craft(c)
     with pytest.raises(ValueError, match="total mass"):
-        c.compile_tick()
+        w.compile()
 
 
 def test_parameter_introspection():

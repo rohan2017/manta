@@ -42,8 +42,10 @@ def test_ekf_predict_with_per_tick_input():
     c.add(Thruster("t", force=(0.0, 0.0, 1.0)))
 
     # Sim
-    tick = c.compile_tick(gravity_field=GravityField(g=g))
-    sim_state = c.initial_state()
+    w = World().add_field(GravityField(g=g))
+    w.add_craft(c)
+    sim = TargetNumpy(w.compile())
+    sim_state = sim.initial_state()
     # EKF
     _ekf_world = World().add_field(GravityField(g=g))
     _ekf_world.add_craft(c)
@@ -62,9 +64,8 @@ def test_ekf_predict_with_per_tick_input():
             thrust = 2.0 * m * 9.81
 
         # Sim step.
-        sim_state["t.throttle"] = thrust
-        out = tick(dt=dt, **sim_state)
-        sim_state = {**sim_state, **out}
+        sim_state["hover_ekf"]["t.throttle"] = thrust
+        sim_state = sim.step(sim_state, dt=dt)
 
         # EKF predict step.
         ekf.predict(dt=dt, u={"t.throttle": thrust})
@@ -72,10 +73,10 @@ def test_ekf_predict_with_per_tick_input():
     # No measurements, no noise — should agree to round-off.
     est = ekf.state_dict()["hover_ekf"]
     np.testing.assert_allclose(est["position"].ravel(),
-                               np.array(sim_state["position"]).ravel(),
+                               np.array(sim_state["hover_ekf"]["position"]).ravel(),
                                atol=1e-9)
     np.testing.assert_allclose(est["velocity"].ravel(),
-                               np.array(sim_state["velocity"]).ravel(),
+                               np.array(sim_state["hover_ekf"]["velocity"]).ravel(),
                                atol=1e-9)
 
 

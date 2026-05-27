@@ -207,7 +207,7 @@ class State(_Declaration):
         if manifold not in ("R1", "R3"):
             raise NotImplementedError(
                 f"State.manifold={manifold!r}: only 'R1' (scalar) and "
-                f"'R3' (vec3) are wired through compile_tick today. SO3 "
+                f"'R3' (vec3) are wired through the world tick today. SO3 "
                 f"requires the dual-frame parametrization (orientation "
                 f"= Quat[from, to]) and isn't yet user-selectable.")
         if manifold == "R3":
@@ -508,7 +508,7 @@ class RootPart(CompositePart):
 # to point at when they say "the Part's update receives a TickContext".
 # Do NOT `isinstance(ctx, TickContext)` against this — that check
 # would always pass against the placeholder regardless of what `ctx`
-# actually is. The compile_tick loop in craft.py constructs and
+# actually is. The world-tick loop in coupled_tick.py constructs and
 # dispatches the concrete context directly.
 
 class TickContext:   # noqa: D401  (docstring is the API doc)

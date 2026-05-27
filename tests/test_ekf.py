@@ -82,24 +82,30 @@ def test_ekf_predict_alone_matches_tick():
     c = Craft("predict_only")
     c.add(Mass("body", mass=1.0))
 
-    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
+    # Truth sim: an identical craft in its own World.
+    tc = Craft("predict_only")
+    tc.add(Mass("body", mass=1.0))
+    tw = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
+    tw.add_craft(tc, position=(0.0, 0.0, 100.0))
+    truth_sim = TargetNumpy(tw.compile())
+
     _ekf_world = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
     _ekf_world.add_craft(c)
     ekf = TargetNumpy(EKF(_ekf_world))
 
-    state = c.initial_state(position=(0.0, 0.0, 100.0))
-    ekf.reset(state={"predict_only": {"position": state["position"]}})
+    state = truth_sim.initial_state()
+    ekf.reset(state={"predict_only":
+                     {"position": state["predict_only"]["position"]}})
 
     dt = 0.01
     for _ in range(100):
         # Direct tick
-        out = tick(dt=dt, **state)
-        state = {**state, **out}
+        state = truth_sim.step(state, dt=dt)
         # EKF predict (with no process noise)
         ekf.predict(dt=dt)
 
     # Both should now be at z = 100 − 0.5·9.81·1 = 95.095.
-    assert np.isclose(state["position"][2],  95.095, atol=1e-5)
+    assert np.isclose(state["predict_only"]["position"][2],  95.095, atol=1e-5)
     assert np.isclose(ekf.state_dict()["predict_only"]["position"][2],
                       95.095, atol=1e-5)
 
@@ -111,14 +117,19 @@ def test_ekf_position_sensor_pulls_estimate_toward_truth():
     c = Craft("oracle_demo")
     c.add(Mass("body", mass=1.0))
 
-    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
+    tc = Craft("oracle_demo")
+    tc.add(Mass("body", mass=1.0))
+    tw = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
+    tw.add_craft(tc, position=(0.0, 0.0, 100.0))
+    truth_sim = TargetNumpy(tw.compile())
+
     _ekf_world = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
     _ekf_world.add_craft(c)
     ekf = TargetNumpy(EKF(_ekf_world))
 
     # Truth at z=100, EKF prior at z=0 — but covariance reflects the
     # uncertainty.
-    truth = c.initial_state(position=(0.0, 0.0, 100.0))
+    truth = truth_sim.initial_state()
     P0 = np.eye(ekf.spec.tangent_dim) * 1.0   # broad prior, tangent-dim
     ekf.reset(state={"oracle_demo": {"position": np.zeros(3)}}, P=P0)
 
@@ -130,14 +141,13 @@ def test_ekf_position_sensor_pulls_estimate_toward_truth():
     dt = 0.01
     for _ in range(500):  # 5 seconds
         # Truth integration.
-        out = tick(dt=dt, **truth)
-        truth = {k: out[k] for k in truth}
+        truth = truth_sim.step(truth, dt=dt)
         # EKF predict + noisy measurement update.
         ekf.predict(dt=dt, Q=Q)
-        z = truth["position"][2] + rng.normal(0.0, 0.1)
+        z = truth["oracle_demo"]["position"][2] + rng.normal(0.0, 0.1)
         ekf.update(h_z, z=np.array([z]), R=R)
 
-    truth_z = truth["position"][2]
+    truth_z = truth["oracle_demo"]["position"][2]
     est_z   = ekf.state_dict()["oracle_demo"]["position"][2]
     # Truth has fallen by ½·g·t² = 122.625 → z = -22.625.
     assert np.isclose(truth_z, 100.0 - 0.5 * 9.81 * 25.0, atol=1e-3)
@@ -195,14 +205,19 @@ def test_eskf_attitude_estimation_converges():
     c = Craft("attitude_demo")
     c.add(Mass("body", mass=1.0, moi=(1.0, 1.0, 1.0)))   # spherical I
 
-    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
+    # Truth spins at ω = 1 rad/s about +z.
+    omega_truth = np.array([0.0, 0.0, 1.0])
+    tc = Craft("attitude_demo")
+    tc.add(Mass("body", mass=1.0, moi=(1.0, 1.0, 1.0)))
+    tw = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
+    tw.add_craft(tc, angular_velocity=tuple(omega_truth))
+    truth_sim = TargetNumpy(tw.compile())
+
     _ekf_world = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     _ekf_world.add_craft(c)
     ekf = TargetNumpy(EKF(_ekf_world))
 
-    # Truth spins at ω = 1 rad/s about +z.
-    omega_truth = np.array([0.0, 0.0, 1.0])
-    truth = c.initial_state(angular_velocity=tuple(omega_truth))
+    truth = truth_sim.initial_state()
 
     # EKF prior: wrong orientation + uncertain.
     half = math.pi / 8.0
@@ -223,15 +238,14 @@ def test_eskf_attitude_estimation_converges():
     Q = np.eye(n_tan) * 1e-8
 
     for _ in range(500):
-        out = tick(dt=0.01, **truth)
-        truth = {k: out[k] for k in truth}
+        truth = truth_sim.step(truth, dt=0.01)
         ekf.predict(dt=0.01, Q=Q)
-        z = truth["orientation"] + rng.normal(0.0, 0.03, size=4)
+        z = truth["attitude_demo"]["orientation"] + rng.normal(0.0, 0.03, size=4)
         ekf.update(h_q, z=z, R=R)
 
     # Estimate's orientation should now track truth tightly.
     est_q   = ekf.state_dict()["attitude_demo"]["orientation"]
-    truth_q = truth["orientation"]
+    truth_q = truth["attitude_demo"]["orientation"]
     # Inner product: |<est, truth>| ≈ 1 when they agree (modulo cover).
     inner = abs(float(np.dot(est_q, truth_q)))
     assert inner > 0.999, \

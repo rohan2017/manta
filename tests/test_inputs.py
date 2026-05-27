@@ -1,8 +1,7 @@
 """Per-tick Input declarations — values supplied by the caller each step.
 
 Uses a `Joint` with a single rotor `Mass` child to exercise the
-torque_cmd Input across the various integration paths (compile_tick,
-World.step, EKF.predict).
+torque_cmd Input across the integration paths (World.step, EKF.predict).
 """
 
 import numpy as np
@@ -60,14 +59,15 @@ def test_zero_torque_default_keeps_flywheel_at_rest():
     c.add(Mass("body", mass=100.0, moi=(1000.0, 1000.0, 1000.0)))
     c.add(_flywheel("motor", I_axial=0.01))    # default torque_cmd=0
 
-    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
-    state = c.initial_state()
+    w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
+    w.add_craft(c)
+    sim = TargetNumpy(w.compile())
+    state = sim.initial_state()
     for _ in range(1000):
-        out = tick(dt=0.001, **state)
-        state = {**state, **out}
+        state = sim.step(state, dt=0.001)
 
-    assert np.isclose(state["motor.rate"],  0.0, atol=1e-12)
-    assert np.isclose(state["motor.angle"], 0.0, atol=1e-12)
+    assert np.isclose(state["idle"]["motor.rate"],  0.0, atol=1e-12)
+    assert np.isclose(state["idle"]["motor.angle"], 0.0, atol=1e-12)
 
 
 def test_per_tick_torque_drives_flywheel():
@@ -75,29 +75,28 @@ def test_per_tick_torque_drives_flywheel():
     c.add(Mass("body", mass=100.0, moi=(1000.0, 1000.0, 1000.0)))
     c.add(_flywheel("motor", I_axial=0.01))
 
-    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
-    state = c.initial_state()
+    w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
+    w.add_craft(c)
+    sim = TargetNumpy(w.compile())
+    state = sim.initial_state()
 
     # First second: idle (default 0 torque).
     for _ in range(1000):
-        out = tick(dt=0.001, **state)
-        state = {**state, **out}
-    assert np.isclose(state["motor.rate"], 0.0, atol=1e-9)
+        state = sim.step(state, dt=0.001)
+    assert np.isclose(state["driven"]["motor.rate"], 0.0, atol=1e-9)
 
     # Switch torque on — input persists between steps because of the merge.
-    state["motor.torque_cmd"] = 1.0
+    state["driven"]["motor.torque_cmd"] = 1.0
     for _ in range(1000):
-        out = tick(dt=0.001, **state)
-        state = {**state, **out}
+        state = sim.step(state, dt=0.001)
     # α = 1.0 / 0.01 = 100 rad/s² for 1 s ⇒ ω = 100.
-    assert np.isclose(state["motor.rate"], 100.0, atol=1e-6)
+    assert np.isclose(state["driven"]["motor.rate"], 100.0, atol=1e-6)
 
     # Switch torque off — rate stays at 100 (no friction).
-    state["motor.torque_cmd"] = 0.0
+    state["driven"]["motor.torque_cmd"] = 0.0
     for _ in range(1000):
-        out = tick(dt=0.001, **state)
-        state = {**state, **out}
-    assert np.isclose(state["motor.rate"], 100.0, atol=1e-6)
+        state = sim.step(state, dt=0.001)
+    assert np.isclose(state["driven"]["motor.rate"], 100.0, atol=1e-6)
 
 
 def test_input_value_can_change_each_tick():
@@ -106,23 +105,24 @@ def test_input_value_can_change_each_tick():
     c.add(Mass("body", mass=100.0, moi=(1000.0, 1000.0, 1000.0)))
     c.add(_flywheel("motor", I_axial=0.01))
 
-    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, 0.0)))
-    state = c.initial_state()
+    w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
+    w.add_craft(c)
+    sim = TargetNumpy(w.compile())
+    state = sim.initial_state()
 
     # Apply a sinusoidal torque over 2 seconds.
     dt = 0.001
     integral = 0.0
     for i in range(2000):
         tau = np.sin(2 * np.pi * i * dt / 2.0)   # 0.5 Hz sine
-        state["motor.torque_cmd"] = float(tau)
+        state["ramping"]["motor.torque_cmd"] = float(tau)
         integral += tau * dt
-        out = tick(dt=dt, **state)
-        state = {**state, **out}
+        state = sim.step(state, dt=dt)
 
     # The integral of a full sine cycle over its period is ~0, so the
     # flywheel rate ends near zero.
     expected_rate = integral / 0.01   # ω = ∫τ/I dt
-    assert np.isclose(state["motor.rate"], expected_rate, atol=1e-3)
+    assert np.isclose(state["ramping"]["motor.rate"], expected_rate, atol=1e-3)
 
 
 # ---------------------------------------------------------------------------
@@ -191,13 +191,15 @@ def test_multiple_inputs_on_one_part():
     c = Craft("two_in")
     c.add(Mass("body", mass=1.0))
     c.add(TwoInputPart("p"))
-    state = c.initial_state()
-    assert state["p.scale_a"] == 1.0
-    assert state["p.scale_b"] == 2.0
+    init = c.initial_state()
+    assert init["p.scale_a"] == 1.0
+    assert init["p.scale_b"] == 2.0
 
-    tick = c.compile_tick(gravity_field=GravityField(g=(0.0, 0.0, -9.81)))
-    out = tick(dt=0.001, **state)
-    assert "position" in out
+    w = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
+    w.add_craft(c)
+    sim = TargetNumpy(w.compile())
+    state = sim.step(sim.initial_state(), dt=0.001)
+    assert "position" in state["two_in"]
 
 
 def test_input_decl_introspection():
