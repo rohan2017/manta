@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import casadi as ca
 
-from ..ir.frames import Frame, _validate_frame
+from ..ir.frames import _validate_frame
 from ..ir.types import Quat, Scalar, Vec3, _as_mx
 
 

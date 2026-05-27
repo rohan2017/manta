@@ -49,7 +49,7 @@ import casadi as ca
 import numpy as np
 
 from ...fields import FluidField
-from ...ir.frames import WorldFrame, CraftFrame
+from ...ir.frames import CraftFrame
 from ...ir.types import Vec3
 from ..base import Parameter, Part, PartUpdate
 from ...ir.wrench import Wrench

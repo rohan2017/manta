@@ -42,7 +42,7 @@ from typing import Any
 import casadi as ca
 
 from .ir.frames import WorldFrame, CraftFrame
-from .ir.types import Mat3, Quat, Scalar, Vec3
+from .ir.types import Mat3, Quat, Vec3
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +172,6 @@ def kinematic_pass(root_part,
         output frame ω; the output frame additionally gets `rate · axis`
         if the part is a Joint.
     """
-    from .parts.articulation.joint import Joint
     from .parts.base import CompositePart
 
     # ----- root state (coincides with body) -----------------------------

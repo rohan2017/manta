@@ -16,8 +16,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ...estimation.state_spec import StateSlot, StateSpec
-from .extract import OutputSpec, WorldFunctions
+from ...estimation.state_spec import StateSlot
+from .extract import WorldFunctions
 
 
 # ---------------------------------------------------------------------------

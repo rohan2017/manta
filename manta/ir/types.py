@@ -24,10 +24,8 @@ from typing import Any, ClassVar
 import casadi as ca
 
 from .frames import (
-    Frame,
     FrameError,
     _capture_user_source,
-    _check_frame,
     _format_frame,
     _is_frame,
     _validate_frame,
