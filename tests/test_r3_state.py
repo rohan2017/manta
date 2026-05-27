@@ -1,7 +1,7 @@
 """Per-Part R3 state slots — `State(manifold="R3", frame=...)`.
 
 The R3 manifold for user-declared Part state is wired through
-compile_tick, coupled_tick, initial_state, and StateSpec.from_world.
+compile_world_tick, initial_state, and StateSpec.from_world.
 Use case: a Part that carries its own 3-vector state internally
 (e.g. an integrator accumulating a velocity error, a wind estimate
 local to one Part, etc.).

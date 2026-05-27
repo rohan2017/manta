@@ -508,7 +508,7 @@ class RootPart(CompositePart):
 # to point at when they say "the Part's update receives a TickContext".
 # Do NOT `isinstance(ctx, TickContext)` against this — that check
 # would always pass against the placeholder regardless of what `ctx`
-# actually is. The world-tick loop in coupled_tick.py constructs and
+# actually is. The world-tick loop in world_tick.py constructs and
 # dispatches the concrete context directly.
 
 class TickContext:   # noqa: D401  (docstring is the API doc)

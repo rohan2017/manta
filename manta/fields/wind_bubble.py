@@ -86,7 +86,7 @@ class CraftWindBubble(Disturbance):
         self.radius = float(radius)
 
     def contribute_at_sym(self, point, t) -> FluidState:
-        # Craft's symbolic position (set up by compile_coupled_tick
+        # Craft's symbolic position (set up by compile_world_tick
         # Pass 0a). Bubbles must be added AFTER their anchor craft
         # was added to the world; world.compile() then guarantees the
         # symbolic state is in scope.

@@ -11,7 +11,7 @@ extending v_rel · r̂ > 0), with equal-and-opposite F on B.
 Each endpoint Part on the craft has a `Part.transform` giving the
 attachment offset in body frame. The Tether reads both transforms,
 computes the world-frame positions, evaluates the force, and emits a
-pair of wrenches at-the-endpoint-offsets. The compile_coupled_tick
+pair of wrenches at-the-endpoint-offsets. The compile_world_tick
 framework lifts these to craft-origin wrenches via the standard
 force-at-offset → body-frame-torque mechanism, so off-axis attachments
 produce the correct torques on each craft automatically.

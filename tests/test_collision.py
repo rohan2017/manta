@@ -181,9 +181,9 @@ def test_offset_collider_produces_tip_over_torque():
 # Collision in a coupled (multi-craft) component
 # ---------------------------------------------------------------------------
 
-def test_collision_field_reaches_coupled_tick():
+def test_collision_field_reaches_world_tick():
     """A Collider on one craft of a tethered pair should see the
-    ground plane the World registers. Before the coupled_tick fix this
+    ground plane the World registers. Before the world_tick fix this
     silently dropped the CollisionField and the body free-fell through
     the floor."""
     from manta.couplings import Tether
@@ -220,5 +220,5 @@ def test_collision_field_reaches_coupled_tick():
     z_a = float(state["a"]["position"][2])
     expected = -1.0 * g / 1e5
     assert np.isclose(z_a, expected, atol=2e-4), (
-        f"a.z={z_a}, expected≈{expected}; the coupled_tick path is "
+        f"a.z={z_a}, expected≈{expected}; the world_tick path is "
         f"probably dropping the CollisionField again.")

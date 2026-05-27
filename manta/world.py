@@ -217,7 +217,7 @@ class World:
     def compile(self) -> "CompiledWorld":
         """Compile every craft in this world into one shared tick.
 
-        Concretely: route through `compile_coupled_tick` with every
+        Concretely: route through `compile_world_tick` with every
         craft + every coupling. There is no per-component partitioning
         any more — the World is the unit of simulation, so the entire
         world's dynamics live in a single CasADi function. This makes
@@ -270,14 +270,14 @@ class World:
             raise ValueError(
                 f"World '{self.name}': no crafts added; nothing to compile.")
 
-        # One tick, all crafts. compile_coupled_tick already handles the
+        # One tick, all crafts. compile_world_tick already handles the
         # N=1 case cleanly — the only difference is that slot names get
         # prefixed with `<craft.name>.` to disambiguate across crafts.
         # `CompiledWorld.step` translates between the user-facing nested
         # state dict and that flat-prefixed casadi input naming.
-        from .coupled_tick import compile_coupled_tick
+        from .world_tick import compile_world_tick
         all_crafts = [e["craft"] for e in self._crafts]
-        tick = compile_coupled_tick(
+        tick = compile_world_tick(
             all_crafts, list(self._couplings),
             gravity_field=self._fields.get(GravityField),
             fluid_field=self._fields.get(FluidField),

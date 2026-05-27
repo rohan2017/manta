@@ -1,6 +1,6 @@
 """World-tick compilation: one shared CasADi function over every craft.
 
-`World.compile()` always routes through `compile_coupled_tick` —
+`World.compile()` always routes through `compile_world_tick` —
 there's no per-component partitioning. The resulting CompiledGraph
 takes the concatenated state of every craft (with `<craft_name>.`
 prefixed slot names) plus every state-bearing disturbance and
@@ -14,13 +14,13 @@ anchored to craft A whose contribution another craft B's DragSurface
 samples) also Just Works — both crafts' symbolic state is in scope
 during the single tick compile.
 
-The per-craft physics pipeline mirrors the original
-`Craft.compile_tick` (inertials → state inputs → TickContext → part
-wrench aggregation → Newton-Euler → symplectic integration → outputs).
-It diverges by: (a) prefixing all per-craft IO names with the craft
-name, (b) sharing one `dt` + `t` input across all crafts, and (c)
-splicing in coupling wrenches between the part-aggregation and N-E
-steps.
+The per-craft physics pipeline is: inertials → state inputs →
+TickContext → part wrench aggregation → Newton-Euler → symplectic
+integration → outputs. The multi-craft wrapper around it (a)
+prefixes all per-craft IO names with the craft name, (b) shares one
+`dt` + `t` input across all crafts, and (c) splices in coupling
+wrenches between the part-aggregation and N-E steps. The N=1 case is
+not special-cased — a single craft is just a one-element component.
 """
 
 from __future__ import annotations
@@ -40,14 +40,14 @@ from .parts.base import Part, PartUpdate, WhiteNoise
 from .ir.wrench import Wrench
 
 
-def compile_coupled_tick(crafts: list,
-                          couplings: list,
-                          *,
-                          gravity_field=None,
-                          fluid_field=None,
-                          mag_field=None,
-                          collision_field=None,
-                          ) -> "ir.graph.CompiledGraph":
+def compile_world_tick(crafts: list,
+                       couplings: list,
+                       *,
+                       gravity_field=None,
+                       fluid_field=None,
+                       mag_field=None,
+                       collision_field=None,
+                       ) -> "ir.graph.CompiledGraph":
     """Compile a CasADi-MX tick over multiple coupled crafts.
 
     Args:
@@ -55,9 +55,10 @@ def compile_coupled_tick(crafts: list,
                     referenced by `couplings`.
         couplings — list of Coupling instances (subclasses with
                     compute_wrenches_sym(ctx_a, ctx_b) → (Wrench, Wrench)).
-        gravity_field, fluid_field, mag_field, collision_field — same
-                    semantics as Craft.compile_tick. Shared across all
-                    crafts in this component. Any unset field defaults
+        gravity_field, fluid_field, mag_field, collision_field —
+                    the world's shared fields, queried per craft.
+                    Shared across all crafts in this component. Any
+                    unset field defaults
                     to its empty form (zero gravity / zero density /
                     zero B / zero penetration).
 
@@ -87,14 +88,14 @@ def compile_coupled_tick(crafts: list,
         collision_field = _CollisionField()
 
     if not crafts:
-        raise ValueError("compile_coupled_tick: needs at least one craft.")
+        raise ValueError("compile_world_tick: needs at least one craft.")
 
     # Validate couplings reference only crafts in this component.
     craft_set = {id(c) for c in crafts}
     for cp in couplings:
         if id(cp.craft_a) not in craft_set or id(cp.craft_b) not in craft_set:
             raise ValueError(
-                "compile_coupled_tick: coupling references a craft not in "
+                "compile_world_tick: coupling references a craft not in "
                 "the given crafts list.")
 
     # Quick numpy snapshot per craft (mass-positivity guard only). The
@@ -108,7 +109,7 @@ def compile_coupled_tick(crafts: list,
                 f"Craft '{craft.name}': total mass is "
                 f"{ai['m_total']}; need m > 0.")
 
-    name = "_".join(c.name for c in crafts) + "_coupled_tick"
+    name = "_".join(c.name for c in crafts) + "_world_tick"
     with ir.Graph(name=name) as g:
         dt = ir.Scalar.input("dt")
         t  = ir.Scalar.input("t")
@@ -208,7 +209,7 @@ def _plumb_field_disturbances(fields, dt) -> tuple[list, list[tuple[str, Any]]]:
                 continue
             if dist.name in seen_names:
                 raise ValueError(
-                    f"compile_coupled_tick: duplicate disturbance name "
+                    f"compile_world_tick: duplicate disturbance name "
                     f"{dist.name!r}. Disturbance names must be unique "
                     f"within a world.")
             seen_names.add(dist.name)
@@ -293,7 +294,7 @@ def _trace_craft_pass1(g_ctx,
     later passes need."""
     prefix = f"{craft.name}."
 
-    # Rigid-body state symbols were created in `compile_coupled_tick`'s
+    # Rigid-body state symbols were created in `compile_world_tick`'s
     # Pass 0a and stashed on `craft._sym_state` (so disturbances anchored
     # to other crafts can reference them). Pick them up here.
     position    = craft._sym_state["position"]
@@ -302,7 +303,8 @@ def _trace_craft_pass1(g_ctx,
     ang_vel     = craft._sym_state["angular_velocity"]
     # Placeholder MX symbols for current-tick body acceleration / α
     # (substituted with the real Newton-Euler outputs after the wrench
-    # sum is known — see Craft.compile_tick for the rationale).
+    # sum is known — see the TickContext docstring in craft.py for why
+    # the a/α a part reads must be a compile-time placeholder).
     a_world_sym = ca.MX.sym(f"{craft.name}_a_anchor", 3, 1)
     alpha_sym    = ca.MX.sym(f"{craft.name}_alpha", 3, 1)
     a_world_placeholder = ir.Vec3[WorldFrame].from_mx(a_world_sym)
@@ -334,7 +336,7 @@ def _trace_craft_pass1(g_ctx,
                     raise NotImplementedError(
                         f"{type(part).__name__}('{part.name}'): "
                         f"State manifold {sdecl.manifold!r} not yet "
-                        f"wired through compile_coupled_tick.")
+                        f"wired through compile_world_tick.")
                 part_states[sname] = sym
                 saved[sname] = getattr(part, sname)
                 object.__setattr__(part, sname, sym)

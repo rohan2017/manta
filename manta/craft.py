@@ -1,5 +1,13 @@
 """Craft — full 6-DOF rigid-body dynamics with Newton-Euler integration.
 
+This module holds the `Craft` container (a part tree + initial-state
+helpers), the `TickContext` passed to each `Part.update()`, and the
+compile-time inertial/wrench helpers (`_aggregate_inertials`,
+`_wrench_to_craft`). The dynamics pipeline described below — the
+symbolic Newton-Euler tick that consumes those helpers — is compiled
+in `world_tick.py` (the sole tick path; see `World.compile`). The
+description here is the physics contract that pipeline implements.
+
 Scope:
 - 13-DOF rigid-body state: position (3) + orientation quaternion (4) +
   linear velocity (3) + angular velocity (3).
@@ -351,8 +359,9 @@ class Craft:
 
     @property
     def _parts(self) -> list[Part]:
-        """Flat part list used by the world-tick compile / _aggregate
-        helpers that haven't yet been refactored to walk the tree."""
+        """Flat (DFS-order) part list used by the world-tick compile and
+        the `_aggregate_inertials` helper. Mutable-list mirror of the
+        `parts` tuple."""
         return list(self.parts)
 
     @property

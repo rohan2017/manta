@@ -87,11 +87,11 @@ class EKF:
 
         # Compile the est-side world tick using the world's registered
         # fields + couplings.
-        from ..coupled_tick import compile_coupled_tick
+        from ..world_tick import compile_world_tick
         from ..fields import (
             CollisionField, FluidField, GravityField, MagField,
         )
-        compiled_tick = compile_coupled_tick(
+        compiled_tick = compile_world_tick(
             list(self.crafts), list(world._couplings),
             gravity_field=world.get_field(GravityField),
             fluid_field=world.get_field(FluidField),
