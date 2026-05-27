@@ -23,23 +23,25 @@ class _FrameProbe(Part):
     vel_world   = Output(shape="vec3")
     vel_craft   = Output(shape="vec3")
     vel_parent  = Output(shape="vec3")
-    vel_part    = Output(shape="vec3")
-    acc_part    = Output(shape="vec3")
-    omega_craft = Output(shape="vec3")
-    omega_part  = Output(shape="vec3")
+    vel_part     = Output(shape="vec3")
+    acc_part     = Output(shape="vec3")
+    omega_craft  = Output(shape="vec3")
+    omega_parent = Output(shape="vec3")
+    omega_part   = Output(shape="vec3")
 
     def update(self, ctx) -> PartUpdate:
         zero = Vec3[PartFrame].constant((0.0, 0.0, 0.0))
         return PartUpdate(
             wrench=Wrench(force=zero, torque=zero),
             outputs={
-                "vel_world":   ctx.velocity[WorldFrame],
-                "vel_craft":   ctx.velocity[CraftFrame],
-                "vel_parent":  ctx.velocity[ParentFrame],
-                "vel_part":    ctx.velocity[PartFrame],
-                "acc_part":    ctx.acceleration[PartFrame],
-                "omega_craft": ctx.angular_velocity[CraftFrame],
-                "omega_part":  ctx.angular_velocity[PartFrame],
+                "vel_world":    ctx.velocity[WorldFrame],
+                "vel_craft":    ctx.velocity[CraftFrame],
+                "vel_parent":   ctx.velocity[ParentFrame],
+                "vel_part":     ctx.velocity[PartFrame],
+                "acc_part":     ctx.acceleration[PartFrame],
+                "omega_craft":  ctx.angular_velocity[CraftFrame],
+                "omega_parent": ctx.angular_velocity[ParentFrame],
+                "omega_part":   ctx.angular_velocity[PartFrame],
             },
         )
 
@@ -101,3 +103,36 @@ def test_world_craft_part_frames_are_distinct_on_a_rotor():
     # to craft".
     np.testing.assert_allclose(_o(st, "rotorcraft", "p.vel_parent"),
                                _o(st, "rotorcraft", "p.vel_craft"), atol=1e-12)
+
+
+def test_nested_gimbal_parentframe_isolates_inner_joint():
+    """Pan (z, ω_pan) → tilt (y, ω_tilt) → probe. At zero angles the probe's
+    angular velocity relative to:
+      * the craft   = pan + tilt = (0, ω_tilt, ω_pan)   (both joints above it)
+      * its parent  = tilt only  = (0, ω_tilt, 0)       (the local joint)
+    They differ by exactly the pan rate on z — the discriminating case the
+    root-mounted test can't show."""
+    omega_pan, omega_tilt = 2.0, 3.0
+    c = Craft("gimbal")
+    c.add(Mass("base", mass=10.0, moi=(1.0, 1.0, 1.0)))
+    pan = Joint("pan", mode="passive", axis=(0.0, 0.0, 1.0))
+    pan.add(Mass("pan_rotor", mass=0.01, moi=(1e-4, 1e-4, 1e-4)))
+    tilt = Joint("tilt", mode="passive", axis=(0.0, 1.0, 0.0))
+    tilt.add(Mass("tilt_rotor", mass=0.01, moi=(1e-4, 1e-4, 1e-4)))
+    tilt.add(_FrameProbe("p", transform=(0.2, 0.0, 0.0)))
+    pan.add(tilt)
+    c.add(pan)
+
+    sim = _free(c, **{"pan.rate": omega_pan, "tilt.rate": omega_tilt})
+    st = sim.step(sim.initial_state(), dt=1e-5)
+
+    np.testing.assert_allclose(_o(st, "gimbal", "p.omega_craft"),
+                               (0.0, omega_tilt, omega_pan), atol=1e-6)
+    np.testing.assert_allclose(_o(st, "gimbal", "p.omega_parent"),
+                               (0.0, omega_tilt, 0.0), atol=1e-6)
+    np.testing.assert_allclose(_o(st, "gimbal", "p.omega_part"),
+                               0.0, atol=1e-12)
+    # The two differ by the pan rate on z — ParentFrame drops the outer joint.
+    diff = (_o(st, "gimbal", "p.omega_craft")
+            - _o(st, "gimbal", "p.omega_parent"))
+    np.testing.assert_allclose(diff, (0.0, 0.0, omega_pan), atol=1e-6)
