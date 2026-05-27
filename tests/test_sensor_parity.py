@@ -192,3 +192,30 @@ def test_magnetometer_picks_up_dipole_at_local_position():
     np.testing.assert_allclose(
         np.array(out["orbiter"]["m.B"]).ravel(),
         (0.0, 0.0, expected_z), rtol=1e-9, atol=1e-15)
+
+
+def test_magnetometer_samples_at_single_mount_offset():
+    """Regression: ctx.position already includes the part transform, so the
+    magnetometer must NOT re-add it. A sensor at transform=(0,0,h) on a craft
+    at z=Z must read the same field as a transform=0 sensor at z=Z+h — in a
+    position-varying (dipole) field. The old double-offset bug sampled z=Z+2h."""
+    m, Z, h = 1.0e23, 1.0e7, 2.0e6
+
+    def reading(craft_z, offset):
+        mf = MagField()
+        mf.add(DipoleMag(position=(0, 0, 0), moment=(0.0, 0.0, m), eps=0.0))
+        c = Craft("c")
+        c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
+        c.add(Magnetometer("mag", transform=(0.0, 0.0, offset)))
+        w = World().add_field(mf)
+        w.add_craft(c, position=(0, 0, craft_z))
+        sim = TargetNumpy(w.compile())
+        out = sim.step(sim.initial_state(), dt=1e-3)
+        return np.array(out["c"]["mag.B"]).ravel()
+
+    offset_sensor = reading(Z, h)         # mounts at Z, offset h → samples Z+h
+    flush_sensor  = reading(Z + h, 0.0)   # mounts at Z+h, no offset
+    np.testing.assert_allclose(offset_sensor, flush_sensor, rtol=1e-9)
+    # And it differs from the buggy double-offset sample at Z+2h.
+    double = reading(Z + 2 * h, 0.0)
+    assert not np.allclose(offset_sensor, double, rtol=1e-6)

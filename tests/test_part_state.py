@@ -175,11 +175,11 @@ def test_joint_accepts_articulation_aware_child():
 def test_joint_rejects_non_articulation_aware_child():
     """A part that hasn't been made articulation-aware would read/emit in
     the wrong frame on a spinning rotor — the guard catches it at
-    construction. Magnetometer is not yet articulation-aware."""
-    from manta.parts import Magnetometer
+    construction. DragSurface is not yet articulation-aware."""
+    from manta.parts import DragSurface
     j = Joint("axle", mode="passive")
     with pytest.raises(TypeError, match="articulation-aware"):
-        j.add(Magnetometer("mag"))
+        j.add(DragSurface("fin"))
 
 
 def test_joint_unknown_mode_raises():

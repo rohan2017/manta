@@ -10,8 +10,8 @@ transfer alone misses. These tests pin both against closed-form values.
 import numpy as np
 
 from manta import World, Craft, TargetNumpy
-from manta.fields import GravityField
-from manta.parts import Joint, Mass, Thruster, IMU
+from manta.fields import GravityField, MagField
+from manta.parts import Joint, Mass, Thruster, IMU, Magnetometer
 
 
 def _free_world(craft, **overrides):
@@ -121,3 +121,29 @@ def test_rotor_imu_centripetal_scales_with_rate_squared():
         return float(np.asarray(state["fly"]["imu.accel"]).ravel()[0])
 
     np.testing.assert_allclose(accel_x(20.0), 4.0 * accel_x(10.0), rtol=3e-3)
+
+
+# ---------------------------------------------------------------------------
+# Rotor-mounted magnetometer: reads the field in its own (spinning) frame
+# ---------------------------------------------------------------------------
+
+def test_rotor_magnetometer_reads_in_sensor_frame():
+    """A magnetometer on a z-axis joint locked at θ reads the body-frame field
+    rotated into its own frame: B_sensor = R_z(θ).T · B_body. With the craft
+    unrotated and a uniform B=(1,0,0), at θ=π/2 the sensor reads (0,-1,0)."""
+    c = Craft("compass")
+    c.add(Mass("bus", mass=1.0, moi=(1.0, 1.0, 1.0)))
+    j = Joint("yaw", mode="passive", axis=(0.0, 0.0, 1.0))
+    j.add(Mass("rotor", mass=0.01, moi=(1e-3, 1e-3, 1e-3)))
+    j.add(Magnetometer("mag"))
+    c.add(j)
+
+    w = World().add_field(GravityField().add_uniform((0.0, 0.0, 0.0)))
+    w.add_field(MagField().add_uniform((1.0, 0.0, 0.0)))
+    w.add_craft(c, **{"yaw.angle": np.pi / 2})
+    sim = TargetNumpy(w.compile())
+    state = sim.step(sim.initial_state(), dt=1e-3)
+
+    np.testing.assert_allclose(
+        np.asarray(state["compass"]["mag.B"]).ravel(),
+        (0.0, -1.0, 0.0), atol=1e-9)

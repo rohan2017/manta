@@ -1,15 +1,17 @@
-"""Magnetometer — body-frame magnetic flux reading.
+"""Magnetometer — magnetic flux reading in the sensor's own frame.
 
 Queries the registered MagField at the sensor's mount point in
-WorldFrame, rotates the result into CraftFrame. That's exactly what a
-3-axis fluxgate magnetometer reads when the craft is oriented in the
-field.
+WorldFrame, rotates the result into the sensor's frame. That's exactly
+what a 3-axis fluxgate magnetometer reads when the craft is oriented in
+the field.
 
 With no MagField registered, `ctx.field(MagField)` returns an empty
-field (zero everywhere); the magnetometer reads zero. With a
-Part.transform offset, the sensor reads the field at that offset point
-— for spatially uniform B this is identical to the craft origin; for a
-nearby dipole it captures the local gradient.
+field (zero everywhere); the magnetometer reads zero. `ctx.position` is
+already the sensor's mount-point in WorldFrame (the kinematic pass
+composes it through the part's `transform` and any joints above it), so
+the field is sampled there directly — for spatially uniform B this is
+identical to the craft origin; for a nearby dipole it captures the
+local gradient.
 """
 
 from __future__ import annotations
@@ -26,21 +28,30 @@ class Magnetometer(Part):
 
     Outputs:
         B : Vec3[CraftFrame] — magnetic flux density at the sensor
-                                position, rotated into craft frame. SI
-                                units (Tesla).
+                                position, in the sensor's own frame. SI
+                                units (Tesla). For a sensor mounted
+                                directly on the craft root that frame is
+                                CraftFrame; on a Joint rotor it spins
+                                with the rotor.
     """
+
+    articulation_aware = True   # outputs in the sensor's own (input) frame
 
     B = Output(shape="vec3")
 
     def update(self, ctx) -> PartUpdate:
-        offset_craft = Vec3[CraftFrame].constant(tuple(self.transform))
-        p_world = ctx.position + ctx.orientation.apply(offset_craft)
-
-        B_world = ctx.field(MagField).state_at_sym(p_world, ctx.t)
-        B_craft  = ctx.orientation.conjugate().apply(B_world)
+        # ctx.position is already the sensor's world-frame mount point
+        # (chain-composed through transform + any joints), so sample the
+        # field there directly.
+        B_world = ctx.field(MagField).state_at_sym(ctx.position, ctx.t)
+        # World → body, then body → sensor (input) frame. R_craft_from_input
+        # is identity for a root-mounted magnetometer; on a rotor it carries
+        # the joint angle, so the reading rotates with the sensor.
+        B_body   = ctx.orientation.conjugate().apply(B_world)
+        B_sensor = ctx.R_craft_from_input.transpose() @ B_body
 
         zero_v = Vec3[CraftFrame].constant((0.0, 0.0, 0.0))
         return PartUpdate(
             wrench=Wrench(force=zero_v, torque=zero_v),
-            outputs={"B": B_craft},
+            outputs={"B": B_sensor},
         )
