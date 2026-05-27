@@ -36,7 +36,7 @@ from .inertia import symbolic_inertia_rollup
 from .kinematics import kinematic_pass
 from .ir.frames import WorldFrame, CraftFrame
 from .ir.manifold import SO3
-from .parts.base import Part, PartUpdate, RandomWalkNoise, WhiteNoise
+from .parts.base import Part, PartUpdate, WhiteNoise
 from .ir.wrench import Wrench
 
 
@@ -429,9 +429,15 @@ def _trace_craft_pass1(g_ctx,
     )
 
     # Aggregate wrenches + collect state/sensor outputs.
+    from .parts.articulation.joint import Joint
     net = Wrench.zero(CraftFrame)
     new_state_outputs: list[tuple[str, Any]] = []
     sensor_outputs:    list[tuple[str, Any]] = []
+    # Per-joint (angle, rate, accel) symbols, for the moving-COM correction
+    # in `_emit_per_craft_dynamics`. accel is recovered from the joint's own
+    # explicit-Euler `rate` update (new_rate = rate + accel·dt), so it stays
+    # a pure function of state with no extra wiring through Joint.update.
+    joint_dynamics: list[dict[str, Any]] = []
     for part in craft._parts:
         kin = kin_states[part]
         ctx_part = TickContext(
@@ -497,6 +503,19 @@ def _trace_craft_pass1(g_ctx,
         w_craft = _wrench_to_craft(w_part, kin.r_in_craft)
         net = net + w_craft
 
+        # Stash joint (angle, rate, accel) for the moving-COM correction.
+        if isinstance(part, Joint):
+            angle_node = state_input_nodes[part].get("angle")
+            rate_node  = state_input_nodes[part].get("rate")
+            new_rate   = new_state.get("rate")
+            if angle_node is not None and rate_node is not None \
+                    and new_rate is not None:
+                joint_dynamics.append({
+                    "angle_mx": angle_node._mx,
+                    "rate_mx":  rate_node._mx,
+                    "accel_mx": (new_rate._mx - rate_node._mx) / dt._mx,
+                })
+
     return {
         "position":          position,
         "orientation":       orientation,
@@ -508,6 +527,7 @@ def _trace_craft_pass1(g_ctx,
         "new_state_outputs": new_state_outputs,
         "sensor_outputs":    sensor_outputs,
         "rw_bias_updates":   rw_bias_updates,
+        "joints":            joint_dynamics,
         "saved_state_attrs": saved_state_attrs,
         "saved_input_attrs": saved_input_attrs,
         "saved_noise_attrs": saved_noise_attrs,
@@ -566,6 +586,30 @@ def _emit_per_craft_dynamics(g_ctx, craft, pc, dt) -> None:
     r_OC = -r_com
     offset_term = alpha.cross(r_OC) + ang_vel.cross(ang_vel.cross(r_OC))
     a_origin_world = a_com_world + orientation.apply(offset_term)
+
+    # --- Moving-COM correction (articulated craft) -----------------------
+    # When a joint actuates, the COM translates within the body, so r_OC is
+    # time-varying and the rigid origin-transfer above is incomplete. Add the
+    # missing 2ω×ṙ_OC + r̈_OC = −2ω·v_com_body − a_com_body, with
+    # v_com_body = ∂com/∂θ·θ̇ and a_com_body = d/dt(v_com_body) (Hessian·θ̇θ̇
+    # + ∂com/∂θ·θ̈). θ̈ is a pure function of state, so there is no algebraic
+    # loop and no 1-tick lag (the legacy leaf-walk used last-tick accel).
+    # Identically zero when no joint shifts the COM (on-axis symmetric
+    # rotors), and what keeps a free-floating articulated craft's system COM
+    # from drifting (linear-momentum conservation).
+    joints = pc.get("joints", [])
+    if joints:
+        theta      = ca.vertcat(*[j["angle_mx"] for j in joints])
+        theta_dot  = ca.vertcat(*[j["rate_mx"]  for j in joints])
+        theta_ddot = ca.vertcat(*[j["accel_mx"] for j in joints])
+        com_jac    = ca.jacobian(com_mx, theta)              # 3×n
+        v_com_mx   = ca.mtimes(com_jac, theta_dot)           # 3×1
+        a_com_mx   = (ca.mtimes(ca.jacobian(v_com_mx, theta), theta_dot)
+                      + ca.mtimes(com_jac, theta_ddot))      # 3×1
+        v_com_body = ir.Vec3[CraftFrame].from_mx(v_com_mx)
+        a_com_body = ir.Vec3[CraftFrame].from_mx(a_com_mx)
+        moving_term = ang_vel.cross(v_com_body) * (-2.0) - a_com_body
+        a_origin_world = a_origin_world + orientation.apply(moving_term)
 
     # --- Validate wrench independence from placeholder dynamics ----------
     a_world_sym = pc["a_world_sym"]

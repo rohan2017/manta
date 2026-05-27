@@ -16,6 +16,12 @@ The joint emits:
     ω for a top-level joint; the outer joint's output ω for a nested
     inner joint).
 
+Its `rate` dynamics also pick up a Coriolis joint torque,
+`-[ω_rotor × (I_joint·ω_rotor)]·axis` with `ω_rotor = ω_mount + rate·axis`
+— the base-rotation coupling through the full rotor inertia. It vanishes
+for an axisymmetric rotor whose COM lies on the joint axis and is nonzero
+otherwise (matching the legacy `Motor`; the α_mount cross term is omitted).
+
 Each child `Mass` contributes its own gravity via `Mass.update`; the
 Joint itself emits no force.
 
@@ -142,39 +148,48 @@ class Joint(CompositePart):
     # ----- Rotor I_axial computed from children ---------------------------
 
     @property
-    def I_axial(self) -> float:
-        """Rotor MOI about the joint's spin axis, with parallel-axis lifts.
+    def I_joint_tensor(self) -> np.ndarray:
+        """Full rotor inertia tensor (3×3) about the joint origin, in the
+        joint's input-frame coords at rest pose.
 
-        Walks the subtree below this joint, summing each Mass's
-        diagonal MOI about the joint origin. The lift accounts for
-        children offset from the joint axis (`r_⊥² · m`) but treats
-        each child as if its frame is aligned with the joint's input
-        frame at zero angle — which matches the gyroscopic-correction
-        usage in `update()`, where I_axial only ever multiplies the
-        rate-along-axis. A child Mass's own diagonal MOI rotates with
-        any nested Joint above it, but the axial projection along the
-        SAME axis is rotation-invariant for symmetric rotors and a
-        good approximation otherwise."""
-        axis = np.array(self.axis, dtype=float)
-        n = float(np.linalg.norm(axis))
-        if n <= 0.0:
-            return 0.0
-        axis_unit = axis / n
-
-        total = 0.0
+        Walks the subtree below this joint, summing each Mass's diagonal
+        MOI lifted to the joint origin via the parallel-axis theorem. The
+        lift treats each child as if its frame is aligned with the joint's
+        input frame at zero angle — exact for a top-level joint, a good
+        approximation for nested ones (a child's own diagonal MOI rotates
+        with any inner Joint above it). `I_axial` is just this tensor's
+        projection onto the spin axis; `update()` needs the full tensor
+        for the Coriolis joint torque, whose off-axis components matter
+        for non-axisymmetric or off-axis rotors."""
+        total = np.zeros((3, 3))
         for descendant in self.walk():
             if descendant is self:
                 continue
             m = float(getattr(descendant, "mass", 0.0) or 0.0)
             moi_diag = getattr(descendant, "moi", (0.0, 0.0, 0.0))
             I_own = np.diag([float(moi_diag[0]),
-                              float(moi_diag[1]),
-                              float(moi_diag[2])])
+                             float(moi_diag[1]),
+                             float(moi_diag[2])])
             r = _offset_from(self, descendant)
             # Parallel-axis lift about the joint origin (in joint input frame).
             I_lifted = I_own + m * (float(r @ r) * np.eye(3) - np.outer(r, r))
-            total += float(axis_unit @ I_lifted @ axis_unit)
+            total += I_lifted
         return total
+
+    @property
+    def I_axial(self) -> float:
+        """Rotor MOI about the joint's spin axis: `axisᵀ · I_joint · axis`.
+
+        The scalar inertia driving the joint's `rate` dynamics, and the
+        rotor angular-momentum factor in the gyroscopic correction. Shares
+        the rest-pose / symmetric-rotor approximation of `I_joint_tensor`;
+        the axial projection is rotation-invariant for symmetric rotors."""
+        axis = np.array(self.axis, dtype=float)
+        n = float(np.linalg.norm(axis))
+        if n <= 0.0:
+            return 0.0
+        axis_unit = axis / n
+        return float(axis_unit @ self.I_joint_tensor @ axis_unit)
 
     # ----- update() --------------------------------------------------------
 
@@ -205,8 +220,30 @@ class Joint(CompositePart):
         rate_mx  = self.rate._mx
         angle_mx = self.angle._mx
         dt_mx    = ctx.dt._mx
+        # Mount's absolute angular velocity (input-frame ω, in craft-frame
+        # coords; see the gyro note below). Also feeds the Coriolis term.
+        omega_mx = ctx.angular_velocity._mx
         if I_ax > 0.0:
-            accel_mx = tau_mx / I_ax
+            # Coriolis joint torque from base rotation through the full
+            # rotor inertia: τ_corio = −[ω_rotor × (I_joint·ω_rotor)]·axis,
+            # with ω_rotor = ω_mount + θ̇·axis. Built in the joint's input
+            # frame, where I_joint_tensor lives — rotate ω_mount in via Rᵀ.
+            # Identically zero for an axisymmetric rotor whose COM sits on
+            # the joint axis; nonzero for off-axis or asymmetric rotors. It
+            # drives only the joint's own acceleration: the body-side
+            # reaction is already carried by the gyroscopic term below, and
+            # the α_mount cross-coupling is omitted (both match the legacy
+            # Motor::resolve).
+            axis_unit_np = np.array(self.axis, dtype=float)
+            axis_unit_np = axis_unit_np / np.linalg.norm(axis_unit_np)
+            axis_unit_in = ca.MX(axis_unit_np.tolist())
+            omega_mount_in = ca.mtimes(R_in_mx.T, omega_mx)
+            omega_rotor_in = omega_mount_in + rate_mx * axis_unit_in
+            I_joint_dm     = ca.DM(self.I_joint_tensor)
+            Iw_in          = ca.mtimes(I_joint_dm, omega_rotor_in)
+            tau_corio_mx   = -ca.dot(ca.cross(omega_rotor_in, Iw_in),
+                                     axis_unit_in)
+            accel_mx = (tau_mx + tau_corio_mx) / I_ax
         else:
             accel_mx = ca.MX(0.0)
         new_rate_mx  = rate_mx + accel_mx * dt_mx
@@ -224,7 +261,6 @@ class Joint(CompositePart):
         # body-frame coords) — for a top-level joint that's body ω; for
         # a nested joint it's the outer joint's output ω.
         L_rotor_mx = axis_mx * (I_ax * rate_mx)
-        omega_mx = ctx.angular_velocity._mx
         # ca.cross handles 3-vec × 3-vec.
         tau_gyro_mx = -ca.cross(omega_mx, L_rotor_mx)
         torque_mx = reaction_mx + tau_gyro_mx
