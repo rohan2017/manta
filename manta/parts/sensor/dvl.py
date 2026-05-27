@@ -26,11 +26,18 @@ class DVL(Part):
                                       reference (seafloor / ground).
     """
 
+    articulation_aware = True   # outputs in the sensor's own (input) frame
+
     velocity = Output(shape="vec3")
 
     def update(self, ctx) -> PartUpdate:
         zero_v = Vec3[CraftFrame].constant((0.0, 0.0, 0.0))
+        # ctx.velocity_body is the velocity at the mount point in body
+        # coords; a DVL reads it in its own (mount) frame. Rotate body →
+        # input via R_craft_from_input transposed — identity for a
+        # root-mounted DVL, the joint angle for a rotor-mounted one.
+        v_sensor = ctx.R_craft_from_input.transpose() @ ctx.velocity_body
         return PartUpdate(
             wrench=Wrench(force=zero_v, torque=zero_v),
-            outputs={"velocity": ctx.velocity_body},
+            outputs={"velocity": v_sensor},
         )

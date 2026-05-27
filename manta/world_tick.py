@@ -402,11 +402,26 @@ def _trace_craft_pass1(g_ctx,
             rw_bias_updates.append((input_name, bias_next))
         saved_noise_attrs[part] = saved_n
 
+    # Per-joint angular-acceleration placeholders. A Joint's θ̈ is not a
+    # state slot — it's computed inside Joint.update() (a pure function of
+    # state) — so, exactly like the body's a/α, the kinematic pass takes a
+    # placeholder symbol now and the framework substitutes the real
+    # `(new_rate − rate)/dt` after the update loop. These feed the
+    # joint-relative acceleration of every part on the rotor (and hence
+    # rotor-mounted sensors + the moving-COM origin recoil).
+    from .parts.articulation.joint import Joint
+    joint_accel_syms: dict[Any, Any] = {}
+    for part in craft._parts:
+        if isinstance(part, Joint):
+            joint_accel_syms[part] = ca.MX.sym(
+                f"{craft.name}_{part.name}_jaccel", 1, 1)
+
     # Symbolic kinematic + inertia passes over the part tree.
     kin_states = kinematic_pass(
         craft.root, position, orientation, velocity, ang_vel, t,
         body_acceleration_world=a_world_placeholder,
-        body_angular_acceleration=alpha_placeholder)
+        body_angular_acceleration=alpha_placeholder,
+        joint_angular_accels=joint_accel_syms)
     inertia = symbolic_inertia_rollup(craft.root)
 
     fields_tuple = (gravity_field, fluid_field, mag_field, collision_field)
@@ -431,15 +446,15 @@ def _trace_craft_pass1(g_ctx,
     )
 
     # Aggregate wrenches + collect state/sensor outputs.
-    from .parts.articulation.joint import Joint
     net = Wrench.zero(CraftFrame)
     new_state_outputs: list[tuple[str, Any]] = []
     sensor_outputs:    list[tuple[str, Any]] = []
-    # Per-joint (angle, rate, accel) symbols, for the moving-COM correction
-    # in `_emit_per_craft_dynamics`. accel is recovered from the joint's own
-    # explicit-Euler `rate` update (new_rate = rate + accel·dt), so it stays
+    # Real value for each joint's θ̈ placeholder: recovered from the joint's
+    # own explicit-Euler `rate` update (new_rate = rate + θ̈·dt), so it stays
     # a pure function of state with no extra wiring through Joint.update.
-    joint_dynamics: list[dict[str, Any]] = []
+    # Paired (placeholder, real) entries the framework substitutes alongside
+    # the body a/α placeholders.
+    joint_accel_reals: list[tuple[Any, Any]] = []
     for part in craft._parts:
         kin = kin_states[part]
         ctx_part = TickContext(
@@ -505,18 +520,33 @@ def _trace_craft_pass1(g_ctx,
         w_craft = _wrench_to_craft(w_part, kin.r_in_craft)
         net = net + w_craft
 
-        # Stash joint (angle, rate, accel) for the moving-COM correction.
+        # Resolve this joint's θ̈ placeholder to its real state-function.
         if isinstance(part, Joint):
-            angle_node = state_input_nodes[part].get("angle")
-            rate_node  = state_input_nodes[part].get("rate")
-            new_rate   = new_state.get("rate")
-            if angle_node is not None and rate_node is not None \
-                    and new_rate is not None:
-                joint_dynamics.append({
-                    "angle_mx": angle_node._mx,
-                    "rate_mx":  rate_node._mx,
-                    "accel_mx": (new_rate._mx - rate_node._mx) / dt._mx,
-                })
+            rate_node = state_input_nodes[part].get("rate")
+            new_rate  = new_state.get("rate")
+            sym       = joint_accel_syms.get(part)
+            if rate_node is not None and new_rate is not None \
+                    and sym is not None:
+                joint_accel_reals.append(
+                    (sym, (new_rate._mx - rate_node._mx) / dt._mx))
+
+    # Body-relative COM motion for the moving-COM origin recoil — the
+    # mass-weighted reduction of the per-part relative kinematics the
+    # kinematic pass just produced (same quantities a rotor-mounted sensor
+    # reads). Zero when no joint shifts the COM. Carries the θ̈ placeholders
+    # via a_rel; resolved in `_emit_per_craft_dynamics`.
+    m_total = inertia["m_total"]
+    v_com_rel_mx = ca.MX.zeros(3, 1)
+    a_com_rel_mx = ca.MX.zeros(3, 1)
+    for part in craft._parts:
+        m = float(getattr(part, "mass", 0.0) or 0.0)
+        if m <= 0.0:
+            continue
+        kin = kin_states[part]
+        v_com_rel_mx = v_com_rel_mx + m * kin.velocity_rel_body._mx
+        a_com_rel_mx = a_com_rel_mx + m * kin.acceleration_rel_body._mx
+    v_com_rel_mx = v_com_rel_mx / m_total
+    a_com_rel_mx = a_com_rel_mx / m_total
 
     return {
         "position":          position,
@@ -529,7 +559,8 @@ def _trace_craft_pass1(g_ctx,
         "new_state_outputs": new_state_outputs,
         "sensor_outputs":    sensor_outputs,
         "rw_bias_updates":   rw_bias_updates,
-        "joints":            joint_dynamics,
+        "joint_accel_reals": joint_accel_reals,
+        "com_rel_motion":    (v_com_rel_mx, a_com_rel_mx),
         "saved_state_attrs": saved_state_attrs,
         "saved_input_attrs": saved_input_attrs,
         "saved_noise_attrs": saved_noise_attrs,
@@ -592,33 +623,34 @@ def _emit_per_craft_dynamics(g_ctx, craft, pc, dt) -> None:
     # --- Moving-COM correction (articulated craft) -----------------------
     # When a joint actuates, the COM translates within the body, so r_OC is
     # time-varying and the rigid origin-transfer above is incomplete. Add the
-    # missing 2ω×ṙ_OC + r̈_OC = −2ω·v_com_body − a_com_body, with
-    # v_com_body = ∂com/∂θ·θ̇ and a_com_body = d/dt(v_com_body) (Hessian·θ̇θ̇
-    # + ∂com/∂θ·θ̈). θ̈ is a pure function of state, so there is no algebraic
-    # loop and no 1-tick lag (the legacy leaf-walk used last-tick accel).
+    # missing 2ω×ṙ_OC + r̈_OC = −2ω·v_com_body − a_com_body, where the
+    # body-relative COM motion (v_com_body, a_com_body) is the mass-weighted
+    # reduction of the per-part relative kinematics from the kinematic pass
+    # (built in pass-1; see `com_rel_motion`). It carries the joint θ̈
+    # placeholders (via a_rel), resolved below alongside the body a/α.
     # Identically zero when no joint shifts the COM (on-axis symmetric
     # rotors), and what keeps a free-floating articulated craft's system COM
     # from drifting (linear-momentum conservation).
-    joints = pc.get("joints", [])
-    if joints:
-        theta      = ca.vertcat(*[j["angle_mx"] for j in joints])
-        theta_dot  = ca.vertcat(*[j["rate_mx"]  for j in joints])
-        theta_ddot = ca.vertcat(*[j["accel_mx"] for j in joints])
-        com_jac    = ca.jacobian(com_mx, theta)              # 3×n
-        v_com_mx   = ca.mtimes(com_jac, theta_dot)           # 3×1
-        a_com_mx   = (ca.mtimes(ca.jacobian(v_com_mx, theta), theta_dot)
-                      + ca.mtimes(com_jac, theta_ddot))      # 3×1
-        v_com_body = ir.Vec3[CraftFrame].from_mx(v_com_mx)
-        a_com_body = ir.Vec3[CraftFrame].from_mx(a_com_mx)
-        moving_term = ang_vel.cross(v_com_body) * (-2.0) - a_com_body
-        a_origin_world = a_origin_world + orientation.apply(moving_term)
+    v_com_rel_mx, a_com_rel_mx = pc["com_rel_motion"]
+    v_com_body = ir.Vec3[CraftFrame].from_mx(v_com_rel_mx)
+    a_com_body = ir.Vec3[CraftFrame].from_mx(a_com_rel_mx)
+    moving_term = ang_vel.cross(v_com_body) * (-2.0) - a_com_body
+    a_origin_world = a_origin_world + orientation.apply(moving_term)
 
     # --- Validate wrench independence from placeholder dynamics ----------
+    # Wrenches must be functions of state only: forbid dependence on the body
+    # a/α placeholders AND on any joint θ̈ placeholder (each would otherwise
+    # leave an unresolved symbol in `net`, which we never substitute).
     a_world_sym = pc["a_world_sym"]
     alpha_sym    = pc["alpha_sym"]
-    for sym_name, sym_mx in (("acceleration_world", a_world_sym),
-                              ("acceleration_body", a_world_sym),
-                              ("angular_acceleration", alpha_sym)):
+    joint_accel_reals = pc.get("joint_accel_reals", [])
+    joint_syms  = [sym  for sym, _    in joint_accel_reals]
+    joint_reals = [real for _,   real in joint_accel_reals]
+    checks = [("acceleration_world", a_world_sym),
+              ("acceleration_body", a_world_sym),
+              ("angular_acceleration", alpha_sym)]
+    checks += [("a joint's angular acceleration", s) for s in joint_syms]
+    for sym_name, sym_mx in checks:
         if (ca.depends_on(net.force._mx, sym_mx)
                 or ca.depends_on(net.torque._mx, sym_mx)):
             raise ValueError(
@@ -627,8 +659,16 @@ def _emit_per_craft_dynamics(g_ctx, craft, pc, dt) -> None:
                 f"of state only.")
 
     # --- Substitute placeholders → real dynamics in emitted outputs -----
-    placeholders = ca.vertcat(a_world_sym, alpha_sym)
-    real_values  = ca.vertcat(a_origin_world._mx, alpha._mx)
+    # First resolve the joint θ̈ placeholders inside a_origin_world itself
+    # (they entered via the moving-COM term) so the integrated body state is
+    # placeholder-free; then a_world_sym maps to that resolved expression.
+    if joint_syms:
+        a_origin_world = ir.Vec3[WorldFrame].from_mx(
+            ca.substitute(a_origin_world._mx,
+                          ca.vertcat(*joint_syms),
+                          ca.vertcat(*joint_reals)))
+    placeholders = ca.vertcat(a_world_sym, alpha_sym, *joint_syms)
+    real_values  = ca.vertcat(a_origin_world._mx, alpha._mx, *joint_reals)
     from .ir.types import _IRValue
 
     def _resolve(val):

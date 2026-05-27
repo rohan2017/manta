@@ -102,6 +102,8 @@ class Joint(CompositePart):
                         rad/s.
     """
 
+    articulation_aware = True   # rotates its axis via ctx.R_craft_from_input
+
     axis:          tuple = Parameter((0.0, 0.0, 1.0))
     mode:          str   = Parameter(_PASSIVE)
     stall_torque:  float = Parameter(1.0)
@@ -122,27 +124,31 @@ class Joint(CompositePart):
     def add(self, child) -> Part:
         """Attach a Part to the rotor.
 
-        Children may be `Mass` parts (rotor inertia) or nested `Joint`s
-        (e.g., pan–tilt gimbals). Child Masses can sit anywhere — the
-        symbolic kinematic and inertia passes lift their position
-        through the joint chain. Other leaf-part types (Thruster,
-        sensors, drag surfaces) need their `update()` to rotate any
-        input-frame quantities through `ctx.R_craft_from_input` before
-        they will read correctly on a moving rotor; until they do,
-        only `Mass` and `Joint` are accepted here.
+        Any articulation-aware Part may ride a rotor: `Mass` (inertia),
+        nested `Joint`s (pan–tilt gimbals), thrusters, and sensors. The
+        symbolic kinematic and inertia passes lift each child's position,
+        velocity, and acceleration through the joint chain, so a sensor
+        reads the rotor's true specific force and a thruster's thrust
+        rotates with the rotor.
+
+        Children must set `articulation_aware = True` — meaning their
+        `update()` rotates input-frame wrenches into body coords (and
+        directional sensor outputs into their own frame) via
+        `ctx.R_craft_from_input`. A part that doesn't would silently
+        read/emit in the wrong frame on a spinning rotor, so it is
+        rejected here with guidance.
 
         Returns the child (so chained construction reads naturally,
         matching `CompositePart.add`).
         """
-        # Lazy-import to avoid a circular dependency at module load time.
-        from ..structure.mass import Mass
-        if not isinstance(child, (Mass, Joint)):
+        if not getattr(child, "articulation_aware", False):
             raise TypeError(
-                f"Joint.add: only Mass and Joint children supported, got "
-                f"{type(child).__name__}. Leaf parts that emit wrenches "
-                f"in their own input frame need to be made articulation-"
-                f"aware (rotate by ctx.R_craft_from_input) before they "
-                f"can ride on a moving rotor.")
+                f"Joint.add: child {type(child).__name__}"
+                f"('{getattr(child, 'name', '?')}') is not "
+                f"articulation-aware. A part on a moving rotor must rotate "
+                f"its input-frame quantities through ctx.R_craft_from_input "
+                f"and set `articulation_aware = True`. Stock Mass, Joint, "
+                f"Thruster, IMU, DVL, and PositionSensor already do.")
         return super().add(child)
 
     # ----- Rotor I_axial computed from children ---------------------------

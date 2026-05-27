@@ -163,14 +163,23 @@ def test_joint_accepts_mass_child_with_nonzero_transform():
     assert j.children[0].transform == (0.0, 0.0, 0.1)
 
 
-def test_joint_rejects_non_mass_non_joint_child():
-    """Leaf parts that emit input-frame quantities (Thrusters, sensors,
-    drag surfaces) still need articulation-aware update() before they
-    can ride a moving rotor — the guard catches them at construction."""
+def test_joint_accepts_articulation_aware_child():
+    """Articulation-aware leaf parts (IMU, Thruster, …) ride a rotor:
+    their update() rotates input-frame quantities via R_craft_from_input."""
     from manta.parts import IMU
     j = Joint("axle", mode="passive")
-    with pytest.raises(TypeError, match="Mass and Joint children"):
-        j.add(IMU("g"))
+    j.add(IMU("g"))
+    assert j.children[0].name == "g"
+
+
+def test_joint_rejects_non_articulation_aware_child():
+    """A part that hasn't been made articulation-aware would read/emit in
+    the wrong frame on a spinning rotor — the guard catches it at
+    construction. Magnetometer is not yet articulation-aware."""
+    from manta.parts import Magnetometer
+    j = Joint("axle", mode="passive")
+    with pytest.raises(TypeError, match="articulation-aware"):
+        j.add(Magnetometer("mag"))
 
 
 def test_joint_unknown_mode_raises():

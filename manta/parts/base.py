@@ -309,6 +309,16 @@ class Part:
     # planet is then accessible via `ctx.planet(PlanetCls)`.
     requires_planet: ClassVar[type | None] = None
 
+    # True iff this part's `update()` correctly handles being mounted on a
+    # moving frame (a Joint's rotor): it expresses any input-frame wrench
+    # in body coords via `ctx.R_craft_from_input`, and any directional
+    # sensor output in its own frame via `R_craft_from_input.T`. Parts that
+    # only read world/body quantities already-resolved by the kinematic
+    # pass (or whose contribution is frame-invariant, e.g. gravity) set this
+    # too. `Joint.add` refuses children that leave it False, since they
+    # would silently read/emit in the wrong frame on a spinning rotor.
+    articulation_aware: ClassVar[bool] = False
+
     # Universal: every part has a static (parent → part) offset.
     transform: "tuple[float, float, float]" = Parameter((0.0, 0.0, 0.0))
 

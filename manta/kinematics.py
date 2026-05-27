@@ -2,24 +2,34 @@
 
 Given the body's rigid-body state (position, orientation, velocity,
 angular velocity), the body's symbolic acceleration / angular
-acceleration, and every Joint's (angle, rate), compute for each part
+acceleration, and every Joint's (angle, rate, θ̈), compute for each part
 its effective kinematic state — origin position, linear velocity at
-the origin, angular velocity, lever-arm-lifted acceleration, the
-part's body-frame position, and the rotation matrices that take its
-input/output frames into body coords — all as CasADi MX expressions
-composed through the joint chain. A flat craft (no nested joints)
-reduces to "everything is the body's state offset by `part.transform`"
-with identity rotations; deep nesting (gimbal: pan → tilt → camera)
-composes naturally.
+the origin, angular velocity/acceleration, the part's body-frame
+position, and the rotation matrices that take its input/output frames
+into body coords — all as CasADi MX expressions composed through the
+joint chain. A flat craft (no nested joints) reduces to "everything is
+the body's state offset by `part.transform`" with identity rotations;
+deep nesting (gimbal: pan → tilt → camera) composes naturally.
+
+Each part's absolute acceleration is the rotating-frame transport of the
+body's a/α to the part's mount point PLUS the joint-induced relative
+motion: the rigid lever arm (α×r + ω×(ω×r)) augmented with the Coriolis
+term 2·ω_body×v_rel and the relative acceleration a_rel, where (v_rel,
+a_rel) are the part's velocity/acceleration in the (rotating) body frame
+— nonzero only for parts on a moving joint. This is what lets a sensor on
+a spinning rotor read the right specific force; the body-relative COM
+motion (the mass-weighted reduction of these) drives the moving-COM
+origin recoil in `world_tick`.
 
 Body acceleration handling: an accelerometer's reading depends on
 body a/α, which is the OUTPUT of Newton-Euler — reading them inside
 `update()` (the wrench-collection phase, which feeds N-E) is
 circular. The framework passes MX **placeholder** symbols for a/α
-into this pass, lets parts emit outputs referencing them, then
-substitutes the real Newton-Euler expressions into those outputs
-after the wrench sum is known. Wrenches that would themselves depend
-on a/α are rejected at compile time (no implicit-equation solver).
+(and, for the same reason, each Joint's θ̈) into this pass, lets parts
+emit outputs referencing them, then substitutes the real expressions
+into those outputs after the wrench sum is known. Wrenches that would
+themselves depend on a/α (or θ̈) are rejected at compile time (no
+implicit-equation solver).
 
 **Frame convention**:
   * World-frame fields (`origin_in_world`, `velocity_origin`,
@@ -112,6 +122,17 @@ class KinematicState:
     acceleration_world:            Any   # Vec3[WorldFrame]
     acceleration_body:              Any   # Vec3[CraftFrame]
     angular_acceleration:           Any   # Vec3[CraftFrame]
+    # --- Body-relative (joint-induced) kinematics, body-frame coords ----
+    # Motion of this part's origin / output frame relative to the body
+    # frame, i.e. due ONLY to the joint angles between body and part
+    # (zero for the root and for any part rigidly fixed to the body).
+    # The absolute world/body acceleration above is composed from these
+    # via the rotating-frame transport theorem; the moving-COM origin
+    # recoil is their mass-weighted reduction.
+    velocity_rel_body:              Any   # Vec3[CraftFrame]: ṙ|_body
+    acceleration_rel_body:          Any   # Vec3[CraftFrame]: r̈|_body
+    omega_rel_output:               Any   # Vec3[CraftFrame]: relative ω
+    alpha_rel_output:               Any   # Vec3[CraftFrame]: relative α
 
 
 # ---------------------------------------------------------------------------
@@ -156,13 +177,20 @@ def kinematic_pass(root_part,
                    t,
                    *,
                    body_acceleration_world,
-                   body_angular_acceleration) -> dict:
+                   body_angular_acceleration,
+                   joint_angular_accels=None) -> dict:
     """Walk `root_part`'s subtree, returning `{part: KinematicState}`.
 
     Joint angle/rate values are read directly off each Joint instance
     via `joint.angle._mx` / `joint.rate._mx` — assumes the framework has
     already rebound the State attributes to symbolic MX inputs before
-    this is called.
+    this is called. A Joint's angular acceleration θ̈ is NOT a state
+    slot, so it is supplied separately via `joint_angular_accels`
+    (`{joint: MX scalar}`); like the body's a/α these are compile-time
+    placeholders that the caller substitutes with the real
+    state-function `(new_rate − rate)/dt` after `Joint.update()` runs.
+    Joints absent from the dict (or `joint_angular_accels=None`) take
+    θ̈ = 0 — fine for the velocity/position outputs, which don't use it.
 
     The root's state coincides with the body. Each child:
       * Position composes through `parent.orientation_output · transform`.
@@ -171,14 +199,23 @@ def kinematic_pass(root_part,
       * Angular velocity of the part's input frame equals the parent's
         output frame ω; the output frame additionally gets `rate · axis`
         if the part is a Joint.
+      * Body-relative kinematics (velocity_rel_body, acceleration_rel_body,
+        ω/α_rel) propagate the same way with the body frame as the fixed
+        base — these capture the joint-induced motion that the rigid
+        lever-arm transfer alone misses, so a sensor on a moving rotor
+        reads the right specific force and the system COM recoil is exact.
     """
     from .parts.base import CompositePart
+
+    if joint_angular_accels is None:
+        joint_angular_accels = {}
 
     # ----- root state (coincides with body) -----------------------------
     body_v_in_body = body_orientation.conjugate().apply(body_velocity)
 
     eye3_mat = Mat3[CraftFrame, CraftFrame].from_mx(ca.MX.eye(3))
     zero_r   = Vec3[CraftFrame].from_mx(ca.MX.zeros(3, 1))
+    zero_vec = Vec3[CraftFrame].from_mx(ca.MX.zeros(3, 1))
 
     # Root sees the body's own acceleration directly (no lever arm).
     # Body-frame version via R^T. Caller passes a / α as MX placeholder
@@ -201,6 +238,10 @@ def kinematic_pass(root_part,
         acceleration_world=body_acceleration_world,
         acceleration_body=body_acceleration_body,
         angular_acceleration=body_angular_acceleration,
+        velocity_rel_body=zero_vec,
+        acceleration_rel_body=zero_vec,
+        omega_rel_output=zero_vec,
+        alpha_rel_output=zero_vec,
     )
 
     states: dict = {root_part: root_state}
@@ -213,7 +254,8 @@ def kinematic_pass(root_part,
                 parent_state, child, body_orientation, t,
                 body_acceleration_world=body_acceleration_world,
                 body_angular_acceleration=body_angular_acceleration,
-                body_angular_velocity=body_angular_velocity)
+                body_angular_velocity=body_angular_velocity,
+                joint_angular_accels=joint_angular_accels)
             states[child] = child_state
             visit_children(child, child_state)
 
@@ -226,8 +268,12 @@ def _compute_child_state(parent_state: KinematicState, child,
                          *,
                          body_acceleration_world,
                          body_angular_acceleration,
-                         body_angular_velocity) -> KinematicState:
+                         body_angular_velocity,
+                         joint_angular_accels=None) -> KinematicState:
     from .parts.articulation.joint import Joint
+
+    if joint_angular_accels is None:
+        joint_angular_accels = {}
 
     # Child's `transform` lives in parent's OUTPUT frame coords.
     transform_mx = ca.MX(list(child.transform))
@@ -236,8 +282,9 @@ def _compute_child_state(parent_state: KinematicState, child,
     # r_child_in_craft = r_parent_in_craft + R_craft_from_parent_output · transform.
     R_craft_from_parent_out_mx = parent_state.R_craft_from_output._mx
     r_parent_in_craft_mx = parent_state.r_in_craft._mx
-    child_r_in_craft_mx = (r_parent_in_craft_mx
-                           + ca.mtimes(R_craft_from_parent_out_mx, transform_mx))
+    # Offset from parent origin to child origin, in body-frame coords.
+    offset_in_craft_mx = ca.mtimes(R_craft_from_parent_out_mx, transform_mx)
+    child_r_in_craft_mx = r_parent_in_craft_mx + offset_in_craft_mx
     child_r_in_craft = Vec3[CraftFrame].from_mx(child_r_in_craft_mx)
 
     # Mount doesn't rotate, so child's INPUT frame = parent's OUTPUT.
@@ -269,8 +316,13 @@ def _compute_child_state(parent_state: KinematicState, child,
         q_anchor_from_input_mx)
     child_omega_input_in_craft = parent_state.angular_velocity_output
 
+    # Body-relative angular velocity / acceleration of the INPUT frame
+    # equal the parent's OUTPUT-frame relative values (the mount is rigid).
+    omega_rel_input_mx = parent_state.omega_rel_output._mx
+    alpha_rel_input_mx = parent_state.alpha_rel_output._mx
+
     # If child is a Joint, compose joint rotation onto the output frame
-    # and add `rate · axis` to the output ω.
+    # and add `rate · axis` to the output ω (and `θ̈ · axis` to α_rel).
     if isinstance(child, Joint):
         angle_mx = (child.angle._mx
                     if hasattr(child.angle, "_mx")
@@ -278,6 +330,7 @@ def _compute_child_state(parent_state: KinematicState, child,
         rate_mx  = (child.rate._mx
                     if hasattr(child.rate,  "_mx")
                     else ca.MX(float(child.rate)))
+        accel_mx = joint_angular_accels.get(child, ca.MX(0.0))
 
         # Joint axis given in input-frame local coords:
         axis_local_mx = ca.MX(list(child.axis))
@@ -303,13 +356,43 @@ def _compute_child_state(parent_state: KinematicState, child,
             child_omega_input_in_craft._mx + omega_increment_in_craft_mx)
         child_omega_output_in_craft = Vec3[CraftFrame].from_mx(
             child_omega_output_in_craft_mx)
+
+        # Relative ω/α gain the joint's own spin. The axis is fixed in the
+        # input frame, which itself spins at ω_rel_input relative to the
+        # body, hence the ω_rel_input × (θ̇·axis) term in α_rel.
+        omega_rel_output_mx = omega_rel_input_mx + omega_increment_in_craft_mx
+        alpha_rel_output_mx = (
+            alpha_rel_input_mx
+            + accel_mx * axis_in_craft_mx
+            + ca.cross(omega_rel_input_mx, omega_increment_in_craft_mx))
     else:
         q_anchor_from_output = q_anchor_from_input
         R_craft_from_child_output_mx = R_craft_from_child_input_mx
         child_omega_output_in_craft = child_omega_input_in_craft
+        omega_rel_output_mx = omega_rel_input_mx
+        alpha_rel_output_mx = alpha_rel_input_mx
 
     R_craft_from_child_output = Mat3[CraftFrame, CraftFrame].from_mx(
         R_craft_from_child_output_mx)
+    child_omega_rel_output = Vec3[CraftFrame].from_mx(omega_rel_output_mx)
+    child_alpha_rel_output = Vec3[CraftFrame].from_mx(alpha_rel_output_mx)
+
+    # ----- body-relative velocity / acceleration of the origin ----------
+    # Rigid-chain recursion with the body frame as the fixed base, so these
+    # isolate the joint-induced motion (zero when no joint lies above the
+    # part). v̇|_body = v̇_parent|_body + ω_rel_parent × offset; the accel
+    # adds the centripetal ω_rel×(ω_rel×offset) + tangential α_rel×offset.
+    omega_rel_parent_mx = parent_state.omega_rel_output._mx
+    alpha_rel_parent_mx = parent_state.alpha_rel_output._mx
+    v_rel_child_mx = (parent_state.velocity_rel_body._mx
+                      + ca.cross(omega_rel_parent_mx, offset_in_craft_mx))
+    a_rel_child_mx = (parent_state.acceleration_rel_body._mx
+                      + ca.cross(alpha_rel_parent_mx, offset_in_craft_mx)
+                      + ca.cross(omega_rel_parent_mx,
+                                 ca.cross(omega_rel_parent_mx,
+                                          offset_in_craft_mx)))
+    child_velocity_rel_body = Vec3[CraftFrame].from_mx(v_rel_child_mx)
+    child_acceleration_rel_body = Vec3[CraftFrame].from_mx(a_rel_child_mx)
 
     # ----- body-frame quantities ----------------------------------------
     # ctx.velocity_body: body-frame coords of the linear velocity at the
@@ -323,13 +406,29 @@ def _compute_child_state(parent_state: KinematicState, child,
     # any caller-supplied expression). After the wrench-collection
     # phase the framework substitutes them with the real Newton-Euler
     # outputs, so a Part reading `ctx.acceleration_body` ends up
-    # reading the current-tick lever-arm-lifted value.
+    # reading the current-tick value.
+    #
+    # Rotating-frame transport theorem: the absolute acceleration of a
+    # point that also moves WITHIN the (rotating) body frame is the rigid
+    # lever-arm transfer PLUS the Coriolis term 2·ω_body × v_rel and the
+    # relative acceleration a_rel. For a part rigidly fixed to the body
+    # (v_rel = a_rel = 0) this collapses to the original lever arm.
     lever_craft  = (body_angular_acceleration.cross(child_r_in_craft)
                     + body_angular_velocity.cross(
-                        body_angular_velocity.cross(child_r_in_craft)))
+                        body_angular_velocity.cross(child_r_in_craft))
+                    + body_angular_velocity.cross(child_velocity_rel_body)
+                      * 2.0
+                    + child_acceleration_rel_body)
     lever_world = body_orientation.apply(lever_craft)
     child_a_world = body_acceleration_world + lever_world
     child_a_body   = body_orientation.conjugate().apply(child_a_world)
+
+    # Absolute angular acceleration of the part's output frame:
+    # α_abs = α_body + α_rel + ω_body × ω_rel  (all in body coords).
+    child_angular_acceleration = (body_angular_acceleration
+                                  + child_alpha_rel_output
+                                  + body_angular_velocity.cross(
+                                      child_omega_rel_output))
 
     return KinematicState(
         origin_in_world=child_origin_in_world,
@@ -344,7 +443,11 @@ def _compute_child_state(parent_state: KinematicState, child,
         R_craft_from_output=R_craft_from_child_output,
         acceleration_world=child_a_world,
         acceleration_body=child_a_body,
-        angular_acceleration=body_angular_acceleration,
+        angular_acceleration=child_angular_acceleration,
+        velocity_rel_body=child_velocity_rel_body,
+        acceleration_rel_body=child_acceleration_rel_body,
+        omega_rel_output=child_omega_rel_output,
+        alpha_rel_output=child_alpha_rel_output,
     )
 
 
