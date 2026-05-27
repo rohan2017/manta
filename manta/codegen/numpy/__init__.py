@@ -117,6 +117,21 @@ class NumpyEKF:
         self._x   = self._initial_x()
         self._P   = np.eye(ekf.spec.tangent_dim) * 1e-2
 
+        # Measurement bus: one mailbox per registered sensor, in
+        # registration order (= the order step() applies them). The user
+        # drops a reading in via feed(); step() consumes fresh ones.
+        self._meas: dict[str, dict[str, Any]] = {}
+        for key, spec_o in ekf._sensors.items():
+            self._meas[spec_o["full"]] = {
+                "value": None, "fresh": False, "t": None,
+                "dim": spec_o["dim"], "key": key,
+            }
+        # Latched (zero-order-hold) control inputs, read by step()'s
+        # predict. Full or craft-relative names; resolved per predict.
+        self.inputs: dict[str, float] = {}
+        # Filter clock — advances by dt each step (or to the supplied t).
+        self._t = 0.0
+
     def _initial_x(self) -> np.ndarray:
         """Pack the world's nested initial-state dict into the spec's
         flat ambient layout."""
@@ -267,8 +282,6 @@ class NumpyEKF:
                 f"NumpyEKF.update: no measurements provided for "
                 f"{type(part).__name__}('{part.name}').")
         ekf = self._ekf
-        u_vec = ekf._u_defaults
-        dt0, t0 = 0.0, 0.0
         for out_name, z in measurements.items():
             key = (id(part), out_name)
             if key not in ekf._sensors:
@@ -276,21 +289,88 @@ class NumpyEKF:
                 raise KeyError(
                     f"NumpyEKF.update: part '{part.name}' has no "
                     f"registered output {out_name!r} (available: {avail}).")
-            spec_o = ekf._sensors[key]
-            z_arr  = np.atleast_1d(np.asarray(z, dtype=float)).reshape(-1)
-            if z_arr.size != spec_o["dim"]:
-                raise ValueError(
-                    f"NumpyEKF.update: {part.name}.{out_name}: expected "
-                    f"z of size {spec_o['dim']}, got {z_arr.size}.")
-            h_val = np.asarray(spec_o["h_fn"](self._x, u_vec, dt0, t0)
-                                ).reshape(-1)
-            H     = np.asarray(spec_o["H_fn"](self._x, u_vec, dt0, t0))
-            if spec_o["L_h_fn"] is not None:
-                L_h = np.asarray(spec_o["L_h_fn"](self._x, u_vec, dt0, t0))
-                R   = L_h @ ekf._Sigma @ L_h.T
-            else:
-                R   = np.zeros((spec_o["dim"], spec_o["dim"]))
-            self._apply_update(z_arr, h_val, H, R)
+            self._apply_sensor_update(ekf._sensors[key], z,
+                                      ekf._u_defaults)
+
+    def _apply_sensor_update(self, spec_o: dict[str, Any], z,
+                             u_vec: np.ndarray) -> None:
+        """Evaluate one sensor's cached h/H/R at the current state + `u_vec`
+        and fold the measurement `z` in via the Joseph-form update."""
+        ekf = self._ekf
+        z_arr = np.atleast_1d(np.asarray(z, dtype=float)).reshape(-1)
+        if z_arr.size != spec_o["dim"]:
+            raise ValueError(
+                f"NumpyEKF: {spec_o['full']}: expected z of size "
+                f"{spec_o['dim']}, got {z_arr.size}.")
+        h_val = np.asarray(spec_o["h_fn"](self._x, u_vec, 0.0, 0.0)
+                            ).reshape(-1)
+        H     = np.asarray(spec_o["H_fn"](self._x, u_vec, 0.0, 0.0))
+        if spec_o["L_h_fn"] is not None:
+            L_h = np.asarray(spec_o["L_h_fn"](self._x, u_vec, 0.0, 0.0))
+            R   = L_h @ ekf._Sigma @ L_h.T
+        else:
+            R   = np.zeros((spec_o["dim"], spec_o["dim"]))
+        self._apply_update(z_arr, h_val, H, R)
+
+    # ---- Measurement bus + step ----------------------------------------
+
+    def _resolve_meas_name(self, name: str) -> str:
+        """Resolve a full or craft-relative sensor name to its full key."""
+        if name in self._meas:
+            return name
+        matches = [n for n in self._meas if n.endswith("." + name)]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            raise KeyError(
+                f"NumpyEKF.feed: ambiguous sensor name {name!r}; matches "
+                f"{matches}. Use the fully-qualified form.")
+        raise KeyError(
+            f"NumpyEKF.feed: unknown sensor {name!r}. Registered: "
+            f"{sorted(self._meas)}")
+
+    def feed(self, name: str, z, *, t: float | None = None) -> None:
+        """Drop a measurement into the bus and mark it fresh.
+
+        `name` is a registered sensor's full `"craft.part.output"` name or
+        an unambiguous suffix. `t` is an optional measurement timestamp
+        used for staleness rejection in `step()`. The reading is consumed
+        (and the fresh flag cleared) by the next `step()`.
+        """
+        m = self._meas[self._resolve_meas_name(name)]
+        z_arr = np.atleast_1d(np.asarray(z, dtype=float)).reshape(-1)
+        if z_arr.size != m["dim"]:
+            raise ValueError(
+                f"NumpyEKF.feed: {name}: expected z of size {m['dim']}, "
+                f"got {z_arr.size}.")
+        m["value"] = z_arr
+        m["fresh"] = True
+        m["t"]     = t
+
+    def step(self, dt: float, *, t: float | None = None) -> None:
+        """Predict by `dt`, then fold in every fresh measurement.
+
+        Latched `self.inputs` drive the predict. Fresh measurements are
+        applied sequentially in registration order at a single
+        linearization point (the post-predict state); their fresh flags
+        are then cleared. A timestamped measurement older than the
+        interval start is dropped as stale. Sub-`dt` measurement timing is
+        quantized to the step boundary; full out-of-sequence handling is
+        out of scope.
+        """
+        t_start = t if t is not None else self._t
+        u_dict  = self.inputs if self.inputs else None
+        self.predict(dt, t=t_start, u=u_dict)
+        u_vec = self._ekf._build_u(u_dict)
+        for full, m in self._meas.items():
+            if not m["fresh"]:
+                continue
+            m["fresh"] = False
+            if m["t"] is not None and m["t"] < t_start - 1e-9:
+                continue  # stale: predates the interval we just integrated
+            self._apply_sensor_update(self._ekf._sensors[m["key"]],
+                                      m["value"], u_vec)
+        self._t = t_start + dt
 
     def _update_low_level(self,
                           h_sym: Callable[[ca.MX], ca.MX],

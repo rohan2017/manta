@@ -36,11 +36,58 @@ API::
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import IntFlag, auto
 from typing import Any
 
 import casadi as ca
 import numpy as np
 
+
+class SlotSet(IntFlag):
+    """Aliases for the rigid-body slots an EKF should track.
+
+    Combine with ``|``::
+
+        EKF(world, track={"drone": POSE | TWIST})
+
+    The composites map to the rigid-body slot-name suffixes
+    (``position`` / ``orientation`` / ``velocity`` / ``angular_velocity``).
+    They name ONLY the rigid-body block — part R1/R3 states, RW-bias
+    slots, and disturbance slots are never selected by an alias; they
+    enter the tracked set via dynamics closure or because a chosen
+    sensor observes them.
+    """
+    POSITION         = auto()
+    ORIENTATION      = auto()
+    VELOCITY         = auto()
+    ANGULAR_VELOCITY = auto()
+    POSE  = POSITION | ORIENTATION
+    TWIST = VELOCITY | ANGULAR_VELOCITY
+    ALL   = POSE | TWIST
+
+
+# Convenience module-level aliases (the common spelling at call sites).
+POSE  = SlotSet.POSE
+TWIST = SlotSet.TWIST
+ALL   = SlotSet.ALL
+
+_SLOTSET_SUFFIX = {
+    SlotSet.POSITION:         "position",
+    SlotSet.ORIENTATION:      "orientation",
+    SlotSet.VELOCITY:         "velocity",
+    SlotSet.ANGULAR_VELOCITY: "angular_velocity",
+}
+
+
+def resolve_slotset(craft_name: str, slotset: SlotSet) -> set[str]:
+    """Expand a `SlotSet` into the full rigid-body slot names for a craft.
+
+    `SlotSet.POSE` on craft ``"drone"`` →
+    ``{"drone.position", "drone.orientation"}``.
+    """
+    return {f"{craft_name}.{suffix}"
+            for flag, suffix in _SLOTSET_SUFFIX.items()
+            if slotset & flag}
 
 
 @dataclass(frozen=True)
@@ -74,6 +121,11 @@ class StateSpec:
         self._slot_by_name = {s.name: s for s in self._slots}
         self._ambient_dim = sum(s.dim for s in self._slots)
         self._tangent_dim = sum(s.tangent_dim for s in self._slots)
+        # Map this spec's indices back into the spec it was derived from.
+        # For a freshly-built (full) spec this is the identity; `subset`
+        # overrides it with the surviving full-spec indices.
+        self._ambient_keep_idx = np.arange(self._ambient_dim)
+        self._tangent_keep_idx = np.arange(self._tangent_dim)
 
     # ----- Construction --------------------------------------------------
 
@@ -136,6 +188,43 @@ class StateSpec:
         for field in world.fields:
             cls._add_field_disturbance_slots(field, add)
         return cls(slots)
+
+    @classmethod
+    def subset(cls, full_spec: "StateSpec",
+               kept_names) -> "StateSpec":
+        """Build a standalone spec over a subset of `full_spec`'s slots.
+
+        Slots are kept in their original `full_spec` order; ambient and
+        tangent offsets re-densify from 0 so every existing method
+        (pack/unpack/boxplus/boxminus) works on the result unchanged.
+        The returned spec also carries `ambient_keep_idx` /
+        `tangent_keep_idx` — the indices in `full_spec` that survive —
+        for slicing full-size vectors/covariances down to this subset.
+        """
+        kept = set(kept_names)
+        slots: list[StateSlot] = []
+        offset = 0
+        tan_offset = 0
+        ambient_keep: list[int] = []
+        tangent_keep: list[int] = []
+        for s in full_spec.slots:
+            if s.name not in kept:
+                continue
+            ambient_keep.extend(range(s.offset, s.offset + s.dim))
+            tangent_keep.extend(
+                range(s.tangent_offset, s.tangent_offset + s.tangent_dim))
+            slots.append(StateSlot(name=s.name,
+                                   offset=offset,
+                                   dim=s.dim,
+                                   manifold=s.manifold,
+                                   tangent_dim=s.tangent_dim,
+                                   tangent_offset=tan_offset))
+            offset += s.dim
+            tan_offset += s.tangent_dim
+        sub = cls(slots)
+        sub._ambient_keep_idx = np.array(ambient_keep, dtype=int)
+        sub._tangent_keep_idx = np.array(tangent_keep, dtype=int)
+        return sub
 
     @staticmethod
     def _add_field_disturbance_slots(field, add) -> None:
@@ -218,6 +307,19 @@ class StateSpec:
     @property
     def tangent_dim(self) -> int:
         return self._tangent_dim
+
+    @property
+    def ambient_keep_idx(self) -> np.ndarray:
+        """Indices into the parent (full) spec's ambient vector that this
+        spec retains. Identity for a full spec; a gather map for a
+        `subset`."""
+        return self._ambient_keep_idx
+
+    @property
+    def tangent_keep_idx(self) -> np.ndarray:
+        """Indices into the parent (full) spec's tangent vector that this
+        spec retains."""
+        return self._tangent_keep_idx
 
     def slot(self, name: str) -> StateSlot:
         """Lookup a slot by name.

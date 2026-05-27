@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3
-from ..base import Output, Part, PartUpdate
+from ..base import Output, Part, PartUpdate, WhiteNoise
 from ...ir.wrench import Wrench
 
 
@@ -26,7 +26,15 @@ class PositionSensor(Part):
         position : Vec3[WorldFrame]   — sensor mount-point position in
                                          world frame; exactly what a GPS
                                          or mocap marker reads.
+
+    Noise channel (set σ to engage — leave at 0 for a noiseless oracle):
+        position_noise : world-frame white noise on the reading. Engage
+                         it (`PositionSensor("gps", position_noise_sigma=0.5)`)
+                         to give the EKF an auto-built R for this sensor,
+                         e.g. when driving the filter through `step()`.
     """
+
+    position_noise = WhiteNoise(shape="vec3", frame=WorldFrame, sigma=0.0)
 
     position = Output(shape="vec3")
 
@@ -34,5 +42,6 @@ class PositionSensor(Part):
         zero_v = Vec3[PartFrame].constant((0.0, 0.0, 0.0))
         return PartUpdate(
             wrench=Wrench(force=zero_v, torque=zero_v),
-            outputs={"position": ctx.position[WorldFrame]},
+            outputs={"position": ctx.position[WorldFrame]
+                                  + self.position_noise},
         )

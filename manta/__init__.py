@@ -53,9 +53,11 @@ from .world import World, CompiledWorld
 from .planets import Planet
 from .couplings import Coupling
 from .estimation.ekf import EKF
+from .estimation.state_spec import ALL, POSE, TWIST, SlotSet
 from .codegen import TargetCpp, TargetNumpy
 
 __all__ = [
     "ir", "Craft", "World", "Coupling", "CompiledWorld", "Planet", "EKF",
     "TargetNumpy", "TargetCpp",
+    "SlotSet", "POSE", "TWIST", "ALL",
 ]
