@@ -29,7 +29,7 @@ def test_state_spec_rigid_body_layout():
     assert spec.tangent_dim == 12   # SO(3) collapses 4→3
     names = [s.name for s in spec.slots]
     assert names == ["position", "orientation", "velocity", "angular_velocity"]
-    assert spec.slot("orientation").manifold == "SO3"
+    assert spec.slot("orientation").manifold.kind == "quat"
 
 
 def test_state_spec_with_parts():

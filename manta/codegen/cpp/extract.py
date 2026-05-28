@@ -282,36 +282,30 @@ def _discover_input_names(cf: ca.Function,
     return out
 
 
+def _match_noise_driver(owner, sub: str):
+    """Look up the noise channel whose driver-input name equals `sub`.
+    Returns (nname, ndecl) on a hit, else None. Replaces the prior
+    `isinstance(WhiteNoise) / sub.endswith('_driver') + isinstance(RW)`
+    pair — each Noise subclass owns its own driver-name convention."""
+    for nname, ndecl in owner.noise_declarations().items():
+        if ndecl.driver_input_name(nname) == sub:
+            return nname, ndecl
+    return None
+
+
 def _is_known_noise_input(owner, sub: str) -> bool:
-    """True if `<owner>.<sub>` matches a WhiteNoise channel or a
-    RandomWalkNoise driver (`<bias>_driver`)."""
-    from ...parts.base import RandomWalkNoise, WhiteNoise
-    ndecls = owner.noise_declarations()
-    if sub in ndecls and isinstance(ndecls[sub], WhiteNoise):
-        return True
-    if sub.endswith("_driver"):
-        bias = sub[: -len("_driver")]
-        if bias in ndecls and isinstance(ndecls[bias], RandomWalkNoise):
-            return True
-    return False
+    return _match_noise_driver(owner, sub) is not None
 
 
 def _noise_zero(owner, sub: str):
     """Return the zero MX of the right shape for a Noise input.
     Raises if the input doesn't match a known channel."""
-    from ...parts.base import RandomWalkNoise, WhiteNoise
-    ndecls = owner.noise_declarations()
-    if sub in ndecls and isinstance(ndecls[sub], WhiteNoise):
-        ndecl = ndecls[sub]
-        dim = 1 if ndecl.shape == "scalar" else 3
-        return ca.MX.zeros(dim, 1)
-    if sub.endswith("_driver"):
-        bias = sub[: -len("_driver")]
-        if bias in ndecls and isinstance(ndecls[bias], RandomWalkNoise):
-            ndecl = ndecls[bias]
-            dim = 1 if ndecl.shape == "scalar" else 3
-            return ca.MX.zeros(dim, 1)
-    raise RuntimeError(f"extract: unhandled noise sub-name {sub!r}")
+    hit = _match_noise_driver(owner, sub)
+    if hit is None:
+        raise RuntimeError(f"extract: unhandled noise sub-name {sub!r}")
+    _, ndecl = hit
+    dim = 1 if ndecl.shape == "scalar" else 3
+    return ca.MX.zeros(dim, 1)
 
 
 def _evaluate_tick_flat(cf: ca.Function,

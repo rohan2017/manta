@@ -110,9 +110,9 @@ def test_state_spec_picks_up_r3_state_slot():
     w.add_craft(c)
     spec = StateSpec.from_world(w)
     slot = spec.slot("c.p.bias")
-    assert slot.dim         == 3
-    assert slot.tangent_dim == 3
-    assert slot.manifold    == "R3"
+    assert slot.dim              == 3
+    assert slot.tangent_dim      == 3
+    assert slot.manifold.kind    == "vec"
 
 
 def test_ekf_estimates_r3_state_from_output_observation():

@@ -39,7 +39,7 @@ from .inertia import symbolic_inertia_rollup
 from .kinematics import kinematic_pass
 from .ir.frames import WorldFrame, CraftFrame, PartFrame
 from .ir.manifold import SO3
-from .parts.base import CompositePart, Part, PartUpdate, WhiteNoise
+from .parts.base import CompositePart, Part, PartUpdate
 from .ir.wrench import Wrench
 
 
@@ -223,56 +223,31 @@ def _plumb_field_disturbances(fields, dt) -> tuple[list, list[tuple[str, Any]]]:
             # User-declared State slots: input → identity passthrough.
             # (Disturbance state advances only via paired RW Noise.)
             for sname, sdecl in sdecls.items():
-                if sdecl.manifold != "R1":
+                if sdecl.manifold.kind != "scalar":
                     raise NotImplementedError(
                         f"{type(dist).__name__}('{dist.name}'): State "
-                        f"manifold {sdecl.manifold!r} not yet supported "
-                        f"on disturbance-declared state.")
+                        f"manifold kind {sdecl.manifold.kind!r} not yet "
+                        f"supported on disturbance-declared state.")
                 sym = ir.Scalar.input(prefix + sname)
                 saved[sname] = getattr(dist, sname)
                 object.__setattr__(dist, sname, sym)
                 state_outputs.append((prefix + sname, sym))
 
-            # Noise channels.
+            # Noise channels — synthesis is polymorphic on the Noise
+            # subclass; the compiler just binds the returned symbol and
+            # optionally records the synthesized state update.
             for nname, ndecl in ndecls.items():
-                frame = ndecl.frame or WorldFrame
-                if isinstance(ndecl, WhiteNoise):
-                    if ndecl.shape == "scalar":
-                        sym = ir.Scalar.input(prefix + nname)
-                    else:
-                        sym = ir.Vec3[frame].input(prefix + nname)
-                    saved[nname] = getattr(dist, nname)
-                    object.__setattr__(dist, nname, sym)
-                    continue
-                # RandomWalkNoise.
-                sigma = float(getattr(dist, f"{nname}_sigma"))
-                if sigma <= 0.0:
-                    # Inert: bind to zero, no slot, no driver.
-                    if ndecl.shape == "scalar":
-                        zero_sym = ir.Scalar.from_mx(ca.MX(0.0))
-                    else:
-                        zero_sym = ir.Vec3[frame].from_mx(
-                            ca.MX.zeros(3, 1))
-                    saved[nname] = getattr(dist, nname)
-                    object.__setattr__(dist, nname, zero_sym)
-                    continue
-                # Active RW: bias state + driver input.
-                driver_name = prefix + f"{nname}_driver"
-                if ndecl.shape == "scalar":
-                    bias_sym   = ir.Scalar.input(prefix + nname)
-                    driver_sym = ir.Scalar.input(driver_name)
-                    sqrt_dt    = ca.sqrt(dt._mx)
-                    bias_next  = ir.Scalar.from_mx(
-                        bias_sym._mx + sqrt_dt * driver_sym._mx)
-                else:
-                    bias_sym   = ir.Vec3[frame].input(prefix + nname)
-                    driver_sym = ir.Vec3[frame].input(driver_name)
-                    sqrt_dt    = ca.sqrt(dt._mx)
-                    bias_next  = ir.Vec3[frame].from_mx(
-                        bias_sym._mx + sqrt_dt * driver_sym._mx)
+                synth = ndecl.synthesize(
+                    base_name=prefix + nname,
+                    name=nname,
+                    dt=dt,
+                    default_frame=WorldFrame,
+                    owner=dist,
+                )
                 saved[nname] = getattr(dist, nname)
-                object.__setattr__(dist, nname, bias_sym)
-                state_outputs.append((prefix + nname, bias_next))
+                object.__setattr__(dist, nname, synth.signal_sym)
+                if synth.state_update is not None:
+                    state_outputs.append(synth.state_update)
 
             saved_attrs.append((dist, saved))
 
@@ -330,16 +305,17 @@ def _trace_craft_pass1(g_ctx,
             saved: dict[str, Any] = {}
             for sname, sdecl in decls.items():
                 input_name = prefix + f"{part.name}.{sname}"
-                if sdecl.manifold == "R1":
+                kind = sdecl.manifold.kind
+                if kind == "scalar":
                     sym = ir.Scalar.input(input_name)
-                elif sdecl.manifold == "R3":
+                elif kind == "vec":
                     frame = sdecl.frame or CraftFrame
                     sym = ir.Vec3[frame].input(input_name)
                 else:
                     raise NotImplementedError(
                         f"{type(part).__name__}('{part.name}'): "
-                        f"State manifold {sdecl.manifold!r} not yet "
-                        f"wired through compile_world_tick.")
+                        f"State manifold kind {kind!r} not yet wired "
+                        f"through compile_world_tick.")
                 part_states[sname] = sym
                 saved[sname] = getattr(part, sname)
                 object.__setattr__(part, sname, sym)
@@ -355,10 +331,10 @@ def _trace_craft_pass1(g_ctx,
                 object.__setattr__(part, iname, sym)
             saved_input_attrs[part] = saved_i
 
-    # Per-part Noise plumbing — same shape as the single-craft path.
-    # White channels: one graph input, bind directly. RW channels: a
-    # state input (bias) + a driver input; after-tick state update
-    # `bias_next = bias + sqrt(dt) · driver`.
+    # Per-part Noise plumbing — synthesis is polymorphic on the Noise
+    # subclass (see manta/parts/base.py). The compiler binds the
+    # returned symbol onto the part attribute and records any
+    # synthesized state update.
     saved_noise_attrs: dict[Part, dict[str, Any]] = {}
     rw_bias_updates: list[tuple[str, Any]] = []   # (state_name, bias_next)
     for part in craft._parts:
@@ -368,41 +344,17 @@ def _trace_craft_pass1(g_ctx,
         saved_n: dict[str, Any] = {}
         for nname, ndecl in ndecls.items():
             input_name = prefix + f"{part.name}.{nname}"
-            frame = ndecl.frame or CraftFrame
-            if isinstance(ndecl, WhiteNoise):
-                if ndecl.shape == "scalar":
-                    sym = ir.Scalar.input(input_name)
-                else:
-                    sym = ir.Vec3[frame].input(input_name)
-                saved_n[nname] = getattr(part, nname)
-                object.__setattr__(part, nname, sym)
-                continue
-            # RandomWalkNoise
-            sigma = float(getattr(part, f"{nname}_sigma"))
-            if sigma <= 0.0:
-                if ndecl.shape == "scalar":
-                    zero_sym = ir.Scalar.from_mx(ca.MX(0.0))
-                else:
-                    zero_sym = ir.Vec3[frame].from_mx(ca.MX.zeros(3, 1))
-                saved_n[nname] = getattr(part, nname)
-                object.__setattr__(part, nname, zero_sym)
-                continue
-            driver_name = f"{input_name}_driver"
-            if ndecl.shape == "scalar":
-                bias_sym   = ir.Scalar.input(input_name)
-                driver_sym = ir.Scalar.input(driver_name)
-                sqrt_dt    = ca.sqrt(dt._mx)
-                bias_next_mx = bias_sym._mx + sqrt_dt * driver_sym._mx
-                bias_next = ir.Scalar.from_mx(bias_next_mx)
-            else:
-                bias_sym   = ir.Vec3[frame].input(input_name)
-                driver_sym = ir.Vec3[frame].input(driver_name)
-                sqrt_dt    = ca.sqrt(dt._mx)
-                bias_next_mx = bias_sym._mx + sqrt_dt * driver_sym._mx
-                bias_next = ir.Vec3[frame].from_mx(bias_next_mx)
+            synth = ndecl.synthesize(
+                base_name=input_name,
+                name=nname,
+                dt=dt,
+                default_frame=CraftFrame,
+                owner=part,
+            )
             saved_n[nname] = getattr(part, nname)
-            object.__setattr__(part, nname, bias_sym)
-            rw_bias_updates.append((input_name, bias_next))
+            object.__setattr__(part, nname, synth.signal_sym)
+            if synth.state_update is not None:
+                rw_bias_updates.append(synth.state_update)
         saved_noise_attrs[part] = saved_n
 
     # Per-joint angular-acceleration placeholders. A Joint's θ̈ is not a

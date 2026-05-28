@@ -118,8 +118,34 @@ class Input(_Declaration):
     """
 
 
+class SynthesizedNoise:
+    """Return value of `Noise.synthesize()` describing the IR plumbing
+    one occurrence of a Noise channel contributes to a tick.
+
+    Attrs:
+        signal_sym    — IR symbol bound onto `part.<name>` so that user
+                        code reading `self.<name>` inside `update()`
+                        sees the symbolic current value.
+        state_update  — Optional `(slot_full_name, next_value_sym)`; the
+                        compiler appends this to the tick's state-output
+                        list (the slot evolves over time).
+    """
+
+    __slots__ = ("signal_sym", "state_update")
+
+    def __init__(self, signal_sym, state_update=None):
+        self.signal_sym   = signal_sym
+        self.state_update = state_update
+
+
 class Noise(_Declaration):
     """Abstract base for noise-channel declarations.
+
+    Subclasses set class-level metadata (`kind`, `contributes_state`)
+    and implement `synthesize()` (the per-tick IR plumbing) and
+    `process_noise_block(dt)` (the EKF Q contribution). Backends key
+    on `kind` via their own registry — no `isinstance(WhiteNoise)`
+    dispatch anywhere in the codebase.
 
     Concrete subclasses:
 
@@ -127,7 +153,7 @@ class Noise(_Declaration):
         graph input named `<part>.<noise_name>`, rebinds the part
         attribute to that input, and the part adds it directly into its
         sensor reading (or process expression). σ is the per-tick
-        measurement stddev.
+        measurement stddev. `kind = "white"`.
 
       * `RandomWalkNoise` — random-walk bias. The framework synthesizes:
           - A **state slot** `<part>.<noise_name>` holding the bias.
@@ -135,13 +161,8 @@ class Noise(_Declaration):
           - A state update each tick:
                 bias_next = bias + sqrt(dt) · driver,    driver ~ N(0, σ²).
         Inside `update()`, `self.<noise_name>` reads the bias state
-        (the slowly-drifting current value) — typically added into the
-        sensor signal alongside a separate `WhiteNoise` channel. σ has
-        continuous σ/√Hz semantics; per-tick bias variance is dt·σ².
-
-    Custom noise types can subclass `Noise` directly; the framework
-    dispatches on `isinstance(decl, WhiteNoise)` / `RandomWalkNoise` in
-    the compile pipeline.
+        (the slowly-drifting current value). σ has continuous σ/√Hz
+        semantics; per-tick bias variance is dt·σ². `kind = "random_walk"`.
 
     Args:
         shape — "scalar" or "vec3". Default "vec3".
@@ -150,6 +171,10 @@ class Noise(_Declaration):
         sigma — 1-σ standard deviation, scalar (isotropic across axes).
                 See subclass docstrings for unit conventions.
     """
+
+    # Class-level metadata. Subclasses MUST set both.
+    kind:              str  = None    # type: ignore[assignment]
+    contributes_state: bool = False
 
     __slots__ = ("shape", "frame", "sigma")
 
@@ -164,17 +189,131 @@ class Noise(_Declaration):
         self.frame = frame
         self.sigma = float(sigma)
 
+    # ---- Manifolds ----------------------------------------------------
+
+    def signal_manifold(self, *, default_frame=None):
+        """Manifold of the symbol user code reads as self.<name>."""
+        from ..ir.slot_manifold import ScalarManifold, R3Manifold
+        if self.shape == "scalar":
+            return ScalarManifold()
+        return R3Manifold(frame=self.frame or default_frame)
+
+    def state_manifold(self, *, default_frame=None):
+        """Manifold of the synthesized state slot, or None."""
+        if not self.contributes_state:
+            return None
+        return self.signal_manifold(default_frame=default_frame)
+
+    # ---- Activity gate ------------------------------------------------
+
+    def is_active(self, owner, name: str) -> bool:
+        """Is this channel currently producing nonzero output? Reads
+        the runtime `<name>_sigma` attribute on the owner."""
+        return float(getattr(owner, f"{name}_sigma")) > 0.0
+
+    # ---- Input-name classification (extract.py / ekf.py) --------------
+
+    def driver_input_name(self, name: str) -> str:
+        """The name of this channel's per-tick stochastic input. For
+        White noise the signal IS the driver (same name); for RW the
+        driver is a separate `<name>_driver` input distinct from the
+        bias state name."""
+        return name
+
+    # ---- Initial state seeding ---------------------------------------
+
+    def initial_state_entries(self, name: str, owner) -> dict[str, object]:
+        """Names → zero values this channel contributes to the seed
+        state dict (state_spec.unpack-compatible). Inert RW channels
+        return an empty dict; everyone else seeds at least the signal
+        slot."""
+        zero = self._zero_value()
+        return {name: zero}
+
+    # ---- IR synthesis (the world-tick compiler's entry point) --------
+
+    def synthesize(self, *, base_name: str, name: str, dt, default_frame,
+                   owner) -> SynthesizedNoise:
+        """Build one tick's worth of IR plumbing for this channel.
+        Subclasses implement; the world-tick compiler calls this once
+        per noise declaration per owner."""
+        raise NotImplementedError(
+            f"{type(self).__name__}.synthesize must be implemented.")
+
+    # ---- Helpers ------------------------------------------------------
+
+    def _zero_value(self):
+        import numpy as np
+        if self.shape == "scalar":
+            return 0.0
+        return np.zeros(3, dtype=float)
+
 
 class WhiteNoise(Noise):
     """Per-tick i.i.d. Gaussian noise channel. σ is the per-tick stddev."""
 
+    kind              = "white"
+    contributes_state = False
+
     __slots__ = ()
+
+    def synthesize(self, *, base_name, name, dt, default_frame, owner):
+        import casadi as ca   # noqa: F401  — used by IR ctors below.
+        from .. import ir
+        if self.shape == "scalar":
+            sym = ir.Scalar.input(base_name)
+        else:
+            frame = self.frame or default_frame
+            sym = ir.Vec3[frame].input(base_name)
+        return SynthesizedNoise(signal_sym=sym)
 
 
 class RandomWalkNoise(Noise):
     """Random-walk bias channel. σ has σ/√Hz drift-density units."""
 
+    kind              = "random_walk"
+    contributes_state = True
+
     __slots__ = ()
+
+    def driver_input_name(self, name: str) -> str:
+        return f"{name}_driver"
+
+    def initial_state_entries(self, name, owner):
+        # Inert when σ=0: no slot, no driver, no seed.
+        if not self.is_active(owner, name):
+            return {}
+        zero = self._zero_value()
+        return {name: zero, f"{name}_driver": zero}
+
+    def synthesize(self, *, base_name, name, dt, default_frame, owner):
+        import casadi as ca
+        from .. import ir
+        frame = self.frame or default_frame
+        if not self.is_active(owner, name):
+            # Inert: bind zero, no slot, no driver.
+            if self.shape == "scalar":
+                zero_sym = ir.Scalar.from_mx(ca.MX(0.0))
+            else:
+                zero_sym = ir.Vec3[frame].from_mx(ca.MX.zeros(3, 1))
+            return SynthesizedNoise(signal_sym=zero_sym)
+        # Active: bias-state input + driver input + state update.
+        driver_name = f"{base_name}_driver"
+        sqrt_dt = ca.sqrt(dt._mx)
+        if self.shape == "scalar":
+            bias_sym   = ir.Scalar.input(base_name)
+            driver_sym = ir.Scalar.input(driver_name)
+            bias_next  = ir.Scalar.from_mx(
+                bias_sym._mx + sqrt_dt * driver_sym._mx)
+        else:
+            bias_sym   = ir.Vec3[frame].input(base_name)
+            driver_sym = ir.Vec3[frame].input(driver_name)
+            bias_next  = ir.Vec3[frame].from_mx(
+                bias_sym._mx + sqrt_dt * driver_sym._mx)
+        return SynthesizedNoise(
+            signal_sym=bias_sym,
+            state_update=(base_name, bias_next),
+        )
 
 
 class State(_Declaration):
@@ -191,26 +330,37 @@ class State(_Declaration):
     Args:
         init      Python value (default initial value across compiles).
                   For R1 a float; for R3 a length-3 tuple / ndarray.
-        manifold  Tag describing how the state composes:
-                    'R1' (default) — scalar; tangent = same.
-                    'R3'           — 3-vector in WorldFrame; tangent = 3.
-                  'SO3' (quaternion) requires the dual-frame parametrization
-                  and isn't yet user-selectable; rigid-body slots use it
-                  internally.
+        manifold  String shortcut ('R1', 'R3') or a `Manifold` instance.
+                  'SO3' requires the dual-frame parametrization (used
+                  internally for rigid-body slots; not user-selectable
+                  via this declaration yet).
         frame     Frame tag for R3 state. Default `CraftFrame`. Ignored
-                  for R1.
+                  for R1. Folded into the Manifold instance.
+
+    `state.manifold` always reads back as a `Manifold` instance; the
+    string form is normalized at construction.
     """
 
     __slots__ = ("init", "manifold", "frame")
 
-    def __init__(self, init, manifold: str = "R1", frame=None) -> None:
-        if manifold not in ("R1", "R3"):
-            raise NotImplementedError(
-                f"State.manifold={manifold!r}: only 'R1' (scalar) and "
-                f"'R3' (vec3) are wired through the world tick today. SO3 "
-                f"requires the dual-frame parametrization (orientation "
-                f"= Quat[from, to]) and isn't yet user-selectable.")
-        if manifold == "R3":
+    def __init__(self, init, manifold="R1", frame=None) -> None:
+        from ..ir.slot_manifold import (
+            Manifold, ScalarManifold, R3Manifold, manifold_from_shortcut,
+        )
+        if isinstance(manifold, Manifold):
+            mfd = manifold
+        else:
+            # Reject SO3 explicitly to preserve the prior error message;
+            # the dual-frame parametrization isn't user-selectable here.
+            if manifold not in ("R1", "R3"):
+                raise NotImplementedError(
+                    f"State.manifold={manifold!r}: only 'R1' (scalar) and "
+                    f"'R3' (vec3) are wired through the world tick today. "
+                    f"SO3 requires the dual-frame parametrization "
+                    f"(orientation = Quat[from, to]) and isn't yet "
+                    f"user-selectable.")
+            mfd = manifold_from_shortcut(manifold, frame=frame)
+        if isinstance(mfd, R3Manifold):
             try:
                 t = tuple(float(x) for x in init)
             except (TypeError, ValueError):
@@ -223,9 +373,11 @@ class State(_Declaration):
                     f"{init!r}")
             init = t
         super().__init__(default=init)
-        self.init = init
-        self.manifold = manifold
-        self.frame = frame
+        self.init     = init
+        self.manifold = mfd
+        # Keep the explicit `frame` attribute for the few read sites that
+        # consult it directly; for R3 it mirrors the manifold's frame.
+        self.frame = (mfd.frame if isinstance(mfd, R3Manifold) else frame)
 
 
 # ---------------------------------------------------------------------------

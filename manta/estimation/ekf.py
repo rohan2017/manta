@@ -587,36 +587,24 @@ class EKF:
 
     def _classify_noise_input(self, full_name: str, owner, sub: str,
                               owner_label: str) -> None:
-        """Append a noise-spec entry for `<owner>.<sub>` if it matches a
-        white noise channel directly, or for `<owner>.<sub>_driver` if
-        it matches an RW Noise channel via its driver-suffix.
+        """Append a noise-spec entry for `<owner>.<sub>` if it matches
+        any noise channel's per-tick stochastic driver. The lookup is
+        polymorphic on the Noise subclass — each subclass declares its
+        own driver-input naming via `driver_input_name(name)`.
 
         `owner` can be a Part or a Disturbance — both expose
         `noise_declarations()` with the same shape.
         """
-        from ..parts.base import RandomWalkNoise, WhiteNoise
-        ndecls = owner.noise_declarations()
-        if sub in ndecls and isinstance(ndecls[sub], WhiteNoise):
-            ndecl = ndecls[sub]
+        for nname, ndecl in owner.noise_declarations().items():
+            if ndecl.driver_input_name(nname) != sub:
+                continue
             dim   = 1 if ndecl.shape == "scalar" else 3
-            sigma = float(getattr(owner, f"{sub}_sigma"))
+            sigma = float(getattr(owner, f"{nname}_sigma"))
             self._noise_specs.append({
                 "owner": owner, "name": sub, "full": full_name,
                 "dim": dim, "sigma": sigma,
             })
             return
-        if sub.endswith("_driver"):
-            bias_name = sub[: -len("_driver")]
-            if (bias_name in ndecls
-                    and isinstance(ndecls[bias_name], RandomWalkNoise)):
-                ndecl = ndecls[bias_name]
-                dim   = 1 if ndecl.shape == "scalar" else 3
-                sigma = float(getattr(owner, f"{bias_name}_sigma"))
-                self._noise_specs.append({
-                    "owner": owner, "name": sub, "full": full_name,
-                    "dim": dim, "sigma": sigma,
-                })
-                return
         raise RuntimeError(
             f"EKF: tick input {full_name!r} on {owner_label} is neither "
             f"an Input nor a recognized Noise channel.")

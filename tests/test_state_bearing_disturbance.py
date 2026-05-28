@@ -88,9 +88,9 @@ def test_state_spec_picks_up_disturbance_bias():
     names = [s.name for s in spec.slots]
     assert "wind.velocity" in names
     slot = spec.slot("wind.velocity")
-    assert slot.dim         == 3
-    assert slot.tangent_dim == 3
-    assert slot.manifold    == "R3"
+    assert slot.dim              == 3
+    assert slot.tangent_dim      == 3
+    assert slot.manifold.kind    == "vec"
 
 
 def test_ekf_has_disturbance_state_and_noise_channel():

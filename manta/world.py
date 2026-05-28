@@ -311,22 +311,8 @@ class World:
                 init: dict[str, Any] = {}
                 for sname, sdecl in sdecls.items():
                     init[sname] = float(sdecl.init)
-                from .parts.base import WhiteNoise
                 for nname, ndecl in ndecls.items():
-                    shape = 3 if ndecl.shape == "vec3" else 1
-                    zero  = (np.zeros(shape, dtype=float)
-                             if shape > 1 else 0.0)
-                    if isinstance(ndecl, WhiteNoise):
-                        init[nname] = zero
-                    else:
-                        sigma = float(getattr(dist, f"{nname}_sigma"))
-                        if sigma <= 0.0:
-                            continue
-                        init[nname] = (np.zeros(shape, dtype=float)
-                                       if shape > 1 else 0.0)
-                        init[f"{nname}_driver"] = (
-                            np.zeros(shape, dtype=float)
-                            if shape > 1 else 0.0)
+                    init.update(ndecl.initial_state_entries(nname, dist))
                 out[dist.name] = init
         return out
 

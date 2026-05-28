@@ -52,7 +52,7 @@ import numpy as np
 
 from .ir.frames import PartFrame
 from .ir.types import Mat3, Quat, Scalar, Vec3
-from .parts.base import Part, WhiteNoise
+from .parts.base import Part
 from .ir.wrench import Wrench
 
 
@@ -449,14 +449,11 @@ class Craft:
         for part in self._parts:
             for nname, ndecl in part.noise_declarations().items():
                 sigma = float(getattr(part, f"{nname}_sigma"))
-                if isinstance(ndecl, WhiteNoise):
-                    key = f"{part.name}.{nname}"
-                else:
-                    # Inert RW channels (sigma == 0) aren't in the
-                    # graph; skip emitting a sample.
-                    if sigma <= 0.0:
-                        continue
-                    key = f"{part.name}.{nname}_driver"
+                # Inert RW channels skip RNG entirely; everyone else
+                # samples into the channel's driver-input name.
+                if ndecl.contributes_state and sigma <= 0.0:
+                    continue
+                key = f"{part.name}.{ndecl.driver_input_name(nname)}"
                 if ndecl.shape == "scalar":
                     out[key] = (rng.normal(0.0, sigma)
                                 if sigma > 0.0 else 0.0)
@@ -482,10 +479,10 @@ class Craft:
         }
         for part in self._parts:
             for sname, sdecl in part.state_declarations().items():
-                if sdecl.manifold == "R1":
+                if sdecl.manifold.kind == "scalar":
                     state[f"{part.name}.{sname}"] = float(sdecl.init)
                 else:
-                    # R3 — `init` is a 3-tuple, validated at declaration
+                    # vec — `init` is a 3-tuple, validated at declaration
                     # time. Store as ndarray for symmetry with rigid-body
                     # slots.
                     state[f"{part.name}.{sname}"] = np.asarray(
@@ -504,21 +501,11 @@ class Craft:
             #     bias state, `<part>.<nname>_driver` is the per-tick
             #     driver. RW channels with sigma == 0 are inert.
             for nname, ndecl in part.noise_declarations().items():
-                shape = 3 if ndecl.shape == "vec3" else 1
-                zero  = (np.zeros(shape, dtype=float)
-                         if shape > 1 else 0.0)
-                if isinstance(ndecl, WhiteNoise):
-                    state[f"{part.name}.{nname}"] = zero
-                else:
-                    sigma = float(getattr(part, f"{nname}_sigma"))
-                    if sigma <= 0.0:
-                        continue
-                    state[f"{part.name}.{nname}"] = (
-                        np.zeros(shape, dtype=float)
-                        if shape > 1 else 0.0)
-                    state[f"{part.name}.{nname}_driver"] = (
-                        np.zeros(shape, dtype=float)
-                        if shape > 1 else 0.0)
+                # Each channel declares which slots it contributes to
+                # the seed dict (white: just the signal; active RW:
+                # bias + driver; inert RW: nothing).
+                for k, v in ndecl.initial_state_entries(nname, part).items():
+                    state[f"{part.name}.{k}"] = v
         unknown = set(overrides) - set(state)
         if unknown:
             raise KeyError(

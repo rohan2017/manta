@@ -18,6 +18,7 @@ from pathlib import Path
 
 from ...estimation.state_spec import StateSlot
 from .extract import WorldFunctions
+from .types import cpp_type_for
 
 
 # ---------------------------------------------------------------------------
@@ -31,14 +32,7 @@ def _cpp_ident(name: str) -> str:
 
 
 def _eigen_type_for(slot: StateSlot) -> str:
-    if slot.manifold == "R1":
-        return "double"
-    if slot.manifold == "R3":
-        return "Eigen::Vector3d"
-    if slot.manifold == "SO3":
-        return "Eigen::Vector4d"
-    raise NotImplementedError(
-        f"wrapper: no Eigen mapping for manifold {slot.manifold!r}")
+    return cpp_type_for(slot.manifold).decl
 
 
 def _state_field_init(slot: StateSlot, world) -> str:
@@ -51,6 +45,7 @@ def _state_field_init(slot: StateSlot, world) -> str:
       * an RW-bias `<part>.<bias>` → zero (matches `initial_state`),
       * a Disturbance state — handled by the disturbance branch below.
     """
+    cpp = cpp_type_for(slot.manifold)
     head, _, rest = slot.name.partition(".")
     # Per-craft slot?
     craft = next((c for c in world.crafts if c.name == head), None)
@@ -59,24 +54,17 @@ def _state_field_init(slot: StateSlot, world) -> str:
             part_name, sub = rest.split(".", 1)
             part = next(p for p in craft.parts if p.name == part_name)
             if sub in part.state_declarations():
-                sdecl = part.state_declarations()[sub]
-                if sdecl.manifold == "R1":
-                    return repr(float(getattr(part, sub)))
-                if sdecl.manifold == "R3":
-                    vec = getattr(part, sub)
-                    return (f"Eigen::Vector3d({float(vec[0])!r}, "
-                            f"{float(vec[1])!r}, {float(vec[2])!r})")
-                raise NotImplementedError(sdecl.manifold)
+                return cpp.literal(getattr(part, sub))
             from ...parts.base import RandomWalkNoise
             if (sub in part.noise_declarations()
                     and isinstance(part.noise_declarations()[sub],
                                    RandomWalkNoise)):
-                return "Eigen::Vector3d::Zero()" if slot.manifold == "R3" else "0.0"
+                return cpp.zero
             raise RuntimeError(
                 f"wrapper: per-craft slot {slot.name!r} is not a State "
                 f"or RW bias.")
         # Rigid-body slot — manifold default.
-        return _manifold_default(slot.manifold)
+        return cpp.zero
     # Per-disturbance slot.
     from ...fields.base import Disturbance
     for field in world.fields:
@@ -86,24 +74,11 @@ def _state_field_init(slot: StateSlot, world) -> str:
                 if (rest in dist.noise_declarations()
                         and isinstance(dist.noise_declarations()[rest],
                                        RandomWalkNoise)):
-                    return "Eigen::Vector3d::Zero()" if slot.manifold == "R3" else "0.0"
+                    return cpp.zero
                 if rest in dist.state_declarations():
-                    sdecl = dist.state_declarations()[rest]
-                    if sdecl.manifold == "R1":
-                        return repr(float(getattr(dist, rest)))
-                    if sdecl.manifold == "R3":
-                        vec = getattr(dist, rest)
-                        return (f"Eigen::Vector3d({float(vec[0])!r}, "
-                                f"{float(vec[1])!r}, {float(vec[2])!r})")
+                    return cpp.literal(getattr(dist, rest))
     raise RuntimeError(
         f"wrapper: slot {slot.name!r} doesn't resolve to a known owner.")
-
-
-def _manifold_default(manifold: str) -> str:
-    if manifold == "R3": return "Eigen::Vector3d::Zero()"
-    if manifold == "SO3": return "Eigen::Vector4d(1.0, 0.0, 0.0, 0.0)"
-    if manifold == "R1": return "0.0"
-    raise NotImplementedError(manifold)
 
 
 # ---------------------------------------------------------------------------

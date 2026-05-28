@@ -72,9 +72,9 @@ def test_state_spec_picks_up_rw_bias_as_state_slot():
     names = [s.name for s in spec.slots]
     assert "g.gyro_bias" in names
     slot = spec.slot("g.gyro_bias")
-    assert slot.dim         == 3
-    assert slot.tangent_dim == 3
-    assert slot.manifold    == "R3"
+    assert slot.dim              == 3
+    assert slot.tangent_dim      == 3
+    assert slot.manifold.kind    == "vec"
 
 
 def test_initial_state_seeds_bias_and_driver_at_zero():

@@ -42,6 +42,13 @@ from typing import Any
 import casadi as ca
 import numpy as np
 
+from ..ir.slot_manifold import (
+    Manifold,
+    ScalarManifold,
+    R3Manifold,
+    SO3Manifold,
+)
+
 
 class SlotSet(IntFlag):
     """Aliases for the rigid-body slots an EKF should track.
@@ -98,19 +105,23 @@ class StateSlot:
         name        — string key in the tick dict (e.g., "position",
                       "wheel.angle"). Same key the tick function uses.
         offset      — start index in the ambient vector.
-        dim         — width in the ambient vector (1, 3, or 4).
-        manifold    — 'R1' (scalar), 'R3' (3-vector), 'SO3' (quaternion 4→3 tan).
-                      Determines the tangent layout for an ESKF.
-        tangent_dim — width in the tangent vector. 4 → 3 for SO3, else
-                      equal to `dim`.
+        manifold    — `Manifold` instance describing the slot's storage
+                      and tangent dims. `dim` and `tangent_dim` are
+                      derived. Backends key on `manifold.kind`.
         tangent_offset — start index in the tangent vector.
     """
     name: str
     offset: int
-    dim: int
-    manifold: str
-    tangent_dim: int
+    manifold: Manifold
     tangent_offset: int
+
+    @property
+    def dim(self) -> int:
+        return self.manifold.ambient_dim
+
+    @property
+    def tangent_dim(self) -> int:
+        return self.manifold.tangent_dim
 
 
 class StateSpec:
@@ -146,16 +157,14 @@ class StateSpec:
         offset = 0
         tan_offset = 0
 
-        def add(name: str, dim: int, manifold: str, tangent_dim: int):
+        def add(name: str, manifold: Manifold):
             nonlocal offset, tan_offset
             slots.append(StateSlot(name=name,
                                    offset=offset,
-                                   dim=dim,
                                    manifold=manifold,
-                                   tangent_dim=tangent_dim,
                                    tangent_offset=tan_offset))
-            offset += dim
-            tan_offset += tangent_dim
+            offset += manifold.ambient_dim
+            tan_offset += manifold.tangent_dim
 
         cls._add_craft_slots(craft, "", add)
         return cls(slots)
@@ -172,16 +181,14 @@ class StateSpec:
         offset = 0
         tan_offset = 0
 
-        def add(name: str, dim: int, manifold: str, tangent_dim: int):
+        def add(name: str, manifold: Manifold):
             nonlocal offset, tan_offset
             slots.append(StateSlot(name=name,
                                    offset=offset,
-                                   dim=dim,
                                    manifold=manifold,
-                                   tangent_dim=tangent_dim,
                                    tangent_offset=tan_offset))
-            offset += dim
-            tan_offset += tangent_dim
+            offset += manifold.ambient_dim
+            tan_offset += manifold.tangent_dim
 
         for craft in world.crafts:
             cls._add_craft_slots(craft, f"{craft.name}.", add)
@@ -215,9 +222,7 @@ class StateSpec:
                 range(s.tangent_offset, s.tangent_offset + s.tangent_dim))
             slots.append(StateSlot(name=s.name,
                                    offset=offset,
-                                   dim=s.dim,
                                    manifold=s.manifold,
-                                   tangent_dim=s.tangent_dim,
                                    tangent_offset=tan_offset))
             offset += s.dim
             tan_offset += s.tangent_dim
@@ -241,58 +246,34 @@ class StateSpec:
                 continue
             prefix = f"{dist.name}."
             for sname, sdecl in sdecls.items():
-                if sdecl.manifold == "R1":
-                    add(prefix + sname, 1, "R1", 1)
-                elif sdecl.manifold == "R3":
-                    add(prefix + sname, 3, "R3", 3)
-                else:
-                    raise NotImplementedError(
-                        f"StateSpec: Disturbance state manifold "
-                        f"{sdecl.manifold!r} not yet supported.")
-            from ..parts.base import RandomWalkNoise
+                add(prefix + sname, sdecl.manifold)
             for nname, ndecl in ndecls.items():
-                if not isinstance(ndecl, RandomWalkNoise):
+                if not ndecl.contributes_state:
                     continue
-                sigma = float(getattr(dist, f"{nname}_sigma"))
-                if sigma <= 0.0:
+                if not ndecl.is_active(dist, nname):
                     continue
-                if ndecl.shape == "scalar":
-                    add(prefix + nname, 1, "R1", 1)
-                else:
-                    add(prefix + nname, 3, "R3", 3)
+                add(prefix + nname, ndecl.state_manifold())
 
     @staticmethod
     def _add_craft_slots(craft, prefix: str, add) -> None:
         """Emit one craft's worth of slots into `add`, optionally prefixed."""
-        add(prefix + "position",         3, "R3",  3)
-        add(prefix + "orientation",      4, "SO3", 3)
-        add(prefix + "velocity",         3, "R3",  3)
-        add(prefix + "angular_velocity", 3, "R3",  3)
+        add(prefix + "position",         R3Manifold())
+        add(prefix + "orientation",      SO3Manifold())
+        add(prefix + "velocity",         R3Manifold())
+        add(prefix + "angular_velocity", R3Manifold())
         for part in craft.parts:
             for sname, sdecl in part.state_declarations().items():
                 key = prefix + f"{part.name}.{sname}"
-                if sdecl.manifold == "R1":
-                    add(key, 1, "R1", 1)
-                elif sdecl.manifold == "R3":
-                    add(key, 3, "R3", 3)
-                else:
-                    raise NotImplementedError(
-                        f"StateSpec: manifold {sdecl.manifold!r} on "
-                        f"{part.name}.{sname} not yet supported.")
-            # RandomWalkNoise declarations synthesize a bias state slot
-            # per active channel.
-            from ..parts.base import RandomWalkNoise
+                add(key, sdecl.manifold)
+            # Noise channels that synthesize a state slot (RW today;
+            # any future state-carrying Noise subclass with
+            # `contributes_state=True`) are picked up generically.
             for nname, ndecl in part.noise_declarations().items():
-                if not isinstance(ndecl, RandomWalkNoise):
+                if not ndecl.contributes_state:
                     continue
-                sigma = float(getattr(part, f"{nname}_sigma"))
-                if sigma <= 0.0:
+                if not ndecl.is_active(part, nname):
                     continue
-                key = prefix + f"{part.name}.{nname}"
-                if ndecl.shape == "scalar":
-                    add(key, 1, "R1", 1)
-                else:
-                    add(key, 3, "R3", 3)
+                add(prefix + f"{part.name}.{nname}", ndecl.state_manifold())
 
     # ----- Accessors -----------------------------------------------------
 
@@ -396,35 +377,12 @@ class StateSpec:
             δ_out = boxminus(f(boxplus(x, δ_in)), f(x))
             F     = ∂δ_out / ∂δ_in  evaluated at δ_in = 0
         """
-        from ..ir.manifold import _so3_exp
         chunks: list[ca.MX] = []
         for slot in self._slots:
             x_chunk = x_ambient[slot.offset : slot.offset + slot.dim]
             d_chunk = delta_tangent[
                 slot.tangent_offset : slot.tangent_offset + slot.tangent_dim]
-            if slot.manifold in ("R1", "R3"):
-                chunks.append(x_chunk + d_chunk)
-            elif slot.manifold == "SO3":
-                # q ⊞ δ = q ⊗ exp(δ): apply tangent perturbation on the
-                # RIGHT (left-trivialized would be exp(δ) ⊗ q). Convention
-                # matches manta.ir.manifold.SO3.boxplus where the
-                # delta lives in the from_frame's tangent space and the
-                # rotation is appended on the left, but for state-vector
-                # purposes either convention works as long as it's
-                # consistent across boxplus and boxminus.
-                dq = _so3_exp(d_chunk)
-                # q_new = dq · q_chunk  (left trivialization).
-                w1, x1, y1, z1 = dq[0], dq[1], dq[2], dq[3]
-                w2 = x_chunk[0]; x2 = x_chunk[1]
-                y2 = x_chunk[2]; z2 = x_chunk[3]
-                w = w1*w2 - x1*x2 - y1*y2 - z1*z2
-                x = w1*x2 + x1*w2 + y1*z2 - z1*y2
-                y = w1*y2 - x1*z2 + y1*w2 + z1*x2
-                z = w1*z2 + x1*y2 - y1*x2 + z1*w2
-                chunks.append(ca.vertcat(w, x, y, z))
-            else:
-                raise NotImplementedError(
-                    f"boxplus_sym: manifold {slot.manifold!r} not supported")
+            chunks.append(slot.manifold.boxplus_sym(x_chunk, d_chunk))
         return ca.vertcat(*chunks)
 
     def boxminus_sym(self, x_a: ca.MX, x_b: ca.MX) -> ca.MX:
@@ -434,28 +392,11 @@ class StateSpec:
           R3 / R1    →  δ = x_a − x_b
           SO3        →  δ_θ = boxminus(q_a, q_b) = log(q_a ⊗ q_b⁻¹)
         """
-        from ..ir.manifold import _so3_log
         chunks: list[ca.MX] = []
         for slot in self._slots:
             a_chunk = x_a[slot.offset : slot.offset + slot.dim]
             b_chunk = x_b[slot.offset : slot.offset + slot.dim]
-            if slot.manifold in ("R1", "R3"):
-                chunks.append(a_chunk - b_chunk)
-            elif slot.manifold == "SO3":
-                # q_a · q_b⁻¹ → tangent via log.
-                aw = a_chunk[0]; ax = a_chunk[1]
-                ay = a_chunk[2]; az = a_chunk[3]
-                bw =  b_chunk[0]; bx = -b_chunk[1]
-                by = -b_chunk[2]; bz = -b_chunk[3]   # conjugate
-                w = aw*bw - ax*bx - ay*by - az*bz
-                x = aw*bx + ax*bw + ay*bz - az*by
-                y = aw*by - ax*bz + ay*bw + az*bx
-                z = aw*bz + ax*by - ay*bx + az*bw
-                dq = ca.vertcat(w, x, y, z)
-                chunks.append(_so3_log(dq))
-            else:
-                raise NotImplementedError(
-                    f"boxminus_sym: manifold {slot.manifold!r} not supported")
+            chunks.append(slot.manifold.boxminus_sym(a_chunk, b_chunk))
         return ca.vertcat(*chunks)
 
     def boxplus(self, x_ambient: np.ndarray,
@@ -469,26 +410,11 @@ class StateSpec:
             x_chunk = x[slot.offset : slot.offset + slot.dim]
             d_chunk = d[slot.tangent_offset :
                         slot.tangent_offset + slot.tangent_dim]
-            if slot.manifold in ("R1", "R3"):
-                x[slot.offset : slot.offset + slot.dim] = x_chunk + d_chunk
-            elif slot.manifold == "SO3":
-                # exp of axis-angle then left-multiply onto current q.
-                omega = d_chunk
-                theta = float(np.linalg.norm(omega) + 1e-30)
-                half = 0.5 * theta
-                w = np.cos(half)
-                v = omega * (np.sin(half) / theta)
-                dq = np.array([w, v[0], v[1], v[2]])
-                # q_new = dq * q_current.
-                w1, x1, y1, z1 = dq
-                w2, x2, y2, z2 = x_chunk
-                q_new = np.array([
-                    w1*w2 - x1*x2 - y1*y2 - z1*z2,
-                    w1*x2 + x1*w2 + y1*z2 - z1*y2,
-                    w1*y2 - x1*z2 + y1*w2 + z1*x2,
-                    w1*z2 + x1*y2 - y1*x2 + z1*w2,
-                ])
-                # Renormalize defensively (tangent step may be large).
-                q_new = q_new / np.linalg.norm(q_new)
-                x[slot.offset : slot.offset + slot.dim] = q_new
+            new_chunk = slot.manifold.boxplus(x_chunk, d_chunk)
+            # SO(3) quaternion: renormalize defensively (tangent step may
+            # be large). Detect via storage shape (4,) so we don't
+            # special-case the manifold here.
+            if slot.manifold.storage_shape == (4,):
+                new_chunk = new_chunk / np.linalg.norm(new_chunk)
+            x[slot.offset : slot.offset + slot.dim] = new_chunk
         return x
