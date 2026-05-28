@@ -335,6 +335,46 @@ def _wrench_to_craft(wrench_part: Wrench, r_in_craft: Vec3,
     )
 
 
+def _wrench_rotate_to_craft(wrench_part: Wrench,
+                            R_craft_from_input: Mat3) -> Wrench:
+    """Rotate a part-emitted wrench into body coords WITHOUT lifting it.
+
+    Step (1) of `_wrench_to_craft` only: `F_body = R · F_input`,
+    `τ_body = R · τ_input`. The torque stays referenced about the part's
+    OWN origin (no `r × F` lift). The bottom-up wrench cascade
+    (`world_tick`) lifts incrementally via `_shift_wrench` as it walks the
+    tree, so the rotate and the lift are kept separate here.
+    """
+    if wrench_part.frame is not PartFrame:
+        from .ir.frames import FrameError, _capture_user_source
+        raise FrameError(
+            "_wrench_rotate_to_craft",
+            expected="part Wrench in PartFrame",
+            got=f"frame={wrench_part.frame.__name__}",
+            source=_capture_user_source(),
+        )
+    return Wrench(
+        force=R_craft_from_input @ wrench_part.force,
+        torque=R_craft_from_input @ wrench_part.torque,
+    )
+
+
+def _shift_wrench(wrench_craft: Wrench, delta_r: Vec3) -> Wrench:
+    """Move a body-frame wrench's reference point by `delta_r` (CraftFrame).
+
+    Reduces a child's wrench (referenced about the child origin) onto its
+    parent's origin: `τ_parent = τ_child + delta_r × F`, where
+    `delta_r = r_child − r_parent`. Force is unchanged. Used by the
+    bottom-up cascade. Telescoping these per-hop shifts up a non-joint
+    chain reproduces the single `r × F` lift to the root, so a craft with
+    no joints aggregates exactly as `_wrench_to_craft` does.
+    """
+    return Wrench(
+        force=wrench_craft.force,
+        torque=wrench_craft.torque + delta_r.cross(wrench_craft.force),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Craft
 # ---------------------------------------------------------------------------

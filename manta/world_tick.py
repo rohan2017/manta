@@ -31,12 +31,15 @@ import casadi as ca
 import numpy as np
 
 from . import ir
-from .craft import TickContext, _aggregate_inertials, _wrench_to_craft
+from .craft import (
+    TickContext, _aggregate_inertials,
+    _wrench_rotate_to_craft, _shift_wrench,
+)
 from .inertia import symbolic_inertia_rollup
 from .kinematics import kinematic_pass
 from .ir.frames import WorldFrame, CraftFrame, PartFrame
 from .ir.manifold import SO3
-from .parts.base import Part, PartUpdate, WhiteNoise
+from .parts.base import CompositePart, Part, PartUpdate, WhiteNoise
 from .ir.wrench import Wrench
 
 
@@ -445,15 +448,13 @@ def _trace_craft_pass1(g_ctx,
         R_craft_from_input=root_kin.R_craft_from_input,
     )
 
-    # Aggregate wrenches + collect state/sensor outputs.
-    net = Wrench.zero(CraftFrame)
+    # Per-part external wrench, rotated to body coords about the part's
+    # own origin (NOT lifted). The bottom-up cascade below reduces these
+    # up the joint tree into the craft net wrench + each joint's θ̈.
+    own_wrench: dict[Part, Wrench] = {}
     new_state_outputs: list[tuple[str, Any]] = []
     sensor_outputs:    list[tuple[str, Any]] = []
-    # Real value for each joint's θ̈ placeholder: recovered from the joint's
-    # own explicit-Euler `rate` update (new_rate = rate + θ̈·dt), so it stays
-    # a pure function of state with no extra wiring through Joint.update.
-    # Paired (placeholder, real) entries the framework substitutes alongside
-    # the body a/α placeholders.
+    # (placeholder, real) for each joint's θ̈ — populated by the cascade.
     joint_accel_reals: list[tuple[Any, Any]] = []
     for part in craft._parts:
         kin = kin_states[part]
@@ -505,9 +506,14 @@ def _trace_craft_pass1(g_ctx,
             raise KeyError(
                 f"{type(part).__name__}('{part.name}'): unknown state "
                 f"slot(s): {sorted(unknown)}.")
-        for sname in decls:
-            val = new_state.get(sname, state_input_nodes[part][sname])
-            new_state_outputs.append((prefix + f"{part.name}.{sname}", val))
+        # A Joint's angle/rate are emitted by the central integrator in the
+        # cascade below (its update() is a no-op), so skip them here to
+        # avoid emitting stale (un-integrated) values.
+        if not isinstance(part, Joint):
+            for sname in decls:
+                val = new_state.get(sname, state_input_nodes[part][sname])
+                new_state_outputs.append(
+                    (prefix + f"{part.name}.{sname}", val))
 
         # Output validation + queue.
         out_decls = part.output_declarations()
@@ -524,19 +530,60 @@ def _trace_craft_pass1(g_ctx,
         for oname, oval in outputs.items():
             sensor_outputs.append((prefix + f"{part.name}.{oname}", oval))
 
-        # Part-frame wrench → rotate to body coords + lift to craft origin.
-        w_craft = _wrench_to_craft(w_part, kin.r_in_craft, R_craft_from_part)
-        net = net + w_craft
+        # Part-frame wrench → rotate to body coords (NO lift). The cascade
+        # below lifts + sums it up the joint tree.
+        own_wrench[part] = _wrench_rotate_to_craft(w_part, R_craft_from_part)
 
-        # Resolve this joint's θ̈ placeholder to its real state-function.
+    # --- Bottom-up wrench cascade --------------------------------------
+    # Reduce the per-part wrenches up the joint tree. A plain composite
+    # sums its children (each shifted to the composite's own origin); a
+    # Joint hands its accumulated subtree wrench to resolve(), which peels
+    # the axial torque off to drive the DOF (so gravity swings a passive
+    # joint) and passes the rest up. The root accumulation is the craft's
+    # net wrench at the origin — bit-identical to the old per-part
+    # rotate-lift-sum when the craft has no joints (the per-hop shifts
+    # telescope to the single r×F lift).
+    zero_w = Wrench.zero(CraftFrame)
+    # Rotor gyroscopic couples accumulate at the body level (a pure
+    # torque, not routed up the joint chain) — matches the legacy design.
+    gyro_torques: list[Any] = []
+
+    def _cascade(part) -> Wrench:
+        accum = own_wrench.get(part, zero_w)
+        r_part = kin_states[part].r_in_craft
+        if isinstance(part, CompositePart):
+            for child in part.children:
+                child_up = _cascade(child)
+                delta_r = kin_states[child].r_in_craft - r_part
+                accum = accum + _shift_wrench(child_up, delta_r)
         if isinstance(part, Joint):
-            rate_node = state_input_nodes[part].get("rate")
-            new_rate  = new_state.get("rate")
-            sym       = joint_accel_syms.get(part)
-            if rate_node is not None and new_rate is not None \
-                    and sym is not None:
-                joint_accel_reals.append(
-                    (sym, (new_rate._mx - rate_node._mx) / dt._mx))
+            kin = kin_states[part]
+            theta_ddot, passup, gyro = part.resolve(
+                accum, kin.R_craft_from_input, kin.angular_velocity_input)
+            gyro_torques.append(gyro)
+            sym = joint_accel_syms.get(part)
+            if sym is not None:
+                joint_accel_reals.append((sym, theta_ddot))
+            # Central explicit-Euler integration of the joint DOF (same
+            # scheme as the body integrator and the legacy Motor).
+            rate_mx  = state_input_nodes[part]["rate"]._mx
+            angle_mx = state_input_nodes[part]["angle"]._mx
+            dt_mx    = dt._mx
+            new_rate_mx  = rate_mx + theta_ddot * dt_mx
+            new_angle_mx = (angle_mx + rate_mx * dt_mx
+                            + 0.5 * theta_ddot * dt_mx * dt_mx)
+            new_state_outputs.append(
+                (prefix + f"{part.name}.angle", ir.Scalar(new_angle_mx)))
+            new_state_outputs.append(
+                (prefix + f"{part.name}.rate", ir.Scalar(new_rate_mx)))
+            return passup
+        return accum
+
+    net = _cascade(craft.root)
+    # Fold each rotor's gyroscopic couple into the body net torque.
+    for gyro in gyro_torques:
+        net = net + Wrench(force=ir.Vec3[CraftFrame].constant((0.0, 0.0, 0.0)),
+                           torque=gyro)
 
     # Body-relative COM motion for the moving-COM origin recoil — the
     # mass-weighted reduction of the per-part relative kinematics the

@@ -11,29 +11,31 @@ expresses each child's TickContext in its own spinning frame and rotates
 its emitted wrench back to the body — so a part needs no awareness of
 being on a rotor.
 
-The joint emits (in its own input frame; the framework rotates to body):
-  * Reaction torque on the mount frame (Newton's 3rd): `-τ_cmd · axis`.
-  * Gyroscopic correction: `-ω_input × (I_axial · rate · axis)`, where
-    `ω_input` is the joint's input-frame angular velocity (the body's
-    ω for a top-level joint; the outer joint's output ω for a nested
-    inner joint).
+Dynamics live in `resolve()`, called by the framework's bottom-up wrench
+cascade. The joint receives the total wrench from its subtree and splits
+it: the component about `axis` drives the DOF (`θ̈ = (τ_axial + actuator +
+friction + Coriolis) / I_axial`), and the remainder — the full force, the
+perpendicular torque (constraint reaction), and the Newton-3rd reaction of
+the actuator + friction — passes up to the parent. Because the axial
+component of the *external* torque now drives the DOF, a **passive joint
+swings under gravity** (a hanging bob gives `θ̈ = −(g/L)sinθ`). The rotor's
+gyroscopic couple `−ω_mount × (I_axial·rate·axis)` is applied at the body
+level (not routed up the chain), matching the legacy `Motor`. `update()`
+itself is a no-op — children supply the wrench, the cascade does the rest.
 
-Its `rate` dynamics also pick up a Coriolis joint torque,
-`-[ω_rotor × (I_joint·ω_rotor)]·axis` with `ω_rotor = ω_mount + rate·axis`
-— the base-rotation coupling through the full rotor inertia. It vanishes
-for an axisymmetric rotor whose COM lies on the joint axis and is nonzero
-otherwise (matching the legacy `Motor`; the α_mount cross term is omitted).
-
-Each child `Mass` contributes its own gravity via `Mass.update`; the
-Joint itself emits no force.
+Approximation: `I_axial` is the rotor's rest-pose axial inertia and the
+α_mount cross-coupling is omitted (fixed-base, matching the legacy). Exact
+for a single joint on a heavy/fixed mount; the inter-joint inertial
+coupling for nested joints (and the Coriolis coupling that drives e.g.
+Foucault precession) is only approximate — a full articulated-body solver
+would be needed for that.
 
 Modes:
-  * "passive"     — no commanded torque; rotor free-spins under whatever
-                    initial rate is set. The gyroscopic correction still
-                    couples the rotor's angular momentum into the mount.
-  * "saturating"  — commanded torque clipped to `±stall_torque`. Beyond
-                    that, the actuator stalls and only the clamped torque
-                    is applied.
+  * "passive"     — no commanded torque; the DOF responds to the axial
+                    external torque (gravity, contact, …) + friction.
+  * "saturating"  — commanded torque clipped to `±stall_torque`, applied
+                    on top of the external axial torque; its reaction
+                    propagates to the parent.
 
 The name `Joint` (vs. `Motor`) is intentional: `Motor` is reserved for a
 future part that models real motor dynamics (back-EMF, thermal limits,
@@ -45,10 +47,11 @@ from __future__ import annotations
 import casadi as ca
 import numpy as np
 
-from ...ir.frames import PartFrame, WorldFrame
-from ...ir.types import Scalar, Vec3
+from ...ir.frames import CraftFrame, PartFrame
+from ...ir.types import Vec3
 from ..base import CompositePart, Input, Parameter, PartUpdate, State
 from ...ir.wrench import Wrench
+from ... import ir
 
 
 _PASSIVE    = "passive"
@@ -107,6 +110,7 @@ class Joint(CompositePart):
     axis:          tuple = Parameter((0.0, 0.0, 1.0))
     mode:          str   = Parameter(_PASSIVE)
     stall_torque:  float = Parameter(1.0)
+    damping:       float = Parameter(0.0)
     torque_cmd:    float = Input(default=0.0)
 
     angle = State(init=0.0, manifold="R1")
@@ -170,80 +174,99 @@ class Joint(CompositePart):
     # ----- update() --------------------------------------------------------
 
     def update(self, ctx) -> PartUpdate:
-        I_ax = self.I_axial
-        # The Joint works in its own (PartFrame): its axis is given there
-        # and it emits its wrench there; the framework rotates the wrench to
-        # body coords. For a top-level joint PartFrame IS the body frame;
-        # for a nested inner joint it's the outer joint's output frame.
-        axis_local_mx = ca.MX(list(self.axis))
+        # The Joint emits no wrench of its own and does not integrate here.
+        # Its children (Mass, etc.) supply the external wrench; the
+        # framework's bottom-up wrench cascade calls `self.resolve(...)` to
+        # split that subtree wrench (axial component → the joint DOF, the
+        # rest → the parent) and a central integrator advances angle/rate.
+        zero = Vec3[PartFrame].constant((0.0, 0.0, 0.0))
+        return PartUpdate(wrench=Wrench(force=zero, torque=zero),
+                          new_state={})
 
-        # Torque per mode. We work in MX so the saturating clamp can use
-        # ca.fmin / ca.fmax for a branch-free symbolic clip.
-        if self.mode == _PASSIVE:
-            tau_mx = ca.MX(0.0)
-        else:   # _SATURATING (validated at __init__)
-            tau_in_mx = self.torque_cmd._mx
-            stall = float(self.stall_torque)
-            tau_mx = ca.fmin(ca.fmax(tau_in_mx, -stall), stall)
+    # ----- resolve(): the wrench split (called by the cascade) -------------
 
-        # Joint dynamics. Skip the angular-velocity integration if the
-        # rotor has no inertia (massless joint) — its angle just stays
-        # frozen at whatever the user wrote.
+    def resolve(self, accum: Wrench, R_craft_from_input, omega_mount_c):
+        """Split the accumulated subtree wrench at this joint.
+
+        Mirrors the legacy `Motor::resolve`. Works entirely in CraftFrame
+        coords. `accum` is the total wrench from this joint's subtree,
+        referenced about the joint origin. `R_craft_from_input` rotates the
+        joint's input frame into craft coords; `omega_mount_c` is the
+        mount's inertial angular velocity in craft coords.
+
+        Returns `(theta_ddot_mx, passup, gyro_torque)`:
+          * `theta_ddot_mx` — the joint's angular acceleration. The AXIAL
+            component of `accum.torque` drives the DOF (so gravity on a
+            hanging bob swings it), plus the actuator, viscous friction,
+            and Coriolis terms, over the rotor's axial inertia.
+          * `passup` — the wrench transmitted to the parent: the full
+            force, the PERPENDICULAR torque (the constraint reaction), and
+            the Newton-3rd reaction of the actuator + friction along the
+            axis. The axial component of the external torque is NOT
+            transmitted — a free/​frictionless axis absorbs it into the DOF.
+          * `gyro_torque` — the rotor's gyroscopic correction
+            `−ω_mount × (I_axial·rate·axis)` (a pure couple, CraftFrame).
+            Applied at the BODY level (not routed up the joint chain),
+            matching the legacy `Motor` / `rotor_angular_momentum` design.
+
+        Revolute-only today: the DOF is rotation about `axis`, so the
+        projection is onto the torque-along-axis subspace. A future
+        prismatic joint would project the FORCE along the axis and
+        integrate a linear position; that is the only joint-type-specific
+        piece — the cascade and integrator are otherwise generic.
+        """
+        R_mx = R_craft_from_input._mx
+        axis_np = np.array(self.axis, dtype=float)
+        axis_np = axis_np / np.linalg.norm(axis_np)
+        axis_c = ca.mtimes(R_mx, ca.DM(axis_np.reshape(3, 1)))   # craft coords
+
+        tau_mx   = accum.torque._mx
         rate_mx  = self.rate._mx
-        angle_mx = self.angle._mx
-        dt_mx    = ctx.dt._mx
-        # Mount's inertial angular velocity, expressed in the joint's own
-        # frame (rotate the world-frame inertial ω through ctx.orientation).
-        # Feeds the gyro + Coriolis terms, both built in PartFrame.
-        omega_mx = ctx.orientation.conjugate().apply(
-            ctx.angular_velocity[WorldFrame])._mx
-        if I_ax > 0.0:
-            # Coriolis joint torque from base rotation through the full
-            # rotor inertia: τ_corio = −[ω_rotor × (I_joint·ω_rotor)]·axis,
-            # with ω_rotor = ω_mount + θ̇·axis — all in the joint's input
-            # frame, where I_joint_tensor lives, so no rotation is needed.
-            # Identically zero for an axisymmetric rotor whose COM sits on
-            # the joint axis; nonzero for off-axis or asymmetric rotors. It
-            # drives only the joint's own acceleration: the body-side
-            # reaction is already carried by the gyroscopic term below, and
-            # the α_mount cross-coupling is omitted (both match the legacy
-            # Motor::resolve).
-            axis_unit_np = np.array(self.axis, dtype=float)
-            axis_unit_np = axis_unit_np / np.linalg.norm(axis_unit_np)
-            axis_unit_in = ca.MX(axis_unit_np.tolist())
-            omega_rotor_in = omega_mx + rate_mx * axis_unit_in
-            I_joint_dm     = ca.DM(self.I_joint_tensor)
-            Iw_in          = ca.mtimes(I_joint_dm, omega_rotor_in)
-            tau_corio_mx   = -ca.dot(ca.cross(omega_rotor_in, Iw_in),
-                                     axis_unit_in)
-            accel_mx = (tau_mx + tau_corio_mx) / I_ax
+        I_ax     = self.I_axial
+
+        # Axial vs perpendicular decomposition of the external torque.
+        tau_axial = ca.dot(tau_mx, axis_c)
+        tau_perp  = tau_mx - tau_axial * axis_c
+
+        # Actuator torque (passive → 0; saturating → clamped command).
+        if self.mode == _PASSIVE:
+            tau_act = ca.MX(0.0)
         else:
-            accel_mx = ca.MX(0.0)
-        new_rate_mx  = rate_mx + accel_mx * dt_mx
-        new_angle_mx = (angle_mx + rate_mx * dt_mx
-                        + 0.5 * accel_mx * dt_mx * dt_mx)
+            stall = float(self.stall_torque)
+            tau_act = ca.fmin(ca.fmax(self.torque_cmd._mx, -stall), stall)
 
-        # --- Wrench on the mount (input frame; framework rotates to body) ---
-        # Reaction torque (Newton's 3rd, only meaningful in saturating mode
-        # where commanded torque is nonzero).
-        reaction_mx = axis_local_mx * (-tau_mx)
-        # Gyroscopic correction: a spinning rotor that the body tries to
-        # tilt off-axis pushes back via -ω × L_rotor, with the rotor's
-        # angular momentum L_rotor = I_axial·θ̇·axis.
-        L_rotor_mx = axis_local_mx * (I_ax * rate_mx)
-        # ca.cross handles 3-vec × 3-vec.
-        tau_gyro_mx = -ca.cross(omega_mx, L_rotor_mx)
-        torque_mx = reaction_mx + tau_gyro_mx
-        torque = Vec3[PartFrame].from_mx(torque_mx)
+        # Viscous joint friction (resists rate).
+        tau_damp = -float(self.damping) * rate_mx
 
-        # The Joint itself contributes no translational force: children
-        # are in the craft's part walk and each Mass child applies its
-        # own gravity via Mass.update(). Joint only emits the reaction
-        # torque on the body plus the rotor's gyroscopic correction.
-        zero_force = Vec3[PartFrame].constant((0.0, 0.0, 0.0))
+        # Coriolis joint torque through the full rotor inertia, in craft
+        # coords: τ_corio = −[ω_rotor × (I_joint·ω_rotor)]·axis. Zero for an
+        # axisymmetric on-axis rotor (so a spun flywheel keeps its rate).
+        omega_mount_mx = omega_mount_c._mx
+        omega_rotor    = omega_mount_mx + rate_mx * axis_c
+        I_joint_c      = ca.mtimes(R_mx, ca.mtimes(ca.DM(self.I_joint_tensor),
+                                                   R_mx.T))
+        tau_corio = -ca.dot(ca.cross(omega_rotor,
+                                     ca.mtimes(I_joint_c, omega_rotor)),
+                            axis_c)
 
-        return PartUpdate(
-            wrench=Wrench(force=zero_force, torque=torque),
-            new_state={"angle": Scalar(new_angle_mx),
-                       "rate":  Scalar(new_rate_mx)},
+        # DOF acceleration (rotor locked if it has no axial inertia).
+        if I_ax > 1e-18:
+            theta_ddot = (tau_axial + tau_act + tau_damp + tau_corio) / I_ax
+        else:
+            theta_ddot = ca.MX(0.0)
+
+        # Rotor gyroscopic correction −ω_mount × L_rotor (a pure couple).
+        # Applied at the body level, not routed up the chain.
+        L_rotor  = (I_ax * rate_mx) * axis_c
+        tau_gyro = -ca.cross(omega_mount_mx, L_rotor)
+
+        # Pass-up torque: perpendicular constraint reaction + Newton-3rd of
+        # the actuator and friction along the axis. The axial external
+        # torque is absorbed by the DOF, not transmitted.
+        passup_torque_mx = tau_perp + (-(tau_act + tau_damp)) * axis_c
+        passup = Wrench(
+            force=accum.force,
+            torque=ir.Vec3[CraftFrame].from_mx(passup_torque_mx),
         )
+        gyro_torque = ir.Vec3[CraftFrame].from_mx(tau_gyro)
+        return theta_ddot, passup, gyro_torque
