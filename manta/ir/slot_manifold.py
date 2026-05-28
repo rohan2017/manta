@@ -140,12 +140,24 @@ class SO3Manifold(Manifold):
     ``"quat"``. Boxplus uses the same left-trivialization convention
     as `manta.ir.manifold.SO3.boxplus`:
         q_new = exp(δ) ⊗ q
+
+    `from_frame` / `to_frame` parametrize the underlying Quat — a
+    `Quat[from, to]` rotates a vector in `to` coords into `from` coords.
+    Both must be provided when used as a user-declared State manifold
+    (no Frame default — pick the application's convention; the
+    framework's rigid-body orientation uses Quat[WorldFrame,
+    CraftFrame], so an attitude estimator typically matches that).
+    Codegen consumes only `kind` / `storage_shape`; frames are for
+    frame-checked IR construction at compile time.
     """
 
     kind:          ClassVar[str]               = "quat"
     ambient_dim:   ClassVar[int]               = 4
     tangent_dim:   ClassVar[int]               = 3
     storage_shape: ClassVar[tuple[int, ...]]   = (4,)
+
+    from_frame: Any = None
+    to_frame:   Any = None
 
     def boxplus_sym(self, x_mx, delta_mx):
         # Imported lazily to avoid circular import with manta.ir.manifold.

@@ -311,6 +311,10 @@ def _trace_craft_pass1(g_ctx,
                 elif kind == "vec":
                     frame = sdecl.frame or CraftFrame
                     sym = ir.Vec3[frame].input(input_name)
+                elif kind == "quat":
+                    from_f = sdecl.manifold.from_frame
+                    to_f   = sdecl.manifold.to_frame
+                    sym = ir.Quat[from_f, to_f].input(input_name)
                 else:
                     raise NotImplementedError(
                         f"{type(part).__name__}('{part.name}'): "
@@ -464,6 +468,15 @@ def _trace_craft_pass1(g_ctx,
         if not isinstance(part, Joint):
             for sname in decls:
                 val = new_state.get(sname, state_input_nodes[part][sname])
+                # SO(3) state: auto-unwrap the SO3 value wrapper (which
+                # carries a Quat internally) AND defensively renormalize
+                # the quaternion so multi-tick integration doesn't drift
+                # off the unit sphere — mirrors the rigid-body
+                # orientation handling below.
+                if decls[sname].manifold.kind == "quat":
+                    if isinstance(val, SO3):
+                        val = val.quat
+                    val = val.normalize()
                 new_state_outputs.append(
                     (prefix + f"{part.name}.{sname}", val))
 

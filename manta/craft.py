@@ -482,9 +482,9 @@ class Craft:
                 if sdecl.manifold.kind == "scalar":
                     state[f"{part.name}.{sname}"] = float(sdecl.init)
                 else:
-                    # vec — `init` is a 3-tuple, validated at declaration
-                    # time. Store as ndarray for symmetry with rigid-body
-                    # slots.
+                    # vec / quat — `init` is a fixed-length tuple
+                    # validated at declaration time. Store as ndarray
+                    # for symmetry with rigid-body slots.
                     state[f"{part.name}.{sname}"] = np.asarray(
                         sdecl.init, dtype=float)
             # Input slots: seed from the part's current attribute (which

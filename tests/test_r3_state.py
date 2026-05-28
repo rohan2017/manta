@@ -47,8 +47,11 @@ def test_state_r3_requires_length_3_init():
         State(init=42, manifold="R3")
 
 
-def test_state_so3_still_unsupported():
-    with pytest.raises(NotImplementedError, match="SO3"):
+def test_state_so3_string_shortcut_rejected():
+    """The 'SO3' string shortcut intentionally isn't supported —
+    SO(3) needs explicit from_frame / to_frame, so users must pass
+    an SO3Manifold(from_frame=, to_frame=) instance."""
+    with pytest.raises(NotImplementedError, match="SO3Manifold"):
         State(init=(1.0, 0.0, 0.0, 0.0), manifold="SO3")
 
 

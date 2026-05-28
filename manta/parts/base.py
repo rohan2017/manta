@@ -345,20 +345,21 @@ class State(_Declaration):
 
     def __init__(self, init, manifold="R1", frame=None) -> None:
         from ..ir.slot_manifold import (
-            Manifold, ScalarManifold, R3Manifold, manifold_from_shortcut,
+            Manifold, ScalarManifold, R3Manifold, SO3Manifold,
+            manifold_from_shortcut,
         )
         if isinstance(manifold, Manifold):
             mfd = manifold
         else:
-            # Reject SO3 explicitly to preserve the prior error message;
-            # the dual-frame parametrization isn't user-selectable here.
+            # String shortcut: SO(3) is intentionally not in the shortcut
+            # table because it needs explicit from_frame/to_frame. Pass
+            # `manifold=SO3Manifold(from_frame=..., to_frame=...)` instead.
             if manifold not in ("R1", "R3"):
                 raise NotImplementedError(
-                    f"State.manifold={manifold!r}: only 'R1' (scalar) and "
-                    f"'R3' (vec3) are wired through the world tick today. "
-                    f"SO3 requires the dual-frame parametrization "
-                    f"(orientation = Quat[from, to]) and isn't yet "
-                    f"user-selectable.")
+                    f"State.manifold={manifold!r}: string shortcuts are "
+                    f"only defined for 'R1' / 'R3'. For SO(3), pass an "
+                    f"explicit SO3Manifold(from_frame=..., to_frame=...) "
+                    f"instance to capture the dual-frame parametrization.")
             mfd = manifold_from_shortcut(manifold, frame=frame)
         if isinstance(mfd, R3Manifold):
             try:
@@ -372,11 +373,29 @@ class State(_Declaration):
                     f"State(manifold='R3'): init must be length-3, got "
                     f"{init!r}")
             init = t
+        elif isinstance(mfd, SO3Manifold):
+            if mfd.from_frame is None or mfd.to_frame is None:
+                raise ValueError(
+                    f"State(SO3Manifold): from_frame and to_frame must "
+                    f"both be specified — got from_frame={mfd.from_frame!r}, "
+                    f"to_frame={mfd.to_frame!r}.")
+            try:
+                t = tuple(float(x) for x in init)
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"State(SO3Manifold): init must be a length-4 "
+                    f"quaternion (w, x, y, z), got {init!r}")
+            if len(t) != 4:
+                raise ValueError(
+                    f"State(SO3Manifold): init must be length-4, got "
+                    f"{init!r}")
+            init = t
         super().__init__(default=init)
         self.init     = init
         self.manifold = mfd
-        # Keep the explicit `frame` attribute for the few read sites that
+        # Keep the explicit `frame` attribute for read sites that
         # consult it directly; for R3 it mirrors the manifold's frame.
+        # For SO3 the dual frames live on the manifold itself.
         self.frame = (mfd.frame if isinstance(mfd, R3Manifold) else frame)
 
 
