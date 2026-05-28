@@ -304,8 +304,7 @@ def _noise_zero(owner, sub: str):
     if hit is None:
         raise RuntimeError(f"extract: unhandled noise sub-name {sub!r}")
     _, ndecl = hit
-    dim = 1 if ndecl.shape == "scalar" else 3
-    return ca.MX.zeros(dim, 1)
+    return ca.MX.zeros(ndecl.signal_manifold.ambient_dim, 1)
 
 
 def _evaluate_tick_flat(cf: ca.Function,

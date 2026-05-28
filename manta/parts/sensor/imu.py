@@ -46,10 +46,10 @@ class IMU(Part):
     skip them by leaving sigma at 0.
     """
 
-    gyro_noise  = WhiteNoise(     shape="vec3", frame=PartFrame, sigma=0.0)
-    accel_noise = WhiteNoise(     shape="vec3", frame=PartFrame, sigma=0.0)
-    gyro_bias   = RandomWalkNoise(shape="vec3", frame=PartFrame, sigma=0.0)
-    accel_bias  = RandomWalkNoise(shape="vec3", frame=PartFrame, sigma=0.0)
+    gyro_noise  = WhiteNoise(     "vec3", frame=PartFrame, sigma=0.0)
+    accel_noise = WhiteNoise(     "vec3", frame=PartFrame, sigma=0.0)
+    gyro_bias   = RandomWalkNoise("vec3", frame=PartFrame, sigma=0.0)
+    accel_bias  = RandomWalkNoise("vec3", frame=PartFrame, sigma=0.0)
 
     gyro  = Output(shape="vec3")
     accel = Output(shape="vec3")

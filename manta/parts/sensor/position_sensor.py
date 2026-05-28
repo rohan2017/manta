@@ -34,7 +34,7 @@ class PositionSensor(Part):
                          e.g. when driving the filter through `step()`.
     """
 
-    position_noise = WhiteNoise(shape="vec3", frame=WorldFrame, sigma=0.0)
+    position_noise = WhiteNoise("vec3", frame=WorldFrame, sigma=0.0)
 
     position = Output(shape="vec3")
 

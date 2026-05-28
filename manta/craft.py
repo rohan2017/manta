@@ -454,13 +454,14 @@ class Craft:
                 if ndecl.contributes_state and sigma <= 0.0:
                     continue
                 key = f"{part.name}.{ndecl.driver_input_name(nname)}"
-                if ndecl.shape == "scalar":
+                d = ndecl.signal_manifold.ambient_dim
+                if d == 1:
                     out[key] = (rng.normal(0.0, sigma)
                                 if sigma > 0.0 else 0.0)
                 else:
-                    out[key] = (rng.normal(0.0, sigma, 3)
+                    out[key] = (rng.normal(0.0, sigma, d)
                                 if sigma > 0.0
-                                else np.zeros(3, dtype=float))
+                                else np.zeros(d, dtype=float))
         return out
 
     def initial_state(self, **overrides) -> dict:

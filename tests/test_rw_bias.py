@@ -34,8 +34,8 @@ from manta.ir.wrench import Wrench
 
 class BiasedGyro(Part):
     """A minimal gyro sensor with both white noise + RW bias."""
-    gyro_noise = WhiteNoise(     shape="vec3", frame=PartFrame, sigma=0.001)
-    gyro_bias  = RandomWalkNoise(shape="vec3", frame=PartFrame, sigma=0.02)
+    gyro_noise = WhiteNoise(     "vec3", frame=PartFrame, sigma=0.001)
+    gyro_bias  = RandomWalkNoise("vec3", frame=PartFrame, sigma=0.02)
     gyro = Output(shape="vec3")
 
     def update(self, ctx):
@@ -75,6 +75,22 @@ def test_state_spec_picks_up_rw_bias_as_state_slot():
     assert slot.dim              == 3
     assert slot.tangent_dim      == 3
     assert slot.manifold.kind    == "vec"
+
+
+def test_noise_accepts_direct_signal_manifold_instance():
+    """The shortcut string ("vec3") is ergonomics; the canonical form
+    is a Manifold instance. This test exercises the instance path
+    directly so any future signal manifold (vec6, quat, custom) is
+    proven reachable without needing a new shortcut string."""
+    from manta.ir.slot_manifold import R3Manifold
+    from manta.parts.base import WhiteNoise, RandomWalkNoise
+    n = WhiteNoise(R3Manifold(frame=PartFrame), sigma=0.5)
+    assert n.signal_manifold.kind         == "vec"
+    assert n.signal_manifold.ambient_dim  == 3
+    assert n.signal_manifold.frame        is PartFrame
+    rw = RandomWalkNoise(R3Manifold(frame=PartFrame), sigma=0.1)
+    assert rw.contributes_state
+    assert rw.state_manifold().kind       == "vec"
 
 
 def test_initial_state_seeds_bias_and_driver_at_zero():

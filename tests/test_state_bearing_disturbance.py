@@ -29,7 +29,7 @@ from manta.parts.base import RandomWalkNoise
 class WindBias(Disturbance):
     """A globally-constant wind velocity, evolved as a random walk."""
     field_value_shape = FluidState
-    velocity = RandomWalkNoise(shape="vec3", sigma=1e-3)
+    velocity = RandomWalkNoise("vec3", sigma=1e-3)
 
     def contribute_at_sym(self, point, t):
         return FluidState(

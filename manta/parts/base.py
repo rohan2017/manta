@@ -142,10 +142,9 @@ class Noise(_Declaration):
     """Abstract base for noise-channel declarations.
 
     Subclasses set class-level metadata (`kind`, `contributes_state`)
-    and implement `synthesize()` (the per-tick IR plumbing) and
-    `process_noise_block(dt)` (the EKF Q contribution). Backends key
-    on `kind` via their own registry — no `isinstance(WhiteNoise)`
-    dispatch anywhere in the codebase.
+    and implement `synthesize()` (the per-tick IR plumbing). Backends
+    key on `signal_manifold.kind` via their own registry — no
+    `isinstance(WhiteNoise)` dispatch anywhere in the codebase.
 
     Concrete subclasses:
 
@@ -165,44 +164,58 @@ class Noise(_Declaration):
         semantics; per-tick bias variance is dt·σ². `kind = "random_walk"`.
 
     Args:
-        shape — "scalar" or "vec3". Default "vec3".
-        frame — Frame class for the vec3 form. Default `CraftFrame`.
-                Ignored for scalar shape.
-        sigma — 1-σ standard deviation, scalar (isotropic across axes).
-                See subclass docstrings for unit conventions.
+        signal_manifold — `Manifold` instance OR shortcut string. The
+                          manifold of the symbol user code reads as
+                          `self.<name>`. Shortcuts: ``"scalar"``,
+                          ``"vec3"`` (combine with ``frame=`` for vec3).
+                          Default ``"vec3"``.
+        frame           — Frame class, only consumed when
+                          `signal_manifold` is a shortcut and resolves
+                          to a vector-typed manifold. Ignored otherwise.
+        sigma           — 1-σ standard deviation, scalar (isotropic
+                          across axes). See subclass docstrings for
+                          unit conventions.
     """
 
     # Class-level metadata. Subclasses MUST set both.
     kind:              str  = None    # type: ignore[assignment]
     contributes_state: bool = False
 
-    __slots__ = ("shape", "frame", "sigma")
+    __slots__ = ("signal_manifold", "sigma")
 
-    def __init__(self, shape: str = "vec3", frame=None,
+    def __init__(self, signal_manifold="vec3", *, frame=None,
                  sigma: float = 0.0) -> None:
         super().__init__(default=None)
-        if shape not in ("scalar", "vec3"):
-            raise ValueError(
-                f"{type(self).__name__}: shape must be 'scalar' or 'vec3'; "
-                f"got {shape!r}")
-        self.shape = shape
-        self.frame = frame
+        from ..ir.slot_manifold import Manifold
+        self.signal_manifold = _noise_manifold_from_shortcut(
+            signal_manifold, frame=frame,
+            owner_label=type(self).__name__,
+        ) if not isinstance(signal_manifold, Manifold) else signal_manifold
         self.sigma = float(sigma)
 
-    # ---- Manifolds ----------------------------------------------------
+    # ---- Manifolds (resolved at synthesis time for the late-bound
+    # frame default; the canonical form just returns self.signal_manifold
+    # and only the legacy R3Manifold(frame=None) case substitutes) -----
 
-    def signal_manifold(self, *, default_frame=None):
-        """Manifold of the symbol user code reads as self.<name>."""
-        from ..ir.slot_manifold import ScalarManifold, R3Manifold
-        if self.shape == "scalar":
-            return ScalarManifold()
-        return R3Manifold(frame=self.frame or default_frame)
+    def resolved_signal_manifold(self, *, default_frame=None):
+        """Return `self.signal_manifold` with any unresolved frame
+        substituted from `default_frame`. Used at IR synthesis time;
+        the unresolved form keeps `R3Manifold(frame=None)` legal so
+        a part can declare a noise without committing to a frame
+        until the compiler knows which one it's in (CraftFrame for
+        parts, WorldFrame for disturbances)."""
+        from ..ir.slot_manifold import R3Manifold
+        if isinstance(self.signal_manifold, R3Manifold) \
+                and self.signal_manifold.frame is None:
+            return R3Manifold(frame=default_frame)
+        return self.signal_manifold
 
     def state_manifold(self, *, default_frame=None):
-        """Manifold of the synthesized state slot, or None."""
+        """Manifold of the synthesized state slot, or None. For RW
+        the state lives in the same space as the per-tick signal."""
         if not self.contributes_state:
             return None
-        return self.signal_manifold(default_frame=default_frame)
+        return self.resolved_signal_manifold(default_frame=default_frame)
 
     # ---- Activity gate ------------------------------------------------
 
@@ -227,8 +240,7 @@ class Noise(_Declaration):
         state dict (state_spec.unpack-compatible). Inert RW channels
         return an empty dict; everyone else seeds at least the signal
         slot."""
-        zero = self._zero_value()
-        return {name: zero}
+        return {name: self._zero_value()}
 
     # ---- IR synthesis (the world-tick compiler's entry point) --------
 
@@ -243,10 +255,68 @@ class Noise(_Declaration):
     # ---- Helpers ------------------------------------------------------
 
     def _zero_value(self):
-        import numpy as np
-        if self.shape == "scalar":
-            return 0.0
-        return np.zeros(3, dtype=float)
+        """Numpy-side zero for seeding the input dict. Reads off the
+        manifold so any shape (scalar, vec3, vec6, quat, …) Just Works."""
+        return self.signal_manifold.default_value()
+
+
+def _noise_manifold_from_shortcut(shortcut, *, frame, owner_label):
+    """Resolve a Noise-side shortcut string to a Manifold instance.
+
+    Vocabulary matches the prior `shape=` kwarg for ergonomic
+    continuity: ``"scalar"`` → `ScalarManifold`, ``"vec3"`` →
+    `R3Manifold(frame=frame)`. For richer manifolds (vec6, quat,
+    custom), pass an explicit `Manifold` instance instead.
+    """
+    from ..ir.slot_manifold import ScalarManifold, R3Manifold
+    if shortcut == "scalar":
+        return ScalarManifold()
+    if shortcut == "vec3":
+        return R3Manifold(frame=frame)
+    raise ValueError(
+        f"{owner_label}: signal_manifold shortcut must be "
+        f"'scalar' or 'vec3'; got {shortcut!r}. For other manifolds, "
+        f"pass an explicit Manifold instance.")
+
+
+def _ir_input_for_manifold(manifold, name):
+    """Build the IR input symbol for a Noise channel based on the
+    manifold kind. Mirrors the per-State-kind dispatch in
+    `world_tick.py`; the two dispatch sites should stay aligned (a
+    new manifold kind needs a branch in both).
+    """
+    from .. import ir
+    if manifold.kind == "scalar":
+        return ir.Scalar.input(name)
+    if manifold.kind == "vec":
+        return ir.Vec3[manifold.frame].input(name)
+    raise NotImplementedError(
+        f"Noise: signal_manifold kind {manifold.kind!r} not yet wired "
+        f"for IR input construction.")
+
+
+def _ir_zero_for_manifold(manifold):
+    import casadi as ca
+    from .. import ir
+    if manifold.kind == "scalar":
+        return ir.Scalar.from_mx(ca.MX(0.0))
+    if manifold.kind == "vec":
+        return ir.Vec3[manifold.frame].from_mx(ca.MX.zeros(3, 1))
+    raise NotImplementedError(
+        f"Noise: signal_manifold kind {manifold.kind!r} not yet wired "
+        f"for IR zero construction.")
+
+
+def _ir_add_for_manifold(manifold, a_sym, b_mx):
+    """Type-preserving sum used by RW bias_next = bias + √dt · driver."""
+    from .. import ir
+    if manifold.kind == "scalar":
+        return ir.Scalar.from_mx(a_sym._mx + b_mx)
+    if manifold.kind == "vec":
+        return ir.Vec3[manifold.frame].from_mx(a_sym._mx + b_mx)
+    raise NotImplementedError(
+        f"Noise: signal_manifold kind {manifold.kind!r} not yet wired "
+        f"for RW state update construction.")
 
 
 class WhiteNoise(Noise):
@@ -258,14 +328,10 @@ class WhiteNoise(Noise):
     __slots__ = ()
 
     def synthesize(self, *, base_name, name, dt, default_frame, owner):
-        import casadi as ca   # noqa: F401  — used by IR ctors below.
-        from .. import ir
-        if self.shape == "scalar":
-            sym = ir.Scalar.input(base_name)
-        else:
-            frame = self.frame or default_frame
-            sym = ir.Vec3[frame].input(base_name)
-        return SynthesizedNoise(signal_sym=sym)
+        mfd = self.resolved_signal_manifold(default_frame=default_frame)
+        return SynthesizedNoise(
+            signal_sym=_ir_input_for_manifold(mfd, base_name),
+        )
 
 
 class RandomWalkNoise(Noise):
@@ -288,28 +354,17 @@ class RandomWalkNoise(Noise):
 
     def synthesize(self, *, base_name, name, dt, default_frame, owner):
         import casadi as ca
-        from .. import ir
-        frame = self.frame or default_frame
+        mfd = self.resolved_signal_manifold(default_frame=default_frame)
         if not self.is_active(owner, name):
             # Inert: bind zero, no slot, no driver.
-            if self.shape == "scalar":
-                zero_sym = ir.Scalar.from_mx(ca.MX(0.0))
-            else:
-                zero_sym = ir.Vec3[frame].from_mx(ca.MX.zeros(3, 1))
-            return SynthesizedNoise(signal_sym=zero_sym)
+            return SynthesizedNoise(signal_sym=_ir_zero_for_manifold(mfd))
         # Active: bias-state input + driver input + state update.
         driver_name = f"{base_name}_driver"
-        sqrt_dt = ca.sqrt(dt._mx)
-        if self.shape == "scalar":
-            bias_sym   = ir.Scalar.input(base_name)
-            driver_sym = ir.Scalar.input(driver_name)
-            bias_next  = ir.Scalar.from_mx(
-                bias_sym._mx + sqrt_dt * driver_sym._mx)
-        else:
-            bias_sym   = ir.Vec3[frame].input(base_name)
-            driver_sym = ir.Vec3[frame].input(driver_name)
-            bias_next  = ir.Vec3[frame].from_mx(
-                bias_sym._mx + sqrt_dt * driver_sym._mx)
+        sqrt_dt    = ca.sqrt(dt._mx)
+        bias_sym   = _ir_input_for_manifold(mfd, base_name)
+        driver_sym = _ir_input_for_manifold(mfd, driver_name)
+        bias_next  = _ir_add_for_manifold(mfd, bias_sym,
+                                           sqrt_dt * driver_sym._mx)
         return SynthesizedNoise(
             signal_sym=bias_sym,
             state_update=(base_name, bias_next),
@@ -557,8 +612,9 @@ class Part:
 
         Reads the per-instance `<name>_sigma` attribute (set at
         construction time, default from the declaration). Returns:
-            * `σ²·I3` (np.ndarray, 3×3) for vec3 noise.
             * `σ²` (float) for scalar noise.
+            * `σ²·I_d` (np.ndarray, d×d) for d-vector noise (sized
+              off `signal_manifold.ambient_dim`).
 
         Used by the EKF to size measurement updates without the user
         having to specify R separately:
@@ -573,9 +629,10 @@ class Part:
         decl = decls[name]
         sigma = float(getattr(self, f"{name}_sigma"))
         var = sigma ** 2
-        if decl.shape == "scalar":
+        d = decl.signal_manifold.ambient_dim
+        if d == 1:
             return var
-        return var * np.eye(3)
+        return var * np.eye(d)
 
     # --- Required + optional overrides ------------------------------------
 

@@ -598,7 +598,7 @@ class EKF:
         for nname, ndecl in owner.noise_declarations().items():
             if ndecl.driver_input_name(nname) != sub:
                 continue
-            dim   = 1 if ndecl.shape == "scalar" else 3
+            dim   = ndecl.signal_manifold.ambient_dim
             sigma = float(getattr(owner, f"{nname}_sigma"))
             self._noise_specs.append({
                 "owner": owner, "name": sub, "full": full_name,
