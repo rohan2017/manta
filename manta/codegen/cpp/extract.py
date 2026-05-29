@@ -33,6 +33,7 @@ from dataclasses import dataclass
 import casadi as ca
 
 from ...estimation.state_spec import StateSpec
+from ...linearization import Linearization
 
 
 @dataclass(frozen=True)
@@ -83,6 +84,13 @@ class WorldFunctions:
 def extract(cw) -> WorldFunctions:
     """Extract per-function ca.Functions from a CompiledWorld.
 
+    The boxplus→jacobian→boxminus machinery is the shared
+    `manta.linearization.Linearization` transform (the same one the EKF
+    uses). This function does the C++-specific work around it: discover
+    the tick's Input / Noise routing, then wrap Linearization's symbolic
+    expressions into densified, world-name-prefixed `ca.Function`s with
+    the names CasADi's CodeGenerator emits into C.
+
     Args:
         cw  — the manta CompiledWorld to extract from.
 
@@ -98,67 +106,36 @@ def extract(cw) -> WorldFunctions:
     spec  = StateSpec.from_world(world)
     cf    = cw.tick.casadi_function
 
-    n_ambient = spec.ambient_dim
-    n_tangent = spec.tangent_dim
-
     # Index field disturbances by name for noise-routing.
     dist_by_name = _build_dist_lookup(world)
 
-    # Walk tick inputs → discover Inputs (u) + Noise (zero-fed).
+    # Walk the tick signature → Inputs (u) and Noise channels. The C++
+    # predict zeroes noise (Σ/L are unused here), so a placeholder sigma
+    # is fine — Linearization only needs full+dim to route + zero it.
     input_names = _discover_input_names(cf, world, spec, dist_by_name)
-    n_u         = len(input_names)
+    noise_specs = _discover_noise_specs(cf, world, spec, dist_by_name)
 
-    # Top-level MX symbols.
-    x_sym  = ca.MX.sym("x",  n_ambient, 1)
-    u_sym  = ca.MX.sym("u",  n_u, 1) if n_u > 0 else ca.MX.zeros(0, 1)
-    dt_sym = ca.MX.sym("dt", 1, 1)
-    t_sym  = ca.MX.sym("t",  1, 1)
+    # Every Part Output is a candidate measurement.
+    all_outputs = [f"{c.name}.{p.name}.{o}"
+                   for c in world.crafts
+                   for p in c.parts
+                   for o in p.output_declarations()]
 
-    # Evaluate the tick on flat symbols; gather outputs by name.
-    tick_outputs_by_name = _evaluate_tick_flat(
-        cf, x_sym, u_sym, dt_sym, t_sym, spec, input_names,
-        world, dist_by_name)
+    lin = Linearization(
+        cf, spec, frozen={}, input_names=input_names,
+        noise_specs=noise_specs, outputs=all_outputs,
+        build_functions=False)
 
-    # --- predict_fn -------------------------------------------------------
-    state_chunks = []
-    for slot in spec.slots:
-        chunk = tick_outputs_by_name[slot.name]
-        if chunk.shape != (slot.dim, 1):
-            chunk = ca.reshape(chunk, slot.dim, 1)
-        state_chunks.append(chunk)
-    x_new = ca.vertcat(*state_chunks)
+    args = [lin.x_sym, lin.u_sym, lin.dt_sym, lin.t_sym]
+    argn = ["x", "u", "dt", "t"]
 
+    # predict (x_new, noise-zeroed) — dense by construction. F densified
+    # for the flat row-major C interface.
     predict_fn = ca.Function(
-        f"{world.name}_predict",
-        [x_sym, u_sym, dt_sym, t_sym], [x_new],
-        ["x", "u", "dt", "t"], ["x_new"],
-    )
-
-    # --- predict_jacobian_fn ---------------------------------------------
-    delta = ca.MX.sym("delta", n_tangent, 1)
-    x_pert = spec.boxplus_sym(x_sym, delta)
-    pert_outputs_by_name = _evaluate_tick_flat(
-        cf, x_pert, u_sym, dt_sym, t_sym, spec, input_names,
-        world, dist_by_name)
-    pert_chunks = []
-    for slot in spec.slots:
-        chunk = pert_outputs_by_name[slot.name]
-        if chunk.shape != (slot.dim, 1):
-            chunk = ca.reshape(chunk, slot.dim, 1)
-        pert_chunks.append(chunk)
-    x_pert_new = ca.vertcat(*pert_chunks)
-    delta_out = spec.boxminus_sym(x_pert_new, x_new)
-    F_sym = ca.substitute(
-        ca.jacobian(delta_out, delta),
-        delta,
-        ca.MX.zeros(n_tangent, 1),
-    )
-    F_sym = ca.densify(F_sym)
+        f"{world.name}_predict", args, [lin.x_new], argn, ["x_new"])
     predict_jacobian_fn = ca.Function(
-        f"{world.name}_predict_jacobian",
-        [x_sym, u_sym, dt_sym, t_sym], [F_sym],
-        ["x", "u", "dt", "t"], ["F"],
-    )
+        f"{world.name}_predict_jacobian", args, [ca.densify(lin.F_sym)],
+        argn, ["F"])
 
     # --- per-Output (h, H) -----------------------------------------------
     outputs: list[OutputSpec] = []
@@ -166,38 +143,18 @@ def extract(cw) -> WorldFunctions:
         for part in craft.parts:
             for out_name in part.output_declarations():
                 full = f"{craft.name}.{part.name}.{out_name}"
-                if full not in tick_outputs_by_name:
-                    raise RuntimeError(
-                        f"extract: output {full!r} declared on part but "
-                        f"missing from world tick outputs (compile bug?)")
-                h_mx = tick_outputs_by_name[full]
-                out_dim = int(h_mx.numel())
-                h_mx_flat = ca.reshape(h_mx, out_dim, 1)
-
-                h_pert_mx = pert_outputs_by_name[full]
-                h_pert_flat = ca.reshape(h_pert_mx, out_dim, 1)
-                H_sym = ca.substitute(
-                    ca.jacobian(h_pert_flat, delta),
-                    delta,
-                    ca.MX.zeros(n_tangent, 1),
-                )
-                H_sym = ca.densify(H_sym)
+                o = lin.outputs[full]
                 cname = f"{world.name}_h_{craft.name}_{part.name}_{out_name}"
                 h_fn = ca.Function(
-                    cname,
-                    [x_sym, u_sym, dt_sym, t_sym], [h_mx_flat],
-                    ["x", "u", "dt", "t"], ["h"],
-                )
+                    cname, args, [o.h_sym], argn, ["h"])
                 H_fn = ca.Function(
-                    cname + "_jacobian",
-                    [x_sym, u_sym, dt_sym, t_sym], [H_sym],
-                    ["x", "u", "dt", "t"], ["H"],
-                )
+                    cname + "_jacobian", args, [ca.densify(o.H_sym)],
+                    argn, ["H"])
                 outputs.append(OutputSpec(
                     craft_name=craft.name,
                     part_name=part.name,
                     output_name=out_name,
-                    out_dim=out_dim,
+                    out_dim=o.dim,
                     h_fn=h_fn,
                     H_fn=H_fn,
                 ))
@@ -297,63 +254,37 @@ def _is_known_noise_input(owner, sub: str) -> bool:
     return _match_noise_driver(owner, sub) is not None
 
 
-def _noise_zero(owner, sub: str):
-    """Return the zero MX of the right shape for a Noise input.
-    Raises if the input doesn't match a known channel."""
-    hit = _match_noise_driver(owner, sub)
-    if hit is None:
-        raise RuntimeError(f"extract: unhandled noise sub-name {sub!r}")
-    _, ndecl = hit
-    return ca.MX.zeros(ndecl.signal_manifold.ambient_dim, 1)
-
-
-def _evaluate_tick_flat(cf: ca.Function,
-                        x_sym,
-                        u_sym,
-                        dt_sym,
-                        t_sym,
-                        spec: StateSpec,
-                        input_names: list[str],
-                        world,
-                        dist_by_name: dict) -> dict:
-    """Apply the world tick on flat symbolic inputs; return a dict mapping
-    every named output to its symbolic MX expression."""
-    in_names  = [cf.name_in(i)  for i in range(cf.n_in())]
-    out_names = [cf.name_out(i) for i in range(cf.n_out())]
-    u_index   = {name: i for i, name in enumerate(input_names)}
-
-    sliced = []
-    for name in in_names:
-        if name == "dt":
-            sliced.append(dt_sym); continue
-        if name == "t":
-            sliced.append(t_sym); continue
-        if name in spec:
-            slot = spec.slot(name)
-            sliced.append(x_sym[slot.offset : slot.offset + slot.dim])
+def _discover_noise_specs(cf: ca.Function,
+                          world,
+                          spec: StateSpec,
+                          dist_by_name: dict) -> list[dict]:
+    """Walk the tick signature; return a `{full, dim, sigma}` entry for
+    every Noise channel. `sigma` is a placeholder (0.0): the C++ predict
+    zeroes noise, so Σ/L are unused — Linearization needs only `full`
+    and `dim` to route (and zero) the noise inputs. Inputs and state
+    slots are skipped; `_discover_input_names` already validates them."""
+    from ...craft import Craft as _Craft
+    out: list[dict] = []
+    for i in range(cf.n_in()):
+        name = cf.name_in(i)
+        if name in ("dt", "t") or name in spec:
             continue
-        if name in u_index:
-            sliced.append(u_sym[u_index[name]])
-            continue
-        # Noise — feed zero of the right shape.
         head, _, rest = name.partition(".")
         owner, _ = _resolve_owner(world, dist_by_name, head)
         if owner is None:
-            raise RuntimeError(f"extract: tick input {name!r} not handled.")
-        # Per-craft noise lives at `<craft>.<part>.<sub>`.
-        from ...craft import Craft as _Craft
+            continue
         if isinstance(owner, _Craft) and "." in rest:
             part_name, sub = rest.split(".", 1)
             part = next((p for p in owner.parts if p.name == part_name), None)
-            if part is None:
-                raise RuntimeError(
-                    f"extract: tick input {name!r}: unknown part.")
-            sliced.append(_noise_zero(part, sub))
+            target, key = part, sub
+        else:
+            target, key = owner, rest
+        if target is None:
             continue
-        # Per-disturbance noise lives at `<dist>.<sub>`.
-        sliced.append(_noise_zero(owner, rest))
-
-    result = cf(*sliced)
-    if len(out_names) == 1:
-        return {out_names[0]: result}
-    return {n: result[i] for i, n in enumerate(out_names)}
+        hit = _match_noise_driver(target, key)
+        if hit is not None:
+            _, ndecl = hit
+            out.append({"full": name,
+                        "dim": ndecl.signal_manifold.ambient_dim,
+                        "sigma": 0.0})
+    return out

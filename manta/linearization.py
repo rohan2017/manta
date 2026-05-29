@@ -62,12 +62,18 @@ class OutputLinearization:
     """Linearization of one tick output (a candidate measurement).
 
     `observed_cols` are the tangent-state columns with structural
-    nonzeros in H — the slots this output actually observes. The
-    `ca.Function`s are `None` when the parent `Linearization` was built
-    structure-only (`build_functions=False`)."""
+    nonzeros in H — the slots this output actually observes. `h_sym`
+    (noise-zeroed h(x)) and `H_sym` (∂h/∂δ|₀) are the raw symbolic
+    expressions, always populated — a consumer that wants its own naming
+    or densification (e.g. the C++ extractor) builds functions from
+    these. The `ca.Function`s are convenience wrappers, `None` when the
+    parent `Linearization` was built structure-only
+    (`build_functions=False`)."""
     full:          str
     dim:           int
     observed_cols: np.ndarray
+    h_sym:         ca.MX
+    H_sym:         ca.MX
     h_fn:          ca.Function | None
     H_fn:          ca.Function | None
     L_h_fn:        ca.Function | None
@@ -135,6 +141,7 @@ class Linearization:
                                           t_sym, zero_n)
         x_pert_new = self._gather_state(outputs_pert)
         delta_out  = spec.boxminus_sym(x_pert_new, x_new_0)
+        self.x_new = x_new_0          # predict expr (noise-zeroed)
         self.F_sym = ca.substitute(
             ca.jacobian(delta_out, delta_in),
             delta_in, ca.MX.zeros(n_tangent, 1))
@@ -177,12 +184,12 @@ class Linearization:
             cols = np.flatnonzero(
                 np.array(ca.DM(H_sym.sparsity())).any(axis=0))
             self._h_supports.append(cols)
+            h_sym = ca.substitute(h_n_flat, n_sym, zero_n)   # noise-zeroed h(x)
 
             h_fn = H_fn = L_h_fn = None
             if build_functions:
-                h_0_flat = ca.substitute(h_n_flat, n_sym, zero_n)
                 safe = full.replace(".", "_")
-                h_fn = ca.Function(f"h_{safe}", args, [h_0_flat], argn, ["h"])
+                h_fn = ca.Function(f"h_{safe}", args, [h_sym], argn, ["h"])
                 H_fn = ca.Function(f"H_{safe}", args, [H_sym], argn, ["H"])
                 if self.n_noise > 0:
                     L_h_sym = ca.substitute(
@@ -191,6 +198,7 @@ class Linearization:
                         f"Lh_{safe}", args, [L_h_sym], argn, ["L_h"])
             self.outputs[full] = OutputLinearization(
                 full=full, dim=h_dim, observed_cols=cols,
+                h_sym=h_sym, H_sym=H_sym,
                 h_fn=h_fn, H_fn=H_fn, L_h_fn=L_h_fn)
 
         if build_functions:
