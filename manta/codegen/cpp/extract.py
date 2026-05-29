@@ -13,17 +13,12 @@ the function bundle the codegen backends consume:
 Flat because CasADi's codegen targets row-major flat C; the C++
 wrapper handles typed pack/unpack via the StateSpec slot layout.
 
-The world tick's named inputs / outputs are routed by walking the
-casadi.Function signature:
-
-  Owners — head of `<owner>.<sub>` — are looked up in the world. They
-  can be a craft (which exposes parts with Input / Output / Noise
-  declarations) or a state-bearing disturbance (which exposes Noise
-  declarations driving its bias state).
-
-  Sub-names — the rest — are matched to State (already in spec), Input
-  (routed to u), white-Noise (zero-fed for the clean predict), or RW
-  drivers (`<bias>_driver`, also zero-fed for the clean predict).
+The tick's named I/O is classified by the shared
+`manta.tick_signature.walk_tick_signature` (Inputs → u, Noise channels,
+candidate sensors); the Jacobian machinery is the shared
+`manta.linearization.Linearization`. This module only wraps
+Linearization's symbolic exprs into densified, world-name-prefixed
+`ca.Function`s with the names CasADi's CodeGenerator emits into C.
 """
 
 from __future__ import annotations
@@ -34,6 +29,7 @@ import casadi as ca
 
 from ...estimation.state_spec import StateSpec
 from ...linearization import Linearization
+from ...tick_signature import walk_tick_signature
 
 
 @dataclass(frozen=True)
@@ -106,24 +102,15 @@ def extract(cw) -> WorldFunctions:
     spec  = StateSpec.from_world(world)
     cf    = cw.tick.casadi_function
 
-    # Index field disturbances by name for noise-routing.
-    dist_by_name = _build_dist_lookup(world)
-
-    # Walk the tick signature → Inputs (u) and Noise channels. The C++
-    # predict zeroes noise (Σ/L are unused here), so a placeholder sigma
-    # is fine — Linearization only needs full+dim to route + zero it.
-    input_names = _discover_input_names(cf, world, spec, dist_by_name)
-    noise_specs = _discover_noise_specs(cf, world, spec, dist_by_name)
-
-    # Every Part Output is a candidate measurement.
-    all_outputs = [f"{c.name}.{p.name}.{o}"
-                   for c in world.crafts
-                   for p in c.parts
-                   for o in p.output_declarations()]
+    # Classify the tick's I/O (Inputs, Noise, candidate sensors) — the
+    # shared tick-signature walker. The C++ predict zeroes noise (Σ/L are
+    # unused here), so the channels' sigma is ignored; Linearization needs
+    # only full+dim to route + zero them.
+    sig = walk_tick_signature(cf, world, spec)
 
     lin = Linearization(
-        cf, spec, frozen={}, input_names=input_names,
-        noise_specs=noise_specs, outputs=all_outputs,
+        cf, spec, frozen={}, input_names=sig.input_names,
+        noise_specs=sig.noise, outputs=sig.sensor_names,
         build_functions=False)
 
     args = [lin.x_sym, lin.u_sym, lin.dt_sym, lin.t_sym]
@@ -139,152 +126,26 @@ def extract(cw) -> WorldFunctions:
 
     # --- per-Output (h, H) -----------------------------------------------
     outputs: list[OutputSpec] = []
-    for craft in world.crafts:
-        for part in craft.parts:
-            for out_name in part.output_declarations():
-                full = f"{craft.name}.{part.name}.{out_name}"
-                o = lin.outputs[full]
-                cname = f"{world.name}_h_{craft.name}_{part.name}_{out_name}"
-                h_fn = ca.Function(
-                    cname, args, [o.h_sym], argn, ["h"])
-                H_fn = ca.Function(
-                    cname + "_jacobian", args, [ca.densify(o.H_sym)],
-                    argn, ["H"])
-                outputs.append(OutputSpec(
-                    craft_name=craft.name,
-                    part_name=part.name,
-                    output_name=out_name,
-                    out_dim=o.dim,
-                    h_fn=h_fn,
-                    H_fn=H_fn,
-                ))
+    for s in sig.sensors:
+        o = lin.outputs[s.full]
+        cname = f"{world.name}_h_{s.craft.name}_{s.part.name}_{s.output_name}"
+        h_fn = ca.Function(cname, args, [o.h_sym], argn, ["h"])
+        H_fn = ca.Function(
+            cname + "_jacobian", args, [ca.densify(o.H_sym)], argn, ["H"])
+        outputs.append(OutputSpec(
+            craft_name=s.craft.name,
+            part_name=s.part.name,
+            output_name=s.output_name,
+            out_dim=o.dim,
+            h_fn=h_fn,
+            H_fn=H_fn,
+        ))
 
     return WorldFunctions(
         world_name=world.name,
         spec=spec,
-        input_names=input_names,
+        input_names=sig.input_names,
         predict_fn=predict_fn,
         predict_jacobian_fn=predict_jacobian_fn,
         outputs=outputs,
     )
-
-
-# ---------------------------------------------------------------------------
-# Input / Noise routing helpers
-# ---------------------------------------------------------------------------
-
-def _build_dist_lookup(world) -> dict:
-    """Index every state-bearing disturbance by name for noise routing."""
-    from ...fields.base import Disturbance
-    out = {}
-    for field in world.fields:
-        for d in field._disturbances:
-            if isinstance(d, Disturbance):
-                out[d.name] = d
-    return out
-
-
-def _resolve_owner(world, dist_by_name: dict, head: str):
-    """Return (owner, owner_label) for `head` — a craft, a disturbance,
-    or (None, None)."""
-    craft = next((c for c in world.crafts if c.name == head), None)
-    if craft is not None:
-        return craft, f"craft '{craft.name}'"
-    dist = dist_by_name.get(head)
-    if dist is not None:
-        return dist, f"disturbance '{dist.name}'"
-    return None, None
-
-
-def _discover_input_names(cf: ca.Function,
-                          world,
-                          spec: StateSpec,
-                          dist_by_name: dict) -> list[str]:
-    """Walk the tick's input signature; return the ordered list of
-    part-Input names. Noise channels are recognized but routed
-    separately at evaluation time (zero-fed for the clean predict)."""
-    out: list[str] = []
-    for i in range(cf.n_in()):
-        name = cf.name_in(i)
-        if name in ("dt", "t") or name in spec:
-            continue
-        head, _, rest = name.partition(".")
-        owner, owner_label = _resolve_owner(world, dist_by_name, head)
-        if owner is None:
-            raise RuntimeError(
-                f"extract: tick input {name!r} doesn't match any craft "
-                f"or disturbance in this world.")
-        if isinstance(owner, type(world.crafts[0])) and "." in rest:
-            # Per-craft Input or Noise → drill into the right part.
-            part_name, sub = rest.split(".", 1)
-            part = next((p for p in owner.parts if p.name == part_name), None)
-            if part is None:
-                raise RuntimeError(
-                    f"extract: tick input {name!r}: unknown part "
-                    f"{part_name!r} on craft {owner.name!r}.")
-            if sub in part.input_declarations():
-                out.append(name)
-                continue
-            if _is_known_noise_input(part, sub):
-                continue
-            raise RuntimeError(
-                f"extract: tick input {name!r} on {owner_label} is not "
-                f"an Input or recognized Noise.")
-        # Per-disturbance Noise (state slots already handled by `in spec`).
-        if _is_known_noise_input(owner, rest):
-            continue
-        raise RuntimeError(
-            f"extract: tick input {name!r} on {owner_label} is not a "
-            f"recognized Noise channel.")
-    return out
-
-
-def _match_noise_driver(owner, sub: str):
-    """Look up the noise channel whose driver-input name equals `sub`.
-    Returns (nname, ndecl) on a hit, else None. Replaces the prior
-    `isinstance(WhiteNoise) / sub.endswith('_driver') + isinstance(RW)`
-    pair — each Noise subclass owns its own driver-name convention."""
-    for nname, ndecl in owner.noise_declarations().items():
-        if ndecl.driver_input_name(nname) == sub:
-            return nname, ndecl
-    return None
-
-
-def _is_known_noise_input(owner, sub: str) -> bool:
-    return _match_noise_driver(owner, sub) is not None
-
-
-def _discover_noise_specs(cf: ca.Function,
-                          world,
-                          spec: StateSpec,
-                          dist_by_name: dict) -> list[dict]:
-    """Walk the tick signature; return a `{full, dim, sigma}` entry for
-    every Noise channel. `sigma` is a placeholder (0.0): the C++ predict
-    zeroes noise, so Σ/L are unused — Linearization needs only `full`
-    and `dim` to route (and zero) the noise inputs. Inputs and state
-    slots are skipped; `_discover_input_names` already validates them."""
-    from ...craft import Craft as _Craft
-    out: list[dict] = []
-    for i in range(cf.n_in()):
-        name = cf.name_in(i)
-        if name in ("dt", "t") or name in spec:
-            continue
-        head, _, rest = name.partition(".")
-        owner, _ = _resolve_owner(world, dist_by_name, head)
-        if owner is None:
-            continue
-        if isinstance(owner, _Craft) and "." in rest:
-            part_name, sub = rest.split(".", 1)
-            part = next((p for p in owner.parts if p.name == part_name), None)
-            target, key = part, sub
-        else:
-            target, key = owner, rest
-        if target is None:
-            continue
-        hit = _match_noise_driver(target, key)
-        if hit is not None:
-            _, ndecl = hit
-            out.append({"full": name,
-                        "dim": ndecl.signal_manifold.ambient_dim,
-                        "sigma": 0.0})
-    return out

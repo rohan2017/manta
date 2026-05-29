@@ -152,82 +152,37 @@ class EKF:
         )
         cf = compiled_tick.casadi_function
 
-        # Walk the tick signature: collect Inputs and Noise channels.
-        # Names are flat-prefixed `<owner>.<sub>` where `<owner>` is a
-        # craft name or a field-disturbance name. Membership in the FULL
-        # spec is the "is this a state slot?" check.
-        dist_by_name: dict[str, Any] = {}
-        from ..fields.base import Disturbance
-        for field in world.fields:
-            for dist in field._disturbances:
-                if isinstance(dist, Disturbance):
-                    dist_by_name[dist.name] = dist
+        # Classify the tick's I/O against the model — Inputs (→ u), Noise
+        # channels (→ process noise), and candidate sensors. Shared with
+        # the C++ extractor; membership in the FULL spec is the "is this a
+        # state slot?" check.
+        from ..tick_signature import walk_tick_signature
+        sig = walk_tick_signature(cf, world, full_spec)
+        self._noise_specs = sig.noise
+        all_input_defaults = sig.input_defaults
 
-        self._input_names: list[str] = []
-        self._noise_specs: list[dict[str, Any]] = []
-        for i in range(cf.n_in()):
-            name = cf.name_in(i)
-            if name in ("dt", "t") or name in full_spec:
-                continue
-            head, _, rest = name.partition(".")
-            craft = next((c for c in self.crafts if c.name == head), None)
-            dist  = dist_by_name.get(head)
-            if craft is not None:
-                # Per-craft Input or Noise.
-                if "." not in rest:
-                    raise RuntimeError(
-                        f"EKF: tick input {name!r} not in spec and not "
-                        f"in the `<craft>.<part>.<sub>` shape.")
-                part_name, sub = rest.split(".", 1)
-                part = next((p for p in craft.parts
-                             if p.name == part_name), None)
-                if part is None:
-                    raise RuntimeError(
-                        f"EKF: tick input {name!r}: unknown part "
-                        f"{part_name!r} on craft {craft.name!r}.")
-                if sub in part.input_declarations():
-                    self._input_names.append(name)
-                    continue
-                self._classify_noise_input(
-                    name, part, sub, owner_label=f"craft '{craft.name}'")
-                continue
-            if dist is not None:
-                # Per-disturbance Noise (state slots already in spec).
-                self._classify_noise_input(
-                    name, dist, rest,
-                    owner_label=f"disturbance '{dist.name}'")
-                continue
-            raise RuntimeError(
-                f"EKF: tick input {name!r} doesn't match any craft or "
-                f"registered disturbance.")
-
-        # Defaults for every candidate input. `frozen` collects every
-        # tick input the symbolic graph should treat as a baked constant
-        # rather than a live variable: excluded Inputs first, then any
-        # frozen (untracked) state slots once the closure runs.
-        all_input_defaults = {n: self._lookup_input_default(n)
-                              for n in self._input_names}
+        # `frozen` collects every tick input the symbolic graph should
+        # treat as a baked constant rather than a live variable: excluded
+        # Inputs first, then any frozen (untracked) state slots once the
+        # closure runs.
         frozen: dict[str, Any] = {}
-        if inputs is not None:
+        if inputs is None:
+            self._input_names = sig.input_names
+        else:
             chosen_inputs = self._resolve_names(
-                inputs, self._input_names, "input")
-            for n in self._input_names:
+                inputs, sig.input_names, "input")
+            for n in sig.input_names:
                 if n not in chosen_inputs:
                     frozen[n] = all_input_defaults[n]
-            self._input_names = [n for n in self._input_names
+            self._input_names = [n for n in sig.input_names
                                  if n in chosen_inputs]
         self._u_defaults = np.array(
             [all_input_defaults[n] for n in self._input_names], dtype=float)
 
-        # Candidate sensors = every (part, output). Default keeps all.
-        all_sensor_names: list[str] = []
-        sensor_lookup: dict[str, tuple] = {}
-        for craft in self.crafts:
-            for part in craft.parts:
-                for out_name in part.output_declarations():
-                    full = f"{craft.name}.{part.name}.{out_name}"
-                    all_sensor_names.append(full)
-                    sensor_lookup[full] = (part, craft, out_name)
+        # Candidate sensors = every Part Output. Default keeps all.
+        all_sensor_names = sig.sensor_names
+        sensor_lookup = {s.full: (s.part, s.craft, s.output_name)
+                         for s in sig.sensors}
         if sensors is None:
             if track is None:
                 chosen_sensor_names = list(all_sensor_names)
@@ -374,37 +329,6 @@ class EKF:
                     f"{sorted(candidates)}")
         return resolved
 
-    def _classify_noise_input(self, full_name: str, owner, sub: str,
-                              owner_label: str) -> None:
-        """Append a noise-spec entry for `<owner>.<sub>` if it matches
-        any noise channel's per-tick stochastic driver. The lookup is
-        polymorphic on the Noise subclass — each subclass declares its
-        own driver-input naming via `driver_input_name(name)`.
-
-        `owner` can be a Part or a Disturbance — both expose
-        `noise_declarations()` with the same shape.
-        """
-        for nname, ndecl in owner.noise_declarations().items():
-            if ndecl.driver_input_name(nname) != sub:
-                continue
-            dim   = ndecl.signal_manifold.ambient_dim
-            sigma = float(getattr(owner, f"{nname}_sigma"))
-            self._noise_specs.append({
-                "owner": owner, "name": sub, "full": full_name,
-                "dim": dim, "sigma": sigma,
-            })
-            return
-        raise RuntimeError(
-            f"EKF: tick input {full_name!r} on {owner_label} is neither "
-            f"an Input nor a recognized Noise channel.")
-
-    def _lookup_input_default(self, full_name: str) -> float:
-        """Resolve `<craft>.<part>.<input>` to its part-instance value."""
-        craft_name, rest = full_name.split(".", 1)
-        part_name, input_name = rest.split(".", 1)
-        craft = next(c for c in self.crafts if c.name == craft_name)
-        part  = next(p for p in craft.parts if p.name == part_name)
-        return float(getattr(part, input_name))
 
     def _build_u(self, u: dict[str, float] | None) -> np.ndarray:
         """Resolve `u` to a flat input vector in `_input_names` order.

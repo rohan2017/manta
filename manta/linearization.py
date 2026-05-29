@@ -91,8 +91,10 @@ class Linearization:
                         state slots + excluded inputs). F/L/h/H are born
                         reduced to the kept dims, no post-hoc deletion.
         input_names   — ordered live Input names → the `u` vector.
-        noise_specs   — list of `{"full", "dim", "sigma", ...}` for the
-                        Noise channels feeding the tick (drives `L`/`Σ`).
+        noise_specs   — the Noise channels feeding the tick (drives
+                        `L`/`Σ`). Each is a `NoiseChannel`-like object
+                        with `.full` / `.dim` / `.sigma`
+                        (`manta.tick_signature`).
         outputs       — tick-output full names to linearize as `h`/`H`.
         build_functions — when False, only the structural artifacts
                         (`F_sym`, per-output `observed_cols`,
@@ -111,7 +113,7 @@ class Linearization:
         self._cf           = cf
         self._input_names  = input_names
         self._noise_specs  = noise_specs
-        self.n_noise       = sum(s["dim"] for s in noise_specs)
+        self.n_noise       = sum(s.dim for s in noise_specs)
 
         n_ambient = spec.ambient_dim
         n_tangent = spec.tangent_dim
@@ -165,7 +167,7 @@ class Linearization:
                 self.L_fn = ca.Function("L", args, [L_sym], argn, ["L"])
                 sigmas_sq: list[float] = []
                 for ns in noise_specs:
-                    sigmas_sq.extend([ns["sigma"] ** 2] * ns["dim"])
+                    sigmas_sq.extend([ns.sigma ** 2] * ns.dim)
                 self.Sigma = np.diag(sigmas_sq)
 
         # --- per-output h / H / L_h ----------------------------------------
@@ -282,8 +284,8 @@ class Linearization:
         noise_offsets: dict[str, tuple[int, int]] = {}
         off = 0
         for ns in self._noise_specs:
-            noise_offsets[ns["full"]] = (off, ns["dim"])
-            off += ns["dim"]
+            noise_offsets[ns.full] = (off, ns.dim)
+            off += ns.dim
 
         sliced: list = []
         for name in in_names:
