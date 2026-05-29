@@ -2,7 +2,7 @@
 
 A `Coupling` joins two crafts so their dynamics are evaluated in the
 same compiled tick. Concrete subclasses (e.g. `Tether`) implement
-`compute_wrenches_sym(ctx_a, ctx_b)` and World.compile routes coupled
+`compute_wrenches_sym(ctx_a, ctx_b)` and Sim(world) routes coupled
 components through `compile_world_tick`.
 
 This module is the canonical home of the ABC. Import via:

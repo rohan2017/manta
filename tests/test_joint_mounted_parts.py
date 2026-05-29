@@ -9,7 +9,7 @@ transfer alone misses. These tests pin both against closed-form values.
 
 import numpy as np
 
-from manta import World, Craft, TargetNumpy
+from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField, MagField, FluidField
 from manta.parts import Joint, Mass, Thruster, IMU, Magnetometer, DragSurface
 
@@ -17,7 +17,7 @@ from manta.parts import Joint, Mass, Thruster, IMU, Magnetometer, DragSurface
 def _free_world(craft, **overrides):
     w = World().add_field(GravityField().add_uniform((0.0, 0.0, 0.0)))
     w.add_craft(craft, **overrides)
-    return TargetNumpy(w.compile())
+    return TargetNumpy(Sim(w))
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +141,7 @@ def test_rotor_magnetometer_reads_in_sensor_frame():
     w = World().add_field(GravityField().add_uniform((0.0, 0.0, 0.0)))
     w.add_field(MagField().add_uniform((1.0, 0.0, 0.0)))
     w.add_craft(c, **{"yaw.angle": np.pi / 2})
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     state = sim.step(sim.initial_state(), dt=1e-3)
 
     np.testing.assert_allclose(
@@ -172,7 +172,7 @@ def test_rotor_dragsurface_drag_tracks_rotor_frame():
     j.add(DragSurface("fin", force=(-c, -c, -c)))   # isotropic linear drag
     craft.add(j)
     w.add_craft(craft, **{"yaw.angle": np.pi / 2}, velocity=(V0, 0.0, 0.0))
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     state = sim.step(sim.initial_state(), dt=1e-3)
 
     v = np.asarray(state["sub"]["velocity"]).ravel()

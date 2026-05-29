@@ -11,7 +11,7 @@ These tests verify:
 
 import numpy as np
 
-from manta import Craft, Planet, World, TargetNumpy
+from manta import Craft, Planet, Sim, TargetNumpy, World
 from manta.fields import GravityField
 from manta.parts import Mass
 
@@ -82,7 +82,7 @@ def test_inertial_straight_line_curves_in_planet_frame():
     p_w0, v_w0 = planet.planet_to_world((0, 0, 0), (v0, 0, 0), t=0.0)
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c, position=tuple(p_w0), velocity=tuple(v_w0))
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     state = sim.initial_state()
 
     dt = 0.001

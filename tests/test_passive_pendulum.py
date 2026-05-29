@@ -7,7 +7,7 @@ torque into the joint DOF, so a passive joint now swings under gravity:
 
 import numpy as np
 
-from manta import World, TargetNumpy
+from manta import Sim, TargetNumpy, World
 from manta.craft import Craft
 from manta.fields import GravityField
 from manta.parts import Mass, Joint
@@ -32,7 +32,7 @@ def _pendulum(L: float, m: float = 1.0, damping: float = 0.0) -> Craft:
 def _sim(craft, **init):
     w = World().add_field(GravityField(g=(0.0, 0.0, -G)))
     w.add_craft(craft)
-    rt = TargetNumpy(w.compile())
+    rt = TargetNumpy(Sim(w))
     st = rt.initial_state()
     for k, v in init.items():
         st["pend"][k] = v

@@ -23,7 +23,7 @@ Run::
 
 from __future__ import annotations
 
-from manta import Craft, Planet, TargetNumpy, World
+from manta import Craft, Planet, Sim, TargetNumpy, World
 from manta.parts import Mass
 
 
@@ -46,7 +46,7 @@ def main() -> None:
                 position=planet.position(0.0, 0.0, 0.0),
                 velocity=planet.velocity(2.0, 0.0, 0.0))
 
-    sim   = TargetNumpy(w.compile())
+    sim   = TargetNumpy(Sim(w))
     state = sim.initial_state()
 
     print(f"planet: {planet}")

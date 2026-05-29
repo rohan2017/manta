@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from manta.craft import Craft
-from manta import World, TargetNumpy
+from manta import Sim, TargetNumpy, World
 from manta.fields import GravityField
 from manta.parts import (
     Joint,
@@ -34,7 +34,7 @@ def test_passive_joint_spins_at_initial_rate():
 
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c, **{"wheel.rate": 1.0})
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     state = sim.initial_state()
     assert state["passive_demo"]["wheel.angle"] == 0.0
     assert state["passive_demo"]["wheel.rate"]  == 1.0
@@ -58,7 +58,7 @@ def test_multiple_joints_have_independent_state():
 
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c, **{"fast.rate": 5.0, "slow.rate": 1.0})
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     state = sim.initial_state()
     for _ in range(1000):
         state = sim.step(state, dt=0.001)
@@ -81,7 +81,7 @@ def test_saturating_joint_below_stall_accelerates_rotor():
 
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c, **{"wheel.torque_cmd": 0.5})
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     state = sim.initial_state()
     for _ in range(1000):
         state = sim.step(state, dt=0.001)
@@ -102,7 +102,7 @@ def test_saturating_joint_clamps_at_stall():
 
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c, **{"wheel.torque_cmd": 5.0})   # way above stall=0.2
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     state = sim.initial_state()
     for _ in range(1000):
         state = sim.step(state, dt=0.001)
@@ -125,7 +125,7 @@ def test_saturating_joint_reaction_spins_body_counter():
 
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c, **{"wheel.torque_cmd": 0.5})
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     state = sim.initial_state()
     for _ in range(1000):
         state = sim.step(state, dt=0.001)
@@ -193,7 +193,7 @@ def test_joint_doesnt_break_free_fall():
 
     w = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
     w.add_craft(c, position=(0.0, 0.0, 100.0), **{"wheel.rate": 10.0})
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     state = sim.initial_state()
     for _ in range(1000):
         state = sim.step(state, dt=0.001)
@@ -228,7 +228,7 @@ def test_unknown_state_slot_raises():
     w = World()
     w.add_craft(c)
     with pytest.raises(KeyError, match="unknown state slot"):
-        w.compile()
+        Sim(w)
 
 
 def test_initial_state_unknown_slot_raises():
@@ -267,7 +267,7 @@ def test_nested_passive_joints_each_track_their_own_rate():
 
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c, **{"pan.rate": 2.0, "tilt.rate": 1.0})
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     state = sim.initial_state()
     for _ in range(1000):
         state = sim.step(state, dt=0.001)
@@ -292,7 +292,7 @@ def test_nested_joint_saturating_drives_inner_rotor():
 
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c, **{"tilt.torque_cmd": 0.5})
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     state = sim.initial_state()
     for _ in range(1000):
         state = sim.step(state, dt=0.001)
@@ -322,7 +322,7 @@ def test_offset_rotor_at_pi_over_2_shows_com_in_y():
     # COM in the body frame.
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c, **{"arm.angle": float(np.pi / 2)})
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     state = sim.step(sim.initial_state(), dt=0.001)
     # Body should still be at rest after one tick (no external wrench,
     # rotor at rest); just verify the compile produced a valid graph
@@ -347,7 +347,7 @@ def test_offset_rotor_changes_body_com():
     # Smoke: the offset rotor compiles under gravity.
     w = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
     w.add_craft(c)
-    TargetNumpy(w.compile())
+    TargetNumpy(Sim(w))
 
     inertials = c.aggregate_inertials()
     assert np.isclose(inertials["m_total"], 11.0)

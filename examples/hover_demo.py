@@ -12,7 +12,7 @@ Run::
 
 import numpy as np
 
-from manta import Craft, World, TargetNumpy
+from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField
 from manta.estimation import EKF, measurement_slot
 from manta.parts import IMU, Mass, PositionSensor, Thruster
@@ -30,10 +30,10 @@ def main() -> None:
     c.add(IMU("g"))
     c.add(PositionSensor("gps"))
 
-    # Sim — through the public World/CompiledWorld surface.
+    # Sim — through the public World/Sim surface.
     w = World().add_field(GravityField().add_uniform(g_world))
     w.add_craft(c, position=(0.0, 0.0, 5.0))
-    cw = TargetNumpy(w.compile())
+    cw = TargetNumpy(Sim(w))
     sim = cw.initial_state()
 
     # EKF — start with a deliberate position + velocity offset.

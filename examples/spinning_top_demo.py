@@ -22,7 +22,7 @@ Run::
 
 import numpy as np
 
-from manta import Craft, World, TargetNumpy
+from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField
 from manta.parts import Joint, Mass, Thruster
 
@@ -58,7 +58,7 @@ def _run_scenario(label: str, rotor_rate: float) -> None:
     w = World().add_field(GravityField().add_uniform((0.0, 0.0, 0.0)))   # gravity off
     c = _build_top()
     w.add_craft(c)
-    cw = TargetNumpy(w.compile())
+    cw = TargetNumpy(Sim(w))
 
     state = cw.initial_state()
     state["top"]["rotor.rate"] = rotor_rate

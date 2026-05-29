@@ -10,7 +10,7 @@ rigid-body orientation.
 import numpy as np
 import pytest
 
-from manta import Craft, TargetNumpy, World
+from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField
 from manta.ir.frames import CraftFrame, PartFrame, WorldFrame
 from manta.ir.manifold import SO3Manifold
@@ -95,7 +95,7 @@ def test_so3_state_passthrough_through_world_tick():
     c.add(_SO3PassthroughPart("att"))
     w = World().add_field(GravityField(g=(0, 0, 0)))
     w.add_craft(c)
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     state = sim.initial_state()
     # Seed at a non-identity quaternion (90° about z).
     q0 = np.array([np.cos(np.pi / 4), 0.0, 0.0, np.sin(np.pi / 4)])
@@ -113,7 +113,7 @@ def test_so3_state_output_round_trips_the_quaternion():
     c.add(_SO3PassthroughPart("att"))
     w = World().add_field(GravityField(g=(0, 0, 0)))
     w.add_craft(c)
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     state = sim.initial_state()
     q = np.array([0.5, 0.5, 0.5, 0.5])   # already unit
     state["c"]["att.orientation_est"] = q
@@ -167,7 +167,7 @@ def test_attitude_integrator_matches_closed_form_quaternion_product():
     c.add(_AttitudeIntegrator("att"))
     w = World().add_field(GravityField(g=(0, 0, 0)))
     w.add_craft(c)
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     state = sim.initial_state()
     omega_z = 0.3   # rad/s
     state["c"]["att.omega_cmd"] = np.array([0.0, 0.0, omega_z])

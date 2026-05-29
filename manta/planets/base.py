@@ -184,7 +184,7 @@ class Planet:
     # ------------------------------------------------------------------
 
     def register_disturbances(self, world: "World") -> None:
-        """Called by `World.compile()` to attach this planet's standing
+        """Called by `Sim(world)` to attach this planet's standing
         contributions to the world's shared fields. Subclasses (Earth,
         Moon, ...) override to install gravity / ocean / atmosphere /
         magnetic-dipole disturbances. Base default: no-op.

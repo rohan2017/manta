@@ -23,7 +23,7 @@ import numpy as np
 import casadi as ca
 import pytest
 
-from manta import World, Craft, EKF, TargetNumpy
+from manta import Craft, EKF, Sim, TargetNumpy, World
 from manta.fields import GravityField
 from manta.parts import Mass
 from manta.parts.base import Output, Part, PartUpdate, RandomWalkNoise, WhiteNoise
@@ -126,7 +126,7 @@ def test_bias_advances_by_sqrt_dt_times_driver_in_sim():
     """With a deterministic driver, the bias state evolves exactly
     as the documented model `bias_next = bias + sqrt(dt) · driver`."""
     w, c = _build_world()
-    cw = TargetNumpy(w.compile())
+    cw = TargetNumpy(Sim(w))
     dt = 0.01
     state = cw.initial_state()
     # Inject a constant driver each tick.
@@ -152,7 +152,7 @@ def test_ekf_estimates_rw_bias_from_gyro_readings():
 
     sim_w, sim_c = _build_world()
     est_w, est_c = _build_world()
-    cw = TargetNumpy(sim_w.compile())
+    cw = TargetNumpy(Sim(sim_w))
     ekf = TargetNumpy(EKF(est_w))
 
     # Truth: a fixed initial bias, no further drift (zero driver).

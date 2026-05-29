@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from manta import Craft, World, TargetNumpy
+from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField
 from manta.parts import Mass, PositionSensor
 
@@ -14,7 +14,7 @@ def test_position_sensor_at_origin_reads_craft_position():
 
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c, position=(3.0, -1.0, 2.5))
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     state = sim.initial_state()
 
     state = sim.step(state, dt=0.001)
@@ -32,7 +32,7 @@ def test_position_sensor_tracks_position_under_freefall():
 
     w = World().add_field(GravityField(g=g))
     w.add_craft(c, position=(0.0, 0.0, 10.0))
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     state = sim.initial_state()
 
     for _ in range(500):
@@ -54,7 +54,7 @@ def test_position_sensor_with_offset_adds_R_offset():
     # Quaternion (w, x, y, z) for 90° about z: (cos(π/4), 0, 0, sin(π/4)).
     w.add_craft(c, position=(0.0, 0.0, 0.0),
                 orientation=(np.cos(np.pi / 4), 0.0, 0.0, np.sin(np.pi / 4)))
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     state = sim.initial_state()
 
     state = sim.step(state, dt=0.001)

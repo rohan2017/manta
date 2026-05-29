@@ -7,7 +7,7 @@ latch (zero-order hold) and drive the predict.
 
 import numpy as np
 
-from manta import World, TargetNumpy
+from manta import Sim, TargetNumpy, World
 from manta.craft import Craft
 from manta.fields import GravityField
 from manta.estimation import EKF
@@ -25,7 +25,7 @@ def _gps_craft(name="drone", sigma=0.1):
 def _truth_sim(z0=100.0):
     tw = World().add_field(GravityField(g=(0, 0, -9.81)))
     tw.add_craft(_gps_craft(), position=(0, 0, z0))
-    sim = TargetNumpy(tw.compile())
+    sim = TargetNumpy(Sim(tw))
     return sim, sim.initial_state()
 
 

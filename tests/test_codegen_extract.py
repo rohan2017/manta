@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from manta import Craft, World
+from manta import Craft, Sim, World
 from manta.fields import GravityField
 from manta.codegen.cpp.extract import extract
 from manta.parts import IMU, Mass, PositionSensor, Thruster
@@ -21,11 +21,11 @@ def _hover_craft():
     return c
 
 
-def _hover_world(name: str = "hover_world") -> "CompiledWorld":
+def _hover_world(name: str = "hover_world") -> "Sim":
     w = World(name=name)
     w.add_field(GravityField(g=(0.0, 0.0, -9.81)))
     w.add_craft(_hover_craft())
-    return w.compile()
+    return Sim(w)
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +145,7 @@ def test_extract_world_with_no_inputs():
     w = World(name="ff")
     w.add_field(GravityField(g=(0.0, 0.0, -9.81)))
     w.add_craft(c)
-    cf = extract(w.compile())
+    cf = extract(Sim(w))
     assert cf.n_inputs == 0
     x = cf.spec.pack({s.name: np.zeros(s.dim) if s.dim > 1 else 0.0
                        for s in cf.spec.slots})

@@ -9,7 +9,7 @@ they actually work.
 import casadi as ca
 import numpy as np
 
-from manta import Craft, World, TargetNumpy
+from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import DipoleMag, MagField, UniformMag, GravityField
 from manta.ir.frames import WorldFrame
 from manta.ir.types import Vec3
@@ -26,7 +26,7 @@ def test_dvl_stationary_craft_reads_zero():
     c.add(DVL("d"))
     w = World().add_field(GravityField(g=(0, 0, 0)))
     w.add_craft(c)
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     state = sim.initial_state()
     state = sim.step(state, dt=0.001)
     np.testing.assert_allclose(np.array(state["dvl_test"]["d.velocity"]).ravel(),
@@ -40,7 +40,7 @@ def test_dvl_moving_craft_reads_anchor_velocity_when_unrotated():
     c.add(DVL("d"))
     w = World().add_field(GravityField(g=(0, 0, 0)))
     w.add_craft(c, velocity=np.array([1.5, -0.3, 2.0]))
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     state = sim.initial_state()
     state = sim.step(state, dt=0.001)
     np.testing.assert_allclose(np.array(state["dvl_move"]["d.velocity"]).ravel(),
@@ -68,7 +68,7 @@ def test_dvl_rotated_craft_reads_rotated_velocity():
     w.add_craft(c,
                 orientation=np.array([np.cos(np.pi/4), 0, 0, np.sin(np.pi/4)]),
                 velocity=np.array([1.0, 0.0, 0.0]))
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     state = sim.initial_state()
     state = sim.step(state, dt=0.001)
     # body velocity = R^T · anchor velocity.
@@ -134,7 +134,7 @@ def test_magnetometer_reads_uniform_field_when_unrotated():
     c.add(Magnetometer("m"))
     w = World().add_field(MagField().add_uniform((1.0, 2.0, 3.0)))
     w.add_craft(c)
-    cw = TargetNumpy(w.compile())
+    cw = TargetNumpy(Sim(w))
     state = cw.initial_state()
     state = cw.step(state, dt=0.001)
     np.testing.assert_allclose(
@@ -150,7 +150,7 @@ def test_magnetometer_reads_rotated_field_under_craft_rotation():
     c.add(Magnetometer("m"))
     w = World().add_field(MagField().add_uniform((1.0, 0.0, 0.0)))
     w.add_craft(c, orientation=(np.cos(np.pi/4), 0, 0, np.sin(np.pi/4)))
-    cw = TargetNumpy(w.compile())
+    cw = TargetNumpy(Sim(w))
     state = cw.initial_state()
     out = cw.step(state, dt=0.001)
     # R^T · (1,0,0) with R = +90° about z → (0, -1, 0) in body frame.
@@ -165,7 +165,7 @@ def test_magnetometer_with_no_field_reads_zero():
     c.add(Magnetometer("m"))
     w = World().add_field(GravityField(g=(0, 0, 0)))
     w.add_craft(c)
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     state = sim.initial_state()
     state = sim.step(state, dt=0.001)
     np.testing.assert_allclose(np.array(state["nomag"]["m.B"]).ravel(),
@@ -185,7 +185,7 @@ def test_magnetometer_picks_up_dipole_at_local_position():
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(Magnetometer("m"))
     w.add_craft(c, position=(0, 0, 1e7))
-    cw = TargetNumpy(w.compile())
+    cw = TargetNumpy(Sim(w))
     state = cw.initial_state()
     out   = cw.step(state, dt=0.001)
     expected_z = 1e-7 * 2 * m / (1e7) ** 3
@@ -209,7 +209,7 @@ def test_magnetometer_samples_at_single_mount_offset():
         c.add(Magnetometer("mag", transform=(0.0, 0.0, offset)))
         w = World().add_field(mf)
         w.add_craft(c, position=(0, 0, craft_z))
-        sim = TargetNumpy(w.compile())
+        sim = TargetNumpy(Sim(w))
         out = sim.step(sim.initial_state(), dt=1e-3)
         return np.array(out["c"]["mag.B"]).ravel()
 

@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from manta import Craft, TargetNumpy, World
+from manta import Craft, Sim, TargetNumpy, World
 from manta.couplings import Tether
 from manta.fields import CollisionField
 from manta.parts import Collider, Mass, TetherEndpoint
@@ -105,7 +105,7 @@ def _swing_azimuth(window: np.ndarray) -> float:
 
 def main() -> None:
     w, earth = _build_world()
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     state = sim.initial_state()
 
     T_prec = 2.0 * np.pi / OMEGA          # one precession period (at the pole)

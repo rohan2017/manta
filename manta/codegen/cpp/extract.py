@@ -1,4 +1,4 @@
-"""Per-function CasADi extraction from a CompiledWorld.
+"""Per-function CasADi extraction from a Sim.
 
 Given a compiled World (an IR carrying a single CasADi tick function
 over every craft + every state-bearing disturbance), `extract` builds
@@ -60,7 +60,7 @@ class OutputSpec:
 
 @dataclass
 class WorldFunctions:
-    """The complete set of exportable ca.Functions for one CompiledWorld."""
+    """The complete set of exportable ca.Functions for one Sim."""
     world_name:          str
     spec:                StateSpec
     input_names:         list[str]      # ordered as the u vector
@@ -82,7 +82,7 @@ class WorldFunctions:
 
 
 def extract(cw) -> WorldFunctions:
-    """Extract per-function ca.Functions from a CompiledWorld.
+    """Extract per-function ca.Functions from a Sim.
 
     The boxplus→jacobian→boxminus machinery is the shared
     `manta.linearization.Linearization` transform (the same one the EKF
@@ -92,15 +92,15 @@ def extract(cw) -> WorldFunctions:
     the names CasADi's CodeGenerator emits into C.
 
     Args:
-        cw  — the manta CompiledWorld to extract from.
+        cw  — the manta Sim to extract from.
 
     Returns:
         A `WorldFunctions` bundle.
     """
-    from ...world import CompiledWorld
-    if not isinstance(cw, CompiledWorld):
+    from ...world import Sim
+    if not isinstance(cw, Sim):
         raise TypeError(
-            f"extract: expected CompiledWorld, got {type(cw).__name__}")
+            f"extract: expected Sim, got {type(cw).__name__}")
 
     world = cw.world
     spec  = StateSpec.from_world(world)

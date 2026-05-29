@@ -8,7 +8,7 @@ to the body. These guard the cascade before pendulum/Foucault work.
 
 import numpy as np
 
-from manta import World, TargetNumpy
+from manta import Sim, TargetNumpy, World
 from manta.craft import Craft
 from manta.fields import GravityField
 from manta.parts import Mass, Joint, Thruster
@@ -26,7 +26,7 @@ def test_flat_craft_offset_thruster_torque():
     c.add(Thruster("t", force=(0.0, 0.0, 1.0), transform=(0.5, 0.0, 0.0)))
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c)
-    rt = TargetNumpy(w.compile())
+    rt = TargetNumpy(Sim(w))
     st = rt.initial_state()
     st["flat"]["t.throttle"] = 10.0           # 10 N at x=0.5 → τ_y = −5 N·m
     dt = 1e-4
@@ -53,7 +53,7 @@ def test_no_spurious_wrench_on_deflected_passive_joint():
     c.add(h)
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))   # NO gravity
     w.add_craft(c)
-    rt = TargetNumpy(w.compile())
+    rt = TargetNumpy(Sim(w))
     st = rt.initial_state()
     st["pend"]["hinge.angle"] = 0.6
     for _ in range(2000):
@@ -78,7 +78,7 @@ def test_free_body_recoils_from_swinging_bob():
     c.add(h)
     w = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
     w.add_craft(c)
-    rt = TargetNumpy(w.compile())
+    rt = TargetNumpy(Sim(w))
     st = rt.initial_state()
     st["pend"]["hinge.angle"] = 0.6
     swung = body_recoil = 0.0

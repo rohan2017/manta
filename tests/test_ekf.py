@@ -8,7 +8,7 @@ import math
 import numpy as np
 import pytest
 
-from manta import World, TargetNumpy
+from manta import Sim, TargetNumpy, World
 from manta.craft import Craft
 from manta.fields import GravityField
 from manta.estimation import EKF, measurement_component, measurement_slot
@@ -87,7 +87,7 @@ def test_ekf_predict_alone_matches_tick():
     tc.add(Mass("body", mass=1.0))
     tw = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
     tw.add_craft(tc, position=(0.0, 0.0, 100.0))
-    truth_sim = TargetNumpy(tw.compile())
+    truth_sim = TargetNumpy(Sim(tw))
 
     _ekf_world = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
     _ekf_world.add_craft(c)
@@ -121,7 +121,7 @@ def test_ekf_position_sensor_pulls_estimate_toward_truth():
     tc.add(Mass("body", mass=1.0))
     tw = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
     tw.add_craft(tc, position=(0.0, 0.0, 100.0))
-    truth_sim = TargetNumpy(tw.compile())
+    truth_sim = TargetNumpy(Sim(tw))
 
     _ekf_world = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
     _ekf_world.add_craft(c)
@@ -211,7 +211,7 @@ def test_eskf_attitude_estimation_converges():
     tc.add(Mass("body", mass=1.0, moi=(1.0, 1.0, 1.0)))
     tw = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     tw.add_craft(tc, angular_velocity=tuple(omega_truth))
-    truth_sim = TargetNumpy(tw.compile())
+    truth_sim = TargetNumpy(Sim(tw))
 
     _ekf_world = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     _ekf_world.add_craft(c)

@@ -8,7 +8,7 @@ to the world's shared fields and provides:
     (so co-rotating disturbances can compute `ω × r` symbolically).
   * Factory methods for initial-state values expressed in PlanetFrame
     (`earth.position(x,y,z)`, `earth.at_rest()`), resolved at
-    `world.compile()` time to the WorldFrame seed the integrator
+    `Sim(world)` time to the WorldFrame seed the integrator
     actually uses.
 
 The base `Planet` is concrete enough to use directly when you just need

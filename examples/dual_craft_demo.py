@@ -12,7 +12,7 @@ Run::
 
 import numpy as np
 
-from manta import Craft, World, TargetNumpy
+from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField, FluidField
 from manta.couplings import Tether
 from manta.parts import DragSurface, Mass, TetherEndpoint
@@ -45,7 +45,7 @@ def main() -> None:
     w.add_coupling(Tether(alice, "hook", bob, "hook",
                           stiffness=20.0, damping=0.5, rest_length=10.0))
 
-    cw = TargetNumpy(w.compile())
+    cw = TargetNumpy(Sim(w))
     state = cw.initial_state()
     print(f"Crafts in world: {[c.name for c in cw.crafts]}")
     print(f"State keys (alice): {sorted(state['alice'].keys())[:4]} …")

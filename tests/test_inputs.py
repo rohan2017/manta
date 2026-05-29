@@ -7,7 +7,7 @@ torque_cmd Input across the integration paths (World.step, EKF.predict).
 import numpy as np
 import pytest
 
-from manta import World, Craft, TargetNumpy
+from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField
 from manta.estimation import EKF
 from manta.parts import (
@@ -61,7 +61,7 @@ def test_zero_torque_default_keeps_flywheel_at_rest():
 
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c)
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     state = sim.initial_state()
     for _ in range(1000):
         state = sim.step(state, dt=0.001)
@@ -77,7 +77,7 @@ def test_per_tick_torque_drives_flywheel():
 
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c)
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     state = sim.initial_state()
 
     # First second: idle (default 0 torque).
@@ -107,7 +107,7 @@ def test_input_value_can_change_each_tick():
 
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c)
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     state = sim.initial_state()
 
     # Apply a sinusoidal torque over 2 seconds.
@@ -130,14 +130,14 @@ def test_input_value_can_change_each_tick():
 # ---------------------------------------------------------------------------
 
 def test_world_carries_inputs_through_step():
-    """CompiledWorld.step's merge pattern carries Inputs across ticks."""
+    """Sim.step's merge pattern carries Inputs across ticks."""
     w = World().add_field(GravityField().add_uniform((0.0, 0.0, 0.0)))
     c = Craft("driven")
     c.add(Mass("body", mass=100.0, moi=(1000.0, 1000.0, 1000.0)))
     c.add(_flywheel("motor", I_axial=0.05))
     w.add_craft(c)
 
-    cw = TargetNumpy(w.compile())
+    cw = TargetNumpy(Sim(w))
     state = cw.initial_state()
     state["driven"]["motor.torque_cmd"] = 1.0
 
@@ -198,7 +198,7 @@ def test_multiple_inputs_on_one_part():
 
     w = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
     w.add_craft(c)
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     state = sim.step(sim.initial_state(), dt=0.001)
     assert "position" in state["two_in"]
 

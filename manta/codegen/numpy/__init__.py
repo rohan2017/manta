@@ -2,12 +2,12 @@
 
 `TargetNumpy(ir)` dispatches by IR type:
 
-  * `TargetNumpy(CompiledWorld)` → `NumpyWorld` with `.step()` and
+  * `TargetNumpy(Sim)` → `NumpyWorld` with `.step()` and
     `.initial_state()`.
   * `TargetNumpy(EKF)`           → `NumpyEKF` with `.predict()`,
     `.update()`, `.state_dict()`, `.reset()`, `.x`, `.P`.
 
-The IR objects themselves (`CompiledWorld`, `EKF`) describe the
+The IR objects themselves (`Sim`, `EKF`) describe the
 compiled symbolic graph but are not directly callable for ticking /
 predicting — choose a target to get the runtime.
 """
@@ -21,11 +21,11 @@ import numpy as np
 
 
 # ---------------------------------------------------------------------------
-# NumpyWorld — runtime for CompiledWorld
+# NumpyWorld — runtime for Sim
 # ---------------------------------------------------------------------------
 
 class NumpyWorld:
-    """Native-Python evaluator wrapping a `CompiledWorld` IR.
+    """Native-Python evaluator wrapping a `Sim` IR.
 
     Provides the user-facing tick API: `initial_state()` and
     `step(state, dt, t=0)`. Internally calls the IR's CasADi function
@@ -34,10 +34,10 @@ class NumpyWorld:
     """
 
     def __init__(self, cw) -> None:
-        from ...world import CompiledWorld
-        if not isinstance(cw, CompiledWorld):
+        from ...world import Sim
+        if not isinstance(cw, Sim):
             raise TypeError(
-                f"NumpyWorld: expected CompiledWorld, got "
+                f"NumpyWorld: expected Sim, got "
                 f"{type(cw).__name__}")
         self._cw = cw
 
@@ -448,17 +448,17 @@ def TargetNumpy(ir):
     Lowers a compiled-model IR to a Python-native runtime evaluator.
     Dispatches by IR type:
 
-      * `CompiledWorld` → `NumpyWorld` (`.step()`, `.initial_state()`).
+      * `Sim` → `NumpyWorld` (`.step()`, `.initial_state()`).
       * `EKF`           → `NumpyEKF`   (`.predict()`, `.update()`,
                                         `.state_dict()`, `.reset()`,
                                         `.x`, `.P`).
     """
-    from ...world import CompiledWorld
+    from ...world import Sim
     from ...estimation.ekf import EKF
-    if isinstance(ir, CompiledWorld):
+    if isinstance(ir, Sim):
         return NumpyWorld(ir)
     if isinstance(ir, EKF):
         return NumpyEKF(ir)
     raise TypeError(
         f"TargetNumpy: no handler for IR type {type(ir).__name__}. "
-        f"Expected CompiledWorld or EKF.")
+        f"Expected Sim or EKF.")

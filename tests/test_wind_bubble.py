@@ -13,7 +13,7 @@ Capstone test for the field-bus design:
 import casadi as ca
 import numpy as np
 
-from manta import Craft, EKF, World, TargetNumpy
+from manta import Craft, EKF, Sim, TargetNumpy, World
 from manta.fields import (
     CraftWindBubble, FluidField, GravityField,
 )
@@ -38,7 +38,7 @@ def _build_world(*, n_crafts: int = 1, sigma: float = 1e-3,
 
 def test_compiled_world_exposes_per_craft_wind_state():
     w, crafts = _build_world(n_crafts=2)
-    cw = TargetNumpy(w.compile())
+    cw = TargetNumpy(Sim(w))
     init = cw.initial_state()
     assert {c.name for c in crafts} <= set(init)
     assert "c0_wind" in init and "c1_wind" in init
@@ -49,7 +49,7 @@ def test_compiled_world_exposes_per_craft_wind_state():
 
 def test_wind_state_evolves_via_rw():
     w, _ = _build_world(n_crafts=1)
-    cw = TargetNumpy(w.compile())
+    cw = TargetNumpy(Sim(w))
     state = cw.initial_state()
     drv = np.array([0.5, -0.25, 0.1])
     dt = 0.01
@@ -92,6 +92,6 @@ def test_unique_bubble_names_for_distinct_crafts():
     """Two bubbles with auto-generated names from distinct crafts
     don't collide (the default is `<craft.name>_wind`)."""
     w, crafts = _build_world(n_crafts=3)
-    cw = TargetNumpy(w.compile())
+    cw = TargetNumpy(Sim(w))
     owners = set(cw.initial_state())
     assert {"c0", "c1", "c2", "c0_wind", "c1_wind", "c2_wind"} <= owners

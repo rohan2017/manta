@@ -5,7 +5,7 @@ import math
 
 import numpy as np
 
-from manta import World, TargetNumpy
+from manta import Sim, TargetNumpy, World
 from manta.craft import Craft
 from manta.fields import GravityField
 from manta.parts import Mass
@@ -72,7 +72,7 @@ def test_free_spinning_body_conserves_angular_momentum_z():
     omega_0 = 2.0  # rad/s about +z
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))  # no gravity
     w.add_craft(c, angular_velocity=(0.0, 0.0, omega_0))
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
 
     state = sim.initial_state()
     for _ in range(1000):
@@ -97,7 +97,7 @@ def test_free_spinning_anisotropic_intermediate_axis():
 
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c, angular_velocity=(0.0, 0.0, 1.0))
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
 
     state = sim.initial_state()
     for _ in range(500):
@@ -121,7 +121,7 @@ def test_no_position_drift_from_pure_rotation():
 
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c, angular_velocity=(0.0, 0.0, 5.0))
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     state = sim.initial_state()
     for _ in range(1000):
         state = sim.step(state, dt=0.001)
@@ -141,7 +141,7 @@ def test_gravity_creates_no_torque_at_balanced_com():
     # COM = (0,0,0) by symmetry.
     w = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
     w.add_craft(c)
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
 
     state = sim.initial_state()
     for _ in range(100):
@@ -161,7 +161,7 @@ def test_quaternion_normalization_holds_over_long_run():
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.2, 0.3)))
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c, angular_velocity=(0.3, 0.5, 0.7))
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
 
     state = sim.initial_state()
     for _ in range(10_000):

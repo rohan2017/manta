@@ -88,7 +88,7 @@ class CraftWindBubble(Disturbance):
     def contribute_at_sym(self, point, t) -> FluidState:
         # Craft's symbolic position (set up by compile_world_tick
         # Pass 0a). Bubbles must be added AFTER their anchor craft
-        # was added to the world; world.compile() then guarantees the
+        # was added to the world; Sim(world) then guarantees the
         # symbolic state is in scope.
         craft_pos = self.craft._sym_state["position"]
         delta_mx  = point._mx - craft_pos._mx

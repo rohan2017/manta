@@ -1,6 +1,6 @@
 """World-tick compilation: one shared CasADi function over every craft.
 
-`World.compile()` always routes through `compile_world_tick` —
+`Sim(world)` always routes through `compile_world_tick` —
 there's no per-component partitioning. The resulting CompiledGraph
 takes the concatenated state of every craft (with `<craft_name>.`
 prefixed slot names) plus every state-bearing disturbance and

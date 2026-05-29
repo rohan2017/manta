@@ -5,7 +5,7 @@ helpers), the `TickContext` passed to each `Part.update()`, and the
 compile-time inertial/wrench helpers (`_aggregate_inertials`,
 `_wrench_to_craft`). The dynamics pipeline described below — the
 symbolic Newton-Euler tick that consumes those helpers — is compiled
-in `world_tick.py` (the sole tick path; see `World.compile`). The
+in `world_tick.py` (the sole tick path; see `Sim(world)`). The
 description here is the physics contract that pipeline implements.
 
 Scope:
@@ -401,7 +401,7 @@ class Craft:
         from .parts.base import RootPart
         self.name = name
         self.root = RootPart(f"{name}_root")
-        # Set by World.compile() — used by TickContext helpers
+        # Set by Sim(world) — used by TickContext helpers
         # (`ctx.has_field`, `ctx.get_field`, `ctx.planet`) so parts can
         # introspect optional registrations.
         self._world: "World | None" = None
@@ -490,7 +490,7 @@ class Craft:
                         sdecl.init, dtype=float)
             # Input slots: seed from the part's current attribute (which
             # is either the constructor-time override or the declaration
-            # default). These pass through CompiledWorld.step's merge so
+            # default). These pass through Sim.step's merge so
             # the user can update them per-tick or leave them alone.
             for iname in part.input_declarations():
                 state[f"{part.name}.{iname}"] = float(getattr(part, iname))

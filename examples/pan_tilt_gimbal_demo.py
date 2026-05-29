@@ -21,7 +21,7 @@ Run::
 
 from __future__ import annotations
 
-from manta import Craft, TargetNumpy, World
+from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField
 from manta.parts import Joint, Mass
 
@@ -66,7 +66,7 @@ def _print_row(t: float, st: dict) -> None:
 def main() -> None:
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(_build_gimbal())
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     state = sim.initial_state()
 
     # Phase 1: drive PAN only (no tilt command) — pan accelerates, body

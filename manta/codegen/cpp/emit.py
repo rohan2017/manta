@@ -1,4 +1,4 @@
-"""Top-level C++ emission for a CompiledWorld.
+"""Top-level C++ emission for a Sim.
 
 `_emit_world_cpp(cw, out_dir, class_name)` runs the
 extract → kernels → wrapper → CMake pipeline end-to-end, leaving a
@@ -48,7 +48,7 @@ def _emit_world_cpp(cw,
     """Emit a buildable C++ library for the compiled world.
 
     Args:
-        cw          — `CompiledWorld` IR (returned by `World.compile()`).
+        cw          — `Sim` IR (returned by `Sim(world)`).
         out_dir     — destination directory (created if missing).
         class_name  — C++ class name. Conventionally PascalCase.
         basename    — filename stem; defaults to `class_name.lower()`.

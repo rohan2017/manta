@@ -8,7 +8,7 @@ an asymmetric rotor. These tests pin both, with an analytic first-step value.
 
 import numpy as np
 
-from manta import World, Craft, TargetNumpy
+from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField
 from manta.parts import Joint, Mass
 
@@ -22,7 +22,7 @@ def _single_step_rate(moi, omega0, *, dt=0.01) -> float:
     c.add(j)
     w = World().add_field(GravityField().add_uniform((0.0, 0.0, 0.0)))
     w.add_craft(c, angular_velocity=omega0)
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     state = sim.step(sim.initial_state(), dt=dt)
     return float(np.asarray(state["tumbler"]["rotor.rate"]).ravel()[0])
 

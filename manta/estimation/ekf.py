@@ -20,7 +20,7 @@ graph. Lower to a backend to actually run::
 
     from manta import TargetNumpy, EKF
 
-    cw  = TargetNumpy(sim_world.compile())
+    cw  = TargetNumpy(Sim(sim_world))
     ekf = TargetNumpy(EKF(est_world))
     for _ in range(N):
         state = cw.step(state, t=t, dt=dt)
@@ -63,7 +63,7 @@ Auto-assembly contracts:
     through its sensor's cached (h_fn, H_fn, R_builder).
 
   * Initial state seeds from `world._initial_state_dict()` (already
-    PlanetState-resolved by `world.compile()`). The runtime instantiates
+    PlanetState-resolved by `Sim(world)`). The runtime instantiates
     `_x` and `_P` from this seed.
 
 Scope notes:

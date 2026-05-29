@@ -11,7 +11,7 @@ Run::
 
 import numpy as np
 
-from manta import Craft, World, TargetNumpy
+from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField, FluidField
 from manta.parts import Mass, Naca00xx, IMU
 
@@ -34,7 +34,7 @@ def main() -> None:
     # Launched horizontal at 15 m/s with the chord level.
     w.add_craft(glider, position=(0.0, 0.0, 100.0),
                 velocity=(15.0, 0.0, 0.0))
-    cw = TargetNumpy(w.compile())
+    cw = TargetNumpy(Sim(w))
     state = cw.initial_state()
 
     dt = 0.01

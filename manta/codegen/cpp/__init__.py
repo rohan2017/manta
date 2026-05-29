@@ -1,13 +1,13 @@
 """C++ codegen backend.
 
-`TargetCpp(cw, out_dir, class_name=...)` lowers a `CompiledWorld` IR
+`TargetCpp(cw, out_dir, class_name=...)` lowers a `Sim` IR
 to a buildable C++ static library project on disk. The emitted class
 exposes the world's predict + per-Output measurement functions as
 typed Eigen-shaped methods sitting on top of CasADi-generated flat-C
 kernels.
 
 Internals:
-    extract.py  — CompiledWorld → per-function ca.Function objects
+    extract.py  — Sim → per-function ca.Function objects
     kernels.py  — ca.Function → flat C source
     wrapper.py  — typed Eigen-shaped C++ class
     cmake.py    — CMakeLists.txt fragment
@@ -34,7 +34,7 @@ def TargetCpp(ir,
     """C++ codegen target.
 
     Args:
-        ir          — `CompiledWorld` (today). EKF support is a
+        ir          — `Sim` (today). EKF support is a
                       follow-up.
         out_dir     — destination directory (created if missing).
         class_name  — C++ class name. Conventionally PascalCase.
@@ -45,13 +45,13 @@ def TargetCpp(ir,
         `EmitResult` (from `manta.codegen.cpp.emit`) with paths to
         every emitted file plus the `WorldFunctions` bundle.
     """
-    from ...world import CompiledWorld
-    if isinstance(ir, CompiledWorld):
+    from ...world import Sim
+    if isinstance(ir, Sim):
         return _emit_world_cpp(ir, out_dir, class_name=class_name,
                                basename=basename, namespace=namespace)
     raise TypeError(
         f"TargetCpp: no handler for IR type {type(ir).__name__}. "
-        f"Expected CompiledWorld.")
+        f"Expected Sim.")
 
 
 __all__ = ["TargetCpp"]

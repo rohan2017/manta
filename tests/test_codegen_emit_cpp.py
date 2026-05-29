@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from manta import Craft, TargetCpp, World
+from manta import Craft, Sim, TargetCpp, World
 from manta.fields import GravityField
 from manta.parts import IMU, Mass, PositionSensor, Thruster
 
@@ -16,7 +16,7 @@ def _hover_world():
     w = World(name="hover_world")
     w.add_field(GravityField(g=(0.0, 0.0, -9.81)))
     w.add_craft(c)
-    return w.compile()
+    return Sim(w)
 
 
 def test_target_cpp_produces_expected_files(tmp_path: Path):
@@ -46,13 +46,13 @@ def test_target_cpp_custom_basename(tmp_path: Path):
 
 
 def test_target_cpp_rejects_non_world_ir():
-    """TargetCpp(<not a CompiledWorld>) raises a helpful TypeError."""
+    """TargetCpp(<not a Sim>) raises a helpful TypeError."""
     import pytest
     from manta.estimation import EKF
     w = World().add_field(GravityField(g=(0,0,-9.81)))
     w.add_craft(_make_simple_craft())
-    ekf = EKF(w)   # not a CompiledWorld
-    with pytest.raises(TypeError, match="CompiledWorld"):
+    ekf = EKF(w)   # not a Sim
+    with pytest.raises(TypeError, match="Sim"):
         TargetCpp(ekf, "/tmp/whatever", class_name="X")
 
 

@@ -7,8 +7,8 @@ Three layers:
      Parts declare `Parameter` / `State` / `Input` / `Output` /
      `Noise` channels at class scope.
 
-  2. **IR** — compile to symbolic. `World.compile()` returns a
-     `CompiledWorld` (one CasADi tick function over every craft +
+  2. **IR** — compile to symbolic. `Sim(world)` returns a
+     `Sim` (one CasADi tick function over every craft +
      every coupling). `EKF(world)` returns an EKF carrying the
      symbolic predict + auto-built per-sensor measurement bundles.
      Neither is directly callable.
@@ -32,7 +32,7 @@ Standard usage::
     w = World().add_field(GravityField(g=(0,0,-9.81)))
     w.add_craft(drone, position=(0,0,5))
 
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     ekf = TargetNumpy(EKF(w))
 
     state = sim.initial_state()
@@ -49,7 +49,7 @@ through the World/Target API above.
 
 from . import ir
 from .craft import Craft
-from .world import World, CompiledWorld
+from .world import World, Sim
 from .planets import Planet
 from .couplings import Coupling
 from .estimation.ekf import EKF
@@ -57,7 +57,7 @@ from .estimation.state_spec import ALL, POSE, TWIST, SlotSet
 from .codegen import TargetCpp, TargetNumpy
 
 __all__ = [
-    "ir", "Craft", "World", "Coupling", "CompiledWorld", "Planet", "EKF",
+    "ir", "Craft", "World", "Coupling", "Sim", "Planet", "EKF",
     "TargetNumpy", "TargetCpp",
     "SlotSet", "POSE", "TWIST", "ALL",
 ]

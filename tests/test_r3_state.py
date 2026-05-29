@@ -11,7 +11,7 @@ import casadi as ca
 import numpy as np
 import pytest
 
-from manta import Craft, EKF, TargetNumpy, World
+from manta import Craft, EKF, Sim, TargetNumpy, World
 from manta.fields import GravityField
 from manta.ir.frames import CraftFrame, PartFrame, WorldFrame
 from manta.ir.types import Vec3
@@ -79,7 +79,7 @@ def test_r3_state_passthrough_through_world_tick():
     c = Craft("c"); c.add(Mass("body", mass=1.0)); c.add(_R3StatePart("p"))
     w = World().add_field(GravityField(g=(0, 0, 0)))
     w.add_craft(c)
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     state = sim.initial_state()
     state["c"]["p.bias"] = np.array([0.5, -0.5, 1.5])
     for _ in range(20):
@@ -94,7 +94,7 @@ def test_r3_state_appears_in_outputs():
     c = Craft("c"); c.add(Mass("body", mass=1.0)); c.add(_R3StatePart("p"))
     w = World().add_field(GravityField(g=(0, 0, 0)))
     w.add_craft(c)
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     state = sim.initial_state()
     state["c"]["p.bias"] = np.array([4.0, 5.0, 6.0])
     state = sim.step(state, dt=0.01)

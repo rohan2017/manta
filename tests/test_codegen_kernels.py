@@ -5,14 +5,14 @@ from pathlib import Path
 
 import pytest
 
-from manta import Craft, World
+from manta import Craft, Sim, World
 from manta.fields import GravityField
 from manta.codegen.cpp.extract import extract
 from manta.codegen.cpp.kernels import emit_kernels, kernel_function_names
 from manta.parts import IMU, Mass, PositionSensor, Thruster
 
 
-def _hover_world() -> "CompiledWorld":
+def _hover_world() -> "Sim":
     c = Craft("drone")
     c.add(Mass("body", mass=1.5, moi=(0.05, 0.05, 0.08)))
     c.add(Thruster("t", force=(0.0, 0.0, 1.0)))
@@ -21,7 +21,7 @@ def _hover_world() -> "CompiledWorld":
     w = World(name="hover_world")
     w.add_field(GravityField(g=(0.0, 0.0, -9.81)))
     w.add_craft(c)
-    return w.compile()
+    return Sim(w)
 
 
 def test_emit_kernels_produces_c_and_h(tmp_path: Path):

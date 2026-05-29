@@ -9,7 +9,7 @@ A World holds:
     instance per field kind; per-source variation is expressed as
     `Disturbance` subclasses added to that instance.
 
-`world.compile()` returns a `CompiledWorld` — the symbolic IR (a
+`Sim(world)` returns a `Sim` — the symbolic IR (a
 single CasADi tick function covering every craft + every coupling).
 Lower to a backend to actually run ticks::
 
@@ -22,7 +22,7 @@ Lower to a backend to actually run ticks::
     drone.add(Mass("body", mass=1.0))
     w.add_craft(drone, position=(0, 0, 100))
 
-    sim = TargetNumpy(w.compile())       # native-Python runtime
+    sim = TargetNumpy(Sim(w))       # native-Python runtime
     state = sim.initial_state()
     for _ in range(N):
         state = sim.step(state, dt=0.01, t=t)
@@ -122,7 +122,7 @@ class World:
 
     def add_planet(self, planet) -> "World":
         """Register a planet with this world. The planet's
-        `register_disturbances(world)` is called at `world.compile()`
+        `register_disturbances(world)` is called at `Sim(world)`
         time, attaching its standing contributions to the world's
         shared fields. Multi-planet worlds superpose contributions
         from every registered planet.
@@ -214,81 +214,6 @@ class World:
 
     # ---- Compile --------------------------------------------------------
 
-    def compile(self) -> "CompiledWorld":
-        """Compile every craft in this world into one shared tick.
-
-        Concretely: route through `compile_world_tick` with every
-        craft + every coupling. There is no per-component partitioning
-        any more — the World is the unit of simulation, so the entire
-        world's dynamics live in a single CasADi function. This makes
-        field-mediated craft-to-craft coupling automatic (a wake, a
-        wind bubble, or a craft-pose-dependent obstacle is just a
-        disturbance whose graph reads from another craft's state in
-        the same tick).
-
-        Before tracing, every registered Planet's
-        `register_disturbances(self)` runs once. Planet-state initial
-        seeds are resolved to WorldFrame. Per-part `requires_fields` /
-        `requires_planet` are verified.
-        """
-        # Walk planets once, in registration order. A planet may create
-        # field instances via `world.get_or_create_field(...)`.
-        if not self._planets_registered:
-            for planet in self._planets:
-                planet.register_disturbances(self)
-            self._planets_registered = True
-
-        # Resolve any PlanetState-wrapped initial conditions to
-        # WorldFrame seeds at t=0.
-        self._resolve_planet_state_overrides()
-
-        # Verify per-part `requires_fields` / `requires_planet` against
-        # the world's registry. Stamp each craft with a back-pointer so
-        # parts can introspect fields/planets via TickContext helpers.
-        for entry in self._crafts:
-            craft = entry["craft"]
-            craft._world = self
-            for part in craft.parts:
-                for req_cls in getattr(type(part), "requires_fields", []):
-                    if self.get_field(req_cls) is None and not any(
-                            isinstance(f, req_cls) for f in self.fields):
-                        raise ValueError(
-                            f"World '{self.name}': part "
-                            f"{type(part).__name__}('{part.name}') "
-                            f"requires a registered {req_cls.__name__} but "
-                            f"none is attached to this world.")
-                req_planet = getattr(type(part), "requires_planet", None)
-                if req_planet is not None and not any(
-                        isinstance(p, req_planet) for p in self._planets):
-                    raise ValueError(
-                        f"World '{self.name}': part "
-                        f"{type(part).__name__}('{part.name}') "
-                        f"requires a {req_planet.__name__} planet but "
-                        f"none is registered with this world.")
-
-        if not self._crafts:
-            raise ValueError(
-                f"World '{self.name}': no crafts added; nothing to compile.")
-
-        # One tick, all crafts. compile_world_tick already handles the
-        # N=1 case cleanly — the only difference is that slot names get
-        # prefixed with `<craft.name>.` to disambiguate across crafts.
-        # `CompiledWorld.step` translates between the user-facing nested
-        # state dict and that flat-prefixed casadi input naming.
-        from .world_tick import compile_world_tick
-        all_crafts = [e["craft"] for e in self._crafts]
-        tick = compile_world_tick(
-            all_crafts, list(self._couplings),
-            gravity_field=self._fields.get(GravityField),
-            fluid_field=self._fields.get(FluidField),
-            mag_field=self._fields.get(MagField),
-            collision_field=self._fields.get(CollisionField))
-
-        initial = self._initial_state_dict()
-        return CompiledWorld(world=self, tick=tick,
-                             initial=initial,
-                             crafts=tuple(all_crafts))
-
     def _initial_state_dict(self) -> dict[str, dict[str, Any]]:
         """Nested-by-owner initial state dict. Owners = registered
         crafts (with their `add_craft` overrides applied, including
@@ -369,34 +294,93 @@ class World:
 
 
 # ---------------------------------------------------------------------------
-# CompiledWorld — runtime handle
+# Sim — forward-dynamics IR
 # ---------------------------------------------------------------------------
 
-class CompiledWorld:
-    """Compiled-model IR for a World — describes the symbolic graph
-    but doesn't itself evaluate.
+class Sim:
+    """Forward-dynamics IR for a World — the compiled symbolic tick.
 
-    Holds the world's single CasADi function (`tick`), the per-owner
-    initial-state seed, the tuple of registered crafts, and a back-ref
-    to the source World. To actually run ticks, wrap with a backend:
+    `Sim(world)` is one analysis transform over the model, a sibling of
+    `EKF(world)`: it compiles every craft + every coupling into a single
+    CasADi tick function (covering field-mediated craft-to-craft coupling
+    automatically — a wake or wind bubble is just a disturbance whose
+    graph reads another craft's state in the same tick). The Sim itself
+    only describes the symbolic graph; lower it to a backend to run::
 
-        cw  = world.compile()              # IR
-        sim = TargetNumpy(cw)              # native-Python runtime
+        sim   = TargetNumpy(Sim(world))    # native-Python runtime
         state = sim.initial_state()
         state = sim.step(state, dt=0.01)
 
-    Future `TargetCpp(cw, ...)` emits C++ source consuming the same IR.
+    (`Sim` is the IR; `TargetNumpy(Sim(...))` / `TargetCpp(Sim(...), ...)`
+    are the runtime evaluators that consume it.)
+
+    Construction prepares the world once: every registered Planet's
+    `register_disturbances(world)` runs, PlanetState initial seeds resolve
+    to WorldFrame, and per-part `requires_fields` / `requires_planet` are
+    verified against the world's registry.
+
+    State is nested by owner: `state["drone"]["position"]`, plus one
+    top-level key per state-bearing disturbance.
     """
 
-    def __init__(self, *,
-                 world: World,
-                 tick,
-                 initial: dict[str, dict[str, Any]],
-                 crafts: tuple[Craft, ...]) -> None:
+    def __init__(self, world: World) -> None:
+        # Walk planets once, in registration order. A planet may create
+        # field instances via `world.get_or_create_field(...)`.
+        if not world._planets_registered:
+            for planet in world._planets:
+                planet.register_disturbances(world)
+            world._planets_registered = True
+
+        # Resolve any PlanetState-wrapped initial conditions to WorldFrame
+        # seeds at t=0.
+        world._resolve_planet_state_overrides()
+
+        # Verify per-part `requires_fields` / `requires_planet` against the
+        # world's registry. Stamp each craft with a back-pointer so parts
+        # can introspect fields/planets via TickContext helpers.
+        for entry in world._crafts:
+            craft = entry["craft"]
+            craft._world = world
+            for part in craft.parts:
+                for req_cls in getattr(type(part), "requires_fields", []):
+                    if world.get_field(req_cls) is None and not any(
+                            isinstance(f, req_cls) for f in world.fields):
+                        raise ValueError(
+                            f"World '{world.name}': part "
+                            f"{type(part).__name__}('{part.name}') "
+                            f"requires a registered {req_cls.__name__} but "
+                            f"none is attached to this world.")
+                req_planet = getattr(type(part), "requires_planet", None)
+                if req_planet is not None and not any(
+                        isinstance(p, req_planet) for p in world._planets):
+                    raise ValueError(
+                        f"World '{world.name}': part "
+                        f"{type(part).__name__}('{part.name}') "
+                        f"requires a {req_planet.__name__} planet but "
+                        f"none is registered with this world.")
+
+        if not world._crafts:
+            raise ValueError(
+                f"World '{world.name}': no crafts added; nothing to compile.")
+
+        # One tick, all crafts. compile_world_tick handles N=1 cleanly —
+        # the only difference is that slot names get prefixed with
+        # `<craft.name>.` to disambiguate across crafts. `Sim.step`
+        # (on the backend) translates between the user-facing nested state
+        # dict and that flat-prefixed casadi input naming.
+        from .world_tick import compile_world_tick
+        all_crafts = [e["craft"] for e in world._crafts]
+        tick = compile_world_tick(
+            all_crafts, list(world._couplings),
+            gravity_field=world._fields.get(GravityField),
+            fluid_field=world._fields.get(FluidField),
+            mag_field=world._fields.get(MagField),
+            collision_field=world._fields.get(CollisionField))
+
         self._world   = world
         self._tick    = tick
-        self._initial = initial
-        self._crafts  = crafts
+        self._initial = world._initial_state_dict()
+        self._crafts  = tuple(all_crafts)
 
     # ---- Accessors ------------------------------------------------------
 
@@ -414,7 +398,7 @@ class CompiledWorld:
 
         Inputs are flat-prefixed (`<owner>.<slot>`, `dt`, `t`).
         Backends consume this directly; users typically work through
-        a target wrapper (`TargetNumpy(cw).step(...)`).
+        a target wrapper (`TargetNumpy(Sim(world)).step(...)`).
         """
         return self._tick
 
@@ -426,4 +410,4 @@ class CompiledWorld:
 
     def __repr__(self) -> str:
         names = ", ".join(c.name for c in self._crafts)
-        return f"<CompiledWorld crafts=[{names}]>"
+        return f"<Sim crafts=[{names}]>"

@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from manta import Craft, World, TargetNumpy
+from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField
 from manta.parts import Mass, Thruster
 
@@ -20,7 +20,7 @@ def test_hover_thrust_cancels_gravity():
 
     w = World().add_field(GravityField(g=g_world))
     w.add_craft(c, **{"t.throttle": m * 9.81})   # exactly counters gravity
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
 
     state = sim.initial_state()
     for _ in range(1000):
@@ -45,7 +45,7 @@ def test_excess_thrust_accelerates_up():
 
     w = World().add_field(GravityField(g=g_world))
     w.add_craft(c, **{"t.throttle": m * 9.81 + 1.0})   # net = +1 N up → a = 1 m/s²
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
 
     state = sim.initial_state()
     for _ in range(1000):
@@ -70,7 +70,7 @@ def test_offset_thruster_produces_torque():
 
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c, **{"t.throttle": 1.0})     # 1 N at 1 m → τ = +1 N·m about body y.
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
 
     state = sim.initial_state()
     for _ in range(100):

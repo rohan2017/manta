@@ -8,7 +8,7 @@ absolute value, and X[ParentFrame] == X[CraftFrame] for a part on the root.
 
 import numpy as np
 
-from manta import World, Craft, TargetNumpy
+from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField
 from manta.parts import Joint, Mass
 from manta.parts.base import Output, Part, PartUpdate
@@ -49,7 +49,7 @@ class _FrameProbe(Part):
 def _free(craft, **ov):
     w = World().add_field(GravityField().add_uniform((0.0, 0.0, 0.0)))
     w.add_craft(craft, **ov)
-    return TargetNumpy(w.compile())
+    return TargetNumpy(Sim(w))
 
 
 def _o(state, craft, slot):

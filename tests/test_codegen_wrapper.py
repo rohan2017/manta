@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from manta import Craft, World
+from manta import Craft, Sim, World
 from manta.fields import GravityField
 from manta.codegen.cpp.extract import extract
 from manta.codegen.cpp.kernels import emit_kernels
@@ -24,7 +24,7 @@ def _hover_world():
     w = World(name="hover_world")
     w.add_field(GravityField(g=(0.0, 0.0, -9.81)))
     w.add_craft(c)
-    return w.compile()
+    return Sim(w)
 
 
 # ---------------------------------------------------------------------------

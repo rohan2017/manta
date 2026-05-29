@@ -1,7 +1,7 @@
 """End-to-end Python ↔ C++ roundtrip for `TargetCpp(cw, ...)`.
 
 The test:
-  1. Build a CompiledWorld + emit a C++ library via `TargetCpp`.
+  1. Build a Sim + emit a C++ library via `TargetCpp`.
   2. Compile the kernels (cc) and wrapper (c++ + Eigen) into .o files.
   3. Build a `harness_main.cpp` that runs predict N times and evaluates
      each measurement Output, then prints the final state + outputs.
@@ -20,7 +20,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from manta import Craft, TargetCpp, TargetNumpy, World
+from manta import Craft, Sim, TargetCpp, TargetNumpy, World
 from manta.fields import GravityField
 from manta.parts import IMU, Mass, PositionSensor, Thruster
 
@@ -98,7 +98,7 @@ def test_python_cpp_roundtrip(tmp_path: Path):
 
     # ---- 1: TargetCpp ----
     w      = _hover_world()
-    cw     = w.compile()
+    cw     = Sim(w)
     result = TargetCpp(cw, tmp_path, class_name="Drone")
 
     # ---- 2: compile kernels + wrapper ----

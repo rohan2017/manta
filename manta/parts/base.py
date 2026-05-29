@@ -102,7 +102,7 @@ class Input(_Declaration):
       * Initial state from Craft.initial_state() includes the input slot
         seeded with the declaration's `default` (or the construction-time
         override if the user passed one).
-      * Inputs pass through CompiledWorld.step's merge — they persist
+      * Inputs pass through Sim.step's merge — they persist
         between steps until the user overrides. This makes per-tick
         commands ergonomic: set once, tick repeatedly, change when you
         want.
@@ -525,13 +525,13 @@ class Part:
     cpp_class: ClassVar[str] = ""           # filled in by future codegen backends
 
     # Fields the part requires registered on the World. Verified at
-    # `world.compile()`. Subclasses override with concrete Field subclasses
+    # `Sim(world)`. Subclasses override with concrete Field subclasses
     # (e.g., `requires_fields = [GravityField]` for a Mass-like part).
     # Use Field BASE classes — the registered field may be any subclass.
     requires_fields: ClassVar[list[type]] = []
 
     # Planet subclass the part requires. None ⇒ no planet required.
-    # Verified at `world.compile()`. Subclasses override; the matched
+    # Verified at `Sim(world)`. Subclasses override; the matched
     # planet is then accessible via `ctx.planet(PlanetCls)`.
     requires_planet: ClassVar[type | None] = None
 

@@ -13,7 +13,7 @@ Validates:
 import casadi as ca
 import numpy as np
 
-from manta import Craft, World, TargetNumpy
+from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import FluidField, FluidState
 from manta.ir.frames import WorldFrame
 from manta.ir.types import Vec3
@@ -38,7 +38,7 @@ def test_ocean_full_density_at_any_depth():
     w.add_planet(earth)
     c = Craft("probe"); c.add(Mass("body", mass=1.0))
     w.add_craft(c, position=(earth.R_EQ, 0, 0))
-    w.compile()
+    Sim(w)
 
     for depth in (0.1, 1.0, 5.0, 50.0, 500.0):
         rho = _sample_density(w, (earth.R_EQ - depth, 0, 0))
@@ -52,7 +52,7 @@ def test_atmosphere_exponential_falloff():
     w = World(); w.add_planet(earth)
     c = Craft("probe"); c.add(Mass("body", mass=1.0))
     w.add_craft(c, position=(earth.R_EQ + 1.0, 0, 0))
-    w.compile()
+    Sim(w)
 
     H = earth.atmosphere_scale_height
     for alt in (100.0, 1000.0, 10000.0):
@@ -69,7 +69,7 @@ def test_atmosphere_vanishes_at_lunar_distance():
     w = World(); w.add_planet(earth)
     c = Craft("probe"); c.add(Mass("body", mass=1.0))
     w.add_craft(c, position=(earth.R_EQ + 1.0, 0, 0))
-    w.compile()
+    Sim(w)
     rho = _sample_density(w, (3.84e8, 0, 0))
     assert rho < 1e-15, f"atmosphere should be negligible, got {rho}"
 
@@ -83,7 +83,7 @@ def test_co_rotating_at_rest_in_planet_frame():
     c = Craft("buoy"); c.add(Mass("body", mass=1.0))
     w.add_craft(c, position=earth.position(earth.R_EQ, 0, 0),
                    velocity=earth.at_rest())
-    cw = TargetNumpy(w.compile())
+    cw = TargetNumpy(Sim(w))
     state = cw.initial_state()
     expected_v_y = Earth.SIDEREAL * earth.R_EQ
     np.testing.assert_allclose(
@@ -108,7 +108,7 @@ def test_custom_planet_frame_fluid_lambda():
     w.add_field(ff)
     c = Craft("probe"); c.add(Mass("body", mass=1.0))
     w.add_craft(c)
-    w.compile()
+    Sim(w)
     # Sample at r=3 (inside hole), r=7 (donut), r=12 (outside).
     np.testing.assert_allclose(_sample_density(w, (3, 0, 0)),    0.0)
     np.testing.assert_allclose(_sample_density(w, (7, 0, 0)), 1000.0)

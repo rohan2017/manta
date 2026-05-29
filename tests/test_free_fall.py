@@ -10,7 +10,7 @@ in test_rigid_body.py.
 import numpy as np
 import pytest
 
-from manta import ir, World, TargetNumpy
+from manta import Sim, TargetNumpy, World, ir
 from manta.fields import GravityField
 from manta.craft import Craft
 from manta.parts import Mass
@@ -27,7 +27,7 @@ def test_single_mass_free_fall_numerics():
 
     w = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
     w.add_craft(c, position=(0.0, 0.0, 100.0))
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
 
     state = sim.initial_state()
     dt = 0.001
@@ -60,7 +60,7 @@ def test_multi_mass_aggregates_correctly():
 
     w = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
     w.add_craft(c, position=(0.0, 0.0, 0.0))
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     state = sim.initial_state()
     for _ in range(100):
         state = sim.step(state, dt=0.01)
@@ -81,7 +81,7 @@ def test_horizontal_gravity():
     c.add(Mass("body", mass=1.0))
     w = World().add_field(GravityField(g=(2.0, 0.0, 0.0)))
     w.add_craft(c, position=(0.0, 0.0, 0.0))
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
 
     state = sim.initial_state()
     for _ in range(100):
@@ -108,7 +108,7 @@ def test_empty_craft_compile_raises():
     # the mass-positivity guard ("total mass") rather than a separate
     # "no parts" check.
     with pytest.raises(ValueError, match="total mass"):
-        w.compile()
+        Sim(w)
 
 
 def test_zero_mass_craft_raises():
@@ -117,7 +117,7 @@ def test_zero_mass_craft_raises():
     w = World()
     w.add_craft(c)
     with pytest.raises(ValueError, match="total mass"):
-        w.compile()
+        Sim(w)
 
 
 def test_parameter_introspection():

@@ -3,7 +3,7 @@
 Exercises the full design pipeline:
 
   1.  Build a Craft with Mass + Thruster + IMU + PositionSensor
-  2.  Step the sim with a commanded thrust profile via CompiledWorld
+  2.  Step the sim with a commanded thrust profile via Sim
   3.  Sample noisy sensor outputs (gyro, position)
   4.  Run an ESKF in parallel using:
         - the same per-tick commanded thrust (predict step),
@@ -22,7 +22,7 @@ The demo proves three things end-to-end:
 import numpy as np
 import pytest
 
-from manta import Craft, World, TargetNumpy
+from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField
 from manta.estimation import EKF, measurement_slot
 from manta.parts import IMU, Mass, PositionSensor, Thruster
@@ -44,7 +44,7 @@ def test_ekf_predict_with_per_tick_input():
     # Sim
     w = World().add_field(GravityField(g=g))
     w.add_craft(c)
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     sim_state = sim.initial_state()
     # EKF
     _ekf_world = World().add_field(GravityField(g=g))
@@ -130,11 +130,11 @@ def test_hover_with_eskf_tracks_ground_truth():
     c.add(IMU("g"))
     c.add(PositionSensor("gps"))
 
-    # Sim path: use World/CompiledWorld so the demo exercises the public
+    # Sim path: use World/Sim so the demo exercises the public
     # surface used by user code.
     w = World().add_field(GravityField().add_uniform(g_world))
     w.add_craft(c, position=(0.0, 0.0, 5.0))
-    cw = TargetNumpy(w.compile())
+    cw = TargetNumpy(Sim(w))
     sim = cw.initial_state()
     sim["drone"]["t.throttle"] = m * 9.81   # hover
 
@@ -255,7 +255,7 @@ def test_eskf_nees_consistency_over_seeds():
         c = make_craft()
         w = World().add_field(GravityField().add_uniform(g_world))
         w.add_craft(c, position=(0, 0, 5))
-        cw = TargetNumpy(w.compile())
+        cw = TargetNumpy(Sim(w))
         sim = cw.initial_state()
 
         _ekf_world = World().add_field(GravityField(g=g_world))

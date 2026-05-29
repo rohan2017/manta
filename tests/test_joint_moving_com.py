@@ -11,7 +11,7 @@ by the rotor's circular amplitude (~m·d/(M+m)).
 
 import numpy as np
 
-from manta import World, Craft, TargetNumpy
+from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField
 from manta.parts import Joint, Mass
 
@@ -38,7 +38,7 @@ def test_moving_com_keeps_free_floating_system_com_fixed():
 
     w = World().add_field(GravityField().add_uniform((0.0, 0.0, 0.0)))  # free
     w.add_craft(c, **{"wheel.rate": 10.0})                              # spin it
-    sim = TargetNumpy(w.compile())
+    sim = TargetNumpy(Sim(w))
     state = sim.initial_state()
 
     def system_com(st) -> np.ndarray:
