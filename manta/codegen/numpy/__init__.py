@@ -428,7 +428,7 @@ class NumpyEKF:
         S = H @ self._P @ H.T + R
         K = np.linalg.solve(S.T, (self._P @ H.T).T).T
         delta_x = K @ y
-        self._x = self._ekf.spec.boxplus(self._x, delta_x)
+        self._x = self._ekf.spec.boxplus_num(self._x, delta_x)
         I = np.eye(self._ekf.spec.tangent_dim)
         IKH = I - K @ H
         self._P = IKH @ self._P @ IKH.T + K @ R @ K.T

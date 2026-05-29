@@ -186,7 +186,7 @@ class Noise(_Declaration):
     def __init__(self, signal_manifold="vec3", *, frame=None,
                  sigma: float = 0.0) -> None:
         super().__init__(default=None)
-        from ..ir.slot_manifold import Manifold
+        from ..ir.manifold import Manifold
         self.signal_manifold = _noise_manifold_from_shortcut(
             signal_manifold, frame=frame,
             owner_label=type(self).__name__,
@@ -204,7 +204,7 @@ class Noise(_Declaration):
         a part can declare a noise without committing to a frame
         until the compiler knows which one it's in (CraftFrame for
         parts, WorldFrame for disturbances)."""
-        from ..ir.slot_manifold import R3Manifold
+        from ..ir.manifold import R3Manifold
         if isinstance(self.signal_manifold, R3Manifold) \
                 and self.signal_manifold.frame is None:
             return R3Manifold(frame=default_frame)
@@ -268,7 +268,7 @@ def _noise_manifold_from_shortcut(shortcut, *, frame, owner_label):
     `R3Manifold(frame=frame)`. For richer manifolds (vec6, quat,
     custom), pass an explicit `Manifold` instance instead.
     """
-    from ..ir.slot_manifold import ScalarManifold, R3Manifold
+    from ..ir.manifold import ScalarManifold, R3Manifold
     if shortcut == "scalar":
         return ScalarManifold()
     if shortcut == "vec3":
@@ -399,7 +399,7 @@ class State(_Declaration):
     __slots__ = ("init", "manifold", "frame")
 
     def __init__(self, init, manifold="R1", frame=None) -> None:
-        from ..ir.slot_manifold import (
+        from ..ir.manifold import (
             Manifold, ScalarManifold, R3Manifold, SO3Manifold,
             manifold_from_shortcut,
         )

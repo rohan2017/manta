@@ -42,7 +42,7 @@ from typing import Any
 import casadi as ca
 import numpy as np
 
-from ..ir.slot_manifold import (
+from ..ir.manifold import (
     Manifold,
     ScalarManifold,
     R3Manifold,
@@ -399,8 +399,8 @@ class StateSpec:
             chunks.append(slot.manifold.boxminus_sym(a_chunk, b_chunk))
         return ca.vertcat(*chunks)
 
-    def boxplus(self, x_ambient: np.ndarray,
-                delta_tangent: np.ndarray) -> np.ndarray:
+    def boxplus_num(self, x_ambient: np.ndarray,
+                    delta_tangent: np.ndarray) -> np.ndarray:
         """Numeric (numpy) boxplus. Used by the ESKF update step to apply
         the Kalman correction onto the manifold without going through a
         compiled symbolic function."""
@@ -410,7 +410,7 @@ class StateSpec:
             x_chunk = x[slot.offset : slot.offset + slot.dim]
             d_chunk = d[slot.tangent_offset :
                         slot.tangent_offset + slot.tangent_dim]
-            new_chunk = slot.manifold.boxplus(x_chunk, d_chunk)
+            new_chunk = slot.manifold.boxplus_num(x_chunk, d_chunk)
             # SO(3) quaternion: renormalize defensively (tangent step may
             # be large). Detect via storage shape (4,) so we don't
             # special-case the manifold here.

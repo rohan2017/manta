@@ -1,142 +1,61 @@
-"""Manifold helpers — SO3, R3, RigidBody.
+"""Manifold metadata + operations — Scalar, R3, SO(3).
 
-These describe the structure of a *state*: how it composes, what its
-tangent space looks like, and how `boxplus`/`boxminus` lift between the
-ambient (4D for SO3, 3D for R3) and the tangent (3D for SO3, 3D for R3).
+A `Manifold` instance is the single source of truth for one state-vector
+component: its structural metadata (`kind`, dims, `storage_shape`) AND the
+boxplus/boxminus operations at every layer the framework needs them.
 
-The ESKF in `manta.estimation.ekf` uses boxplus/boxminus + CasADi
-autodiff to derive tangent-space Jacobians via the standard pattern
+Three op flavors, ONE underlying math definition per manifold:
 
-    delta_out = boxminus(f(boxplus(x_ref, delta_in)), x_ref_post)
+  * value-typed  — `boxplus(x, delta)` / `boxminus(a, b)` on frame-tagged
+    `Scalar` / `Vec3` / `Quat` values. Frame-checked. This is what a
+    Part's `update()` uses to integrate its own state slot
+    manifold-correctly, and what the world tick uses for rigid-body
+    orientation.
+  * symbolic     — `boxplus_sym` / `boxminus_sym` on raw CasADi MX. Used
+    by the ESKF Jacobian tracer and codegen. Frame-blind: the IR is
+    already built, the frame tags have done their job.
+  * numeric      — `boxplus_num` on flat numpy arrays. Used by the ESKF
+    update to apply a Kalman correction onto the manifold.
 
-and asking CasADi for ∂δ_out / ∂δ_in at δ_in=0. No "manifold
-differentiation magic" — boxplus/boxminus are plain CasADi expressions
-and the framework just composes them.
+The value and numeric paths delegate to the same kernel the symbolic
+path emits (`_so3_exp` / `_so3_log` for SO(3)), so there is exactly one
+definition of each manifold's math — no parallel implementation to drift.
+
+`StateSlot.manifold` holds one of these instances. Backends map
+`manifold.kind` to a concrete type via their own registry
+(e.g. `codegen/cpp/types.py`); backend code never lives on this class, so
+the IR stays backend-agnostic.
 
 `_so3_exp` and `_so3_log` are deliberately branch-free (eps-regularized
 in place of an `if_else`) because CasADi's autodiff walks both branches
 of a conditional, and the non-Taylor branch had `d(sin(0)/0)/dω = NaN`
 that poisoned every Jacobian extracted from a tick using boxplus.
+
+Adding a new manifold kind:
+  1. Subclass `Manifold` with a new `kind` string and structural dims.
+  2. Implement the math kernel once; wire the three op flavors to it.
+  3. Add an entry in each backend's type registry keyed on `kind`
+     (e.g. `codegen/cpp/types.py::_REGISTRY`).
+  4. Done — StateSpec, world_tick, the ESKF, and the wrappers all pick
+     it up via the registry / metadata reads.
 """
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Any, ClassVar
+
 import casadi as ca
+import numpy as np
 
-from ..ir.frames import _validate_frame
-from ..ir.types import Quat, Scalar, Vec3, _as_mx
+from .frames import FrameError, _capture_user_source
+from .types import Quat, Scalar, Vec3
 
 
 # ---------------------------------------------------------------------------
-# SO(3)
+# SO(3) math kernel — shared by every op flavor
 # ---------------------------------------------------------------------------
-
-class SO3:
-    """A rotation in SO(3), stored as a unit quaternion.
-
-    Ambient dim: 4 (quaternion). Tangent dim: 3 (axis-angle vector).
-    Used as a *manifold type* (decoration on state declarations); under
-    the hood it just wraps a Quat. The tangent vectors live in the
-    SAME frame as the rotation's `from_frame` by convention — that's
-    where the EKF's error state lives in the standard ESKF formulation.
-    """
-
-    def __init__(self, q: Quat):
-        if not isinstance(q, Quat):
-            raise TypeError(
-                f"SO3: expected a Quat, got {type(q).__name__}")
-        self._q = q
-
-    @property
-    def quat(self) -> Quat:
-        return self._q
-
-    @property
-    def from_frame(self):
-        return self._q.from_frame
-
-    @property
-    def to_frame(self):
-        return self._q.to_frame
-
-    def __repr__(self) -> str:
-        return f"<SO3 {self._q!r}>"
-
-    # ---- Constructors ----------------------------------------------------
-
-    @classmethod
-    def identity(cls, *, from_frame, to_frame) -> "SO3":
-        return cls(Quat.identity(from_frame=from_frame, to_frame=to_frame))
-
-    @classmethod
-    def from_axis_angle(cls, axis: Vec3, angle: Scalar) -> "SO3":
-        """Build a rotation about `axis` (in PartFrame or whichever frame
-        the axis lives in) by `angle` (radians). The resulting Quat's
-        from/to frames are both the axis's frame (it's an endomorphism)."""
-        _validate_frame("SO3.from_axis_angle axis", axis._frame)
-        # axis must be unit; we normalize for safety.
-        half = _as_mx(angle) * 0.5
-        c = ca.cos(half)
-        s = ca.sin(half)
-        n = ca.norm_2(axis._mx)
-        ax = axis._mx / n
-        w = c
-        v = s * ax
-        q_mx = ca.vertcat(w, v[0], v[1], v[2])
-        return cls(Quat(q_mx, from_frame=axis._frame, to_frame=axis._frame))
-
-    @classmethod
-    def from_quat(cls, q: Quat) -> "SO3":
-        return cls(q)
-
-    # ---- Manifold ops ---------------------------------------------------
-
-    def boxplus(self, delta: Vec3) -> "SO3":
-        """SO(3) boxplus: q ⊞ δ = q · exp(δ), where exp is the SO(3)
-        exponential mapping the tangent (axis-angle) vector to a unit
-        quaternion increment. δ lives in the same frame as the rotation's
-        from_frame (the "left" frame in our convention)."""
-        if not isinstance(delta, Vec3):
-            raise TypeError(
-                f"SO3.boxplus: delta must be a Vec3, got {type(delta).__name__}")
-        # Note: the tangent frame is by convention the rotation's
-        # from_frame in our left-trivialization convention.
-        if delta._frame is not self.from_frame:
-            from ..ir.frames import FrameError, _capture_user_source
-            raise FrameError(
-                "SO3.boxplus",
-                expected=f"delta frame matches SO3.from_frame "
-                         f"({self.from_frame.__name__})",
-                got=f"delta_frame={delta._frame.__name__}",
-                source=_capture_user_source(),
-            )
-        dq = _so3_exp(delta._mx)
-        # q_new = dq * q   (left trivialization: rotation appended on the
-        # left in the from_frame). Mathematically:
-        #   delta_q has from=from, to=from; self._q has from=from, to=to.
-        #   Result has from=from, to=to.
-        dq_quat = Quat(dq, from_frame=self.from_frame, to_frame=self.from_frame)
-        return SO3(dq_quat * self._q)
-
-    def boxminus(self, other: "SO3") -> Vec3:
-        """SO(3) boxminus: δ = log(self · other⁻¹), returned in the
-        from_frame's tangent space."""
-        if not isinstance(other, SO3):
-            raise TypeError(
-                f"SO3.boxminus: other must be an SO3, got {type(other).__name__}")
-        if (other.from_frame is not self.from_frame
-                or other.to_frame is not self.to_frame):
-            from ..ir.frames import FrameError, _capture_user_source
-            raise FrameError(
-                "SO3.boxminus",
-                expected=f"matching SO3 frames "
-                         f"({self.from_frame.__name__}, {self.to_frame.__name__})",
-                got=f"({other.from_frame.__name__}, {other.to_frame.__name__})",
-                source=_capture_user_source(),
-            )
-        dq = (self._q * other._q.conjugate())._mx
-        return Vec3(_so3_log(dq), frame=self.from_frame)
-
 
 def _so3_exp(omega_mx) -> ca.MX:
     """Map a 3-vector to a unit quaternion via the SO(3) exponential.
@@ -182,141 +101,284 @@ def _so3_log(q_mx) -> ca.MX:
     return v_pos * coeff
 
 
+def _quat_mul_mx(a_mx, b_mx) -> ca.MX:
+    """Hamilton product of two (w, x, y, z) quaternion MX columns."""
+    w1, x1, y1, z1 = a_mx[0], a_mx[1], a_mx[2], a_mx[3]
+    w2, x2, y2, z2 = b_mx[0], b_mx[1], b_mx[2], b_mx[3]
+    return ca.vertcat(
+        w1*w2 - x1*x2 - y1*y2 - z1*z2,
+        w1*x2 + x1*w2 + y1*z2 - z1*y2,
+        w1*y2 - x1*z2 + y1*w2 + z1*x2,
+        w1*z2 + x1*y2 - y1*x2 + z1*w2,
+    )
+
+
 # ---------------------------------------------------------------------------
-# R3 — Euclidean 3-space
+# ABC
 # ---------------------------------------------------------------------------
 
-class R3:
-    """Trivial manifold: just R^3 with the natural addition as boxplus.
+@dataclass(frozen=True)
+class Manifold(ABC):
+    """Structural descriptor + operations for a state-vector component.
 
-    Mostly a marker type — Vec3 already does the work. R3 makes the
-    state-declaration story uniform across SO(3), R(n), and composites.
+    Subclasses set `kind` (the backend-registry key) and the dims as
+    class-level constants. Instance attributes carry per-occurrence
+    context (e.g. a frame tag).
     """
 
-    def __init__(self, v: Vec3):
-        if not isinstance(v, Vec3):
-            raise TypeError(f"R3: expected a Vec3, got {type(v).__name__}")
-        self._v = v
+    kind:          ClassVar[str]
+    ambient_dim:   ClassVar[int]
+    tangent_dim:   ClassVar[int]
+    storage_shape: ClassVar[tuple[int, ...]]
 
-    @property
-    def value(self) -> Vec3:
-        return self._v
+    # ---- Value-typed (frame-checked, for IR construction) ------------
 
-    @property
-    def frame(self):
-        return self._v.frame
+    @abstractmethod
+    def boxplus(self, x, delta):
+        """Frame-checked boxplus on tagged values: ambient ⊞ tangent →
+        ambient. `x` is a `Scalar`/`Vec3`/`Quat`, `delta` the matching
+        tangent value. Returns a value of the same type as `x`."""
 
-    def boxplus(self, delta: Vec3) -> "R3":
-        if not isinstance(delta, Vec3):
+    @abstractmethod
+    def boxminus(self, a, b):
+        """Frame-checked boxminus on tagged values: ambient ⊟ ambient →
+        tangent value."""
+
+    # ---- Symbolic (CasADi MX, used by ESKF Jacobian extraction) ------
+
+    @abstractmethod
+    def boxplus_sym(self, x_mx, delta_mx):
+        """Symbolic boxplus: ambient + tangent → ambient. CasADi MX of
+        shape (ambient_dim, 1) and (tangent_dim, 1)."""
+
+    @abstractmethod
+    def boxminus_sym(self, a_mx, b_mx):
+        """Symbolic boxminus: ambient − ambient → tangent."""
+
+    # ---- Numeric (numpy, used by ESKF update onto manifold) ----------
+
+    @abstractmethod
+    def boxplus_num(self, x: np.ndarray, delta: np.ndarray) -> np.ndarray:
+        """Numeric boxplus on flat arrays."""
+
+    # ---- Initial value -----------------------------------------------
+
+    @abstractmethod
+    def default_value(self):
+        """Python-side default value for fresh state (identity element
+        for groups, zero for vectors). Returned as a numpy array of
+        shape `storage_shape` or a scalar."""
+
+
+# ---------------------------------------------------------------------------
+# Concrete manifolds
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class ScalarManifold(Manifold):
+    """R^1 — scalar real. Backend kind: ``"scalar"``."""
+
+    kind:          ClassVar[str]               = "scalar"
+    ambient_dim:   ClassVar[int]               = 1
+    tangent_dim:   ClassVar[int]               = 1
+    storage_shape: ClassVar[tuple[int, ...]]   = (1,)
+
+    def boxplus(self, x: Scalar, delta: Scalar) -> Scalar:
+        if not isinstance(x, Scalar) or not isinstance(delta, Scalar):
             raise TypeError(
-                f"R3.boxplus: delta must be a Vec3, got {type(delta).__name__}")
-        if delta._frame is not self._v.frame:
-            from ..ir.frames import FrameError, _capture_user_source
+                "ScalarManifold.boxplus: x and delta must be Scalar, got "
+                f"{type(x).__name__} / {type(delta).__name__}")
+        return x + delta
+
+    def boxminus(self, a: Scalar, b: Scalar) -> Scalar:
+        if not isinstance(a, Scalar) or not isinstance(b, Scalar):
+            raise TypeError(
+                "ScalarManifold.boxminus: a and b must be Scalar, got "
+                f"{type(a).__name__} / {type(b).__name__}")
+        return a - b
+
+    def boxplus_sym(self, x_mx, delta_mx):
+        return x_mx + delta_mx
+
+    def boxminus_sym(self, a_mx, b_mx):
+        return a_mx - b_mx
+
+    def boxplus_num(self, x, delta):
+        return np.asarray(x, dtype=float) + np.asarray(delta, dtype=float)
+
+    def default_value(self):
+        return 0.0
+
+
+@dataclass(frozen=True)
+class R3Manifold(Manifold):
+    """R^3 — 3-vector. Backend kind: ``"vec"`` (size carried in
+    `storage_shape`, not in the kind string, so a future R6 reuses
+    the same backend dispatch)."""
+
+    kind:          ClassVar[str]               = "vec"
+    ambient_dim:   ClassVar[int]               = 3
+    tangent_dim:   ClassVar[int]               = 3
+    storage_shape: ClassVar[tuple[int, ...]]   = (3,)
+
+    frame: Any = None   # Frame class; codegen does not consume this.
+
+    def boxplus(self, x: Vec3, delta: Vec3) -> Vec3:
+        if not isinstance(x, Vec3) or not isinstance(delta, Vec3):
+            raise TypeError(
+                "R3Manifold.boxplus: x and delta must be Vec3, got "
+                f"{type(x).__name__} / {type(delta).__name__}")
+        if delta._frame is not x._frame:
             raise FrameError(
-                "R3.boxplus",
-                expected=f"delta frame matches R3.frame "
-                         f"({self._v.frame.__name__})",
+                "R3Manifold.boxplus",
+                expected=f"delta frame matches x.frame ({x._frame.__name__})",
                 got=f"delta_frame={delta._frame.__name__}",
                 source=_capture_user_source(),
             )
-        return R3(self._v + delta)
+        return x + delta
 
-    def boxminus(self, other: "R3") -> Vec3:
-        if not isinstance(other, R3):
+    def boxminus(self, a: Vec3, b: Vec3) -> Vec3:
+        if not isinstance(a, Vec3) or not isinstance(b, Vec3):
             raise TypeError(
-                f"R3.boxminus: other must be an R3, got {type(other).__name__}")
-        if other.frame is not self._v.frame:
-            from ..ir.frames import FrameError, _capture_user_source
+                "R3Manifold.boxminus: a and b must be Vec3, got "
+                f"{type(a).__name__} / {type(b).__name__}")
+        if a._frame is not b._frame:
             raise FrameError(
-                "R3.boxminus",
-                expected=f"matching R3.frame ({self._v.frame.__name__})",
-                got=f"other_frame={other.frame.__name__}",
+                "R3Manifold.boxminus",
+                expected=f"matching frames ({a._frame.__name__})",
+                got=f"b_frame={b._frame.__name__}",
                 source=_capture_user_source(),
             )
-        return self._v - other._v
+        return a - b
+
+    def boxplus_sym(self, x_mx, delta_mx):
+        return x_mx + delta_mx
+
+    def boxminus_sym(self, a_mx, b_mx):
+        return a_mx - b_mx
+
+    def boxplus_num(self, x, delta):
+        return np.asarray(x, dtype=float) + np.asarray(delta, dtype=float)
+
+    def default_value(self):
+        return np.zeros(3, dtype=float)
 
 
-# ---------------------------------------------------------------------------
-# Rigid body — R3 × SO3 × R3 × R3 (position, orientation, vel_linear, vel_angular)
-# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class SO3Manifold(Manifold):
+    """SO(3) — rotations stored as a unit quaternion (w, x, y, z).
 
-class RigidBody:
-    """The standard 13-D ambient / 12-D tangent rigid-body state.
+    Ambient 4 (quat) / tangent 3 (axis-angle). Backend kind: ``"quat"``.
+    Left-trivialization convention: the tangent vector lives in the
+    rotation's `from_frame`, and
 
-    Ambient: position (3) + orientation (4) + vel_linear (3) + vel_angular (3) = 13.
-    Tangent: δp (3) + δθ (3) + δv (3) + δω (3) = 12.
+        q ⊞ δ = exp(δ) ⊗ q
 
-    Composite manifold: boxplus / boxminus dispatch component-wise.
+    `from_frame` / `to_frame` parametrize the underlying Quat — a
+    `Quat[from, to]` rotates a vector in `to` coords into `from` coords.
+    Both must be provided when used as a user-declared State manifold
+    (no Frame default — pick the application's convention; the
+    framework's rigid-body orientation uses Quat[WorldFrame,
+    CraftFrame], so an attitude estimator typically matches that).
+    Codegen consumes only `kind` / `storage_shape`; the value-typed ops
+    derive their frames from the `Quat` argument, so a frameless
+    `SO3Manifold()` is a valid operator for already-frame-tagged values.
     """
 
-    def __init__(self,
-                 position: Vec3,
-                 orientation: SO3,
-                 vel_linear: Vec3,
-                 vel_angular: Vec3):
-        self.position    = position
-        self.orientation = orientation
-        self.vel_linear  = vel_linear
-        self.vel_angular = vel_angular
+    kind:          ClassVar[str]               = "quat"
+    ambient_dim:   ClassVar[int]               = 4
+    tangent_dim:   ClassVar[int]               = 3
+    storage_shape: ClassVar[tuple[int, ...]]   = (4,)
 
-    def boxplus(self,
-                d_position: Vec3,
-                d_theta:    Vec3,
-                d_vlinear:  Vec3,
-                d_vangular: Vec3) -> "RigidBody":
-        # Frame checks: each delta must match the frame of the
-        # corresponding ambient slot. SO3.boxplus does its own check on
-        # d_theta; the three Vec3 additions below need explicit checks
-        # because Vec3.__add__ relies on its operand frames matching but
-        # the wrong-frame failure mode is a TypeError in CasADi land,
-        # not a FrameError. So we validate here for a clearer message.
-        for label, ref, delta in (
-            ("d_position",  self.position,    d_position),
-            ("d_vlinear",   self.vel_linear,  d_vlinear),
-            ("d_vangular",  self.vel_angular, d_vangular),
-        ):
-            if not isinstance(delta, Vec3):
-                raise TypeError(
-                    f"RigidBody.boxplus: {label} must be a Vec3, got "
-                    f"{type(delta).__name__}")
-            if delta._frame is not ref._frame:
-                from ..ir.frames import FrameError, _capture_user_source
-                raise FrameError(
-                    f"RigidBody.boxplus[{label}]",
-                    expected=f"frame {ref._frame.__name__}",
-                    got=f"{delta._frame.__name__}",
-                    source=_capture_user_source(),
-                )
-        return RigidBody(
-            position    = self.position + d_position,
-            orientation = self.orientation.boxplus(d_theta),
-            vel_linear  = self.vel_linear + d_vlinear,
-            vel_angular = self.vel_angular + d_vangular,
-        )
+    from_frame: Any = None
+    to_frame:   Any = None
 
-    def boxminus(self, other: "RigidBody") -> tuple[Vec3, Vec3, Vec3, Vec3]:
-        if not isinstance(other, RigidBody):
+    def boxplus(self, q: Quat, delta: Vec3) -> Quat:
+        """q ⊞ δ with δ in q's from_frame (left trivialization). Returns
+        a Quat carrying q's frames."""
+        if not isinstance(q, Quat):
             raise TypeError(
-                f"RigidBody.boxminus: other must be a RigidBody, got "
-                f"{type(other).__name__}")
-        # SO3.boxminus does its own frame check; same per-slot pattern
-        # as boxplus for the three Vec3 differences.
-        for label, ref, oth in (
-            ("position",    self.position,    other.position),
-            ("vel_linear",  self.vel_linear,  other.vel_linear),
-            ("vel_angular", self.vel_angular, other.vel_angular),
-        ):
-            if oth._frame is not ref._frame:
-                from ..ir.frames import FrameError, _capture_user_source
-                raise FrameError(
-                    f"RigidBody.boxminus[{label}]",
-                    expected=f"frame {ref._frame.__name__}",
-                    got=f"{oth._frame.__name__}",
-                    source=_capture_user_source(),
-                )
-        return (
-            self.position - other.position,
-            self.orientation.boxminus(other.orientation),
-            self.vel_linear - other.vel_linear,
-            self.vel_angular - other.vel_angular,
-        )
+                f"SO3Manifold.boxplus: q must be a Quat, got {type(q).__name__}")
+        if not isinstance(delta, Vec3):
+            raise TypeError(
+                "SO3Manifold.boxplus: delta must be a Vec3, got "
+                f"{type(delta).__name__}")
+        if delta._frame is not q._from_frame:
+            raise FrameError(
+                "SO3Manifold.boxplus",
+                expected=f"delta frame matches q.from_frame "
+                         f"({q._from_frame.__name__})",
+                got=f"delta_frame={delta._frame.__name__}",
+                source=_capture_user_source(),
+            )
+        new_mx = self.boxplus_sym(q._mx, delta._mx)
+        return Quat(new_mx, from_frame=q._from_frame, to_frame=q._to_frame)
+
+    def boxminus(self, a: Quat, b: Quat) -> Vec3:
+        """δ = log(a ⊗ b⁻¹), returned in a's from_frame tangent space."""
+        if not isinstance(a, Quat) or not isinstance(b, Quat):
+            raise TypeError(
+                "SO3Manifold.boxminus: a and b must be Quat, got "
+                f"{type(a).__name__} / {type(b).__name__}")
+        if (a._from_frame is not b._from_frame
+                or a._to_frame is not b._to_frame):
+            raise FrameError(
+                "SO3Manifold.boxminus",
+                expected=f"matching Quat frames "
+                         f"({a._from_frame.__name__}, {a._to_frame.__name__})",
+                got=f"({b._from_frame.__name__}, {b._to_frame.__name__})",
+                source=_capture_user_source(),
+            )
+        return Vec3(self.boxminus_sym(a._mx, b._mx), frame=a._from_frame)
+
+    def boxplus_sym(self, x_mx, delta_mx):
+        return _quat_mul_mx(_so3_exp(delta_mx), x_mx)
+
+    def boxminus_sym(self, a_mx, b_mx):
+        b_conj = ca.vertcat(b_mx[0], -b_mx[1], -b_mx[2], -b_mx[3])
+        return _so3_log(_quat_mul_mx(a_mx, b_conj))
+
+    def boxplus_num(self, x, delta):
+        omega = np.asarray(delta, dtype=float)
+        theta = float(np.linalg.norm(omega) + 1e-30)
+        half  = 0.5 * theta
+        w     = np.cos(half)
+        v     = omega * (np.sin(half) / theta)
+        dq    = np.array([w, v[0], v[1], v[2]])
+        w1, x1, y1, z1 = dq
+        w2, x2, y2, z2 = np.asarray(x, dtype=float)
+        return np.array([
+            w1*w2 - x1*x2 - y1*y2 - z1*z2,
+            w1*x2 + x1*w2 + y1*z2 - z1*y2,
+            w1*y2 - x1*z2 + y1*w2 + z1*x2,
+            w1*z2 + x1*y2 - y1*x2 + z1*w2,
+        ])
+
+    def default_value(self):
+        return np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
+
+
+# ---------------------------------------------------------------------------
+# String shortcut → instance
+# ---------------------------------------------------------------------------
+
+def manifold_from_shortcut(shortcut, *, frame=None) -> Manifold:
+    """Map a user-facing shortcut to a Manifold instance.
+
+    Accepts:
+      * a `Manifold` instance — passed through.
+      * `"R1"` → `ScalarManifold()`.
+      * `"R3"` → `R3Manifold(frame=frame)`.
+      * `"SO3"` → `SO3Manifold()`.
+    """
+    if isinstance(shortcut, Manifold):
+        return shortcut
+    if shortcut == "R1":
+        return ScalarManifold()
+    if shortcut == "R3":
+        return R3Manifold(frame=frame)
+    if shortcut == "SO3":
+        return SO3Manifold()
+    raise ValueError(
+        f"manifold_from_shortcut: unknown manifold shortcut {shortcut!r}. "
+        f"Pass 'R1', 'R3', 'SO3', or a Manifold instance.")

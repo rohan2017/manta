@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
-from ...ir.slot_manifold import Manifold
+from ...ir.manifold import Manifold
 
 
 @dataclass(frozen=True)

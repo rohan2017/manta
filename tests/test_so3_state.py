@@ -13,8 +13,7 @@ import pytest
 from manta import Craft, TargetNumpy, World
 from manta.fields import GravityField
 from manta.ir.frames import CraftFrame, PartFrame, WorldFrame
-from manta.ir.manifold import SO3 as SO3Value
-from manta.ir.slot_manifold import SO3Manifold
+from manta.ir.manifold import SO3Manifold
 from manta.ir.types import Vec3
 from manta.ir.wrench import Wrench
 from manta.parts import Mass
@@ -131,10 +130,10 @@ def test_so3_state_output_round_trips_the_quaternion():
 class _AttitudeIntegrator(Part):
     """Integrates a body-frame angular rate input onto an SO(3) state.
 
-    Uses the SO(3) value-wrapper's boxplus (i.e. q ← q · exp(ω·dt) in
-    the wrapper's left-trivialization). Same pattern an IMU integrator
-    or a Madgwick filter would use; this version takes ω as a direct
-    Input rather than from a gyro sensor.
+    Uses the SO(3) manifold's value-typed boxplus (i.e.
+    q ← exp(ω·dt) · q in the left-trivialization). Same pattern an IMU
+    integrator or a Madgwick filter would use; this version takes ω as a
+    direct Input rather than from a gyro sensor.
     """
 
     omega_cmd = State(init=(0.0, 0.0, 0.0), manifold="R3", frame=CraftFrame)
@@ -144,19 +143,19 @@ class _AttitudeIntegrator(Part):
     )
 
     def update(self, ctx) -> PartUpdate:
-        # SO3.boxplus uses left trivialization: the tangent vector lives
-        # in the SO3's from_frame (WorldFrame here). Rotate the
+        # SO3 boxplus uses left trivialization: the tangent vector lives
+        # in the rotation's from_frame (WorldFrame here). Rotate the
         # body-frame ω·dt into world coords before integrating —
         # same pattern world_tick uses for the rigid-body orientation.
         delta_body  = self.omega_cmd * ctx.dt
         delta_world = self.orientation_est.apply(delta_body)
-        new_so3 = SO3Value.from_quat(self.orientation_est).boxplus(delta_world)
+        new_q = SO3Manifold().boxplus(self.orientation_est, delta_world)
         zero = Vec3[PartFrame].constant((0.0, 0.0, 0.0))
         return PartUpdate(
             wrench=Wrench(force=zero, torque=zero),
             new_state={
                 "omega_cmd":       self.omega_cmd,
-                "orientation_est": new_so3,        # SO3 wrapper — auto-unwraps
+                "orientation_est": new_q,          # Quat (frame-tagged)
             },
         )
 

@@ -38,7 +38,7 @@ from .craft import (
 from .inertia import symbolic_inertia_rollup
 from .kinematics import kinematic_pass
 from .ir.frames import WorldFrame, CraftFrame, PartFrame
-from .ir.manifold import SO3
+from .ir.manifold import SO3Manifold
 from .parts.base import CompositePart, Part, PartUpdate
 from .ir.wrench import Wrench
 
@@ -468,14 +468,12 @@ def _trace_craft_pass1(g_ctx,
         if not isinstance(part, Joint):
             for sname in decls:
                 val = new_state.get(sname, state_input_nodes[part][sname])
-                # SO(3) state: auto-unwrap the SO3 value wrapper (which
-                # carries a Quat internally) AND defensively renormalize
-                # the quaternion so multi-tick integration doesn't drift
-                # off the unit sphere — mirrors the rigid-body
-                # orientation handling below.
+                # SO(3) state: defensively renormalize the quaternion so
+                # multi-tick integration doesn't drift off the unit sphere
+                # — mirrors the rigid-body orientation handling below. A
+                # Part integrates such a slot via SO3Manifold().boxplus,
+                # which already returns a (frame-tagged) Quat.
                 if decls[sname].manifold.kind == "quat":
-                    if isinstance(val, SO3):
-                        val = val.quat
                     val = val.normalize()
                 new_state_outputs.append(
                     (prefix + f"{part.name}.{sname}", val))
@@ -711,10 +709,8 @@ def _emit_per_craft_dynamics(g_ctx, craft, pc, dt) -> None:
     new_velocity = velocity + a_origin_world * dt
     new_position = position + velocity * dt + a_origin_world * (0.5 * dt * dt)
     new_ang_vel  = ang_vel + alpha * dt
-    current_so3  = SO3.from_quat(orientation)
     omega_dt_world = orientation.apply(ang_vel * dt)
-    new_so3 = current_so3.boxplus(omega_dt_world)
-    new_orientation = new_so3.quat.normalize()
+    new_orientation = SO3Manifold().boxplus(orientation, omega_dt_world).normalize()
 
     g_ctx.output(new_position,    prefix + "position")
     g_ctx.output(new_orientation, prefix + "orientation")

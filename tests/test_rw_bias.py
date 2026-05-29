@@ -82,7 +82,7 @@ def test_noise_accepts_direct_signal_manifold_instance():
     is a Manifold instance. This test exercises the instance path
     directly so any future signal manifold (vec6, quat, custom) is
     proven reachable without needing a new shortcut string."""
-    from manta.ir.slot_manifold import R3Manifold
+    from manta.ir.manifold import R3Manifold
     from manta.parts.base import WhiteNoise, RandomWalkNoise
     n = WhiteNoise(R3Manifold(frame=PartFrame), sigma=0.5)
     assert n.signal_manifold.kind         == "vec"
