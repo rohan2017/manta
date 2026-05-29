@@ -3,8 +3,14 @@
 `EKF(world)` walks the world's crafts + fields, building:
   * a `StateSpec` (joint state across every craft + every state-bearing
     disturbance). `track=` carves a subset out of this — see below.
-  * Symbolic predict (`_f_fn`), tangent-space F (`_F_fn`), and
-    process-noise gain L (`_L_fn`) — all CasADi functions.
+  * a `Linearization` over the world tick (`manta.linearization`), which
+    produces the symbolic predict (`_f_fn`), tangent-space F (`_F_fn`),
+    process-noise gain L (`_L_fn`), and per-output h/H/L_h — all CasADi
+    functions. The EKF does the model introspection (which tick inputs
+    are Inputs vs. Noise, which outputs are sensors) and the Kalman
+    bookkeeping (Σ, state subsetting, sensor table); the Jacobian
+    machinery is the shared `Linearization` transform (also the seam an
+    LQR/iLQR would reuse).
   * Per-sensor measurement bundles: `_sensors[(id(part), output_name)]`
     holds the cached h/H/L_h ca.Function objects, the sensor dim,
     and a back-ref to the owning part + craft.
@@ -75,6 +81,7 @@ from typing import Any
 import casadi as ca
 import numpy as np
 
+from ..linearization import Linearization, slot_of_tan
 from .state_spec import StateSpec, resolve_slotset
 
 
@@ -251,16 +258,16 @@ class EKF:
                 raise KeyError(
                     f"EKF: track references unknown craft(s) "
                     f"{sorted(unknown)}; world has {sorted(craft_names)}.")
-            # Build the FULL symbolic graph (sparsity only) to read F's
-            # structural dependency pattern + each chosen sensor's
-            # observed slots.
-            full_g = self._build_symbolic(
-                cf, full_spec, dict(frozen),
-                chosen_sensor_names, sensor_lookup, build_functions=False)
-            seed: set[str] = set(full_g["observed_slots"])
+            # Linearize the FULL state (structure only) to read F's
+            # dependency pattern + each chosen sensor's observed slots.
+            full_lin = Linearization(
+                cf, full_spec, frozen=dict(frozen),
+                input_names=self._input_names, noise_specs=self._noise_specs,
+                outputs=chosen_sensor_names, build_functions=False)
+            seed: set[str] = set(full_lin.observed_slots)
             for craft_name, slotset in track.items():
                 seed |= resolve_slotset(craft_name, slotset)
-            kept = self._closure(full_spec, full_g["F_sym"], seed)
+            kept = self._closure(full_spec, full_lin.F_sym, seed)
             self.spec = StateSpec.subset(full_spec, kept)
             # Freeze every full-spec slot we are not keeping.
             for s in full_spec.slots:
@@ -269,24 +276,40 @@ class EKF:
                     frozen[s.name] = np.atleast_1d(
                         np.asarray(val, dtype=float)).reshape(-1)
 
-        # --- Final symbolic build over the (sub)spec --------------------
-        g = self._build_symbolic(cf, self.spec, frozen,
-                                 chosen_sensor_names, sensor_lookup,
-                                 build_functions=True)
-        self._x_sym   = g["x_sym"]
-        self._u_sym   = g["u_sym"]
-        self._n_sym   = g["n_sym"]
-        self._n_noise = g["n_noise"]
-        self._f_fn    = g["f_fn"]
-        self._F_fn    = g["F_fn"]
-        self._L_fn    = g["L_fn"]
-        self._Sigma   = g["Sigma"]
-        self._sensors = g["sensors"]
+        # --- Linearize over the (sub)spec → predict/F/L + sensors -------
+        lin = Linearization(
+            cf, self.spec, frozen=frozen,
+            input_names=self._input_names, noise_specs=self._noise_specs,
+            outputs=chosen_sensor_names, build_functions=True)
+        self._lin     = lin
+        self._x_sym   = lin.x_sym
+        self._u_sym   = lin.u_sym
+        self._n_sym   = lin.n_sym
+        self._n_noise = lin.n_noise
+        self._f_fn    = lin.predict_fn
+        self._F_fn    = lin.F_fn
+        self._L_fn    = lin.L_fn
+        self._Sigma   = lin.Sigma
         # Independent-subsystem partition of the tangent state. With one
         # block the predict is the usual dense propagation; with several
         # (e.g. uncoupled crafts estimated jointly) each propagates on its
         # own, turning the O(n³) covariance step into Σ O(n_b³).
-        self._blocks  = g["blocks"]
+        self._blocks  = lin.blocks
+        # Wrap each output's linearization with its part/craft metadata,
+        # keyed for `ekf.update(part, **measurements)` routing.
+        self._sensors: dict[tuple[int, str], dict[str, Any]] = {}
+        for full in chosen_sensor_names:
+            part, craft, out_name = sensor_lookup[full]
+            o = lin.outputs[full]
+            self._sensors[(id(part), out_name)] = {
+                "dim":    o.dim,
+                "h_fn":   o.h_fn,
+                "H_fn":   o.H_fn,
+                "L_h_fn": o.L_h_fn,
+                "part":   part,
+                "craft":  craft,
+                "full":   full,
+            }
 
         # Mutable runtime state (`_x`, `_P`) lives on the backend
         # evaluator (`NumpyEKF`), not on the IR. The IR keeps the
@@ -300,188 +323,8 @@ class EKF:
         return len(self._blocks)
 
     # ------------------------------------------------------------------
-    # Symbolic graph construction
+    # State subsetting (dependency closure over the linearized dynamics)
     # ------------------------------------------------------------------
-
-    def _build_symbolic(self, cf, spec, frozen, chosen_sensor_names,
-                        sensor_lookup, *, build_functions: bool) -> dict:
-        """Build the predict / F / L / sensor graph over `spec`.
-
-        `frozen` maps tick-input names (untracked state slots + excluded
-        inputs) to constant values that are baked into the graph instead
-        of being live variables — so `f`/`F`/`L`/`h`/`H` are born reduced
-        to the kept dimensions, no post-hoc row/column deletion.
-
-        With `build_functions=False` only the structural artifacts needed
-        for the closure are produced (`F_sym` + each chosen sensor's set
-        of `observed_slots`); the `ca.Function`s are skipped.
-        """
-        n_ambient = spec.ambient_dim
-        n_tangent = spec.tangent_dim
-        n_u       = len(self._input_names)
-        n_noise   = sum(s["dim"] for s in self._noise_specs)
-
-        x_sym  = ca.MX.sym("x",  n_ambient, 1)
-        u_sym  = ca.MX.sym("u", n_u, 1) if n_u > 0 else ca.MX.zeros(0, 1)
-        dt_sym = ca.MX.sym("dt", 1, 1)
-        t_sym  = ca.MX.sym("t",  1, 1)
-        n_sym  = (ca.MX.sym("noise", n_noise, 1) if n_noise > 0
-                  else ca.MX.zeros(0, 1))
-        zero_n = ca.MX.zeros(n_noise, 1)
-
-        outputs_n = self._tick_outputs(cf, spec, x_sym, frozen,
-                                       u_sym, dt_sym, t_sym, n_sym)
-        x_new_n = self._gather_state(spec, outputs_n)
-        x_new_0 = ca.substitute(x_new_n, n_sym, zero_n)
-
-        delta_in = ca.MX.sym("delta_in", n_tangent, 1)
-        x_pert   = spec.boxplus_sym(x_sym, delta_in)
-        outputs_pert = self._tick_outputs(cf, spec, x_pert, frozen,
-                                          u_sym, dt_sym, t_sym, zero_n)
-        x_pert_new = self._gather_state(spec, outputs_pert)
-        delta_out  = spec.boxminus_sym(x_pert_new, x_new_0)
-        F_sym = ca.substitute(
-            ca.jacobian(delta_out, delta_in), delta_in,
-            ca.MX.zeros(n_tangent, 1))
-
-        result: dict[str, Any] = {
-            "x_sym": x_sym, "u_sym": u_sym, "n_sym": n_sym,
-            "n_noise": n_noise, "F_sym": F_sym,
-            "f_fn": None, "F_fn": None, "L_fn": None,
-            "Sigma": None, "sensors": {}, "blocks": [],
-        }
-        L_pattern = None             # tangent × noise sparsity (for blocks)
-        h_supports: list = []        # per-sensor observed tangent columns
-
-        if build_functions:
-            result["f_fn"] = ca.Function(
-                "ekf_predict", [x_sym, u_sym, dt_sym, t_sym], [x_new_0],
-                ["x", "u", "dt", "t"], ["x_new"])
-            result["F_fn"] = ca.Function(
-                "ekf_F", [x_sym, u_sym, dt_sym, t_sym], [F_sym],
-                ["x", "u", "dt", "t"], ["F"])
-            if n_noise > 0:
-                delta_out_n = spec.boxminus_sym(x_new_n, x_new_0)
-                L_sym = ca.substitute(
-                    ca.jacobian(delta_out_n, n_sym), n_sym, zero_n)
-                L_pattern = np.array(ca.DM(L_sym.sparsity()))
-                result["L_fn"] = ca.Function(
-                    "ekf_L", [x_sym, u_sym, dt_sym, t_sym], [L_sym],
-                    ["x", "u", "dt", "t"], ["L"])
-                sigmas_sq = []
-                for ns in self._noise_specs:
-                    sigmas_sq.extend([ns["sigma"] ** 2] * ns["dim"])
-                result["Sigma"] = np.diag(sigmas_sq)
-
-        # Per-(part, output) measurement plumbing. The observed-slot set
-        # (columns of H with structural nonzeros) seeds the closure.
-        slot_of_tan = self._slot_of_tan(spec)
-        observed: set[str] = set()
-        sensors: dict[tuple[int, str], dict[str, Any]] = {}
-        for full in chosen_sensor_names:
-            part, craft, out_name = sensor_lookup[full]
-            if full not in outputs_n:
-                raise RuntimeError(f"EKF: tick is missing output {full!r}.")
-            h_dim       = int(outputs_n[full].numel())
-            h_n_flat    = ca.reshape(outputs_n[full], h_dim, 1)
-            h_pert_flat = ca.reshape(outputs_pert[full], h_dim, 1)
-            H_sym = ca.substitute(
-                ca.jacobian(h_pert_flat, delta_in),
-                delta_in, ca.MX.zeros(n_tangent, 1))
-            Hpat = np.array(ca.DM(H_sym.sparsity()))
-            cols_touched = np.flatnonzero(Hpat.any(axis=0))
-            for j in cols_touched:
-                observed.add(slot_of_tan[int(j)])
-            h_supports.append(cols_touched)
-            if not build_functions:
-                continue
-            h_0_flat = ca.substitute(h_n_flat, n_sym, zero_n)
-            if n_noise > 0:
-                L_h_sym = ca.substitute(
-                    ca.jacobian(h_n_flat, n_sym), n_sym, zero_n)
-                L_h_fn = ca.Function(
-                    f"Lh_{full}".replace(".", "_"),
-                    [x_sym, u_sym, dt_sym, t_sym], [L_h_sym],
-                    ["x", "u", "dt", "t"], ["L_h"])
-            else:
-                L_h_fn = None
-            sensors[(id(part), out_name)] = {
-                "dim":    h_dim,
-                "h_fn":   ca.Function(
-                    f"h_{full}".replace(".", "_"),
-                    [x_sym, u_sym, dt_sym, t_sym], [h_0_flat],
-                    ["x", "u", "dt", "t"], ["h"]),
-                "H_fn":   ca.Function(
-                    f"H_{full}".replace(".", "_"),
-                    [x_sym, u_sym, dt_sym, t_sym], [H_sym],
-                    ["x", "u", "dt", "t"], ["H"]),
-                "L_h_fn": L_h_fn,
-                "part":   part,
-                "craft":  craft,
-                "full":   full,
-            }
-        result["sensors"] = sensors
-        result["observed_slots"] = observed
-        if build_functions:
-            result["blocks"] = self._compute_blocks(
-                n_tangent, F_sym, L_pattern, h_supports)
-        return result
-
-    @staticmethod
-    def _compute_blocks(n_tangent, F_sym, L_pattern, h_supports) -> list:
-        """Partition the tangent state into independent subsystems.
-
-        Two tangent indices land in the same block if they're coupled by
-        the dynamics (`F`), share a process-noise channel (`L` column), or
-        are jointly observed by one sensor (`H` support). Under this
-        partition the covariance stays block-diagonal forever (from a
-        block-diagonal start) — nothing creates a cross-block term — so the
-        predict can propagate each block independently. Returns a list of
-        sorted tangent-index arrays, ordered by first index.
-        """
-        parent = list(range(n_tangent))
-
-        def find(a: int) -> int:
-            while parent[a] != a:
-                parent[a] = parent[parent[a]]
-                a = parent[a]
-            return a
-
-        def union(a: int, b: int) -> None:
-            ra, rb = find(a), find(b)
-            if ra != rb:
-                parent[ra] = rb
-
-        # Dynamics coupling (F[i, j] != 0 ⇒ i and j interact).
-        rows, cols = np.nonzero(np.array(ca.DM(F_sym.sparsity())))
-        for i, j in zip(rows.tolist(), cols.tolist()):
-            union(i, j)
-        # Shared process noise: a noise column feeding rows {r} ties them.
-        if L_pattern is not None:
-            for k in range(L_pattern.shape[1]):
-                rws = np.flatnonzero(L_pattern[:, k])
-                for r in rws[1:]:
-                    union(int(rws[0]), int(r))
-        # Joint observation: a sensor touching columns {c} ties them.
-        for cols_touched in h_supports:
-            for c in cols_touched[1:]:
-                union(int(cols_touched[0]), int(c))
-
-        groups: dict[int, list[int]] = {}
-        for i in range(n_tangent):
-            groups.setdefault(find(i), []).append(i)
-        blocks = [np.array(sorted(v)) for v in groups.values()]
-        blocks.sort(key=lambda b: int(b[0]))
-        return blocks
-
-    @staticmethod
-    def _slot_of_tan(spec) -> list[str]:
-        """Map each tangent index to the name of the slot it belongs to."""
-        m: list[str] = [""] * spec.tangent_dim
-        for s in spec.slots:
-            for i in range(s.tangent_offset, s.tangent_offset + s.tangent_dim):
-                m[i] = s.name
-        return m
 
     def _closure(self, full_spec, F_sym, seed_slots) -> set[str]:
         """Backward reachability on the structural dependency graph.
@@ -491,12 +334,12 @@ class EKF:
         from `seed_slots` to a fixpoint over the slot-level graph (slot
         granularity keeps SO3 orientation atomic).
         """
-        slot_of_tan = self._slot_of_tan(full_spec)
+        sot = slot_of_tan(full_spec)
         pattern = np.array(ca.DM(F_sym.sparsity()))
         rows, cols = np.nonzero(pattern)
         deps: dict[str, set[str]] = {}
         for i, j in zip(rows.tolist(), cols.tolist()):
-            a, b = slot_of_tan[i], slot_of_tan[j]
+            a, b = sot[i], sot[j]
             if a != b:
                 deps.setdefault(a, set()).add(b)
         kept = set(seed_slots)
@@ -530,60 +373,6 @@ class EKF:
                     f"EKF: unknown {label} name {key!r}. Available: "
                     f"{sorted(candidates)}")
         return resolved
-
-    def _tick_outputs(self, cf, spec, x_sym, frozen,
-                      u_sym, dt_sym, t_sym, n_sym) -> dict[str, ca.MX]:
-        """Evaluate the compiled tick on flat symbolic inputs; return a
-        dict mapping every output name to its MX expression.
-
-        State slots in `spec` are sliced from `x_sym`; state slots / inputs
-        in `frozen` are injected as baked constants; live inputs come from
-        `u_sym`; noise channels from `n_sym`.
-        """
-        in_names  = [cf.name_in(i)  for i in range(cf.n_in())]
-        out_names = [cf.name_out(i) for i in range(cf.n_out())]
-        u_index   = {name: i for i, name in enumerate(self._input_names)}
-        noise_offsets: dict[str, tuple[int, int]] = {}
-        off = 0
-        for ns in self._noise_specs:
-            noise_offsets[ns["full"]] = (off, ns["dim"])
-            off += ns["dim"]
-
-        sliced: list[ca.MX] = []
-        for name in in_names:
-            if name == "dt":
-                sliced.append(dt_sym)
-            elif name == "t":
-                sliced.append(t_sym)
-            elif name in spec:
-                slot = spec.slot(name)
-                sliced.append(x_sym[slot.offset : slot.offset + slot.dim])
-            elif name in frozen:
-                val = np.atleast_1d(
-                    np.asarray(frozen[name], dtype=float)).reshape(-1, 1)
-                sliced.append(ca.DM(val))
-            elif name in u_index:
-                sliced.append(u_sym[u_index[name]])
-            elif name in noise_offsets:
-                start, dim = noise_offsets[name]
-                sliced.append(n_sym[start : start + dim])
-            else:
-                raise RuntimeError(f"EKF: tick input {name!r} not handled.")
-
-        result = cf(*sliced)
-        if len(out_names) == 1:
-            return {out_names[0]: result}
-        return {n: result[i] for i, n in enumerate(out_names)}
-
-    def _gather_state(self, spec, outputs_by_name: dict[str, ca.MX]) -> ca.MX:
-        """Concatenate state-slot outputs in spec order → ambient vector."""
-        chunks = []
-        for slot in spec.slots:
-            r = outputs_by_name[slot.name]
-            if r.shape != (slot.dim, 1):
-                r = ca.reshape(r, slot.dim, 1)
-            chunks.append(r)
-        return ca.vertcat(*chunks)
 
     def _classify_noise_input(self, full_name: str, owner, sub: str,
                               owner_label: str) -> None:
