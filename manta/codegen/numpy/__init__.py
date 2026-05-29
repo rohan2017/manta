@@ -34,7 +34,7 @@ class NumpyWorld:
     """
 
     def __init__(self, cw) -> None:
-        from ...world import Sim
+        from ...sim import Sim
         if not isinstance(cw, Sim):
             raise TypeError(
                 f"NumpyWorld: expected Sim, got "
@@ -453,7 +453,7 @@ def TargetNumpy(ir):
                                         `.state_dict()`, `.reset()`,
                                         `.x`, `.P`).
     """
-    from ...world import Sim
+    from ...sim import Sim
     from ...estimation.ekf import EKF
     if isinstance(ir, Sim):
         return NumpyWorld(ir)

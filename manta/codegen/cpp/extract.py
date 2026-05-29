@@ -93,7 +93,7 @@ def extract(cw) -> WorldFunctions:
     Returns:
         A `WorldFunctions` bundle.
     """
-    from ...world import Sim
+    from ...sim import Sim
     if not isinstance(cw, Sim):
         raise TypeError(
             f"extract: expected Sim, got {type(cw).__name__}")

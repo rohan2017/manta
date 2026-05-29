@@ -49,7 +49,8 @@ through the World/Target API above.
 
 from . import ir
 from .craft import Craft
-from .world import World, Sim
+from .world import World
+from .sim import Sim
 from .planets import Planet
 from .couplings import Coupling
 from .estimation.ekf import EKF

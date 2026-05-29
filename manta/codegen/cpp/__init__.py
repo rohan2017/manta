@@ -45,7 +45,7 @@ def TargetCpp(ir,
         `EmitResult` (from `manta.codegen.cpp.emit`) with paths to
         every emitted file plus the `WorldFunctions` bundle.
     """
-    from ...world import Sim
+    from ...sim import Sim
     if isinstance(ir, Sim):
         return _emit_world_cpp(ir, out_dir, class_name=class_name,
                                basename=basename, namespace=namespace)
