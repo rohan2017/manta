@@ -8,6 +8,7 @@ artifacts those algorithms need:
 
   * predict   f(x, u, dt, t)            — next ambient state, noise zeroed
   * F = ∂δ_out/∂δ_in |₀                 — tangent state-transition
+  * B = ∂δ_out/∂u |₀                    — control Jacobian   [if control=]
   * L = ∂δ_out/∂noise |₀                — process-noise gain        [if noise]
   * per output: h, H = ∂h/∂δ |₀, L_h = ∂h/∂noise |₀
 
@@ -108,6 +109,7 @@ class Linearization:
                  input_names: list[str],
                  noise_specs: list[dict],
                  outputs: list[str],
+                 control: bool = False,
                  build_functions: bool = True) -> None:
         self.spec          = spec
         self._cf           = cf
@@ -148,8 +150,24 @@ class Linearization:
             ca.jacobian(delta_out, delta_in),
             delta_in, ca.MX.zeros(n_tangent, 1))
 
+        # --- control Jacobian B = ∂f/∂u (tangent × n_u) -------------------
+        # Same error-state recipe as F, but perturbing the (Euclidean)
+        # input u instead of the state: δ(x_new) for a δu nudge, in tangent
+        # coords. Opt-in (LQR/iLQR/MPC need it; the EKF + codegen don't).
+        self.B_sym = None
+        if control and n_u > 0:
+            delta_u = ca.MX.sym("delta_u", n_u, 1)
+            outputs_pu = self._tick_outputs(
+                x_sym, frozen, u_sym + delta_u, dt_sym, t_sym, zero_n)
+            x_pu_new = self._gather_state(outputs_pu)
+            delta_out_u = spec.boxminus_sym(x_pu_new, x_new_0)
+            self.B_sym = ca.substitute(
+                ca.jacobian(delta_out_u, delta_u),
+                delta_u, ca.MX.zeros(n_u, 1))
+
         self.predict_fn = None
         self.F_fn       = None
+        self.B_fn       = None
         self.L_fn       = None
         self.Sigma      = None
         self.blocks: list = []
@@ -159,6 +177,8 @@ class Linearization:
             self.predict_fn = ca.Function(
                 "predict", args, [x_new_0], argn, ["x_new"])
             self.F_fn = ca.Function("F", args, [self.F_sym], argn, ["F"])
+            if self.B_sym is not None:
+                self.B_fn = ca.Function("B", args, [self.B_sym], argn, ["B"])
             if self.n_noise > 0:
                 delta_out_n = spec.boxminus_sym(x_new_n, x_new_0)
                 L_sym = ca.substitute(

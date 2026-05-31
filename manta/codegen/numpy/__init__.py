@@ -439,6 +439,68 @@ class NumpyEKF:
 
 
 # ---------------------------------------------------------------------------
+# NumpyLQR — runtime for LQR
+# ---------------------------------------------------------------------------
+
+class NumpyLQR:
+    """Native-Python evaluator wrapping an `LQR` IR.
+
+    Stateless: the gain is baked at construction, so `control` is a pure
+    function of the supplied state estimate."""
+
+    def __init__(self, lqr) -> None:
+        from ...control.lqr import LQR
+        if not isinstance(lqr, LQR):
+            raise TypeError(
+                f"NumpyLQR: expected LQR, got {type(lqr).__name__}")
+        self._lqr = lqr
+
+    @property
+    def K(self) -> np.ndarray:
+        return self._lqr.K
+
+    @property
+    def spec(self):
+        return self._lqr.spec
+
+    @property
+    def input_names(self) -> list:
+        return self._lqr.input_names
+
+    def u(self, x_flat) -> np.ndarray:
+        """Control vector for a flat ambient state (spec layout)."""
+        return np.asarray(
+            self._lqr.control_fn(np.asarray(x_flat, dtype=float))).reshape(-1)
+
+    def control(self, state: dict) -> dict[str, float]:
+        """Map a state estimate → `{input_name: value}`.
+
+        `state` is nested `{owner: {slot: value}}` (e.g.
+        `NumpyEKF.state_dict()` or a `NumpyWorld` state) or flat
+        `{"owner.slot": value}`. Slots not supplied fall back to the
+        world's initial state.
+        """
+        lqr = self._lqr
+        flat: dict[str, Any] = {}
+        for owner_name, owner_state in lqr.world._initial_state_dict().items():
+            for k, v in owner_state.items():
+                flat[f"{owner_name}.{k}"] = v
+        for k, v in state.items():
+            if isinstance(v, dict):
+                for slot, val in v.items():
+                    flat[f"{k}.{slot}"] = val
+            else:
+                flat[k] = v
+        x = lqr.spec.pack({k: v for k, v in flat.items() if k in lqr.spec})
+        u_vec = self.u(x)
+        return {name: float(u_vec[i])
+                for i, name in enumerate(lqr.input_names)}
+
+    def __repr__(self) -> str:
+        return f"<NumpyLQR over {self._lqr!r}>"
+
+
+# ---------------------------------------------------------------------------
 # TargetNumpy factory
 # ---------------------------------------------------------------------------
 
@@ -452,13 +514,17 @@ def TargetNumpy(ir):
       * `EKF`           → `NumpyEKF`   (`.predict()`, `.update()`,
                                         `.state_dict()`, `.reset()`,
                                         `.x`, `.P`).
+      * `LQR`           → `NumpyLQR`   (`.control()`, `.u()`, `.K`).
     """
     from ...sim import Sim
     from ...estimation.ekf import EKF
+    from ...control.lqr import LQR
     if isinstance(ir, Sim):
         return NumpyWorld(ir)
     if isinstance(ir, EKF):
         return NumpyEKF(ir)
+    if isinstance(ir, LQR):
+        return NumpyLQR(ir)
     raise TypeError(
         f"TargetNumpy: no handler for IR type {type(ir).__name__}. "
-        f"Expected Sim or EKF.")
+        f"Expected Sim, EKF, or LQR.")
