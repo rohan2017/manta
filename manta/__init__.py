@@ -55,10 +55,11 @@ from .planets import Planet
 from .couplings import Coupling
 from .estimation.ekf import EKF
 from .estimation.state_spec import ALL, POSE, TWIST, SlotSet
+from .control import LQR
 from .codegen import TargetCpp, TargetNumpy
 
 __all__ = [
-    "ir", "Craft", "World", "Coupling", "Sim", "Planet", "EKF",
+    "ir", "Craft", "World", "Coupling", "Sim", "Planet", "EKF", "LQR",
     "TargetNumpy", "TargetCpp",
     "SlotSet", "POSE", "TWIST", "ALL",
 ]
