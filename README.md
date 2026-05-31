@@ -222,7 +222,7 @@ manta/                     library package
     codegen/               Backends (one subpackage per target language)
         numpy/             TargetNumpy + NumpyWorld + NumpyEKF + NumpyLQR
         cpp/               TargetCpp + extract / kernels / wrapper / cmake
-tests/                     325 tests
+tests/                     323 tests
 examples/                  11 runnable demos
 ```
 
@@ -252,7 +252,7 @@ examples/                  11 runnable demos
 
 In active development. The public API (`World`, `Craft`, `Sim`, `EKF`,
 `LQR`, `TargetNumpy`, `TargetCpp`) is settled enough that the 11 demos
-and 325 tests don't carry compat shims. Open items:
+and 323 tests don't carry compat shims. Open items:
 
 - **`TargetCpp(ekf, …)` / `TargetCpp(lqr, …)`** — estimator and
   controller lowering to C++. The sim lowers today; the EKF/LQR IRs

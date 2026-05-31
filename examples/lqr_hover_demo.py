@@ -70,10 +70,13 @@ def main() -> None:
     print(f"{'t (s)':>6}  {'true pos':>22}  {'est err':>9}  {'norm(u)':>8}")
     u = {n: 0.0 for n in lqr.input_names}
     for i in range(500):
-        # Control on the current estimate.
+        # Control on the current estimate. control() returns full input
+        # names ("c.tx.throttle"); split the owner to apply into the
+        # craft's nested state, and reuse the dict as the EKF's u below.
         u = lqr.control(ekf.state_dict())
-        for k, v in u.items():
-            state["c"][k] = v
+        for full, v in u.items():
+            owner, rest = full.split(".", 1)
+            state[owner][rest] = v
 
         # Advance truth; take a noisy position fix.
         state = sim.step(state, dt=dt)

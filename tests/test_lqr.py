@@ -112,8 +112,9 @@ def test_closed_loop_regulates_to_setpoint():
     state = sim.initial_state()
     state["c"]["position"] = np.array([2.0, -1.0, 8.0])
     for _ in range(600):
-        for k, v in ctrl.control(state).items():
-            state["c"][k] = v
+        for full, v in ctrl.control(state).items():
+            owner, rest = full.split(".", 1)      # "c.tx.throttle" → c / tx.throttle
+            state[owner][rest] = v
         state = sim.step(state, dt=0.02)
     np.testing.assert_allclose(np.asarray(state["c"]["position"]).ravel(),
                                [0, 0, 10], atol=1e-2)
