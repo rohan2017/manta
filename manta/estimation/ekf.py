@@ -151,6 +151,9 @@ class EKF:
             collision_field=world.get_field(CollisionField),
         )
         cf = compiled_tick.casadi_function
+        # Per-input rate declarations (ctx.hold) — the runtime gates its
+        # command ports so predict sees the same ZOH command as truth.
+        self._sample_rates = getattr(compiled_tick, "sample_rates", {})
 
         # Classify the tick's I/O against the model — Inputs (→ u), Noise
         # channels (→ process noise), and candidate sensors. Shared with

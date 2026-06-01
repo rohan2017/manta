@@ -19,6 +19,9 @@ from typing import Any, Callable
 import casadi as ca
 import numpy as np
 
+# Output-shape → vector dimension, for sizing sensor-output ports.
+_SHAPE_DIM = {"scalar": 1, "vec3": 3, "vec4": 4}
+
 
 # ---------------------------------------------------------------------------
 # NumpyWorld — runtime for Sim
@@ -40,6 +43,18 @@ class NumpyWorld:
                 f"NumpyWorld: expected Sim, got "
                 f"{type(cw).__name__}")
         self._cw = cw
+        # Optional stochastic noise source (see attach_driver). None ⇒
+        # the sim is a noiseless oracle: Noise inputs stay at their
+        # zero seed, so a sensor reading equals its mean model.
+        self._driver = None
+        # Signal-bus plumbing (lazy). `_bus_state` is the held state for
+        # the no-arg `step(dt)` form; `_out_ports` publish sensor
+        # readings; `_cmd_in_ports` receive actuator commands.
+        self._bus_state: dict | None = None
+        self._bus_t = 0.0
+        self._out_ports: dict[str, Any] = {}
+        self._cmd_in_ports: dict[str, Any] = {}
+        self._sig = None
 
     # ---- IR passthroughs ----------------------------------------------
 
@@ -55,6 +70,33 @@ class NumpyWorld:
     def tick(self):
         return self._cw.tick
 
+    # ---- Noise driver --------------------------------------------------
+
+    def attach_driver(self, driver: "NoiseDriver") -> "NoiseDriver":
+        """Attach a stochastic `NoiseDriver` so `step()` injects sensor +
+        process noise per the model's `Noise` channels.
+
+        Without a driver the sim is a noiseless oracle (the on-device
+        default — there you run against real sensors). With one, every
+        active (σ>0) Noise channel is sampled each step and fed into its
+        tick input, so truth is genuinely noisy *and* matches the very σ
+        the EKF uses to size R/Q. Returns the driver for one-liners::
+
+            sim.attach_driver(NoiseDriver(seed=7))
+        """
+        from ...estimation.state_spec import StateSpec
+        from ...tick_signature import walk_tick_signature
+        cf  = self._cw.tick.casadi_function
+        sig = walk_tick_signature(
+            cf, self._cw.world, StateSpec.from_world(self._cw.world))
+        driver.bind(sig.noise)
+        self._driver = driver
+        return driver
+
+    @property
+    def driver(self) -> "NoiseDriver | None":
+        return self._driver
+
     # ---- State + step --------------------------------------------------
 
     def initial_state(self) -> dict[str, dict[str, Any]]:
@@ -62,20 +104,46 @@ class NumpyWorld:
         import copy
         return copy.deepcopy(self._cw._initial)
 
-    def step(self,
-             state: dict[str, dict[str, Any]],
-             dt: float,
-             t: float = 0.0) -> dict[str, dict[str, Any]]:
+    def step(self, state=None, dt=None, t: float | None = None):
         """Advance the world by `dt`. Returns a fresh state dict.
 
-        `t` is the world-clock time at the start of this step.
-        Owners may be crafts or field disturbances; both use the same
-        `<owner>.<slot>` convention in the underlying casadi function.
+        Two call forms:
+
+          * **functional** — `step(state, dt, t=0)`: pure, returns a new
+            state dict; nothing is held on the runtime. `state` may be a
+            craft or a field disturbance keyed by `<owner>.<slot>`.
+          * **bus** — `step(dt)` / `step(dt, t=...)`: advances the
+            runtime's *held* state (`sim.state`), pulling any wired
+            command ports in first and publishing sensor readings to the
+            wired output ports after. Use with `wire(...)`.
+
+        `t` is the world-clock time at the start of this step. In bus
+        mode, omitting it advances the runtime's internal clock by `dt`
+        each call (so published measurements carry an honest, increasing
+        timestamp the estimator's staleness check can trust).
         """
+        if isinstance(state, dict):
+            return self._functional_step(state, dt, 0.0 if t is None else t)
+        bus_dt = dt if state is None else state
+        if bus_dt is None:
+            raise TypeError("NumpyWorld.step: provide dt")
+        return self._bus_step(float(bus_dt), t)
+
+    def _functional_step(self,
+                         state: dict[str, dict[str, Any]],
+                         dt: float,
+                         t: float = 0.0) -> dict[str, dict[str, Any]]:
         flat: dict[str, Any] = {"dt": dt, "t": t}
         for owner_name, owner_state in state.items():
             for slot, val in owner_state.items():
                 flat[f"{owner_name}.{slot}"] = val
+
+        # Overlay fresh stochastic draws onto the (zero-seeded) Noise
+        # inputs. The samples live only in this tick's `flat` — they are
+        # never written back to `state`, so each step draws afresh.
+        if self._driver is not None:
+            for name, sample in self._driver.sample().items():
+                flat[name] = sample
 
         out = self._cw.tick(**flat)
 
@@ -92,8 +160,169 @@ class NumpyWorld:
                     new_state[owner_name][slot] = val
         return new_state
 
+    # ---- Signal-bus ports + held-state stepping ------------------------
+
+    @property
+    def state(self) -> dict[str, dict[str, Any]]:
+        """The held state for bus-mode `step(dt)` — lazily seeded from
+        `initial_state()`. Returned by reference, so you can mutate it
+        in place (e.g. `sim.state["c"]["position"] = ...`)."""
+        if self._bus_state is None:
+            self._bus_state = self.initial_state()
+        return self._bus_state
+
+    @state.setter
+    def state(self, value: dict) -> None:
+        self._bus_state = value
+
+    def out(self, name: str):
+        """Producer port for a sensor Output (`"craft.part.output"` or an
+        unambiguous suffix). Published each bus `step()` — at the part's
+        declared sample rate (`ctx.sample`) if any, else every tick."""
+        from ...signal import Signal
+        full = self._resolve(name, self._signature().sensor_names, "output")
+        if full not in self._out_ports:
+            self._out_ports[full] = Signal(
+                full, dim=self._output_dim(full), rate=self._rate(full))
+        return self._out_ports[full]
+
+    def command(self, name: str):
+        """Consumer port for an actuator Input. Pulled into the held
+        state before each bus `step()` (latched / zero-order-hold) — at
+        the part's declared intake rate (`ctx.hold`) if any."""
+        from ...signal import Signal
+        full = self._resolve(name, self._signature().input_names, "input")
+        if full not in self._cmd_in_ports:
+            self._cmd_in_ports[full] = Signal(
+                full, dim=self._input_dim(full), latched=True,
+                rate=self._rate(full))
+        return self._cmd_in_ports[full]
+
+    def _rate(self, full: str):
+        return getattr(self._cw.tick, "sample_rates", {}).get(full)
+
+    def _bus_step(self, dt: float, t: float | None) -> dict[str, dict[str, Any]]:
+        t0 = self._bus_t if t is None else t  # start-of-step world time
+        st = self.state                       # lazy-seed the held state
+        # Pull wired command ports into the held state (ZOH, rate-gated).
+        for full, port in self._cmd_in_ports.items():
+            v = port.latched_value(t0)
+            if v is not None:
+                owner, rest = full.split(".", 1)
+                st.setdefault(owner, {})[rest] = v
+        new = self._functional_step(st, dt, t0)
+        self._bus_state = new
+        self._bus_t = t0 + dt
+        # Publish sensor readings, stamped at the start-of-step time (the
+        # instant the reading observes), to the wired output ports —
+        # gated by each port's sample rate (sample-and-hold in between).
+        for full, port in self._out_ports.items():
+            owner, slot = full.split(".", 1)
+            if owner in new and slot in new[owner] and port.due(t0):
+                port.set(np.asarray(new[owner][slot]).ravel(), t=t0)
+        return new
+
+    # ---- Port resolution helpers --------------------------------------
+
+    def _signature(self):
+        if self._sig is None:
+            from ...estimation.state_spec import StateSpec
+            from ...tick_signature import walk_tick_signature
+            cf = self._cw.tick.casadi_function
+            self._sig = walk_tick_signature(
+                cf, self._cw.world, StateSpec.from_world(self._cw.world))
+        return self._sig
+
+    @staticmethod
+    def _resolve(name: str, candidates: list[str], label: str) -> str:
+        if name in candidates:
+            return name
+        matches = [c for c in candidates if c.endswith("." + name)]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            raise KeyError(
+                f"NumpyWorld: ambiguous {label} {name!r}; matches {matches}. "
+                f"Use the fully-qualified form.")
+        raise KeyError(
+            f"NumpyWorld: unknown {label} {name!r}. Available: "
+            f"{sorted(candidates)}")
+
+    def _output_dim(self, full: str) -> int | None:
+        for s in self._signature().sensors:
+            if s.full == full:
+                shape = s.part.output_declarations()[s.output_name].shape
+                return _SHAPE_DIM.get(shape)
+        return None
+
+    def _input_dim(self, full: str) -> int | None:
+        for ic in self._signature().inputs:
+            if ic.full == full:
+                d = ic.default
+                return 1 if np.ndim(d) == 0 else int(np.size(d))
+        return None
+
     def __repr__(self) -> str:
-        return f"<NumpyWorld over {self._cw!r}>"
+        drv = "" if self._driver is None else f" +{self._driver!r}"
+        return f"<NumpyWorld over {self._cw!r}{drv}>"
+
+
+# ---------------------------------------------------------------------------
+# NoiseDriver — stochastic source for a Sim's Noise channels
+# ---------------------------------------------------------------------------
+
+class NoiseDriver:
+    """Draws the random samples that make a `Sim` genuinely noisy.
+
+    A model's `Noise` channels (WhiteNoise / RandomWalkNoise) only
+    declare a *distribution*; the compiled tick exposes each as an
+    ordinary input seeded to zero. Left alone, the sim is a noiseless
+    oracle. Attach a driver and every active (σ>0) channel is sampled
+    each `step()` and fed into its input — so the same σ that the EKF
+    reads to size R/Q now also shapes the truth it estimates.
+
+    Both kinds sample `N(0, σ²)` per component: WhiteNoise adds the draw
+    straight into the reading; RandomWalkNoise feeds its `_driver` input
+    and the kernel applies the √dt random-walk scaling. The driver is a
+    deliberately thin, swappable layer (kept *out* of the pure kernel),
+    so it lowers to a few lines in any target language and is simply
+    omitted for on-device deployment.
+
+    Usage::
+
+        sim = TargetNumpy(Sim(world))
+        sim.attach_driver(NoiseDriver(seed=7))
+    """
+
+    def __init__(self, seed: int | None = None) -> None:
+        self._seed = seed
+        self._rng  = np.random.default_rng(seed)
+        # (input_name, dim, sigma) per channel; filled by bind().
+        self._channels: list[tuple[str, int, float]] = []
+
+    def bind(self, channels) -> None:
+        """Wire the driver to a list of `NoiseChannel` specs (from
+        `walk_tick_signature`). Called by `NumpyWorld.attach_driver`."""
+        self._channels = [(c.full, c.dim, c.sigma) for c in channels]
+
+    def sample(self) -> dict[str, np.ndarray]:
+        """One independent `N(0, σ²)` draw per active channel.
+
+        Returns `{input_name: vec}`; inactive (σ=0) channels are omitted
+        so they keep their zero seed."""
+        out: dict[str, np.ndarray] = {}
+        for name, dim, sigma in self._channels:
+            if sigma > 0.0:
+                out[name] = self._rng.normal(0.0, sigma, dim)
+        return out
+
+    def reset(self) -> None:
+        """Re-seed to the construction seed for a reproducible rerun."""
+        self._rng = np.random.default_rng(self._seed)
+
+    def __repr__(self) -> str:
+        active = sum(1 for _, _, s in self._channels if s > 0.0)
+        return f"<NoiseDriver seed={self._seed} active={active}>"
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +360,16 @@ class NumpyEKF:
         self.inputs: dict[str, float] = {}
         # Filter clock — advances by dt each step (or to the supplied t).
         self._t = 0.0
+        # Default process noise used by step() when none is passed.
+        self.Q: np.ndarray | None = None
+        # Signal-bus ports (lazy): measurement + command consumers and a
+        # state-estimate producer. `_seen_meas` tracks the last upstream
+        # version folded in, so a measurement is consumed once per fresh
+        # sample (multi-rate safe).
+        self._meas_ports: dict[str, Any] = {}
+        self._cmd_ports:  dict[str, Any] = {}
+        self._seen_meas:  dict[str, int] = {}
+        self._est_port = None
 
     def _initial_x(self) -> np.ndarray:
         """Pack the world's nested initial-state dict into the spec's
@@ -217,6 +456,57 @@ class NumpyEKF:
                     f"NumpyEKF.reset: P shape {P.shape} doesn't match "
                     f"tangent dim {expected}")
             self._P = P.copy()
+        if self._est_port is not None:
+            self._est_port.set(self.state_dict())
+
+    # ---- Signal-bus ports ----------------------------------------------
+
+    def meas(self, name: str):
+        """Consumer port for a sensor measurement (`"craft.part.output"`
+        or an unambiguous suffix). Wire a sim output into it, or `set()`
+        it yourself; `step()` folds it in once per fresh sample."""
+        from ...signal import Signal
+        full = self._resolve_meas_name(name)
+        if full not in self._meas_ports:
+            self._meas_ports[full] = Signal(full, dim=self._meas[full]["dim"])
+        return self._meas_ports[full]
+
+    def command(self, name: str):
+        """Consumer port for a known control input (drives the predict).
+        Latched / zero-order-hold, gated at the part's declared intake
+        rate (`ctx.hold`) so predict sees the same held command as truth."""
+        from ...signal import Signal
+        full = self._resolve_input_full(name)
+        if full not in self._cmd_ports:
+            rate = getattr(self._ekf, "_sample_rates", {}).get(full)
+            self._cmd_ports[full] = Signal(full, latched=True, rate=rate)
+        return self._cmd_ports[full]
+
+    @property
+    def estimate(self):
+        """Producer port carrying the current state estimate (nested
+        `{owner: {slot: value}}`), refreshed after every `step()`/`reset()`.
+        Wire it into `lqr.estimate`."""
+        from ...signal import Signal
+        if self._est_port is None:
+            self._est_port = Signal("estimate", dim=None)
+            self._est_port.set(self.state_dict())
+        return self._est_port
+
+    def _resolve_input_full(self, name: str) -> str:
+        names = self._ekf._input_names
+        if name in names:
+            return name
+        matches = [n for n in names if n.endswith("." + name)]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            raise KeyError(
+                f"NumpyEKF.command: ambiguous input {name!r}; matches "
+                f"{matches}. Use the fully-qualified form.")
+        raise KeyError(
+            f"NumpyEKF.command: unknown input {name!r}. Available: "
+            f"{sorted(names)}")
 
     # ---- Predict -------------------------------------------------------
 
@@ -361,20 +651,40 @@ class NumpyEKF:
         m["fresh"] = True
         m["t"]     = t
 
-    def step(self, dt: float, *, t: float | None = None) -> None:
+    def step(self, dt: float, *, t: float | None = None,
+             Q: np.ndarray | None = None) -> None:
         """Predict by `dt`, then fold in every fresh measurement.
 
-        Latched `self.inputs` drive the predict. Fresh measurements are
-        applied sequentially in registration order at a single
-        linearization point (the post-predict state); their fresh flags
-        are then cleared. A timestamped measurement older than the
-        interval start is dropped as stale. Sub-`dt` measurement timing is
-        quantized to the step boundary; full out-of-sequence handling is
-        out of scope.
+        First pulls any wired ports: latched `command` ports refresh
+        `self.inputs`, and each `meas` port whose upstream has emitted a
+        new sample (its version advanced) is dropped into the mailbox.
+        Then the latched inputs drive the predict and the fresh
+        measurements are applied sequentially at a single linearization
+        point (the post-predict state); their fresh flags are cleared. A
+        timestamped measurement older than the interval start is dropped
+        as stale. `Q` overrides the process noise for this step (else
+        `self.Q`, else model auto-assembly). Sub-`dt` measurement timing
+        is quantized to the step boundary; full out-of-sequence handling
+        is out of scope.
         """
         t_start = t if t is not None else self._t
+        # Pull wired command ports (ZOH, rate-gated) into the latched
+        # input dict — gated on the same clock as the sim so predict and
+        # truth hold the identical command.
+        for full, port in self._cmd_ports.items():
+            v = port.latched_value(t_start)
+            if v is not None:
+                self.inputs[full] = float(v) if np.ndim(v) == 0 else v
+        # Pull wired/own measurement ports: fold in once per fresh sample.
+        for full, port in self._meas_ports.items():
+            ver = port.cur_version
+            if ver > self._seen_meas.get(full, 0):
+                self._seen_meas[full] = ver
+                self.feed(full, port.read(), t=port.cur_t)
+
         u_dict  = self.inputs if self.inputs else None
-        self.predict(dt, t=t_start, u=u_dict)
+        self.predict(dt, t=t_start, u=u_dict,
+                     Q=Q if Q is not None else self.Q)
         u_vec = self._ekf._build_u(u_dict)
         for full, m in self._meas.items():
             if not m["fresh"]:
@@ -385,6 +695,8 @@ class NumpyEKF:
             self._apply_sensor_update(self._ekf._sensors[m["key"]],
                                       m["value"], u_vec)
         self._t = t_start + dt
+        if self._est_port is not None:
+            self._est_port.set(self.state_dict())
 
     def _update_low_level(self,
                           h_sym: Callable[[ca.MX], ca.MX],
@@ -454,6 +766,10 @@ class NumpyLQR:
             raise TypeError(
                 f"NumpyLQR: expected LQR, got {type(lqr).__name__}")
         self._lqr = lqr
+        # Signal-bus ports (lazy): a state-estimate consumer + one
+        # command producer per control input.
+        self._est_in = None
+        self._cmd_ports: dict[str, Any] = {}
 
     @property
     def K(self) -> np.ndarray:
@@ -495,6 +811,55 @@ class NumpyLQR:
         u_vec = self.u(x)
         return {name: float(u_vec[i])
                 for i, name in enumerate(lqr.input_names)}
+
+    # ---- Signal-bus ports ----------------------------------------------
+
+    @property
+    def estimate(self):
+        """Consumer port for the state estimate this regulator acts on.
+        Wire `ekf.estimate` into it."""
+        from ...signal import Signal
+        if self._est_in is None:
+            self._est_in = Signal("estimate", dim=None)
+        return self._est_in
+
+    def command(self, name: str):
+        """Producer port for one control input (`"craft.part.input"` or an
+        unambiguous suffix). `compute()` writes the latest command here;
+        wire it into `sim.command(...)` / `ekf.command(...)`."""
+        from ...signal import Signal
+        full = self._resolve_input_full(name)
+        if full not in self._cmd_ports:
+            self._cmd_ports[full] = Signal(full, dim=1, latched=True)
+        return self._cmd_ports[full]
+
+    def compute(self) -> dict[str, float]:
+        """Read the wired estimate, evaluate the gain, and publish each
+        control to its `command` port. Returns the `{input: value}` dict."""
+        est = self.estimate.read()
+        if est is None:
+            raise RuntimeError(
+                "NumpyLQR.compute: estimate input is empty — wire "
+                "`ekf.estimate` into `lqr.estimate` (or set it) first.")
+        u = self.control(est)
+        for full, v in u.items():
+            self.command(full).set(v)
+        return u
+
+    def _resolve_input_full(self, name: str) -> str:
+        names = self._lqr.input_names
+        if name in names:
+            return name
+        matches = [n for n in names if n.endswith("." + name)]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            raise KeyError(
+                f"NumpyLQR.command: ambiguous input {name!r}; matches "
+                f"{matches}. Use the fully-qualified form.")
+        raise KeyError(
+            f"NumpyLQR.command: unknown input {name!r}. Available: "
+            f"{sorted(names)}")
 
     def __repr__(self) -> str:
         return f"<NumpyLQR over {self._lqr!r}>"

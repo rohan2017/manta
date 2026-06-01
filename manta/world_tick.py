@@ -178,7 +178,15 @@ def compile_world_tick(crafts: list,
     for craft in crafts:
         craft._sym_state = None
 
-    return g.compile(defaults={"t": 0.0})
+    cg = g.compile(defaults={"t": 0.0})
+    # Aggregate per-part rate declarations (ctx.sample / ctx.hold) onto
+    # the compiled tick. Approach A: this is pure metadata — the kernel
+    # is unchanged; the Sim/EKF runtimes read it to gate their I/O ports.
+    rates: dict[str, float] = {}
+    for craft in crafts:
+        rates.update(per_craft[id(craft)].get("sample_rates", {}))
+    cg.sample_rates = rates
+    return cg
 
 
 # ---------------------------------------------------------------------------
@@ -410,6 +418,8 @@ def _trace_craft_pass1(g_ctx,
     own_wrench: dict[Part, Wrench] = {}
     new_state_outputs: list[tuple[str, Any]] = []
     sensor_outputs:    list[tuple[str, Any]] = []
+    # Rate declarations (ctx.sample / ctx.hold) → {full_io_name: rate_hz}.
+    sample_rates:      dict[str, float] = {}
     # (placeholder, real) for each joint's θ̈ — populated by the cascade.
     joint_accel_reals: list[tuple[Any, Any]] = []
     for part in craft._parts:
@@ -492,6 +502,20 @@ def _trace_craft_pass1(g_ctx,
                 f"declared but not written: {sorted(missing_out)}.")
         for oname, oval in outputs.items():
             sensor_outputs.append((prefix + f"{part.name}.{oname}", oval))
+
+        # Rate declarations: match the values passed to ctx.sample()/
+        # ctx.hold() (by identity) against this part's emitted outputs and
+        # its bound Input symbols, recording {full_io_name: rate_hz}.
+        if ctx_part._sample_records:
+            rate_by_id = {sid: r for sid, r, _ in ctx_part._sample_records}
+            for oname, oval in outputs.items():
+                r = rate_by_id.get(id(oval))
+                if r is not None:
+                    sample_rates[prefix + f"{part.name}.{oname}"] = r
+            for iname in part.input_declarations():
+                r = rate_by_id.get(id(getattr(part, iname)))
+                if r is not None:
+                    sample_rates[prefix + f"{part.name}.{iname}"] = r
 
         # Part-frame wrench → rotate to body coords (NO lift). The cascade
         # below lifts + sums it up the joint tree.
@@ -576,6 +600,7 @@ def _trace_craft_pass1(g_ctx,
         "inertia":           inertia,
         "new_state_outputs": new_state_outputs,
         "sensor_outputs":    sensor_outputs,
+        "sample_rates":      sample_rates,
         "rw_bias_updates":   rw_bias_updates,
         "joint_accel_reals": joint_accel_reals,
         "com_rel_motion":    (v_com_rel_mx, a_com_rel_mx),

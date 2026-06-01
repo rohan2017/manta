@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from ...ir.frames import PartFrame
 from ...ir.types import Vec3
-from ..base import Input, Parameter, Part
+from ..base import Input, Parameter, Part, WhiteNoise
 from ...ir.wrench import Wrench
 
 
@@ -40,6 +40,17 @@ class Thruster(Part):
     Input:
         throttle — scalar control input. Units depend on the scaling
                    of the coefficients.
+
+    Process-noise channels (the actuator analogue of a sensor's noise —
+    set σ to engage, default 0 = a perfectly clean actuator):
+        force_noise  : per-tick white force (N) added to the thrust, in
+                       the thruster frame. Because it enters the *wrench*
+                       (not an Output) it propagates through the dynamics
+                       into the next state, so the EKF auto-builds `Q`
+                       from it (just as σ on a sensor auto-builds `R`),
+                       and a `NoiseDriver` jitters the truth thrust by it.
+        torque_noise : per-tick white torque (N·m) added to the reaction
+                       torque, same frame and same role for attitude.
     """
 
     force:       "tuple[float, float, float]" = Parameter((0.0, 0.0, 0.0))
@@ -47,6 +58,9 @@ class Thruster(Part):
     torque:      "tuple[float, float, float]" = Parameter((0.0, 0.0, 0.0))
     torque_quad: "tuple[float, float, float]" = Parameter((0.0, 0.0, 0.0))
     throttle: float = Input(default=0.0)
+
+    force_noise  = WhiteNoise("vec3", frame=PartFrame, sigma=0.0)
+    torque_noise = WhiteNoise("vec3", frame=PartFrame, sigma=0.0)
 
     def update(self, ctx):
         t  = self.throttle
@@ -58,6 +72,6 @@ class Thruster(Part):
         c2τ = Vec3[PartFrame].constant(self.torque_quad)
 
         return Wrench(
-            force =c1F * t + c2F * t2,
-            torque=c1τ * t + c2τ * t2,
+            force =c1F * t + c2F * t2 + self.force_noise,
+            torque=c1τ * t + c2τ * t2 + self.torque_noise,
         )

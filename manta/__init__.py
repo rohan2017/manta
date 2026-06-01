@@ -56,10 +56,11 @@ from .couplings import Coupling
 from .estimation.ekf import EKF
 from .estimation.state_spec import ALL, POSE, TWIST, SlotSet
 from .control import LQR
-from .codegen import TargetCpp, TargetNumpy
+from .codegen import NoiseDriver, TargetCpp, TargetNumpy
+from .signal import Signal, wire
 
 __all__ = [
     "ir", "Craft", "World", "Coupling", "Sim", "Planet", "EKF", "LQR",
-    "TargetNumpy", "TargetCpp",
+    "TargetNumpy", "TargetCpp", "NoiseDriver", "Signal", "wire",
     "SlotSet", "POSE", "TWIST", "ALL",
 ]

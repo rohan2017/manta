@@ -24,6 +24,6 @@ Adding a backend (TensorFlow, raw embedded C, CUDA, …) is one new
 """
 
 from .cpp   import TargetCpp
-from .numpy import NumpyEKF, NumpyWorld, TargetNumpy
+from .numpy import NoiseDriver, NumpyEKF, NumpyWorld, TargetNumpy
 
-__all__ = ["TargetNumpy", "TargetCpp", "NumpyWorld", "NumpyEKF"]
+__all__ = ["TargetNumpy", "TargetCpp", "NumpyWorld", "NumpyEKF", "NoiseDriver"]

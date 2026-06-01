@@ -150,7 +150,7 @@ class TickContext:
                  "position", "velocity", "acceleration",
                  "angular_velocity", "angular_acceleration",
                  "R_craft_from_input",
-                 "_world", "_fields")
+                 "_world", "_fields", "_sample_records")
 
     def __init__(self,
                  *,
@@ -185,6 +185,11 @@ class TickContext:
         # uses it to map a part's emitted wrench to body coords; parts
         # rarely need it directly now.
         self.R_craft_from_input = R_craft_from_input
+        # Rate declarations collected during this part's update():
+        # (id(value), rate_hz, kind) tuples from `sample()` / `hold()`.
+        # The compiler matches the ids against the part's emitted outputs
+        # / bound inputs to build the tick's `sample_rates` map.
+        self._sample_records: list = []
 
     # ----- Field / world introspection ----------------------------------
 
@@ -237,6 +242,44 @@ class TickContext:
             if isinstance(p, cls):
                 return p
         return None
+
+    # ----- Rate declaration (Approach A: metadata only) ------------------
+
+    def sample(self, value, rate=None):
+        """Declare that an Output is sampled at `rate` Hz, and return
+        `value` unchanged.
+
+        This records metadata only — the compiled tick stays a pure
+        function (no sample-and-hold state enters the kernel, so it never
+        complicates autodiff or the EKF/LQR linearization). The Sim
+        runtime reads the rate off the model and gates the matching
+        output *port*: a fresh reading is published once per 1/rate
+        window and held in between. `rate=None` ⇒ every tick. Use inside
+        `update()`::
+
+            return PartUpdate(outputs={
+                "gyro": ctx.sample(gyro_vec, rate=self.rate)})
+        """
+        if rate is not None:
+            self._sample_records.append((id(value), float(rate), "output"))
+        return value
+
+    def hold(self, value, rate=None):
+        """Declare that an Input is accepted at `rate` Hz (zero-order
+        hold), and return `value` unchanged.
+
+        Like `sample()`, this is metadata only — the kernel is unchanged.
+        The Sim and EKF runtimes gate the matching command *port*: a new
+        command is latched once per 1/rate window and held in between, so
+        truth and the estimator's predict see the *same* held command.
+        `rate=None` ⇒ every tick. Use inside `update()` on the Input the
+        part actuates::
+
+            throttle = ctx.hold(self.throttle, rate=self.command_rate)
+        """
+        if rate is not None:
+            self._sample_records.append((id(value), float(rate), "input"))
+        return value
 
 
 # ---------------------------------------------------------------------------

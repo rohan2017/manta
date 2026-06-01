@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3
-from ..base import Output, Part, PartUpdate, WhiteNoise
+from ..base import Output, Parameter, Part, PartUpdate, WhiteNoise
 from ...ir.wrench import Wrench
 
 
@@ -32,7 +32,17 @@ class PositionSensor(Part):
                          it (`PositionSensor("gps", position_noise_sigma=0.5)`)
                          to give the EKF an auto-built R for this sensor,
                          e.g. when driving the filter through `step()`.
+
+    Rate (Hz):
+        rate : measurement rate. `None` (default) ⇒ a fresh fix every
+               tick. Set it (`PositionSensor("gps", rate=1.0)`) to model a
+               slow sensor: the Sim publishes a new reading once per
+               1/rate window and holds it in between, and the EKF folds
+               each fix in exactly once. Pure metadata — the tick stays a
+               smooth function (the estimator sees the continuous model).
     """
+
+    rate: float = Parameter(None)
 
     position_noise = WhiteNoise("vec3", frame=WorldFrame, sigma=0.0)
 
@@ -40,8 +50,8 @@ class PositionSensor(Part):
 
     def update(self, ctx) -> PartUpdate:
         zero_v = Vec3[PartFrame].constant((0.0, 0.0, 0.0))
+        reading = ctx.position[WorldFrame] + self.position_noise
         return PartUpdate(
             wrench=Wrench(force=zero_v, torque=zero_v),
-            outputs={"position": ctx.position[WorldFrame]
-                                  + self.position_noise},
+            outputs={"position": ctx.sample(reading, rate=self.rate)},
         )
