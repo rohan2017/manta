@@ -384,13 +384,20 @@ class State(_Declaration):
 
     Args:
         init      Python value (default initial value across compiles).
-                  For R1 a float; for R3 a length-3 tuple / ndarray.
+                  For R1 a float; for R3 a length-3 tuple / ndarray; for
+                  SO(3) a length-4 quaternion (w, x, y, z).
         manifold  String shortcut ('R1', 'R3') or a `Manifold` instance.
-                  'SO3' requires the dual-frame parametrization (used
-                  internally for rigid-body slots; not user-selectable
-                  via this declaration yet).
+                  SO(3) state is fully supported — pass an explicit
+                  `SO3Manifold(from_frame=..., to_frame=...)` instance
+                  (the string shortcut is intentionally disallowed because
+                  SO(3) needs the dual-frame parametrization). The slot
+                  then evolves on the manifold: the part integrates it
+                  with `manifold.boxplus(q, ω·dt)`, the framework keeps it
+                  unit-normalized, and the EKF/LQR linearization gives it
+                  a 3-dim tangent automatically. See `tests/test_so3_state`.
         frame     Frame tag for R3 state. Default `CraftFrame`. Ignored
-                  for R1. Folded into the Manifold instance.
+                  for R1 and SO(3) (the latter's frames live on the
+                  manifold). Folded into the Manifold instance.
 
     `state.manifold` always reads back as a `Manifold` instance; the
     string form is normalized at construction.

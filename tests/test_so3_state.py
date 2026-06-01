@@ -203,3 +203,37 @@ def test_state_spec_picks_up_so3_state_slot():
     assert slot.dim              == 4
     assert slot.tangent_dim      == 3
     assert slot.manifold.kind    == "quat"
+
+
+# ---------------------------------------------------------------------------
+# EKF: the SO(3) slot gets a 3-dim tangent and predicts on the manifold
+# ---------------------------------------------------------------------------
+
+def test_ekf_predicts_so3_state_on_manifold():
+    """An SO(3) part state flows through the EKF's Linearization: it gets
+    a 3-dim tangent, and predict integrates it on the manifold (matching
+    the closed-form quaternion product), with a finite, symmetric P."""
+    from manta import EKF
+
+    c = Craft("c"); c.add(Mass("body", mass=1.0))
+    c.add(_AttitudeIntegrator("att"))
+    w = World().add_field(GravityField(g=(0, 0, 0)))
+    w.add_craft(c)
+    ekf = TargetNumpy(EKF(w))
+    # pose/twist 12 + omega_cmd (R3 → 3) + orientation_est (SO3 → 3) = 18.
+    assert ekf.spec.tangent_dim == 18
+
+    omega_z, dt, N = 0.3, 0.005, 400
+    ekf.reset(state={"c": {"att.omega_cmd": [0.0, 0.0, omega_z]}},
+              P=np.eye(ekf.spec.tangent_dim))
+    for _ in range(N):
+        ekf.predict(dt=dt)
+
+    theta = N * omega_z * dt
+    q_exp = np.array([np.cos(theta / 2), 0.0, 0.0, np.sin(theta / 2)])
+    q_got = np.asarray(
+        ekf.state_dict()["c"]["att.orientation_est"]).ravel()
+    assert (np.allclose(q_got, q_exp, atol=1e-6) or
+            np.allclose(q_got, -q_exp, atol=1e-6)), (q_got, q_exp)
+    assert np.all(np.isfinite(ekf.P))
+    np.testing.assert_allclose(ekf.P, ekf.P.T, atol=1e-12)

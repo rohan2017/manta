@@ -42,7 +42,8 @@ class Signal:
     """
 
     __slots__ = ("name", "dim", "value", "fresh", "t", "version",
-                 "source", "latched", "rate", "_last_fire_t", "_held")
+                 "source", "latched", "rate", "_last_fire_t", "_held",
+                 "layout")
 
     def __init__(self, name: str, dim: int | None = None, *,
                  latched: bool = False, rate: float | None = None) -> None:
@@ -54,6 +55,12 @@ class Signal:
         self.version = 0          # bumps on every set()
         self.source:  "Signal | None" = None
         self.latched = latched
+        # Optional schema for a flat vector-valued signal: {slot_name:
+        # (offset, dim)}. A producer of a structured state vector (e.g.
+        # `ekf.estimate`) sets this so a consumer can build a fixed
+        # name-keyed gather into its own layout — the codegen-honest
+        # alternative to shipping a nested dict.
+        self.layout: "dict[str, tuple[int, int]] | None" = None
         # Rate gating (Hz). None ⇒ every tick. The part declares this via
         # `ctx.sample()` / `ctx.hold()`; the runtime stamps it onto the
         # port. `_last_fire_t` / `_held` are the gate's bookkeeping.

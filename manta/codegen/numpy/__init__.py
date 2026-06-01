@@ -457,7 +457,7 @@ class NumpyEKF:
                     f"tangent dim {expected}")
             self._P = P.copy()
         if self._est_port is not None:
-            self._est_port.set(self.state_dict())
+            self._est_port.set(self._x.copy())
 
     # ---- Signal-bus ports ----------------------------------------------
 
@@ -484,13 +484,18 @@ class NumpyEKF:
 
     @property
     def estimate(self):
-        """Producer port carrying the current state estimate (nested
-        `{owner: {slot: value}}`), refreshed after every `step()`/`reset()`.
-        Wire it into `lqr.estimate`."""
+        """Producer port carrying the current state estimate as the flat
+        ambient vector (EKF spec layout), refreshed after every
+        `step()`/`reset()`. The port's `layout` ({slot: (offset, dim)})
+        lets a consumer build a fixed name-keyed gather into its own
+        layout — codegen-honest (a flat vector + a static index map, not
+        a nested dict). Wire it into `lqr.estimate`."""
         from ...signal import Signal
         if self._est_port is None:
-            self._est_port = Signal("estimate", dim=None)
-            self._est_port.set(self.state_dict())
+            self._est_port = Signal("estimate", dim=self.spec.ambient_dim)
+            self._est_port.layout = {
+                s.name: (s.offset, s.dim) for s in self.spec.slots}
+            self._est_port.set(self._x.copy())
         return self._est_port
 
     def _resolve_input_full(self, name: str) -> str:
@@ -696,7 +701,7 @@ class NumpyEKF:
                                       m["value"], u_vec)
         self._t = t_start + dt
         if self._est_port is not None:
-            self._est_port.set(self.state_dict())
+            self._est_port.set(self._x.copy())
 
     def _update_low_level(self,
                           h_sym: Callable[[ca.MX], ca.MX],
@@ -770,6 +775,10 @@ class NumpyLQR:
         # command producer per control input.
         self._est_in = None
         self._cmd_ports: dict[str, Any] = {}
+        # Fixed gather from the wired estimate's layout → this LQR's full
+        # ambient layout: list of (full_offset, dim, src_offset). Built
+        # once on first compute() (None until then).
+        self._gather: "list[tuple[int, int, int]] | None" = None
 
     @property
     def K(self) -> np.ndarray:
@@ -835,16 +844,54 @@ class NumpyLQR:
 
     def compute(self) -> dict[str, float]:
         """Read the wired estimate, evaluate the gain, and publish each
-        control to its `command` port. Returns the `{input: value}` dict."""
+        control to its `command` port. Returns the `{input: value}` dict.
+
+        The estimate is the producer's flat ambient vector; its slots are
+        scattered (by name, via a fixed precomputed gather) into this
+        LQR's full ambient layout over the operating-point base, then the
+        baked control law reads the tracked slots from it. A nested dict
+        is still accepted (e.g. an unwired estimate set by hand)."""
+        import numpy as np
         est = self.estimate.read()
         if est is None:
             raise RuntimeError(
                 "NumpyLQR.compute: estimate input is empty — wire "
                 "`ekf.estimate` into `lqr.estimate` (or set it) first.")
-        u = self.control(est)
+        if isinstance(est, dict):
+            u = self.control(est)                    # legacy / hand-set dict
+        else:
+            self._ensure_gather()
+            x_full = self._lqr.x_ref.copy()          # operating-point base
+            x_src  = np.asarray(est, dtype=float).reshape(-1)
+            for foff, dim, soff in self._gather:
+                x_full[foff:foff + dim] = x_src[soff:soff + dim]
+            u_vec = self.u(x_full)
+            u = {n: float(u_vec[i])
+                 for i, n in enumerate(self._lqr.input_names)}
         for full, v in u.items():
             self.command(full).set(v)
         return u
+
+    def _ensure_gather(self) -> None:
+        """Build the fixed estimate→full-ambient gather from the wired
+        producer's `layout`. Each slot the producer exposes that also
+        exists in this LQR's full spec is copied by name; slots the
+        producer lacks keep their operating-point value (and untracked
+        slots are ignored by the control law anyway)."""
+        if self._gather is not None:
+            return
+        full = self._lqr.spec
+        src = self.estimate.source
+        layout = getattr(src, "layout", None) if src is not None else None
+        if layout is None:
+            raise RuntimeError(
+                "NumpyLQR.compute: wired estimate carries no layout; wire "
+                "`ekf.estimate` (a flat vector + layout) or set a dict.")
+        pairs: list[tuple[int, int, int]] = []
+        for name, (soff, sdim) in layout.items():
+            if name in full:
+                pairs.append((full.slot(name).offset, sdim, soff))
+        self._gather = pairs
 
     def _resolve_input_full(self, name: str) -> str:
         names = self._lqr.input_names
