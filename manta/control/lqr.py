@@ -50,7 +50,7 @@ from ..linearization import Linearization
 from ..linearized_world import flatten_nested, freeze_complement, resolve_suffix
 from ..sim import Sim
 from ..estimation.state_spec import StateSpec
-from ..tick_signature import walk_tick_signature
+from ..tick import walk_tick_signature
 
 
 def _solve_dare(A, B, Q, R, *, max_iter: int = 10000, tol: float = 1e-12):

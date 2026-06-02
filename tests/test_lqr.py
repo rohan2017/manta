@@ -14,7 +14,7 @@ from manta import World, Craft, Sim, LQR, TargetNumpy
 from manta.fields import GravityField
 from manta.parts import Mass, Thruster
 from manta.estimation.state_spec import StateSpec
-from manta.tick_signature import walk_tick_signature
+from manta.tick import walk_tick_signature
 from manta.linearization import Linearization
 
 M, G = 2.0, 9.81

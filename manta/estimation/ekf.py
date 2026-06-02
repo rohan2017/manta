@@ -136,7 +136,7 @@ class EKF:
 
         # Compile the est-side world tick using the world's registered
         # fields + couplings.
-        from ..world_tick import compile_world_tick
+        from ..tick import compile_world_tick
         from ..fields import (
             CollisionField, FluidField, GravityField, MagField,
         )
@@ -156,7 +156,7 @@ class EKF:
         # channels (→ process noise), and candidate sensors. Shared with
         # the C++ extractor; membership in the FULL spec is the "is this a
         # state slot?" check.
-        from ..tick_signature import walk_tick_signature
+        from ..tick import walk_tick_signature
         sig = walk_tick_signature(cf, world, full_spec)
         self._noise_specs = sig.noise
         all_input_defaults = sig.input_defaults

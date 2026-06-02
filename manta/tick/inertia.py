@@ -46,7 +46,7 @@ from __future__ import annotations
 import casadi as ca
 import numpy as np
 
-from .ir._rotation import R_from_axis_angle
+from ..ir._rotation import R_from_axis_angle
 
 
 # ---------------------------------------------------------------------------
@@ -70,8 +70,8 @@ def symbolic_inertia_rollup(root_part) -> dict:
 
     Raises ValueError if total mass is zero.
     """
-    from .parts.articulation.joint import Joint
-    from .parts.base import CompositePart
+    from ..parts.articulation.joint import Joint
+    from ..parts.base import CompositePart
 
     # Accumulators (MX). com_sum is summed as m·r vectors; I_about_origin
     # is the inertia tensor about the craft origin, in body-frame coords.
@@ -139,7 +139,7 @@ def symbolic_inertia_rollup(root_part) -> dict:
                 visit(child, r_part_in_craft_mx, R_craft_from_output_mx)
 
     # Visit each child of root with parent state = root (r=0, R=I).
-    from .parts.base import CompositePart as _CompositePart
+    from ..parts.base import CompositePart as _CompositePart
     if isinstance(root_part, _CompositePart):
         for child in root_part.children:
             visit(child, ca.MX.zeros(3, 1), ca.MX.eye(3))
@@ -175,7 +175,7 @@ def _evaluate_at_zero(expr_mx, root_part) -> np.ndarray:
     """Evaluate `expr_mx` with every Joint's angle/rate MX symbol substituted
     by 0. Used for compile-time singularity checks against the at-rest
     inertia tensor without spinning up a full CasADi Function."""
-    from .parts.articulation.joint import Joint
+    from ..parts.articulation.joint import Joint
 
     def collect_joint_syms(part, syms):
         if isinstance(part, Joint):
@@ -185,7 +185,7 @@ def _evaluate_at_zero(expr_mx, root_part) -> np.ndarray:
                 syms.append(angle_attr._mx)
             if hasattr(rate_attr, "_mx"):
                 syms.append(rate_attr._mx)
-        from .parts.base import CompositePart
+        from ..parts.base import CompositePart
         if isinstance(part, CompositePart):
             for c in part.children:
                 collect_joint_syms(c, syms)

@@ -88,7 +88,7 @@ class NumpyWorld:
             sim.attach_driver(NoiseDriver(seed=7))
         """
         from ...estimation.state_spec import StateSpec
-        from ...tick_signature import walk_tick_signature
+        from ...tick import walk_tick_signature
         cf  = self._cw.tick.casadi_function
         sig = walk_tick_signature(
             cf, self._cw.world, StateSpec.from_world(self._cw.world))
@@ -230,7 +230,7 @@ class NumpyWorld:
     def _signature(self):
         if self._sig is None:
             from ...estimation.state_spec import StateSpec
-            from ...tick_signature import walk_tick_signature
+            from ...tick import walk_tick_signature
             cf = self._cw.tick.casadi_function
             self._sig = walk_tick_signature(
                 cf, self._cw.world, StateSpec.from_world(self._cw.world))

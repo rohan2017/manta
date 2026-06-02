@@ -30,17 +30,17 @@ from typing import Any
 import casadi as ca
 import numpy as np
 
-from . import ir
-from .craft import (
+from .. import ir
+from ..craft import (
     TickContext, _aggregate_inertials,
     _wrench_rotate_to_craft, _shift_wrench,
 )
 from .inertia import symbolic_inertia_rollup
 from .kinematics import kinematic_pass
-from .ir.frames import WorldFrame, CraftFrame, PartFrame
-from .ir.manifold import SO3Manifold
-from .parts.base import CompositePart, Part, PartUpdate
-from .ir.wrench import Wrench
+from ..ir.frames import WorldFrame, CraftFrame, PartFrame
+from ..ir.manifold import SO3Manifold
+from ..parts.base import CompositePart, Part, PartUpdate
+from ..ir.wrench import Wrench
 
 
 def compile_world_tick(crafts: list,
@@ -75,7 +75,7 @@ def compile_world_tick(crafts: list,
     Plus a shared `dt` input. Sensor outputs use the same prefix.
     """
     # Resolve field defaults.
-    from .fields import (
+    from ..fields import (
         CollisionField as _CollisionField,
         FluidField as _FluidField,
         GravityField as _GravityField,
@@ -202,7 +202,7 @@ def _plumb_field_disturbances(fields, dt) -> tuple[list, list[tuple[str, Any]]]:
       * `state_outputs` — list of `(output_name, output_value)` that the
         caller emits as graph outputs after the part-loop completes.
     """
-    from .fields.base import Disturbance
+    from ..fields.base import Disturbance
 
     saved_attrs: list = []
     state_outputs: list[tuple[str, Any]] = []
@@ -297,7 +297,7 @@ def _trace_craft_pass1(craft,
     alpha_placeholder    = ir.Vec3[CraftFrame].from_mx(alpha_sym)
 
     if collision_field is None:
-        from .fields import CollisionField as _CF
+        from ..fields import CollisionField as _CF
         collision_field = _CF()
 
     # State + Input rebinds on each part — must happen BEFORE the
@@ -363,7 +363,7 @@ def _trace_craft_pass1(craft,
     # `(new_rate − rate)/dt` after the update loop. These feed the
     # joint-relative acceleration of every part on the rotor (and hence
     # rotor-mounted sensors + the moving-COM origin recoil).
-    from .parts.articulation.joint import Joint
+    from ..parts.articulation.joint import Joint
     joint_accel_syms: dict[Any, Any] = {}
     for part in craft._parts:
         if isinstance(part, Joint):
@@ -415,7 +415,7 @@ def _trace_craft_pass1(craft,
         # each kinematic quantity as a frame-indexed view (X[Frame] = the
         # value relative to Frame, in Frame coords), the part's own world
         # attitude, and the Craft←Part rotation. The wrench the part returns
-        # is in PartFrame; `_wrench_to_craft` maps it back to body coords.
+        # is in PartFrame; `_wrench_rotate_to_craft` maps it to body coords.
         orientation_part = ir.Quat[WorldFrame, PartFrame].from_mx(
             kin.orientation_anchor_from_input._mx)
         R_craft_from_part = ir.Mat3[CraftFrame, PartFrame].from_mx(
@@ -444,7 +444,7 @@ def _trace_craft_pass1(craft,
                 f"{type(part).__name__}('{part.name}').update(): must "
                 f"return Wrench or PartUpdate, got {type(result).__name__}")
         if w_part.frame is not PartFrame:
-            from .ir.frames import FrameError, _capture_user_source
+            from ..ir.frames import FrameError, _capture_user_source
             raise FrameError(
                 f"{type(part).__name__}.update",
                 expected="Wrench in PartFrame",
@@ -699,7 +699,7 @@ def _emit_per_craft_dynamics(g_ctx, craft, pc, dt) -> None:
                           ca.vertcat(*joint_reals)))
     placeholders = ca.vertcat(a_world_sym, alpha_sym, *joint_syms)
     real_values  = ca.vertcat(a_origin_world._mx, alpha._mx, *joint_reals)
-    from .ir.types import _IRValue
+    from ..ir.types import _IRValue
 
     def _resolve(val):
         if not isinstance(val, _IRValue):

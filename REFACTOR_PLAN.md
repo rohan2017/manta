@@ -139,3 +139,10 @@ Per the no-alias rule: move + fix every import, no shims.
     whether to force the coupling anyway.
   - **DEFERRED: numpy per-runtime file split** — pure organization (the monolith is
     smaller now after the dedup); offered as a follow-up.
+- [x] **Folder reorg: `manta/tick/`** — grouped the tick-compilation cluster
+  (`world_tick.py`, `kinematics.py`, `inertia.py`, `tick_signature.py`) into one
+  package with an `__init__` re-exporting `compile_world_tick` / `walk_tick_signature`.
+  Fixed every importer (no compat shims). Also removed `_wrench_to_craft` (a dead
+  pre-cascade fossil the first sweep missed) + its stale docstring references. Full
+  suite green. `recurrence.py` left at top level (it's an IR block, peer of `Sim`, not
+  a backend) — the name is the recurrence-relation form `x' = f(x,u,dt)`.

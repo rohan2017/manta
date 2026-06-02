@@ -50,14 +50,14 @@ from typing import Any
 
 import casadi as ca
 
-from .ir._rotation import (
+from ..ir._rotation import (
     R_from_axis_angle,
     quat_from_axis_angle,
     quat_mul,
     rotate_vec_by_quat,
 )
-from .ir.frames import WorldFrame, CraftFrame, ParentFrame, PartFrame
-from .ir.types import Mat3, Quat, Vec3
+from ..ir.frames import WorldFrame, CraftFrame, ParentFrame, PartFrame
+from ..ir.types import Mat3, Quat, Vec3
 
 
 # ---------------------------------------------------------------------------
@@ -242,7 +242,7 @@ def kinematic_pass(root_part,
         lever-arm transfer alone misses, so a sensor on a moving rotor
         reads the right specific force and the system COM recoil is exact.
     """
-    from .parts.base import CompositePart
+    from ..parts.base import CompositePart
 
     if joint_angular_accels is None:
         joint_angular_accels = {}
@@ -318,7 +318,7 @@ def _compute_child_state(parent_state: KinematicState, parent_part, child,
                          body_angular_acceleration,
                          body_angular_velocity,
                          joint_angular_accels=None) -> KinematicState:
-    from .parts.articulation.joint import Joint
+    from ..parts.articulation.joint import Joint
 
     if joint_angular_accels is None:
         joint_angular_accels = {}

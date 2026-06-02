@@ -3,10 +3,11 @@
 This module holds the `Craft` container (a part tree + initial-state
 helpers), the `TickContext` passed to each `Part.update()`, and the
 compile-time inertial/wrench helpers (`_aggregate_inertials`,
-`_wrench_to_craft`). The dynamics pipeline described below — the
-symbolic Newton-Euler tick that consumes those helpers — is compiled
-in `world_tick.py` (the sole tick path; see `Sim(world)`). The
-description here is the physics contract that pipeline implements.
+`_wrench_rotate_to_craft` + `_shift_wrench`). The dynamics pipeline
+described below — the symbolic Newton-Euler tick that consumes those
+helpers — is compiled in `tick/world_tick.py` (the sole tick path; see
+`Sim(world)`). The description here is the physics contract that pipeline
+implements.
 
 Scope:
 - 13-DOF rigid-body state: position (3) + orientation quaternion (4) +
@@ -338,51 +339,11 @@ def _aggregate_inertials(parts: list[Part]) -> dict[str, Any]:
 # Wrench transformation (part frame → craft frame)
 # ---------------------------------------------------------------------------
 
-def _wrench_to_craft(wrench_part: Wrench, r_in_craft: Vec3,
-                     R_craft_from_input: Mat3) -> Wrench:
-    """Lift a part-emitted wrench to a wrench acting at the craft origin.
-
-    A part's `update()` works entirely in its OWN (input) frame: it reads
-    a TickContext whose directional quantities are already expressed in
-    that frame and returns its wrench there too. This function does the
-    two framework-side steps that put it on the body:
-
-      1. Rotate force and torque from the part's input frame into
-         body-frame coords:  F_body = R · F_input,  τ_body = R · τ_input,
-         where `R = R_craft_from_input` (identity for a part mounted
-         directly on the craft root; the joint angle for a part on a
-         rotor chain).
-      2. Lift the force from the part's offset to the craft origin:
-             F_at_origin = F_body
-             τ_at_origin = τ_body + r × F_body
-
-    `r_in_craft` is the part's body-frame position (from the symbolic
-    kinematic pass) — `part.transform` for a flat craft, joint-chain-
-    composed otherwise. Because the rotation lives here, no part needs to
-    touch `R_craft_from_input`; any part rides any joint correctly.
-    """
-    if wrench_part.frame is not PartFrame:
-        from .ir.frames import FrameError, _capture_user_source
-        raise FrameError(
-            "_wrench_to_craft",
-            expected="part Wrench in PartFrame",
-            got=f"frame={wrench_part.frame.__name__}",
-            source=_capture_user_source(),
-        )
-    force_body  = R_craft_from_input @ wrench_part.force
-    torque_body = R_craft_from_input @ wrench_part.torque
-    extra_torque = r_in_craft.cross(force_body)
-    return Wrench(
-        force=force_body,
-        torque=torque_body + extra_torque,
-    )
-
-
 def _wrench_rotate_to_craft(wrench_part: Wrench,
                             R_craft_from_input: Mat3) -> Wrench:
     """Rotate a part-emitted wrench into body coords WITHOUT lifting it.
 
-    Step (1) of `_wrench_to_craft` only: `F_body = R · F_input`,
+    Rotation-only step: `F_body = R · F_input`,
     `τ_body = R · τ_input`. The torque stays referenced about the part's
     OWN origin (no `r × F` lift). The bottom-up wrench cascade
     (`world_tick`) lifts incrementally via `_shift_wrench` as it walks the
@@ -409,8 +370,9 @@ def _shift_wrench(wrench_craft: Wrench, delta_r: Vec3) -> Wrench:
     parent's origin: `τ_parent = τ_child + delta_r × F`, where
     `delta_r = r_child − r_parent`. Force is unchanged. Used by the
     bottom-up cascade. Telescoping these per-hop shifts up a non-joint
-    chain reproduces the single `r × F` lift to the root, so a craft with
-    no joints aggregates exactly as `_wrench_to_craft` does.
+    chain reproduces the single `r × F` lift to the root (rotate via
+    `_wrench_rotate_to_craft`, then shift), so a flat craft aggregates
+    exactly as a single lift-to-origin would.
     """
     return Wrench(
         force=wrench_craft.force,

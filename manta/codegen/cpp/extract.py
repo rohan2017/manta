@@ -29,7 +29,7 @@ import casadi as ca
 
 from ...estimation.state_spec import StateSpec
 from ...linearization import Linearization
-from ...tick_signature import walk_tick_signature
+from ...tick import walk_tick_signature
 
 
 @dataclass(frozen=True)

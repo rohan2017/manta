@@ -103,7 +103,7 @@ class Sim:
         # `<craft.name>.` to disambiguate across crafts. `Sim.step`
         # (on the backend) translates between the user-facing nested state
         # dict and that flat-prefixed casadi input naming.
-        from .world_tick import compile_world_tick
+        from .tick import compile_world_tick
         all_crafts = [e["craft"] for e in world._crafts]
         tick = compile_world_tick(
             all_crafts, list(world._couplings),

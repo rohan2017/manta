@@ -76,7 +76,7 @@ class TickSignature:
 
 def _dist_by_name(world) -> dict:
     """Index every state-bearing field disturbance by name."""
-    from .fields.base import Disturbance
+    from ..fields.base import Disturbance
     out: dict[str, Any] = {}
     for field in world.fields:
         for d in field._disturbances:
