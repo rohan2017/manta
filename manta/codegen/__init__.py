@@ -23,7 +23,9 @@ Adding a backend (TensorFlow, raw embedded C, CUDA, …) is one new
 `Target*` constructor consuming the same IR.
 """
 
-from .cpp   import TargetCpp
-from .numpy import NoiseDriver, NumpyEKF, NumpyWorld, TargetNumpy
+from .target import Target
+from .cpp    import TargetCpp
+from .numpy  import NoiseDriver, NumpyEKF, NumpyWorld, TargetNumpy
 
-__all__ = ["TargetNumpy", "TargetCpp", "NumpyWorld", "NumpyEKF", "NoiseDriver"]
+__all__ = ["Target", "TargetNumpy", "TargetCpp",
+           "NumpyWorld", "NumpyEKF", "NoiseDriver"]

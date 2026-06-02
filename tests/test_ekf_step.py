@@ -47,12 +47,15 @@ def test_step_multi_rate_tracks_truth():
     rng = np.random.default_rng(0)
     dt = 0.02
     for i in range(200):
-        st = sim.step(st, dt=dt, t=i * dt)
+        # A measurement sampled at i·dt is the truth at the *start* of the
+        # interval; step() folds it (update-then-predict) before propagating
+        # over [i·dt, (i+1)·dt], so feed it before advancing the truth.
         truth = np.asarray(st["drone"]["position"])
         # GPS arrives at 1/4 the filter rate.
         if i % 4 == 0:
             rt.feed("gps.position", truth + rng.normal(0, 0.1, 3), t=i * dt)
         rt.step(dt, t=i * dt)
+        st = sim.step(st, dt=dt, t=i * dt)
 
     est = np.asarray(rt.state_dict()["drone"]["position"])
     truth = np.asarray(st["drone"]["position"])

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3
-from ..base import Output, Part, PartUpdate
+from ..base import Output, Part, PartUpdate, WhiteNoise
 from ...ir.wrench import Wrench
 
 
@@ -24,7 +24,14 @@ class DVL(Part):
         velocity : Vec3[CraftFrame] — body-frame velocity (R^T·v_anchor).
                                       What a DVL reads when locked to a
                                       reference (seafloor / ground).
+
+    Noise channel (set σ to engage):
+        velocity_noise — vec3 white, per-tick m/s. Becomes the EKF's
+                         measurement R, exactly as PositionSensor's
+                         `position_noise`. Defaults to 0 (an ideal read).
     """
+
+    velocity_noise = WhiteNoise("vec3", frame=PartFrame, sigma=0.0)
 
     velocity = Output(shape="vec3")
 
@@ -37,5 +44,5 @@ class DVL(Part):
         v_sensor = ctx.orientation.conjugate().apply(ctx.velocity[WorldFrame])
         return PartUpdate(
             wrench=Wrench(force=zero_v, torque=zero_v),
-            outputs={"velocity": v_sensor},
+            outputs={"velocity": v_sensor + self.velocity_noise},
         )

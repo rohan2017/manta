@@ -46,14 +46,18 @@ def test_target_cpp_custom_basename(tmp_path: Path):
 
 
 def test_target_cpp_rejects_non_world_ir():
-    """TargetCpp(<not a Sim>) raises a helpful TypeError."""
+    """TargetCpp lowering of an unsupported transform fails loudly: a
+    recognized-but-unimplemented IR (EKF/LQR) raises NotImplementedError
+    with a concrete message; a non-IR object raises TypeError."""
     import pytest
     from manta.estimation import EKF
     w = World().add_field(GravityField(g=(0,0,-9.81)))
     w.add_craft(_make_simple_craft())
-    ekf = EKF(w)   # not a Sim
-    with pytest.raises(TypeError, match="Sim"):
+    ekf = EKF(w)   # a real IR, but C++ EKF lowering isn't implemented yet
+    with pytest.raises(NotImplementedError, match="EKF"):
         TargetCpp(ekf, "/tmp/whatever", class_name="X")
+    with pytest.raises(TypeError, match="IR type"):
+        TargetCpp(object(), "/tmp/whatever", class_name="X")
 
 
 def _make_simple_craft():

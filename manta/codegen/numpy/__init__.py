@@ -19,6 +19,8 @@ from typing import Any, Callable
 import casadi as ca
 import numpy as np
 
+from ..target import Target
+
 # Output-shape → vector dimension, for sizing sensor-output ports.
 _SHAPE_DIM = {"scalar": 1, "vec3": 3, "vec4": 4}
 
@@ -658,19 +660,25 @@ class NumpyEKF:
 
     def step(self, dt: float, *, t: float | None = None,
              Q: np.ndarray | None = None) -> None:
-        """Predict by `dt`, then fold in every fresh measurement.
+        """Fold the interval-start measurements, then predict by `dt`.
 
-        First pulls any wired ports: latched `command` ports refresh
-        `self.inputs`, and each `meas` port whose upstream has emitted a
-        new sample (its version advanced) is dropped into the mailbox.
-        Then the latched inputs drive the predict and the fresh
-        measurements are applied sequentially at a single linearization
-        point (the post-predict state); their fresh flags are cleared. A
-        timestamped measurement older than the interval start is dropped
-        as stale. `Q` overrides the process noise for this step (else
-        `self.Q`, else model auto-assembly). Sub-`dt` measurement timing
-        is quantized to the step boundary; full out-of-sequence handling
-        is out of scope.
+        The sim emits sensor outputs from the *input* state, so a reading
+        published over the step `[t, t+dt]` is sampled at its start `t`.
+        It is therefore folded against the current (pre-predict) state —
+        **update-then-predict** — and only then is the state propagated
+        over `[t, t+dt]`. (Folding an interval-start reading *after* a full
+        predict — the earlier order — meets it with the `t+dt` state, which
+        biases rate-derived states like orientation by O(dt): during a
+        transient the innovation carries the rate's change over `dt`.)
+        After the call the held state is the prediction at `t+dt` — the
+        estimate to act on at that instant.
+
+        Pulls wired ports first: latched `command` ports refresh
+        `self.inputs` (ZOH), and each `meas` port whose upstream advanced
+        is dropped into the mailbox. `Q` overrides the process noise (else
+        `self.Q`, else model auto-assembly). A measurement stamped after
+        the current time is held for a later step; full out-of-sequence
+        handling is out of scope.
         """
         t_start = t if t is not None else self._t
         # Pull wired command ports (ZOH, rate-gated) into the latched
@@ -688,17 +696,20 @@ class NumpyEKF:
                 self.feed(full, port.read(), t=port.cur_t)
 
         u_dict  = self.inputs if self.inputs else None
-        self.predict(dt, t=t_start, u=u_dict,
-                     Q=Q if Q is not None else self.Q)
         u_vec = self._ekf._build_u(u_dict)
+        # Update first: fold the interval-start measurements at the current
+        # (pre-predict) state, so the reading meets the state it observed.
         for full, m in self._meas.items():
             if not m["fresh"]:
                 continue
             m["fresh"] = False
             if m["t"] is not None and m["t"] < t_start - 1e-9:
-                continue  # stale: predates the interval we just integrated
+                continue  # stale: predates the current (pre-predict) state
             self._apply_sensor_update(self._ekf._sensors[m["key"]],
                                       m["value"], u_vec)
+        # Then predict over [t_start, t_start + dt].
+        self.predict(dt, t=t_start, u=u_dict,
+                     Q=Q if Q is not None else self.Q)
         self._t = t_start + dt
         if self._est_port is not None:
             self._est_port.set(self._x.copy())
@@ -750,6 +761,14 @@ class NumpyEKF:
         IKH = I - K @ H
         self._P = IKH @ self._P @ IKH.T + K @ R @ K.T
         self._P = 0.5 * (self._P + self._P.T)
+
+    def observability(self, **kwargs):
+        """Local observability report for this EKF's sensor set at an
+        operating point (defaults to the world's initial state). See
+        `manta.estimation.observability`. Pass `sensors=[…]` to ask what a
+        subset of sensors would observe."""
+        from ...estimation.observability import observability
+        return observability(self._ekf, **kwargs)
 
     def __repr__(self) -> str:
         return f"<NumpyEKF over {self._ekf!r}>"
@@ -916,6 +935,22 @@ class NumpyLQR:
 # TargetNumpy factory
 # ---------------------------------------------------------------------------
 
+class _NumpyBackend(Target):
+    """Native-Python backend: all three transforms lower to in-memory
+    runtime evaluators."""
+
+    name = "TargetNumpy"
+
+    def lower_sim(self, sim, **opts):
+        return NumpyWorld(sim)
+
+    def lower_ekf(self, ekf, **opts):
+        return NumpyEKF(ekf)
+
+    def lower_lqr(self, lqr, **opts):
+        return NumpyLQR(lqr)
+
+
 def TargetNumpy(ir):
     """Native-Python backend factory.
 
@@ -928,15 +963,4 @@ def TargetNumpy(ir):
                                         `.x`, `.P`).
       * `LQR`           → `NumpyLQR`   (`.control()`, `.u()`, `.K`).
     """
-    from ...sim import Sim
-    from ...estimation.ekf import EKF
-    from ...control.lqr import LQR
-    if isinstance(ir, Sim):
-        return NumpyWorld(ir)
-    if isinstance(ir, EKF):
-        return NumpyEKF(ir)
-    if isinstance(ir, LQR):
-        return NumpyLQR(ir)
-    raise TypeError(
-        f"TargetNumpy: no handler for IR type {type(ir).__name__}. "
-        f"Expected Sim, EKF, or LQR.")
+    return _NumpyBackend().lower(ir)

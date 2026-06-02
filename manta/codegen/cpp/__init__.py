@@ -22,7 +22,32 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ..target import Target
 from .emit import _emit_world_cpp
+
+
+class _CppBackend(Target):
+    """C++ backend. Lowers `Sim` to a buildable static-library project;
+    `EKF` / `LQR` lowering is a follow-up (the hooks raise so the gap is
+    explicit at the call site rather than silent)."""
+
+    name = "TargetCpp"
+
+    def lower_sim(self, sim, *, out_dir, class_name,
+                  basename=None, namespace="manta_gen", **opts):
+        return _emit_world_cpp(sim, out_dir, class_name=class_name,
+                               basename=basename, namespace=namespace)
+
+    def lower_ekf(self, ekf, **opts):
+        raise NotImplementedError(
+            "TargetCpp: EKF→C++ lowering is not implemented yet. The EKF IR "
+            "carries the same Jacobian bundles (via the shared Linearization); "
+            "the C++ side needs a mutable-state + Joseph-form-update wrapper.")
+
+    def lower_lqr(self, lqr, **opts):
+        raise NotImplementedError(
+            "TargetCpp: LQR→C++ lowering is not implemented yet. It needs a "
+            "feed-forward emit of the baked gain K and the control law.")
 
 
 def TargetCpp(ir,
@@ -34,8 +59,8 @@ def TargetCpp(ir,
     """C++ codegen target.
 
     Args:
-        ir          — `Sim` (today). EKF support is a
-                      follow-up.
+        ir          — `Sim` (today). EKF / LQR support is a follow-up
+                      (those lowerings raise `NotImplementedError`).
         out_dir     — destination directory (created if missing).
         class_name  — C++ class name. Conventionally PascalCase.
         basename    — filename stem; defaults to `class_name.lower()`.
@@ -45,13 +70,8 @@ def TargetCpp(ir,
         `EmitResult` (from `manta.codegen.cpp.emit`) with paths to
         every emitted file plus the `WorldFunctions` bundle.
     """
-    from ...sim import Sim
-    if isinstance(ir, Sim):
-        return _emit_world_cpp(ir, out_dir, class_name=class_name,
+    return _CppBackend().lower(ir, out_dir=out_dir, class_name=class_name,
                                basename=basename, namespace=namespace)
-    raise TypeError(
-        f"TargetCpp: no handler for IR type {type(ir).__name__}. "
-        f"Expected Sim.")
 
 
-__all__ = ["TargetCpp"]
+__all__ = ["TargetCpp", "_CppBackend"]

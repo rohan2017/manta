@@ -13,12 +13,14 @@ a UKF variant land in follow-up milestones.
 """
 
 from .ekf import EKF, measurement_slot, measurement_component
+from .observability import ObservabilityReport, observability
 from .state_spec import (
     ALL, POSE, TWIST, SlotSet, StateSlot, StateSpec, resolve_slotset,
 )
 
 __all__ = [
     "EKF", "measurement_slot", "measurement_component",
+    "observability", "ObservabilityReport",
     "StateSlot", "StateSpec",
     "SlotSet", "POSE", "TWIST", "ALL", "resolve_slotset",
 ]

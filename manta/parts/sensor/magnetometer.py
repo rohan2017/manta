@@ -19,7 +19,7 @@ from __future__ import annotations
 from ...fields import MagField
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3
-from ..base import Output, Part, PartUpdate
+from ..base import Output, Part, PartUpdate, WhiteNoise
 from ...ir.wrench import Wrench
 
 
@@ -33,7 +33,15 @@ class Magnetometer(Part):
                                 directly on the craft root that frame is
                                 CraftFrame; on a Joint rotor it spins
                                 with the rotor.
+
+    Noise channel (set σ to engage):
+        B_noise — vec3 white, per-tick Tesla. Becomes the EKF's
+                  measurement R for a heading/attitude fix, exactly as
+                  PositionSensor's `position_noise` does. Defaults to 0
+                  (a clean reading).
     """
+
+    B_noise = WhiteNoise("vec3", frame=PartFrame, sigma=0.0)
 
     B = Output(shape="vec3")
 
@@ -51,5 +59,5 @@ class Magnetometer(Part):
         zero_v = Vec3[PartFrame].constant((0.0, 0.0, 0.0))
         return PartUpdate(
             wrench=Wrench(force=zero_v, torque=zero_v),
-            outputs={"B": B_sensor},
+            outputs={"B": B_sensor + self.B_noise},
         )
