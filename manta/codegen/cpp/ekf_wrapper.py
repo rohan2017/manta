@@ -41,6 +41,53 @@ def _matrix_literal(M, rows: int, cols: int) -> str:
     return vals
 
 
+def _contiguous_ranges(blocks, n: int):
+    """If `blocks` partition [0, n) into contiguous index ranges, return them
+    as `[(start, length), …]` (sorted); else `None`. The
+    independent-subsystem partition is contiguous in practice (per-owner
+    tangent layout); the wrapper falls back to a dense propagation otherwise.
+    """
+    ranges = []
+    for b in blocks:
+        s = sorted(int(i) for i in b)
+        if s != list(range(s[0], s[-1] + 1)):
+            return None
+        ranges.append((s[0], len(s)))
+    ranges.sort()
+    covered, expect = [], 0
+    for start, length in ranges:
+        if start != expect:
+            return None
+        expect += length
+    return ranges if expect == n else None
+
+
+def _predict_cov_lines(blocks, n: int, has_L: bool) -> list[str]:
+    """Emit the covariance propagation `P ← F P Fᵀ + L Σ Lᵀ`.
+
+    Per independent block when the partition is contiguous (`Σ O(n_b³)` for
+    uncoupled multi-craft, matching the numpy EKF); a single dense step
+    otherwise. Off-block covariance is zero by construction of the partition
+    and stays untouched."""
+    ranges = _contiguous_ranges(blocks, n)
+    if ranges is None or len(ranges) == 1:
+        if has_L:
+            return ["    P = F * P * F.transpose() + Ln * SIGMA * Ln.transpose();"]
+        return ["    P = F * P * F.transpose();"]
+    out = ["    // Per-block propagation (independent subsystems)."]
+    for start, ln in ranges:
+        out.append("    {")
+        out.append(f"        auto Fb = F.block<{ln}, {ln}>({start}, {start});")
+        out.append(f"        Eigen::Matrix<double, {ln}, {ln}> Pb = "
+                   f"Fb * P.block<{ln}, {ln}>({start}, {start}) * Fb.transpose();")
+        if has_L:
+            out.append(f"        auto Lb = Ln.block<{ln}, n_noise>({start}, 0);")
+            out.append("        Pb += Lb * SIGMA * Lb.transpose();")
+        out.append(f"        P.block<{ln}, {ln}>({start}, {start}) = Pb;")
+        out.append("    }")
+    return out
+
+
 def emit_ekf_wrapper(funcs: EkfFunctions, world, out_dir: str | Path, *,
                      class_name: str, basename: str | None = None,
                      namespace: str = "manta_gen") -> dict[str, Path]:
@@ -133,15 +180,14 @@ def _build_cpp(funcs: EkfFunctions, world, *, class_name: str, namespace: str,
           "    pack_state(x, x_in);",
           "    pack_inputs(u, u_in);",
           "    Eigen::Matrix<double, tangent_dim, tangent_dim, Eigen::ColMajor> F;"]
+    has_L = funcs.L_fn is not None and nz > 0
     L += _call(pf, ["x_in", "u_in", "&dt", "&t"], [(0, "x_out")])
     L += _call(Ff, ["x_in", "u_in", "&dt", "&t"], [(0, "F.data()")])
-    if funcs.L_fn is not None and nz > 0:
-        Lf = funcs.L_fn.name()
+    if has_L:
         L += ["    Eigen::Matrix<double, tangent_dim, n_noise, Eigen::ColMajor> Ln;"]
-        L += _call(Lf, ["x_in", "u_in", "&dt", "&t"], [(0, "Ln.data()")])
-        L += ["    P = F * P * F.transpose() + Ln * SIGMA * Ln.transpose();"]
-    else:
-        L += ["    P = F * P * F.transpose();"]
+        L += _call(funcs.L_fn.name(), ["x_in", "u_in", "&dt", "&t"],
+                   [(0, "Ln.data()")])
+    L += _predict_cov_lines(funcs.blocks, n, has_L)
     L += ["    unpack_state(x_out, x);",   # x_new (uses pre-predict F/L above)
           "    P = 0.5 * (P + P.transpose()).eval();",
           "}", ""]
