@@ -54,6 +54,7 @@ from .sim import Sim
 from .planets import Planet
 from .couplings import Coupling
 from .estimation.ekf import EKF
+from .estimation.imu_integrator import IMUIntegrator
 from .estimation.madgwick import Madgwick
 from .estimation.mahony import Mahony
 from .estimation.state_spec import ALL, POSE, TWIST, SlotSet
@@ -64,7 +65,7 @@ from .signal import Signal, wire
 
 __all__ = [
     "ir", "Craft", "World", "Coupling", "Sim", "Planet", "EKF", "LQR", "PID",
-    "Madgwick", "Mahony", "RecurrenceBlock",
+    "Madgwick", "Mahony", "IMUIntegrator", "RecurrenceBlock",
     "TargetNumpy", "TargetCpp", "NoiseDriver", "Signal", "wire",
     "SlotSet", "POSE", "TWIST", "ALL",
 ]

@@ -13,6 +13,7 @@ a UKF variant land in follow-up milestones.
 """
 
 from .ekf import EKF, measurement_slot, measurement_component
+from .imu_integrator import IMUIntegrator
 from .madgwick import Madgwick
 from .mahony import Mahony
 from .observability import (
@@ -25,7 +26,7 @@ from .state_spec import (
 
 __all__ = [
     "EKF", "measurement_slot", "measurement_component",
-    "Madgwick", "Mahony",
+    "Madgwick", "Mahony", "IMUIntegrator",
     "observability", "observability_trajectory", "ObservabilityReport",
     "nees", "NEESReport",
     "StateSlot", "StateSpec",
