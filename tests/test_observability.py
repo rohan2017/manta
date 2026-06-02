@@ -122,3 +122,25 @@ def test_report_is_readable():
 def test_full_suite_observable_label():
     ekf = TargetNumpy(EKF(_sub_world()))
     assert "fully observable" in ekf.observability().summary()
+
+
+def test_observable_basis_shape():
+    rep = TargetNumpy(EKF(_sub_world())).observability(
+        sensors=["imu.gyro", "dvl.velocity", "gps.position"])
+    assert rep.basis.shape == (rep.tangent_dim, rep.rank)
+
+
+def test_trajectory_observability_reveals_heading_through_motion():
+    """Single-point observability says heading is unobservable from
+    GPS+DVL+gyro at rest; over a moving trajectory the DVL/GPS pairing
+    recovers it. The trajectory tool captures that, the local one can't."""
+    from manta.estimation import observability_trajectory
+    sens = ["imu.gyro", "dvl.velocity", "gps.position"]
+    w = _sub_world()
+    at_rest = observability(EKF(w), sensors=sens)
+    moving = observability_trajectory(
+        w, dt=0.02, steps=300, sensors=sens, control={"prop.throttle": 600.0})
+    assert not at_rest.observable                      # heading hidden at rest
+    assert "sub.orientation" in {n for n, _ in at_rest.unobservable}
+    assert moving.observable                            # recovered by motion
+    assert moving.rank > at_rest.rank

@@ -58,6 +58,10 @@ class ObservabilityReport:
                         is the Frobenius norm of the null-space basis
                         restricted to that slot (0 ⇒ fully observable).
         singular_values — singular values of the observability matrix.
+        basis         — orthonormal basis of the **observable** subspace,
+                        shape `(tangent_dim, rank)`. Feed to `nees(...,
+                        observable_basis=...)` to check consistency only
+                        where the state is actually observable.
     """
 
     tangent_dim: int
@@ -65,6 +69,7 @@ class ObservabilityReport:
     sensors: list[str]
     unobservable: list[tuple[str, float]] = field(default_factory=list)
     singular_values: np.ndarray | None = None
+    basis: np.ndarray | None = None
 
     @property
     def observable(self) -> bool:
@@ -158,32 +163,38 @@ def observability(ekf, *, state=None, inputs=None, sensors=None,
     x = _operating_point(ir, state)
     u = ir._build_u(inputs)
 
-    F = np.asarray(ir._F_fn(x, u, dt, t), dtype=float).reshape(n, n)
     pairs = _select_sensors(ir, sensors)
     names = [full for _, full in pairs]
     if not pairs:
-        # No measurements ⇒ nothing observable.
-        return ObservabilityReport(tangent_dim=n, rank=0, sensors=[],
-                                   unobservable=[(s.name, 1.0)
-                                                 for s in spec.slots],
-                                   singular_values=np.zeros(1))
+        return ObservabilityReport(n, 0, [], [(s.name, 1.0) for s in spec.slots],
+                                   np.zeros(1), np.zeros((n, 0)))
+    return _report_from_O(_local_O(ir, x, u, dt, t, pairs, n), spec, names, rtol)
 
+
+def _local_O(ir, x, u, dt, t, pairs, n) -> np.ndarray:
+    """Local discrete observability matrix at one point: `[H; H·F; …;
+    H·F^(n-1)]`. `F^p` stays bounded (F ≈ I + A·dt), so this is well
+    conditioned — unlike `H·F^k` propagated from a trajectory start."""
+    F = np.asarray(ir._F_fn(x, u, dt, t), dtype=float).reshape(n, n)
     H = np.vstack([np.asarray(h(x, u, dt, t), dtype=float).reshape(-1, n)
                    for h, _ in pairs])
-
-    # Discrete observability matrix O = [H; H F; …; H F^(n-1)].
     blocks, Fp = [], np.eye(n)
     for _ in range(n):
         blocks.append(H @ Fp)
         Fp = Fp @ F
-    O = np.vstack(blocks)
+    return np.vstack(blocks)
 
-    U, sv, Vt = np.linalg.svd(O)
+
+def _report_from_O(O, spec, names, rtol) -> ObservabilityReport:
+    """SVD of an observability matrix → rank, observable basis, and the
+    unobservable slots."""
+    n = spec.tangent_dim
+    _, sv, Vt = np.linalg.svd(O)
     smax = sv[0] if sv.size else 0.0
     rank = int(np.sum(sv > rtol * smax)) if smax > 0 else 0
 
-    # Null space of O = unobservable subspace (rows of Vt past the rank).
-    null_basis = Vt[rank:] if rank < n else np.zeros((0, n))
+    basis = Vt[:rank].T.copy() if rank else np.zeros((n, 0))     # observable
+    null_basis = Vt[rank:] if rank < n else np.zeros((0, n))     # unobservable
     unobservable: list[tuple[str, float]] = []
     for s in spec.slots:
         lo, hi = s.tangent_offset, s.tangent_offset + s.tangent_dim
@@ -194,4 +205,60 @@ def observability(ekf, *, state=None, inputs=None, sensors=None,
 
     return ObservabilityReport(
         tangent_dim=n, rank=rank, sensors=names,
-        unobservable=unobservable, singular_values=sv)
+        unobservable=unobservable, singular_values=sv, basis=basis)
+
+
+def observability_trajectory(world, *, dt: float, steps: int,
+                             control: "Callable | dict | None" = None,
+                             sensors: list[str] | None = None,
+                             samples: int = 30,
+                             rtol: float = 1e-6) -> ObservabilityReport:
+    """Observability accumulated **over a trajectory**, not at one point.
+
+    Local `observability()` is evaluated at a single operating point, where
+    a state can look unobservable that a maneuver would reveal (absolute
+    heading from GPS+DVL is the classic case: unobservable at rest,
+    observable while turning). This rolls out the *deterministic* nominal
+    trajectory under `control`, evaluates the local observability matrix at
+    ~`samples` points along it, and reports the rank / unobservable slots /
+    observable basis of their **union** — i.e. a direction counts as
+    observable if it is locally observable at *any* configuration the
+    trajectory visits. (Union of bounded local matrices, so it stays well
+    conditioned — unlike propagating one matrix through the whole run,
+    where the integrators blow the conditioning up.)
+
+    Args mirror `nees`/`observability`: `control` is `{name: value}` or a
+    `t -> {name: value}` callable; `sensors` restricts the suite; `samples`
+    caps how many trajectory points are linearized.
+    """
+    from ..codegen.numpy import TargetNumpy
+    from ..sim import Sim
+    from .ekf import EKF
+
+    sim_ir, ekf_ir = Sim(world), EKF(world)
+    spec = ekf_ir.spec
+    n = spec.tangent_dim
+    sim = TargetNumpy(sim_ir)
+
+    pairs = _select_sensors(ekf_ir, sensors)
+    names = [full for _, full in pairs]
+    if not pairs:
+        return ObservabilityReport(n, 0, [], [(s.name, 1.0) for s in spec.slots],
+                                   np.zeros(1), np.zeros((n, 0)))
+
+    def truth_vec():
+        flat = {f"{o}.{k}": v for o, s in sim.state.items() for k, v in s.items()}
+        return spec.pack({k: v for k, v in flat.items() if k in spec})
+
+    every = max(1, steps // max(1, samples))
+    blocks = []
+    for i in range(steps):
+        t = i * dt
+        u_dict = control(t) if callable(control) else (control or {})
+        for nm, v in u_dict.items():
+            sim.command(nm).set(v)
+        if i % every == 0:
+            blocks.append(_local_O(ekf_ir, truth_vec(),
+                                   ekf_ir._build_u(u_dict or None), dt, t, pairs, n))
+        sim.step(dt)
+    return _report_from_O(np.vstack(blocks), spec, names, rtol)

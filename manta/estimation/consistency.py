@@ -135,6 +135,7 @@ def nees(world, *, dt: float, steps: int,
          control: Callable[[float], dict] | dict | None = None,
          sensors: list[str] | None = None,
          P0: np.ndarray | None = None, Q: np.ndarray | None = None,
+         observable_basis: np.ndarray | None = None,
          runs: int = 20, seed: int = 0, warmup: int | None = None,
          alpha: float = 0.05) -> NEESReport:
     """Monte-Carlo NEES consistency check for `EKF(world)`.
@@ -157,6 +158,12 @@ def nees(world, *, dt: float, steps: int,
         Q        — process-noise override for the predict (else the model's
                    auto-assembled Q). Useful to probe consistency vs. an
                    assumed Q, or to validate the check responds to scaling.
+        observable_basis — `(n, r)` orthonormal basis of the observable
+                   subspace (from `observability(...).basis` or
+                   `observability_trajectory`). When given, NEES is measured
+                   only in that subspace (dof = r) — isolating "is my noise
+                   modeling right where I *can* estimate?" from overconfidence
+                   on unobservable directions.
         runs, seed — ensemble size and base RNG seed.
         warmup   — steps to skip before recording (default `steps // 5`).
         alpha    — significance for the band (default 0.05 ⇒ 95%).
@@ -214,16 +221,20 @@ def nees(world, *, dt: float, steps: int,
             if i >= warmup:
                 e = np.asarray(boxminus(truth_vec(sim), ekf.x)).reshape(-1)
                 P = ekf.P
+                if observable_basis is not None:
+                    e = observable_basis.T @ e
+                    P = observable_basis.T @ P @ observable_basis
                 try:
                     nees_samples.append(float(e @ np.linalg.solve(P, e)))
                 except np.linalg.LinAlgError:
                     nees_samples.append(float(e @ np.linalg.pinv(P) @ e))
 
+    dof = n if observable_basis is None else observable_basis.shape[1]
     anees = float(np.mean(nees_samples))
     # Band sized by the number of independent trajectories (runs), which
-    # accounts for within-run time correlation: runs·ANEES/dof-ish ~ χ²_{runs·n}.
-    k = runs * n
+    # accounts for within-run time correlation: runs·ANEES ~ χ²_{runs·dof}.
+    k = runs * dof
     lower = _chi2_quantile(k, alpha / 2) / runs
     upper = _chi2_quantile(k, 1 - alpha / 2) / runs
-    return NEESReport(dof=n, anees=anees, lower=lower, upper=upper,
+    return NEESReport(dof=dof, anees=anees, lower=lower, upper=upper,
                       runs=runs, samples=len(nees_samples))

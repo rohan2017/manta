@@ -294,10 +294,12 @@ and 358 tests don't carry compat shims. Open items:
   while the covariance looks tight. `observability(EKF(world))` (or
   `numpy_ekf.observability()`) builds the observability matrix from the
   symbolic `F`/`H` at an operating point and reports rank + which state
-  slots are unobservable. It flags, e.g., that GPS + DVL + gyro can't see
-  absolute heading **at rest** (only through a maneuver) — so a compass
-  earns its place. Local + operating-point-dependent by nature; check a
-  few representative points.
+  slots are unobservable (+ an orthonormal **observable basis**). It flags,
+  e.g., that GPS + DVL + gyro can't see absolute heading **at rest**. Local
+  by nature; `observability_trajectory(world, dt=, steps=, control=)` rolls
+  out a maneuver and reports the **union** of local observability over it —
+  capturing observability-through-motion (that same heading *is* observable
+  while the vehicle moves, rank 11→12).
 - **NEES consistency check** (shipped — `manta.estimation.nees`) — the
   complement to observability: observability asks what you *can* estimate;
   NEES asks whether the filter's reported *covariance* is honest (a
@@ -305,10 +307,16 @@ and 358 tests don't carry compat shims. Open items:
   or conservative and waste information). `nees(world, dt=, steps=,
   control=)` runs a Monte-Carlo ensemble (truth jittered by the model's
   process noise, measurements by their R, the initial estimate drawn from
-  P₀) and reports ANEES vs the χ² band: too high ⇒ overconfident, too low
-  ⇒ conservative. It already surfaces that the linearized one-step
-  auto-`Q` (`L·Σ·Lᵀ`) is mildly optimistic. Follow-up: an
-  observable-subspace variant and a Gramian-along-trajectory observability.
+  P₀) and reports ANEES vs the χ² band. Pass `observable_basis=` (from an
+  observability report) to check consistency only where the state is
+  observable. **This settled the auto-`Q` question:** the *full-state* NEES
+  reads overconfident only because the EKF shrinks covariance on the
+  unobservable attitude; in the **observable subspace the filter is
+  consistent**, and the auto-`Q` (`L·Σ·Lᵀ`) is exact for the dynamics-noise
+  states — so it was left as-is (tightening it would have masked a sensor
+  observability issue). The residual overconfidence on unobservable
+  directions is the known EKF-inconsistency-on-unobservable-modes problem;
+  FEJ / observability-constrained EKF is the principled fix (future).
 - **EKF measurement timing** (fixed) — `NumpyEKF.step` now folds a
   measurement *before* propagating over its interval (update-then-predict),
   because the sim emits sensor outputs from the interval's *start* state.

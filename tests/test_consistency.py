@@ -65,3 +65,21 @@ def test_anees_decreases_with_Q():
     tiny = nees(_hover_world(), Q=np.eye(12) * 1e-8, **_KW).anees
     big = nees(_hover_world(), Q=np.eye(12) * 1e-2, **_KW).anees
     assert tiny > big
+
+
+def test_observable_subspace_isolates_modeling_from_observability():
+    """The full-state NEES is overconfident because attitude (yaw) is
+    unobservable from GPS+gyro — not because the noise model is wrong.
+    Restricting to the observable subspace shows the filter IS consistent
+    there, i.e. the auto-Q is correct; the overconfidence is the EKF
+    shrinking covariance on an unobservable direction."""
+    from manta import EKF, TargetNumpy
+    w = _hover_world()
+    basis = TargetNumpy(EKF(w)).observability().basis
+    kw = dict(dt=0.01, steps=300, control={"t.throttle": M * G},
+              runs=20, seed=0)
+    full = nees(w, **kw)
+    sub = nees(w, observable_basis=basis, **kw)
+    assert full.verdict == "overconfident"
+    assert sub.dof == basis.shape[1] < 12
+    assert sub.consistent
