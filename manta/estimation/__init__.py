@@ -14,6 +14,7 @@ a UKF variant land in follow-up milestones.
 
 from .ekf import EKF, measurement_slot, measurement_component
 from .observability import ObservabilityReport, observability
+from .consistency import NEESReport, nees
 from .state_spec import (
     ALL, POSE, TWIST, SlotSet, StateSlot, StateSpec, resolve_slotset,
 )
@@ -21,6 +22,7 @@ from .state_spec import (
 __all__ = [
     "EKF", "measurement_slot", "measurement_component",
     "observability", "ObservabilityReport",
+    "nees", "NEESReport",
     "StateSlot", "StateSpec",
     "SlotSet", "POSE", "TWIST", "ALL", "resolve_slotset",
 ]

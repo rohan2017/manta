@@ -297,8 +297,18 @@ and 358 tests don't carry compat shims. Open items:
   slots are unobservable. It flags, e.g., that GPS + DVL + gyro can't see
   absolute heading **at rest** (only through a maneuver) — so a compass
   earns its place. Local + operating-point-dependent by nature; check a
-  few representative points. Follow-ups: a Gramian-along-trajectory variant
-  and a NEES consistency check.
+  few representative points.
+- **NEES consistency check** (shipped — `manta.estimation.nees`) — the
+  complement to observability: observability asks what you *can* estimate;
+  NEES asks whether the filter's reported *covariance* is honest (a
+  fully-observable filter can still be overconfident and quietly diverge,
+  or conservative and waste information). `nees(world, dt=, steps=,
+  control=)` runs a Monte-Carlo ensemble (truth jittered by the model's
+  process noise, measurements by their R, the initial estimate drawn from
+  P₀) and reports ANEES vs the χ² band: too high ⇒ overconfident, too low
+  ⇒ conservative. It already surfaces that the linearized one-step
+  auto-`Q` (`L·Σ·Lᵀ`) is mildly optimistic. Follow-up: an
+  observable-subspace variant and a Gramian-along-trajectory observability.
 - **EKF measurement timing** (fixed) — `NumpyEKF.step` now folds a
   measurement *before* propagating over its interval (update-then-predict),
   because the sim emits sensor outputs from the interval's *start* state.
