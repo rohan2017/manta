@@ -971,6 +971,7 @@ class NumpyRecurrence:
 
     # ---- State + step --------------------------------------------------
 
+    @property
     def state(self) -> dict[str, Any]:
         """Current state by slot name (e.g. `{"integral": …}`)."""
         return self._b.spec.unpack(self._x)

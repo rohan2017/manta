@@ -38,7 +38,7 @@ def test_pid_integral_accumulates_and_clamps():
     assert c0 == pytest.approx(0.05)          # 0.1 clamped to 0.05
     c1 = r.step(0.1, setpoint=1.0, measurement=0.0)["command"]
     assert c1 == pytest.approx(0.05)          # stays clamped
-    assert float(r.state()["integral"]) == pytest.approx(0.05)
+    assert float(r.state["integral"]) == pytest.approx(0.05)
 
 
 def test_pid_derivative_zero_on_first_step():
@@ -60,10 +60,10 @@ def test_pid_output_limit():
 def test_pid_reset():
     r = TargetNumpy(PID(kp=0.0, ki=1.0))
     r.step(0.1, setpoint=1.0, measurement=0.0)
-    assert float(r.state()["integral"]) != 0.0
+    assert float(r.state["integral"]) != 0.0
     r.reset()
-    assert float(r.state()["integral"]) == pytest.approx(0.0)
-    assert float(r.state()["primed"]) == pytest.approx(0.0)
+    assert float(r.state["integral"]) == pytest.approx(0.0)
+    assert float(r.state["primed"]) == pytest.approx(0.0)
 
 
 # --- C++ roundtrip ----------------------------------------------------------
@@ -148,7 +148,7 @@ def test_pid_python_cpp_roundtrip(tmp_path: Path):
     r = TargetNumpy(pid)
     np_cmds = [r.step(_DT, setpoint=sp, measurement=ms)["command"]
                for sp, ms in zip(_SP, _MS)]
-    st = r.state()
+    st = r.state
     np_state = [float(st["integral"]), float(st["prev_measurement"]),
                 float(st["primed"])]
 

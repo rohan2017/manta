@@ -13,6 +13,7 @@ a UKF variant land in follow-up milestones.
 """
 
 from .ekf import EKF, measurement_slot, measurement_component
+from .madgwick import Madgwick
 from .observability import (
     ObservabilityReport, observability, observability_trajectory,
 )
@@ -23,6 +24,7 @@ from .state_spec import (
 
 __all__ = [
     "EKF", "measurement_slot", "measurement_component",
+    "Madgwick",
     "observability", "observability_trajectory", "ObservabilityReport",
     "nees", "NEESReport",
     "StateSlot", "StateSpec",
