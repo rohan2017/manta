@@ -963,4 +963,4 @@ def TargetNumpy(ir):
                                         `.x`, `.P`).
       * `LQR`           → `NumpyLQR`   (`.control()`, `.u()`, `.K`).
     """
-    return _NumpyBackend().lower(ir)
+    return _NumpyBackend().lower_block(ir)

@@ -46,11 +46,35 @@ def test_target_cpp_custom_basename(tmp_path: Path):
 
 
 def test_target_cpp_rejects_non_ir():
-    """TargetCpp lowers Sim / EKF / LQR; a non-IR object raises TypeError
-    (the dispatch in the Target ABC)."""
+    """TargetCpp lowers Sim / EKF / LQR; a non-block object raises TypeError
+    (the kind dispatch in the Target ABC — no RUNTIME_KIND)."""
     import pytest
-    with pytest.raises(TypeError, match="IR type"):
+    with pytest.raises(TypeError, match="not a lowerable block"):
         TargetCpp(object(), "/tmp/whatever", class_name="X")
+
+
+def test_target_cpp_unsupported_kind_raises():
+    """A block whose RUNTIME_KIND has no backend handler fails loudly at
+    lower_block, naming the kinds the backend does support."""
+    import pytest
+
+    class _FutureBlock:
+        RUNTIME_KIND = "mpc"
+
+    with pytest.raises(NotImplementedError, match="no lowering for block kind 'mpc'"):
+        TargetCpp(_FutureBlock(), "/tmp/whatever", class_name="X")
+
+
+def test_ir_blocks_declare_runtime_kind():
+    """Sim / EKF / LQR each declare the runtime kind the dispatch keys on."""
+    from manta import EKF
+    from manta.codegen.block import KIND_EKF, KIND_LQR, KIND_SIM, block_kind
+    from manta.control import LQR
+
+    assert block_kind(_hover_world()) == KIND_SIM
+    w = _hover_world().world
+    assert EKF(w).RUNTIME_KIND == KIND_EKF
+    assert LQR.RUNTIME_KIND == KIND_LQR
 
 
 def _make_simple_craft():

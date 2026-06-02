@@ -29,10 +29,12 @@ from .emit import _emit_world_cpp, _emit_ekf_cpp, _emit_lqr_cpp
 
 
 class _CppBackend(Target):
-    """C++ backend. Lowers `Sim` to a pure evaluator and `EKF` to a stateful
-    filter (mutable state + Joseph update); both reuse the same flat-C
-    kernels + Eigen-typed wrapper machinery. `LQR` lowering is a follow-up
-    (the hook raises so the gap is explicit at the call site)."""
+    """C++ backend. Lowers `Sim` to a pure evaluator, `EKF` to a stateful
+    filter (mutable state + Joseph update), and `LQR` to a stateless
+    feed-forward `control(x)` law — all on the same flat-C kernels +
+    Eigen-typed wrapper machinery. Each `lower_<kind>` handler is the
+    backend's support for one runtime kind; a block whose kind has no
+    handler fails loudly at `lower_block` (see `manta.codegen.target`)."""
 
     name = "TargetCpp"
 
@@ -71,8 +73,8 @@ def TargetCpp(ir,
         `EmitResult` (from `manta.codegen.cpp.emit`) with paths to
         every emitted file plus the `WorldFunctions` bundle.
     """
-    return _CppBackend().lower(ir, out_dir=out_dir, class_name=class_name,
-                               basename=basename, namespace=namespace)
+    return _CppBackend().lower_block(ir, out_dir=out_dir, class_name=class_name,
+                                     basename=basename, namespace=namespace)
 
 
 __all__ = ["TargetCpp", "_CppBackend"]

@@ -1,61 +1,63 @@
 """Target — the backend ABC.
 
-A `Target` lowers any IR transform (`Sim`, `EKF`, `LQR`) to a
-backend-specific artifact: a native-Python runtime, emitted C++, a future
-Rust crate, etc. Each backend implements the three `lower_*` hooks;
-`lower()` holds the IR-type dispatch so it lives in exactly one place.
+A `Target` lowers any IR *block* (`Sim`, `EKF`, `LQR`, and the
+freestanding `recurrence` blocks — PID, Madgwick, the IMU integrator) to
+a backend-specific artifact: a native-Python runtime, emitted C++, a
+future Rust crate, etc.
 
-A backend that doesn't *yet* support a transform implements that hook to
-raise `NotImplementedError` with a concrete message — so an unsupported
-lowering fails loudly and locally (right at the call) instead of silently
-or deep in a stack. That makes a half-finished backend obvious: the
-missing piece is a hook that raises, not a gap you discover at runtime.
+`lower_block(block, **opts)` is the single entry point. It reads the
+block's `RUNTIME_KIND` (see `manta.codegen.block`) and dispatches to the
+backend's `lower_<kind>` method — so the dispatch is keyed on the small
+*closed* set of runtime kinds, not on the *open* set of block classes. A
+backend supports a kind iff it defines the matching `lower_<kind>`
+handler; a block whose kind has no handler fails loudly and locally at the
+call (a `NotImplementedError` naming the supported kinds) rather than
+silently or deep in a stack.
+
+That is what makes a half-finished backend obvious, and what makes adding
+a block free: a new `recurrence` filter reuses the existing
+`lower_recurrence` handler with zero backend edits.
 
 The public `TargetNumpy(...)` / `TargetCpp(...)` callables are thin
-wrappers over the concrete backends below; their signatures are
-unchanged. Adding a backend = one `Target` subclass implementing the
-three hooks (+ a thin public wrapper if you want a bespoke signature).
+wrappers over the concrete backends below. Adding a backend = one
+`Target` subclass implementing the `lower_<kind>` handlers it supports.
 """
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
+from abc import ABC
 from typing import Any
+
+from .block import block_kind
 
 
 class Target(ABC):
-    """Backend contract: lower a `Sim` / `EKF` / `LQR` IR to an artifact.
+    """Backend contract: lower a block to an artifact.
 
-    Subclasses implement `lower_sim` / `lower_ekf` / `lower_lqr`. Each hook
-    takes the IR plus backend-specific keyword options (e.g. `out_dir`,
-    `class_name` for a file-emitting backend); `lower()` forwards them.
+    Subclasses implement one `lower_<kind>` method per runtime kind they
+    support (e.g. `lower_sim`, `lower_ekf`, `lower_lqr`,
+    `lower_recurrence`). Each handler takes the block plus backend-specific
+    keyword options (e.g. `out_dir`, `class_name` for a file-emitting
+    backend); `lower_block` forwards them.
     """
 
     name: str = "target"
 
-    @abstractmethod
-    def lower_sim(self, sim, **opts) -> Any:
-        """Lower a `Sim` IR (forward dynamics)."""
-
-    @abstractmethod
-    def lower_ekf(self, ekf, **opts) -> Any:
-        """Lower an `EKF` IR (predict + measurement update)."""
-
-    @abstractmethod
-    def lower_lqr(self, lqr, **opts) -> Any:
-        """Lower an `LQR` IR (baked feedback control law)."""
-
-    def lower(self, ir, **opts) -> Any:
-        """Dispatch on IR type to the matching `lower_*` hook."""
-        from ..sim import Sim
-        from ..estimation.ekf import EKF
-        from ..control.lqr import LQR
-        if isinstance(ir, Sim):
-            return self.lower_sim(ir, **opts)
-        if isinstance(ir, EKF):
-            return self.lower_ekf(ir, **opts)
-        if isinstance(ir, LQR):
-            return self.lower_lqr(ir, **opts)
-        raise TypeError(
-            f"{self.name}: no handler for IR type {type(ir).__name__}. "
-            f"Expected Sim, EKF, or LQR.")
+    def lower_block(self, block, **opts) -> Any:
+        """Lower one IR block, dispatching on its `RUNTIME_KIND`."""
+        kind = block_kind(block)
+        if kind is None:
+            raise TypeError(
+                f"{self.name}: {type(block).__name__} is not a lowerable "
+                f"block (no RUNTIME_KIND). Expected a Sim, EKF, LQR, or a "
+                f"recurrence block.")
+        handler = getattr(self, f"lower_{kind}", None)
+        if handler is None:
+            supported = sorted(
+                n[len("lower_"):] for n in dir(self)
+                if n.startswith("lower_") and n != "lower_block"
+                and callable(getattr(self, n)))
+            raise NotImplementedError(
+                f"{self.name}: no lowering for block kind {kind!r} "
+                f"({type(block).__name__}). Supported kinds: {supported}.")
+        return handler(block, **opts)

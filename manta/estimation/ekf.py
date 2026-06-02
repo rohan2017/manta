@@ -93,6 +93,10 @@ class EKF:
     craft in the world (`StateSpec.from_world`).
     """
 
+    # Lowerable-block kind (see manta.codegen.block.KIND_EKF): a backend
+    # lowers an EKF through its `lower_ekf` handler.
+    RUNTIME_KIND = "ekf"
+
     def __init__(self, world, *,
                  track: dict | None = None,
                  sensors: list[str] | None = None,

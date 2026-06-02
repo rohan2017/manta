@@ -111,6 +111,10 @@ class LQR:
         control_fn (`u(x_full)` baked `ca.Function`).
     """
 
+    # Lowerable-block kind (see manta.codegen.block.KIND_LQR): a backend
+    # lowers an LQR through its `lower_lqr` handler.
+    RUNTIME_KIND = "lqr"
+
     def __init__(self, world, *,
                  x_ref: dict,
                  u_ref: dict | None = None,
