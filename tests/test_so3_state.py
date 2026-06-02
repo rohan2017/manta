@@ -32,7 +32,7 @@ class _SO3PassthroughPart(Part):
         init=(1.0, 0.0, 0.0, 0.0),
         manifold=SO3Manifold(from_frame=WorldFrame, to_frame=CraftFrame),
     )
-    quat_out = Output(shape="vec4")
+    quat_out = Output(shape="SO3")
 
     def update(self, ctx) -> PartUpdate:
         zero = Vec3[PartFrame].constant((0.0, 0.0, 0.0))
@@ -200,7 +200,7 @@ def test_state_spec_picks_up_so3_state_slot():
     w.add_craft(c)
     spec = StateSpec.from_world(w)
     slot = spec.slot("c.att.orientation_est")
-    assert slot.dim              == 4
+    assert slot.ambient_dim              == 4
     assert slot.tangent_dim      == 3
     assert slot.manifold.kind    == "quat"
 

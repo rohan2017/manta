@@ -18,21 +18,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from . import _structs as S
+from ._casadi import emit_kernel_call as _call
 from .extract_ekf import EkfFunctions
-
-
-def _call(fn: str, args: list[str], results: list[tuple[int, str]]) -> list[str]:
-    """Emit a CasADi flat-C kernel call (arg/res/iw/w boilerplate)."""
-    out = [f"    {{",
-           f"        const double* arg[{fn}_SZ_ARG] = {{0}};"]
-    out += [f"        arg[{i}] = {a};" for i, a in enumerate(args)]
-    out.append(f"        double* res[{fn}_SZ_RES] = {{0}};")
-    out += [f"        res[{i}] = {e};" for i, e in results]
-    out.append(f"        long long iw[{fn}_SZ_IW > 0 ? {fn}_SZ_IW : 1];")
-    out.append(f"        double    w [{fn}_SZ_W  > 0 ? {fn}_SZ_W  : 1];")
-    out.append(f"        {fn}(arg, res, iw, w, 0);")
-    out.append("    }")
-    return out
 
 
 def _matrix_literal(M, rows: int, cols: int) -> str:

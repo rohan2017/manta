@@ -148,15 +148,3 @@ class Earth(Planet):
             mf.add(DipoleMag(
                 position=tuple(self.center.tolist()),
                 moment=tuple(moment_vec)))
-
-    # ------------------------------------------------------------------
-
-    def height_above_sea_level(self,
-                               position_world: tuple[float, float, float]
-                               ) -> float:
-        """Signed distance from a WorldFrame point to the planet's
-        sea-level surface. Positive in air, negative underwater."""
-        import numpy as np
-        p = np.asarray(position_world, dtype=float)
-        r = float(np.linalg.norm(p - self.center))
-        return r - self.planet_radius

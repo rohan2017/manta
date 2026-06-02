@@ -101,7 +101,7 @@ class RecurrenceBlock:
         dt_sym = ca.MX.sym("dt")
         t_sym  = ca.MX.sym("t")
 
-        xd = {s.name: x_sym[s.offset:s.offset + s.dim] for s in spec.slots}
+        xd = {s.name: x_sym[s.ambient_offset:s.ambient_offset + s.ambient_dim] for s in spec.slots}
         ud, off = {}, 0
         for p in self.inputs:
             ud[p.name] = u_sym[off:off + p.dim]
@@ -119,7 +119,7 @@ class RecurrenceBlock:
             raise ValueError(
                 f"{name}: recurrence did not return outputs {missing_y}.")
 
-        x_next = ca.vertcat(*[ca.reshape(xnext_d[s.name], s.dim, 1)
+        x_next = ca.vertcat(*[ca.reshape(xnext_d[s.name], s.ambient_dim, 1)
                               for s in spec.slots])
         y = ca.vertcat(*[ca.reshape(yd[p.name], p.dim, 1)
                          for p in self.outputs])

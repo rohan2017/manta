@@ -10,8 +10,9 @@ import pytest
 from manta import Craft, Sim, World
 from manta.fields import GravityField
 from manta.codegen.cpp.extract import extract
-from manta.codegen.cpp.kernels import emit_kernels
-from manta.codegen.cpp.wrapper import emit_wrapper
+from manta.codegen.cpp.kernels import emit_kernel_list
+from manta.codegen.cpp.evaluator_spec import sim_spec_from_funcs
+from manta.codegen.cpp.evaluator_wrapper import emit_evaluator_wrapper
 from manta.parts import IMU, Mass, PositionSensor, Thruster
 
 
@@ -27,6 +28,21 @@ def _hover_world():
     return Sim(w)
 
 
+def _sim_kernel_fns(funcs):
+    fns = [funcs.predict_fn, funcs.predict_jacobian_fn]
+    for o in funcs.outputs:
+        fns += [o.h_fn, o.H_fn]
+    return fns
+
+
+def emit_wrapper(funcs, world, out_dir, *, class_name, basename=None):
+    """Render the Sim typed C++ wrapper via the generic evaluator emitter
+    (the production path: Sim is just another evaluator block)."""
+    return emit_evaluator_wrapper(
+        sim_spec_from_funcs(funcs, world), out_dir,
+        class_name=class_name, basename=basename)
+
+
 # ---------------------------------------------------------------------------
 # Files exist and reference the expected symbols
 # ---------------------------------------------------------------------------
@@ -34,7 +50,7 @@ def _hover_world():
 def test_wrapper_files_exist(tmp_path: Path):
     cw = _hover_world()
     funcs = extract(cw)
-    emit_kernels(funcs, tmp_path, basename="drone")
+    emit_kernel_list(_sim_kernel_fns(funcs), tmp_path, basename="drone")
     paths = emit_wrapper(funcs, cw.world, tmp_path,
                           class_name="Drone", basename="drone")
     assert paths["hpp"].exists()
@@ -44,7 +60,7 @@ def test_wrapper_files_exist(tmp_path: Path):
 def test_wrapper_hpp_declares_typed_state_and_methods(tmp_path: Path):
     cw = _hover_world()
     funcs = extract(cw)
-    emit_kernels(funcs, tmp_path, basename="drone")
+    emit_kernel_list(_sim_kernel_fns(funcs), tmp_path, basename="drone")
     paths = emit_wrapper(funcs, cw.world, tmp_path,
                           class_name="Drone", basename="drone")
     hpp = paths["hpp"].read_text()
@@ -99,7 +115,7 @@ def test_wrapper_compiles_against_kernels(tmp_path: Path,
 
     cw = _hover_world()
     funcs = extract(cw)
-    kpaths = emit_kernels(funcs, tmp_path, basename="drone")
+    kpaths = emit_kernel_list(_sim_kernel_fns(funcs), tmp_path, basename="drone")
     wpaths = emit_wrapper(funcs, cw.world, tmp_path,
                           class_name="Drone", basename="drone")
 

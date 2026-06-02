@@ -44,9 +44,9 @@ class PositionSensor(Part):
 
     rate: float = Parameter(None)
 
-    position_noise = WhiteNoise("vec3", frame=WorldFrame, sigma=0.0)
+    position_noise = WhiteNoise("R3", frame=WorldFrame, sigma=0.0)
 
-    position = Output(shape="vec3")
+    position = Output(shape="R3")
 
     def update(self, ctx) -> PartUpdate:
         zero_v = Vec3[PartFrame].constant((0.0, 0.0, 0.0))

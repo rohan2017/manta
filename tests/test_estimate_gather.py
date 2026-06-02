@@ -111,5 +111,5 @@ def test_non_identity_gather_two_crafts():
     assert lqr._gather and all(foff != soff for foff, _, soff in lqr._gather)
     # Each dst offset is exactly craft-a's slot offset in the full layout.
     for name, (soff, dim) in ekf.estimate.layout.items():
-        foff = lqr.spec.slot(name).offset
+        foff = lqr.spec.slot(name).ambient_offset
         assert (foff, dim, soff) in lqr._gather

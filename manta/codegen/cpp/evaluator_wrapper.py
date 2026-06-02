@@ -13,7 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from . import _structs as S
-from .ekf_wrapper import _call
+from ._casadi import emit_kernel_call as _call
 from ..evaluator import ArgSource, EvaluatorSpec, ParamKind, ReturnKind
 
 _P = ParamKind
@@ -117,7 +117,11 @@ def _method_lines(ep, espec: EvaluatorSpec, qcls: str) -> list[str]:
             L.append(f"    double u_in[{n_in}];")
         else:
             L.append("    double u_in[1] = {0.0};   // no inputs declared")
-    if _A.ZERO_DT in args:
+    # A kernel that takes dt but whose public method doesn't expose it (the
+    # dt-independent `measure_*` reads) gets a local zero dt synthesized here
+    # — the IR just says the kernel wants DT; the C-ism stays in the emitter.
+    needs_zero_dt = _A.DT in args and _P.DT not in ep.params
+    if needs_zero_dt:
         L.append("    double dt = 0.0;")
 
     # result buffers
@@ -144,7 +148,7 @@ def _method_lines(ep, espec: EvaluatorSpec, qcls: str) -> list[str]:
 
     # --- kernel call ---
     arg_expr = {_A.STATE: "x_in", _A.INPUTS: "u_in",
-                _A.DT: "&dt", _A.T: "&t", _A.ZERO_DT: "&dt"}
+                _A.DT: "&dt", _A.T: "&t"}
     call_args = [arg_expr[a] for a in args]
     if ret.kind in (_R.STATE,):
         results = [(0, "x_out")]
@@ -155,7 +159,9 @@ def _method_lines(ep, espec: EvaluatorSpec, qcls: str) -> list[str]:
     elif ret.kind is _R.MATRIX:
         results = [(0, "M.data()")]
     elif ret.kind is _R.OUTPUTS_AND_STATE:
-        results = [(ret.state_res, "x_out"), (ret.out_res, "y_out")]
+        # Kernel result order is fixed by the recurrence contract: res 0 is
+        # next-state, res 1 is the readout.
+        results = [(0, "x_out"), (1, "y_out")]
     L += _call(ep.fn_name, call_args, results)
 
     # --- unpack / return ---

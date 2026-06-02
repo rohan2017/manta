@@ -116,22 +116,6 @@ def _capture_user_source() -> str | None:
     return None
 
 
-def _check_frame(name: str, *, expected, got, op: str) -> None:
-    """Raise a FrameError if `got` is not the same class as `expected`.
-
-    Both `expected` and `got` should be subclasses of Frame. Identity is
-    by class equality (Python `is`).
-    """
-    if expected is got:
-        return
-    raise FrameError(
-        op,
-        expected=f"{name}={expected.__name__}",
-        got=f"{name}={got.__name__}",
-        source=_capture_user_source(),
-    )
-
-
 def _format_frame(frame) -> str:
     if frame is None:
         return "<unframed>"

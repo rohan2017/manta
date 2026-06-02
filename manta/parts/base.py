@@ -75,19 +75,20 @@ class Output(_Declaration):
     back as next-tick state).
 
     Args:
-        shape    — "scalar" or "vec3" or "vec4" (= quaternion). Optional;
-                   the framework picks up the actual shape from what the
-                   part writes. Provided here so future codegen / EKF
-                   plumbing can introspect output kinds without tracing.
+        shape    — "R1" (scalar), "R3", or "SO3" (a 4-element quaternion
+                   output). Optional; the framework picks up the actual
+                   shape from what the part writes. Provided here so codegen
+                   / EKF plumbing can introspect output kinds without
+                   tracing. Same vocabulary as `State(manifold=)`.
     """
 
     __slots__ = ("shape",)
 
-    def __init__(self, shape: str = "vec3") -> None:
+    def __init__(self, shape: str = "R3") -> None:
         super().__init__(default=None)
-        if shape not in ("scalar", "vec3", "vec4"):
+        if shape not in ("R1", "R3", "SO3"):
             raise ValueError(
-                f"Output: shape must be one of 'scalar', 'vec3', 'vec4'; "
+                f"Output: shape must be one of 'R1', 'R3', 'SO3'; "
                 f"got {shape!r}")
         self.shape = shape
 
@@ -166,9 +167,9 @@ class Noise(_Declaration):
     Args:
         signal_manifold — `Manifold` instance OR shortcut string. The
                           manifold of the symbol user code reads as
-                          `self.<name>`. Shortcuts: ``"scalar"``,
-                          ``"vec3"`` (combine with ``frame=`` for vec3).
-                          Default ``"vec3"``.
+                          `self.<name>`. Shortcuts: ``"R1"`` (scalar),
+                          ``"R3"`` (combine with ``frame=``). Default
+                          ``"R3"``. Same vocabulary as `State(manifold=)`.
         frame           — Frame class, only consumed when
                           `signal_manifold` is a shortcut and resolves
                           to a vector-typed manifold. Ignored otherwise.
@@ -183,14 +184,12 @@ class Noise(_Declaration):
 
     __slots__ = ("signal_manifold", "sigma")
 
-    def __init__(self, signal_manifold="vec3", *, frame=None,
+    def __init__(self, signal_manifold="R3", *, frame=None,
                  sigma: float = 0.0) -> None:
         super().__init__(default=None)
-        from ..ir.manifold import Manifold
-        self.signal_manifold = _noise_manifold_from_shortcut(
-            signal_manifold, frame=frame,
-            owner_label=type(self).__name__,
-        ) if not isinstance(signal_manifold, Manifold) else signal_manifold
+        from ..ir.manifold import manifold_from_shortcut
+        self.signal_manifold = manifold_from_shortcut(
+            signal_manifold, frame=frame)
         self.sigma = float(sigma)
 
     # ---- Manifolds (resolved at synthesis time for the late-bound
@@ -260,65 +259,6 @@ class Noise(_Declaration):
         return self.signal_manifold.default_value()
 
 
-def _noise_manifold_from_shortcut(shortcut, *, frame, owner_label):
-    """Resolve a Noise-side shortcut string to a Manifold instance.
-
-    Vocabulary matches the prior `shape=` kwarg for ergonomic
-    continuity: ``"scalar"`` → `ScalarManifold`, ``"vec3"`` →
-    `R3Manifold(frame=frame)`. For richer manifolds (vec6, quat,
-    custom), pass an explicit `Manifold` instance instead.
-    """
-    from ..ir.manifold import ScalarManifold, R3Manifold
-    if shortcut == "scalar":
-        return ScalarManifold()
-    if shortcut == "vec3":
-        return R3Manifold(frame=frame)
-    raise ValueError(
-        f"{owner_label}: signal_manifold shortcut must be "
-        f"'scalar' or 'vec3'; got {shortcut!r}. For other manifolds, "
-        f"pass an explicit Manifold instance.")
-
-
-def _ir_input_for_manifold(manifold, name):
-    """Build the IR input symbol for a Noise channel based on the
-    manifold kind. Mirrors the per-State-kind dispatch in
-    `world_tick.py`; the two dispatch sites should stay aligned (a
-    new manifold kind needs a branch in both).
-    """
-    from .. import ir
-    if manifold.kind == "scalar":
-        return ir.Scalar.input(name)
-    if manifold.kind == "vec":
-        return ir.Vec3[manifold.frame].input(name)
-    raise NotImplementedError(
-        f"Noise: signal_manifold kind {manifold.kind!r} not yet wired "
-        f"for IR input construction.")
-
-
-def _ir_zero_for_manifold(manifold):
-    import casadi as ca
-    from .. import ir
-    if manifold.kind == "scalar":
-        return ir.Scalar.from_mx(ca.MX(0.0))
-    if manifold.kind == "vec":
-        return ir.Vec3[manifold.frame].from_mx(ca.MX.zeros(3, 1))
-    raise NotImplementedError(
-        f"Noise: signal_manifold kind {manifold.kind!r} not yet wired "
-        f"for IR zero construction.")
-
-
-def _ir_add_for_manifold(manifold, a_sym, b_mx):
-    """Type-preserving sum used by RW bias_next = bias + √dt · driver."""
-    from .. import ir
-    if manifold.kind == "scalar":
-        return ir.Scalar.from_mx(a_sym._mx + b_mx)
-    if manifold.kind == "vec":
-        return ir.Vec3[manifold.frame].from_mx(a_sym._mx + b_mx)
-    raise NotImplementedError(
-        f"Noise: signal_manifold kind {manifold.kind!r} not yet wired "
-        f"for RW state update construction.")
-
-
 class WhiteNoise(Noise):
     """Per-tick i.i.d. Gaussian noise channel. σ is the per-tick stddev."""
 
@@ -329,9 +269,7 @@ class WhiteNoise(Noise):
 
     def synthesize(self, *, base_name, name, dt, default_frame, owner):
         mfd = self.resolved_signal_manifold(default_frame=default_frame)
-        return SynthesizedNoise(
-            signal_sym=_ir_input_for_manifold(mfd, base_name),
-        )
+        return SynthesizedNoise(signal_sym=mfd.ir_input(base_name))
 
 
 class RandomWalkNoise(Noise):
@@ -357,14 +295,13 @@ class RandomWalkNoise(Noise):
         mfd = self.resolved_signal_manifold(default_frame=default_frame)
         if not self.is_active(owner, name):
             # Inert: bind zero, no slot, no driver.
-            return SynthesizedNoise(signal_sym=_ir_zero_for_manifold(mfd))
+            return SynthesizedNoise(signal_sym=mfd.ir_zero())
         # Active: bias-state input + driver input + state update.
         driver_name = f"{base_name}_driver"
         sqrt_dt    = ca.sqrt(dt._mx)
-        bias_sym   = _ir_input_for_manifold(mfd, base_name)
-        driver_sym = _ir_input_for_manifold(mfd, driver_name)
-        bias_next  = _ir_add_for_manifold(mfd, bias_sym,
-                                           sqrt_dt * driver_sym._mx)
+        bias_sym   = mfd.ir_input(base_name)
+        driver_sym = mfd.ir_input(driver_name)
+        bias_next  = mfd.ir_add(bias_sym, sqrt_dt * driver_sym._mx)
         return SynthesizedNoise(
             signal_sym=bias_sym,
             state_update=(base_name, bias_next),
@@ -498,7 +435,84 @@ class PartUpdate:
 # Part base
 # ---------------------------------------------------------------------------
 
-class Part:
+class DeclarationHost:
+    """Mixin: class-scope `_Declaration` resolution.
+
+    A *declaration host* is any object that declares Parameter / State /
+    Input / Output / Noise channels as class attributes and wants them
+    resolved onto each instance at construction (overrides applied, Noise
+    `<name>_sigma` attributes seeded). Both `Part` and `Disturbance`
+    (`manta.fields.base`) are hosts and share this one implementation — so
+    a change to the declaration protocol (a new channel kind, the
+    sigma-routing rule) lives in exactly one place.
+
+    The host must set `self.name` before calling `_apply_declarations`.
+    """
+
+    @classmethod
+    def _declarations(cls) -> dict[str, "_Declaration"]:
+        """Walk MRO (most-derived overrides parent) returning the union of
+        `_Declaration` class attributes by attribute name."""
+        decls: dict[str, _Declaration] = {}
+        # Walk in reverse-MRO so subclass entries overwrite parents.
+        for klass in reversed(cls.__mro__):
+            for name, value in vars(klass).items():
+                if isinstance(value, _Declaration):
+                    decls[name] = value
+        return decls
+
+    def _apply_declarations(self, overrides: dict[str, Any]) -> None:
+        decls = self._declarations()
+        # Noise declarations expose a per-instance `<name>_sigma`
+        # attribute. Recognize override keys of that form and route
+        # them to the matching declaration without reporting "unknown".
+        noise_sigma_keys = {
+            f"{n}_sigma" for n, d in decls.items() if isinstance(d, Noise)
+        }
+        unknown = set(overrides) - set(decls) - noise_sigma_keys
+        if unknown:
+            raise TypeError(
+                f"{type(self).__name__}({self.name!r}): unknown parameter(s) "
+                f"{sorted(unknown)}. Declared: "
+                f"{sorted(set(decls) | noise_sigma_keys)}")
+        for attr_name, decl in decls.items():
+            value = overrides.get(attr_name, decl.default)
+            # Plain attribute. For State, this is the init value used both
+            # as the seed in initial_state() and as the value the attribute
+            # holds OUTSIDE of a trace. Inside a trace, the framework
+            # rebinds it to the symbolic input node.
+            setattr(self, attr_name, value)
+            if isinstance(decl, Noise):
+                sigma_key = f"{attr_name}_sigma"
+                setattr(self, sigma_key,
+                        float(overrides.get(sigma_key, decl.sigma)))
+
+    @classmethod
+    def state_declarations(cls) -> dict[str, "State"]:
+        """Just the State entries (subset of _declarations)."""
+        return {n: d for n, d in cls._declarations().items()
+                if isinstance(d, State)}
+
+    @classmethod
+    def input_declarations(cls) -> dict[str, "Input"]:
+        """Just the Input entries (subset of _declarations)."""
+        return {n: d for n, d in cls._declarations().items()
+                if isinstance(d, Input)}
+
+    @classmethod
+    def output_declarations(cls) -> dict[str, "Output"]:
+        """Just the Output entries (subset of _declarations)."""
+        return {n: d for n, d in cls._declarations().items()
+                if isinstance(d, Output)}
+
+    @classmethod
+    def noise_declarations(cls) -> dict[str, "Noise"]:
+        """Just the Noise entries (subset of _declarations)."""
+        return {n: d for n, d in cls._declarations().items()
+                if isinstance(d, Noise)}
+
+
+class Part(DeclarationHost):
     """Base class for all parts.
 
     Subclasses declare their interface via class-attribute `Parameter`
@@ -528,9 +542,6 @@ class Part:
              transform=(0.0, 0.0, -0.5))        # 0.5 m below parent origin
     """
 
-    # Subclasses MAY override these for static info / part-name dispatch.
-    cpp_class: ClassVar[str] = ""           # filled in by future codegen backends
-
     # Fields the part requires registered on the World. Verified at
     # `Sim(world)`. Subclasses override with concrete Field subclasses
     # (e.g., `requires_fields = [GravityField]` for a Mass-like part).
@@ -550,69 +561,7 @@ class Part:
         self.parent: "Part | None" = None
         self._apply_declarations(overrides)
 
-    # --- Declaration resolution -------------------------------------------
-
-    def _apply_declarations(self, overrides: dict[str, Any]) -> None:
-        decls = self._declarations()
-        # Noise declarations expose a per-instance `<name>_sigma`
-        # attribute. Recognize override keys of that form and route
-        # them to the matching declaration without reporting "unknown".
-        noise_sigma_keys = {
-            f"{n}_sigma" for n, d in decls.items() if isinstance(d, Noise)
-        }
-        unknown = set(overrides) - set(decls) - noise_sigma_keys
-        if unknown:
-            raise TypeError(
-                f"{type(self).__name__}({self.name!r}): unknown parameter(s) "
-                f"{sorted(unknown)}. Declared: "
-                f"{sorted(set(decls) | noise_sigma_keys)}")
-        for attr_name, decl in decls.items():
-            value = overrides.get(attr_name, decl.default)
-            # Plain attribute. For State, this is the init value used both
-            # as the seed in Craft.initial_state() and as the value the
-            # attribute holds OUTSIDE of a trace. Inside a trace, the
-            # framework rebinds it to the symbolic input node.
-            setattr(self, attr_name, value)
-            if isinstance(decl, Noise):
-                sigma_key = f"{attr_name}_sigma"
-                setattr(self, sigma_key,
-                        float(overrides.get(sigma_key, decl.sigma)))
-
-    @classmethod
-    def _declarations(cls) -> dict[str, _Declaration]:
-        """Walk MRO (most-derived overrides parent) returning the union of
-        `_Declaration` class attributes by attribute name."""
-        decls: dict[str, _Declaration] = {}
-        # Walk in reverse-MRO so subclass entries overwrite parents.
-        for klass in reversed(cls.__mro__):
-            for name, value in vars(klass).items():
-                if isinstance(value, _Declaration):
-                    decls[name] = value
-        return decls
-
-    @classmethod
-    def state_declarations(cls) -> dict[str, "State"]:
-        """Just the State entries (subset of _declarations)."""
-        return {n: d for n, d in cls._declarations().items()
-                if isinstance(d, State)}
-
-    @classmethod
-    def input_declarations(cls) -> dict[str, "Input"]:
-        """Just the Input entries (subset of _declarations)."""
-        return {n: d for n, d in cls._declarations().items()
-                if isinstance(d, Input)}
-
-    @classmethod
-    def output_declarations(cls) -> dict[str, "Output"]:
-        """Just the Output entries (subset of _declarations)."""
-        return {n: d for n, d in cls._declarations().items()
-                if isinstance(d, Output)}
-
-    @classmethod
-    def noise_declarations(cls) -> dict[str, "Noise"]:
-        """Just the Noise entries (subset of _declarations)."""
-        return {n: d for n, d in cls._declarations().items()
-                if isinstance(d, Noise)}
+    # --- Declaration resolution: inherited from DeclarationHost ------------
 
     def noise_R(self, name: str) -> Any:
         """Measurement-noise covariance for a declared Noise slot.

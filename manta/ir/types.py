@@ -23,6 +23,7 @@ from typing import Any, ClassVar
 
 import casadi as ca
 
+from ._rotation import quat_conj, quat_mul, quat_to_rotmat
 from .frames import (
     FrameError,
     _capture_user_source,
@@ -504,19 +505,13 @@ class Quat(_IRValue):
                 got=f"{self._to_frame.__name__} vs {other._from_frame.__name__}",
                 source=_capture_user_source(),
             )
-        w1, x1, y1, z1 = self._mx[0], self._mx[1], self._mx[2], self._mx[3]
-        w2, x2, y2, z2 = other._mx[0], other._mx[1], other._mx[2], other._mx[3]
-        w = w1*w2 - x1*x2 - y1*y2 - z1*z2
-        x = w1*x2 + x1*w2 + y1*z2 - z1*y2
-        y = w1*y2 - x1*z2 + y1*w2 + z1*x2
-        z = w1*z2 + x1*y2 - y1*x2 + z1*w2
-        return Quat(ca.vertcat(w, x, y, z),
+        return Quat(quat_mul(self._mx, other._mx),
                     from_frame=self._from_frame, to_frame=other._to_frame)
 
     def conjugate(self) -> "Quat":
         """Quat[A,B] → Quat[B,A]. For unit quaternions this is the inverse."""
         return Quat(
-            ca.vertcat(self._mx[0], -self._mx[1], -self._mx[2], -self._mx[3]),
+            quat_conj(self._mx),
             from_frame=self._to_frame, to_frame=self._from_frame,
         )
 
@@ -552,20 +547,6 @@ class Quat(_IRValue):
     # ---- Internal: rotation matrix from quaternion (column-major) -------
 
     def _rotmat_mx(self) -> ca.MX:
-        w, x, y, z = self._mx[0], self._mx[1], self._mx[2], self._mx[3]
         # Standard quaternion → R formula. Assumes unit quaternion; the
         # caller is responsible for keeping ‖q‖ ≈ 1.
-        r00 = 1 - 2 * (y * y + z * z)
-        r01 = 2 * (x * y - w * z)
-        r02 = 2 * (x * z + w * y)
-        r10 = 2 * (x * y + w * z)
-        r11 = 1 - 2 * (x * x + z * z)
-        r12 = 2 * (y * z - w * x)
-        r20 = 2 * (x * z - w * y)
-        r21 = 2 * (y * z + w * x)
-        r22 = 1 - 2 * (x * x + y * y)
-        return ca.vertcat(
-            ca.horzcat(r00, r01, r02),
-            ca.horzcat(r10, r11, r12),
-            ca.horzcat(r20, r21, r22),
-        )
+        return quat_to_rotmat(self._mx)

@@ -109,10 +109,10 @@ def test_position_sensor_H_is_identity_on_position_block():
     by_name = {o.full_name: o for o in cf.outputs}
     H_pos = by_name["drone.gps.position"].H_fn
 
-    x = cf.spec.pack({s.name: np.zeros(s.dim) if s.dim > 1 else 0.0
+    x = cf.spec.pack({s.name: np.zeros(s.ambient_dim) if s.ambient_dim > 1 else 0.0
                        for s in cf.spec.slots})
     # Set the rigid-body orientation to identity quaternion.
-    x[cf.spec.slot("drone.orientation").offset] = 1.0
+    x[cf.spec.slot("drone.orientation").ambient_offset] = 1.0
     u = np.zeros(cf.n_inputs)
     H = np.asarray(H_pos(x, u, 0.005, 0.0))
     np.testing.assert_allclose(H[:, 0:3], np.eye(3), atol=1e-12)
@@ -126,9 +126,9 @@ def test_gyro_H_is_identity_on_angular_velocity_block():
     by_name = {o.full_name: o for o in cf.outputs}
     H_gyro = by_name["drone.g.gyro"].H_fn
 
-    x = cf.spec.pack({s.name: np.zeros(s.dim) if s.dim > 1 else 0.0
+    x = cf.spec.pack({s.name: np.zeros(s.ambient_dim) if s.ambient_dim > 1 else 0.0
                        for s in cf.spec.slots})
-    x[cf.spec.slot("drone.orientation").offset] = 1.0
+    x[cf.spec.slot("drone.orientation").ambient_offset] = 1.0
     u = np.zeros(cf.n_inputs)
     H = np.asarray(H_gyro(x, u, 0.005, 0.0))
     np.testing.assert_allclose(H[:, 9:12], np.eye(3), atol=1e-12)
@@ -147,13 +147,13 @@ def test_extract_world_with_no_inputs():
     w.add_craft(c)
     cf = extract(Sim(w))
     assert cf.n_inputs == 0
-    x = cf.spec.pack({s.name: np.zeros(s.dim) if s.dim > 1 else 0.0
+    x = cf.spec.pack({s.name: np.zeros(s.ambient_dim) if s.ambient_dim > 1 else 0.0
                        for s in cf.spec.slots})
-    x[cf.spec.slot("free_fall.orientation").offset] = 1.0
+    x[cf.spec.slot("free_fall.orientation").ambient_offset] = 1.0
     u = np.zeros(0)
     x_new = np.asarray(cf.predict_fn(x, u, 0.005, 0.0)).ravel()
     # Free-fall under -9.81: v_z = -0.04905, z = -1.226e-4 after one step.
-    vel_off = cf.spec.slot("free_fall.velocity").offset
-    pos_off = cf.spec.slot("free_fall.position").offset
+    vel_off = cf.spec.slot("free_fall.velocity").ambient_offset
+    pos_off = cf.spec.slot("free_fall.position").ambient_offset
     assert np.isclose(x_new[vel_off + 2], -0.04905, atol=1e-6)
     assert np.isclose(x_new[pos_off + 2], -1.22625e-4, atol=1e-8)

@@ -31,9 +31,9 @@ class DVL(Part):
                          `position_noise`. Defaults to 0 (an ideal read).
     """
 
-    velocity_noise = WhiteNoise("vec3", frame=PartFrame, sigma=0.0)
+    velocity_noise = WhiteNoise("R3", frame=PartFrame, sigma=0.0)
 
-    velocity = Output(shape="vec3")
+    velocity = Output(shape="R3")
 
     def update(self, ctx) -> PartUpdate:
         zero_v = Vec3[PartFrame].constant((0.0, 0.0, 0.0))

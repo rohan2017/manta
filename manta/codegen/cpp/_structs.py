@@ -105,11 +105,11 @@ def pack_state_lines(spec, qcls: str) -> list[str]:
     out = [f"static void pack_state(const {qcls}::State& s, double* x) {{"]
     for slot in spec.slots:
         ident = cpp_ident(slot.name)
-        if slot.dim == 1:
-            out.append(f"    x[{slot.offset}] = s.{ident};")
+        if slot.ambient_dim == 1:
+            out.append(f"    x[{slot.ambient_offset}] = s.{ident};")
         else:
-            for i in range(slot.dim):
-                out.append(f"    x[{slot.offset + i}] = s.{ident}[{i}];")
+            for i in range(slot.ambient_dim):
+                out.append(f"    x[{slot.ambient_offset + i}] = s.{ident}[{i}];")
     out.append("}")
     return out
 
@@ -118,11 +118,11 @@ def unpack_state_lines(spec, qcls: str) -> list[str]:
     out = [f"static void unpack_state(const double* x, {qcls}::State& s) {{"]
     for slot in spec.slots:
         ident = cpp_ident(slot.name)
-        if slot.dim == 1:
-            out.append(f"    s.{ident} = x[{slot.offset}];")
+        if slot.ambient_dim == 1:
+            out.append(f"    s.{ident} = x[{slot.ambient_offset}];")
         else:
-            for i in range(slot.dim):
-                out.append(f"    s.{ident}[{i}] = x[{slot.offset + i}];")
+            for i in range(slot.ambient_dim):
+                out.append(f"    s.{ident}[{i}] = x[{slot.ambient_offset + i}];")
     out.append("}")
     return out
 

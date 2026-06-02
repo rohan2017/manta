@@ -20,9 +20,10 @@ import casadi as ca
 import numpy as np
 
 from ..target import Target
+from ...linearized_world import resolve_suffix
 
 # Output-shape → vector dimension, for sizing sensor-output ports.
-_SHAPE_DIM = {"scalar": 1, "vec3": 3, "vec4": 4}
+_SHAPE_DIM = {"R1": 1, "R3": 3, "SO3": 4}
 
 
 # ---------------------------------------------------------------------------
@@ -237,18 +238,7 @@ class NumpyWorld:
 
     @staticmethod
     def _resolve(name: str, candidates: list[str], label: str) -> str:
-        if name in candidates:
-            return name
-        matches = [c for c in candidates if c.endswith("." + name)]
-        if len(matches) == 1:
-            return matches[0]
-        if len(matches) > 1:
-            raise KeyError(
-                f"NumpyWorld: ambiguous {label} {name!r}; matches {matches}. "
-                f"Use the fully-qualified form.")
-        raise KeyError(
-            f"NumpyWorld: unknown {label} {name!r}. Available: "
-            f"{sorted(candidates)}")
+        return resolve_suffix(name, candidates, label=label, who="NumpyWorld")
 
     def _output_dim(self, full: str) -> int | None:
         for s in self._signature().sensors:
@@ -496,24 +486,13 @@ class NumpyEKF:
         if self._est_port is None:
             self._est_port = Signal("estimate", dim=self.spec.ambient_dim)
             self._est_port.layout = {
-                s.name: (s.offset, s.dim) for s in self.spec.slots}
+                s.name: (s.ambient_offset, s.ambient_dim) for s in self.spec.slots}
             self._est_port.set(self._x.copy())
         return self._est_port
 
     def _resolve_input_full(self, name: str) -> str:
-        names = self._ekf._input_names
-        if name in names:
-            return name
-        matches = [n for n in names if n.endswith("." + name)]
-        if len(matches) == 1:
-            return matches[0]
-        if len(matches) > 1:
-            raise KeyError(
-                f"NumpyEKF.command: ambiguous input {name!r}; matches "
-                f"{matches}. Use the fully-qualified form.")
-        raise KeyError(
-            f"NumpyEKF.command: unknown input {name!r}. Available: "
-            f"{sorted(names)}")
+        return resolve_suffix(name, self._ekf._input_names,
+                              label="input", who="NumpyEKF.command")
 
     # ---- Predict -------------------------------------------------------
 
@@ -627,18 +606,8 @@ class NumpyEKF:
 
     def _resolve_meas_name(self, name: str) -> str:
         """Resolve a full or craft-relative sensor name to its full key."""
-        if name in self._meas:
-            return name
-        matches = [n for n in self._meas if n.endswith("." + name)]
-        if len(matches) == 1:
-            return matches[0]
-        if len(matches) > 1:
-            raise KeyError(
-                f"NumpyEKF.feed: ambiguous sensor name {name!r}; matches "
-                f"{matches}. Use the fully-qualified form.")
-        raise KeyError(
-            f"NumpyEKF.feed: unknown sensor {name!r}. Registered: "
-            f"{sorted(self._meas)}")
+        return resolve_suffix(name, self._meas,
+                              label="sensor", who="NumpyEKF.feed")
 
     def feed(self, name: str, z, *, t: float | None = None) -> None:
         """Drop a measurement into the bus and mark it fresh.
@@ -909,23 +878,12 @@ class NumpyLQR:
         pairs: list[tuple[int, int, int]] = []
         for name, (soff, sdim) in layout.items():
             if name in full:
-                pairs.append((full.slot(name).offset, sdim, soff))
+                pairs.append((full.slot(name).ambient_offset, sdim, soff))
         self._gather = pairs
 
     def _resolve_input_full(self, name: str) -> str:
-        names = self._lqr.input_names
-        if name in names:
-            return name
-        matches = [n for n in names if n.endswith("." + name)]
-        if len(matches) == 1:
-            return matches[0]
-        if len(matches) > 1:
-            raise KeyError(
-                f"NumpyLQR.command: ambiguous input {name!r}; matches "
-                f"{matches}. Use the fully-qualified form.")
-        raise KeyError(
-            f"NumpyLQR.command: unknown input {name!r}. Available: "
-            f"{sorted(names)}")
+        return resolve_suffix(name, self._lqr.input_names,
+                              label="input", who="NumpyLQR.command")
 
     def __repr__(self) -> str:
         return f"<NumpyLQR over {self._lqr!r}>"

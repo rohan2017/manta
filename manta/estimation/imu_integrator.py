@@ -33,7 +33,8 @@ from __future__ import annotations
 
 import casadi as ca
 
-from ..ir.manifold import R3Manifold, SO3Manifold, _quat_mul_mx, _so3_exp
+from ..ir._rotation import quat_conj, quat_mul, so3_exp
+from ..ir.manifold import R3Manifold, SO3Manifold
 from ..recurrence import RecurrenceBlock
 
 
@@ -62,15 +63,14 @@ class IMUIntegrator(RecurrenceBlock):
             gyro = u["gyro"]
 
             # Specific force, body → world (quaternion sandwich), + gravity.
-            q_conj = ca.vertcat(q[0], -q[1], -q[2], -q[3])
             a_body_q = ca.vertcat(0, accel[0], accel[1], accel[2])
-            a_world_q = _quat_mul_mx(_quat_mul_mx(q, a_body_q), q_conj)
+            a_world_q = quat_mul(quat_mul(q, a_body_q), quat_conj(q))
             a_world = a_world_q[1:4] + g
 
             v_next = v + a_world * dt
             p_next = p + v * dt + 0.5 * a_world * dt * dt
             # Exact body-frame attitude increment for the step.
-            q_next = _quat_mul_mx(q, _so3_exp(gyro * dt))
+            q_next = quat_mul(q, so3_exp(gyro * dt))
 
             nxt = {"position": p_next, "velocity": v_next,
                    "orientation": q_next}

@@ -16,8 +16,8 @@ maps a block to its runtime façade.
 from __future__ import annotations
 
 from . import _structs as S
+from ._casadi import densify as _densify
 from .extract import extract
-from .extract_ekf import _densify
 from .types import cpp_type_for
 from ..evaluator import (
     ArgSource, EntryPoint, EvaluatorSpec, FieldSpec, ParamKind,
@@ -37,7 +37,7 @@ def _state_fields(spec, init_expr) -> tuple[FieldSpec, ...]:
     per-slot default."""
     return tuple(
         FieldSpec(ident=S.cpp_ident(s.name), type_expr=S.eigen_type_for(s),
-                  init_expr=init_expr(s), dim=s.dim)
+                  init_expr=init_expr(s), dim=s.ambient_dim)
         for s in spec.slots)
 
 
@@ -67,8 +67,8 @@ def _x0_init(x0):
     from the packed `x0` vector."""
     def init(slot) -> str:
         cpp = cpp_type_for(slot.manifold)
-        seg = x0[slot.offset:slot.offset + slot.dim]
-        if slot.dim == 1:
+        seg = x0[slot.ambient_offset:slot.ambient_offset + slot.ambient_dim]
+        if slot.ambient_dim == 1:
             return cpp.literal(float(seg[0]))
         return cpp.literal([float(v) for v in seg])
     return init
@@ -102,15 +102,16 @@ def sim_spec_from_funcs(funcs, world) -> EvaluatorSpec:
     kernels = [funcs.predict_fn, funcs.predict_jacobian_fn]
     for o in funcs.outputs:
         ident = S.cpp_ident(o.full_name)
-        # h/H take the full (x,u,dt,t) kernel signature but the public
-        # method omits dt (h is dt-independent in our parts) → ZERO_DT.
+        # h/H take the full (x,u,dt,t) kernel signature but the public method
+        # omits dt (h is dt-independent in our parts) — the emitter feeds a
+        # zero dt since the kernel wants DT and the method has no DT param.
         entries.append(EntryPoint(
             f"measure_{ident}", o.h_fn.name(),
-            (_P.STATE, _P.INPUTS, _P.T), (_A.STATE, _A.INPUTS, _A.ZERO_DT, _A.T),
+            (_P.STATE, _P.INPUTS, _P.T), (_A.STATE, _A.INPUTS, _A.DT, _A.T),
             ReturnSpec(ReturnKind.VEC, dim=o.out_dim)))
         entries.append(EntryPoint(
             f"measure_{ident}_jacobian", o.H_fn.name(),
-            (_P.STATE, _P.INPUTS, _P.T), (_A.STATE, _A.INPUTS, _A.ZERO_DT, _A.T),
+            (_P.STATE, _P.INPUTS, _P.T), (_A.STATE, _A.INPUTS, _A.DT, _A.T),
             ReturnSpec(ReturnKind.MATRIX, rows=o.out_dim, cols=tan)))
         kernels += [o.h_fn, o.H_fn]
 
@@ -161,7 +162,7 @@ def evaluator_spec_for_recurrence(block) -> EvaluatorSpec:
         entry_points=(EntryPoint(
             "step", block.update_fn.name(),
             (_P.INPUTS, _P.DT, _P.T), (_A.STATE, _A.INPUTS, _A.DT, _A.T),
-            ReturnSpec(ReturnKind.OUTPUTS_AND_STATE, state_res=0, out_res=1),
+            ReturnSpec(ReturnKind.OUTPUTS_AND_STATE),
             const=False),),
         stateful=True,
         kernels=(block.update_fn,),

@@ -144,7 +144,7 @@ def compile_world_tick(crafts: list,
         per_craft: dict[int, dict[str, Any]] = {}
         for craft in crafts:
             per_craft[id(craft)] = _trace_craft_pass1(
-                g, craft, gravity_field, fluid_field, mag_field, dt, t,
+                craft, gravity_field, fluid_field, mag_field, dt, t,
                 collision_field=collision_field)
 
         # Pass 2: coupling wrench injection.
@@ -236,7 +236,8 @@ def _plumb_field_disturbances(fields, dt) -> tuple[list, list[tuple[str, Any]]]:
                         f"{type(dist).__name__}('{dist.name}'): State "
                         f"manifold kind {sdecl.manifold.kind!r} not yet "
                         f"supported on disturbance-declared state.")
-                sym = ir.Scalar.input(prefix + sname)
+                sym = sdecl.manifold.ir_input(
+                    prefix + sname, default_frame=WorldFrame)
                 saved[sname] = getattr(dist, sname)
                 object.__setattr__(dist, sname, sym)
                 state_outputs.append((prefix + sname, sym))
@@ -266,8 +267,7 @@ def _plumb_field_disturbances(fields, dt) -> tuple[list, list[tuple[str, Any]]]:
 # Per-craft helpers
 # ---------------------------------------------------------------------------
 
-def _trace_craft_pass1(g_ctx,
-                       craft,
+def _trace_craft_pass1(craft,
                        gravity_field,
                        fluid_field,
                        mag_field,
@@ -313,21 +313,8 @@ def _trace_craft_pass1(g_ctx,
             saved: dict[str, Any] = {}
             for sname, sdecl in decls.items():
                 input_name = prefix + f"{part.name}.{sname}"
-                kind = sdecl.manifold.kind
-                if kind == "scalar":
-                    sym = ir.Scalar.input(input_name)
-                elif kind == "vec":
-                    frame = sdecl.frame or CraftFrame
-                    sym = ir.Vec3[frame].input(input_name)
-                elif kind == "quat":
-                    from_f = sdecl.manifold.from_frame
-                    to_f   = sdecl.manifold.to_frame
-                    sym = ir.Quat[from_f, to_f].input(input_name)
-                else:
-                    raise NotImplementedError(
-                        f"{type(part).__name__}('{part.name}'): "
-                        f"State manifold kind {kind!r} not yet wired "
-                        f"through compile_world_tick.")
+                sym = sdecl.manifold.ir_input(
+                    input_name, default_frame=CraftFrame)
                 part_states[sname] = sym
                 saved[sname] = getattr(part, sname)
                 object.__setattr__(part, sname, sym)
@@ -385,7 +372,7 @@ def _trace_craft_pass1(g_ctx,
 
     # Symbolic kinematic + inertia passes over the part tree.
     kin_states = kinematic_pass(
-        craft.root, position, orientation, velocity, ang_vel, t,
+        craft.root, position, orientation, velocity, ang_vel,
         body_acceleration_world=a_world_placeholder,
         body_angular_acceleration=alpha_placeholder,
         joint_angular_accels=joint_accel_syms)

@@ -35,8 +35,7 @@ implicit-equation solver).
   * World-frame fields (`origin_in_world`, `velocity_origin`,
     `orientation_anchor_from_*`) carry the part's actual absolute pose.
   * "In CraftFrame" fields (`angular_velocity_input/output`,
-    `velocity_body_in_craft`, `r_in_craft`,
-    `R_craft_from_input/output`) are expressed in the **body's
+    `r_in_craft`, `R_craft_from_input/output`) are expressed in the **body's
     CraftFrame coords** even for nested parts whose own frame differs
     by the joint chain. Wrench aggregation lifts each part's emitted
     wrench through `r_in_craft`; articulated parts that emit
@@ -51,6 +50,12 @@ from typing import Any
 
 import casadi as ca
 
+from .ir._rotation import (
+    R_from_axis_angle,
+    quat_from_axis_angle,
+    quat_mul,
+    rotate_vec_by_quat,
+)
 from .ir.frames import WorldFrame, CraftFrame, ParentFrame, PartFrame
 from .ir.types import Mat3, Quat, Vec3
 
@@ -84,9 +89,6 @@ class KinematicState:
         angular_velocity_output       — Vec3[CraftFrame]: ω of the part's
                                          output frame. Equals input for
                                          non-Joint parts.
-        velocity_body_in_craft        — Vec3[CraftFrame]: body-frame
-                                         linear velocity at the origin
-                                         (= R_body^T · velocity_origin).
         orientation_anchor_from_input — Quat: world-frame orientation of
                                          the part's input frame.
         orientation_anchor_from_output — Quat: same for the output frame.
@@ -113,15 +115,12 @@ class KinematicState:
     velocity_origin:                Any   # Vec3[WorldFrame]
     angular_velocity_input:         Any   # Vec3[CraftFrame]
     angular_velocity_output:        Any   # Vec3[CraftFrame]
-    velocity_body_in_craft:         Any   # Vec3[CraftFrame]
     orientation_anchor_from_input:  Any   # Quat
     orientation_anchor_from_output: Any   # Quat
     r_in_craft:                     Any   # Vec3[CraftFrame]
     R_craft_from_input:             Any   # Mat3[CraftFrame, CraftFrame]
     R_craft_from_output:            Any   # Mat3[CraftFrame, CraftFrame]
     acceleration_world:            Any   # Vec3[WorldFrame]
-    acceleration_body:              Any   # Vec3[CraftFrame]
-    angular_acceleration:           Any   # Vec3[CraftFrame]
     # --- Body-relative (joint-induced) kinematics, body-frame coords ----
     # Motion of this part's origin / output frame relative to the body
     # frame, i.e. due ONLY to the joint angles between body and part
@@ -204,32 +203,6 @@ def _assemble_frame_views(*,
     }
 
 
-def _quat_from_axis_angle_mx(axis_local_mx, angle_mx):
-    """(w, x, y, z) MX quaternion from a length-3 axis MX in the local
-    frame and a scalar angle MX. Axis is normalized symbolically with
-    an eps softener; passing a zero axis gives identity (within float
-    rounding)."""
-    n_sq = ca.dot(axis_local_mx, axis_local_mx) + 1.0e-30
-    n    = ca.sqrt(n_sq)
-    axis_unit = axis_local_mx / n
-    half  = 0.5 * angle_mx
-    w     = ca.cos(half)
-    s     = ca.sin(half)
-    return ca.vertcat(w, s * axis_unit[0], s * axis_unit[1], s * axis_unit[2])
-
-
-def _quat_mul_mx(qa_mx, qb_mx):
-    """Hamilton product of two MX quaternions (w, x, y, z)."""
-    aw, ax, ay, az = qa_mx[0], qa_mx[1], qa_mx[2], qa_mx[3]
-    bw, bx, by, bz = qb_mx[0], qb_mx[1], qb_mx[2], qb_mx[3]
-    return ca.vertcat(
-        aw*bw - ax*bx - ay*by - az*bz,
-        aw*bx + ax*bw + ay*bz - az*by,
-        aw*by - ax*bz + ay*bw + az*bx,
-        aw*bz + ax*by - ay*bx + az*bw,
-    )
-
-
 # ---------------------------------------------------------------------------
 # Pass
 # ---------------------------------------------------------------------------
@@ -239,7 +212,6 @@ def kinematic_pass(root_part,
                    body_orientation,
                    body_velocity,
                    body_angular_velocity,
-                   t,
                    *,
                    body_acceleration_world,
                    body_angular_acceleration,
@@ -276,33 +248,24 @@ def kinematic_pass(root_part,
         joint_angular_accels = {}
 
     # ----- root state (coincides with body) -----------------------------
-    body_v_in_body = body_orientation.conjugate().apply(body_velocity)
-
     eye3_mat = Mat3[CraftFrame, CraftFrame].from_mx(ca.MX.eye(3))
     zero_r   = Vec3[CraftFrame].from_mx(ca.MX.zeros(3, 1))
     zero_vec = Vec3[CraftFrame].from_mx(ca.MX.zeros(3, 1))
 
-    # Root sees the body's own acceleration directly (no lever arm).
-    # Body-frame version via R^T. Caller passes a / α as MX placeholder
-    # symbols that get substituted to the real Newton-Euler outputs
-    # after the wrench-collection phase.
-    body_acceleration_body = body_orientation.conjugate().apply(
-        body_acceleration_world)
-
+    # Root sees the body's own acceleration directly (no lever arm). The
+    # caller passes a / α as MX placeholder symbols that get substituted to
+    # the real Newton-Euler outputs after the wrench-collection phase.
     root_state = KinematicState(
         origin_in_world=body_position,
         velocity_origin=body_velocity,
         angular_velocity_input=body_angular_velocity,
         angular_velocity_output=body_angular_velocity,
-        velocity_body_in_craft=body_v_in_body,
         orientation_anchor_from_input=body_orientation,
         orientation_anchor_from_output=body_orientation,
         r_in_craft=zero_r,
         R_craft_from_input=eye3_mat,
         R_craft_from_output=eye3_mat,
         acceleration_world=body_acceleration_world,
-        acceleration_body=body_acceleration_body,
-        angular_acceleration=body_angular_acceleration,
         velocity_rel_body=zero_vec,
         acceleration_rel_body=zero_vec,
         omega_rel_output=zero_vec,
@@ -336,7 +299,7 @@ def kinematic_pass(root_part,
             return
         for child in parent.children:
             child_state = _compute_child_state(
-                parent_state, parent, child, body_orientation, t,
+                parent_state, parent, child, body_orientation,
                 body_acceleration_world=body_acceleration_world,
                 body_angular_acceleration=body_angular_acceleration,
                 body_angular_velocity=body_angular_velocity,
@@ -349,7 +312,7 @@ def kinematic_pass(root_part,
 
 
 def _compute_child_state(parent_state: KinematicState, parent_part, child,
-                         body_orientation, t,
+                         body_orientation,
                          *,
                          body_acceleration_world,
                          body_angular_acceleration,
@@ -381,7 +344,7 @@ def _compute_child_state(parent_state: KinematicState, parent_part, child,
     # Step 1: rotate transform from parent-output-frame coords to anchor
     # coords via the parent's output orientation.
     q_anchor_from_parent_output = parent_state.orientation_anchor_from_output
-    offset_in_world_mx = _rotate_vec_by_quat_mx(
+    offset_in_world_mx = rotate_vec_by_quat(
         q_anchor_from_parent_output._mx, transform_mx)
     offset_in_world = Vec3[WorldFrame].from_mx(offset_in_world_mx)
     child_origin_in_world = parent_state.origin_in_world + offset_in_world
@@ -422,11 +385,11 @@ def _compute_child_state(parent_state: KinematicState, parent_part, child,
 
         # Input → output rotation as both a quaternion (for anchor side)
         # and a rotation matrix (for body-frame side).
-        q_input_from_output_mx = _quat_from_axis_angle_mx(
+        q_input_from_output_mx = quat_from_axis_angle(
             axis_local_mx, angle_mx)
-        R_input_from_output_mx = _R_from_axis_angle_mx(
+        R_input_from_output_mx = R_from_axis_angle(
             axis_local_mx, angle_mx)
-        q_anchor_from_output_mx = _quat_mul_mx(
+        q_anchor_from_output_mx = quat_mul(
             q_anchor_from_input_mx, q_input_from_output_mx)
         q_anchor_from_output = Quat[WorldFrame, CraftFrame].from_mx(
             q_anchor_from_output_mx)
@@ -479,13 +442,6 @@ def _compute_child_state(parent_state: KinematicState, parent_part, child,
     child_velocity_rel_body = Vec3[CraftFrame].from_mx(v_rel_child_mx)
     child_acceleration_rel_body = Vec3[CraftFrame].from_mx(a_rel_child_mx)
 
-    # ----- body-frame quantities ----------------------------------------
-    # ctx.velocity_body: body-frame coords of the linear velocity at the
-    # child's origin. This is the "DVL reading" if a DVL were mounted on
-    # this part — but expressed in the body's frame, not the part's own.
-    child_velocity_body_in_craft = body_orientation.conjugate().apply(
-        child_velocity_origin)
-
     # ----- acceleration at the child's mount point ---------------------
     # Body a / α come in as compile-time placeholder MX symbols (or
     # any caller-supplied expression). After the wrench-collection
@@ -506,14 +462,6 @@ def _compute_child_state(parent_state: KinematicState, parent_part, child,
                     + child_acceleration_rel_body)
     lever_world = body_orientation.apply(lever_craft)
     child_a_world = body_acceleration_world + lever_world
-    child_a_body   = body_orientation.conjugate().apply(child_a_world)
-
-    # Absolute angular acceleration of the part's output frame:
-    # α_abs = α_body + α_rel + ω_body × ω_rel  (all in body coords).
-    child_angular_acceleration = (body_angular_acceleration
-                                  + child_alpha_rel_output
-                                  + body_angular_velocity.cross(
-                                      child_omega_rel_output))
 
     # ----- ParentFrame views: motion relative to the immediate parent ---
     # The part's frame is its INPUT frame (= parent's OUTPUT frame). The
@@ -533,7 +481,7 @@ def _compute_child_state(parent_state: KinematicState, parent_part, child,
         p_accel_mx = joint_angular_accels.get(parent_part, ca.MX(0.0))
         # transform is in the parent's OUTPUT coords; express in the
         # parent's INPUT (= ParentFrame) coords via the joint rotation.
-        R_pin_from_pout = _R_from_axis_angle_mx(p_axis_mx, p_angle_mx)
+        R_pin_from_pout = R_from_axis_angle(p_axis_mx, p_angle_mx)
         r_pf_mx = ca.mtimes(R_pin_from_pout, transform_parentframe_mx)
         omega_pf_mx = p_rate_mx * p_axis_mx
         alpha_pf_mx = p_accel_mx * p_axis_mx
@@ -580,15 +528,12 @@ def _compute_child_state(parent_state: KinematicState, parent_part, child,
         velocity_origin=child_velocity_origin,
         angular_velocity_input=child_omega_input_in_craft,
         angular_velocity_output=child_omega_output_in_craft,
-        velocity_body_in_craft=child_velocity_body_in_craft,
         orientation_anchor_from_input=q_anchor_from_input,
         orientation_anchor_from_output=q_anchor_from_output,
         r_in_craft=child_r_in_craft,
         R_craft_from_input=R_craft_from_child_input,
         R_craft_from_output=R_craft_from_child_output,
         acceleration_world=child_a_world,
-        acceleration_body=child_a_body,
-        angular_acceleration=child_angular_acceleration,
         velocity_rel_body=child_velocity_rel_body,
         acceleration_rel_body=child_acceleration_rel_body,
         omega_rel_output=child_omega_rel_output,
@@ -597,60 +542,3 @@ def _compute_child_state(parent_state: KinematicState, parent_part, child,
     )
 
 
-def _R_from_axis_angle_mx(axis_local_mx, angle_mx):
-    """Rodrigues' rotation matrix for an MX axis + angle. Eps-soften the
-    axis norm so a zero axis (or near-zero) doesn't crash."""
-    if isinstance(axis_local_mx, list):
-        axis_local_mx = ca.MX(axis_local_mx)
-    # Force 3×1 shape.
-    if axis_local_mx.shape == (3,):
-        axis_local_mx = ca.reshape(axis_local_mx, 3, 1)
-    n_sq = ca.mtimes(axis_local_mx.T, axis_local_mx) + 1.0e-30
-    n    = ca.sqrt(n_sq)
-    u    = axis_local_mx / n
-    c    = ca.cos(angle_mx)
-    s    = ca.sin(angle_mx)
-    ux, uy, uz = u[0], u[1], u[2]
-    zero = ca.MX(0.0)
-    K = ca.vertcat(
-        ca.horzcat(zero, -uz, uy),
-        ca.horzcat(uz, zero, -ux),
-        ca.horzcat(-uy, ux, zero),
-    )
-    eye3 = ca.MX.eye(3)
-    return eye3 + s * K + (1.0 - c) * ca.mtimes(K, K)
-
-
-# ---------------------------------------------------------------------------
-# Vector rotation by quaternion (acting on MX)
-# ---------------------------------------------------------------------------
-
-def _rotate_vec_by_quat_mx(q_mx, v_mx):
-    """Rotate a 3-vector `v_mx` by the quaternion `q_mx = (w, x, y, z)`.
-
-    Uses the standard q · v · q* formula expressed in MX. Result is a
-    length-3 MX expressing the rotated vector in the target frame.
-    """
-    w = q_mx[0]
-    x = q_mx[1]
-    y = q_mx[2]
-    z = q_mx[3]
-    # rotation matrix R(q):
-    #   R = [ 1-2(y²+z²),  2(xy - zw),   2(xz + yw) ]
-    #       [ 2(xy + zw),  1-2(x²+z²),   2(yz - xw) ]
-    #       [ 2(xz - yw),  2(yz + xw),   1-2(x²+y²) ]
-    r00 = 1 - 2 * (y * y + z * z)
-    r01 = 2 * (x * y - z * w)
-    r02 = 2 * (x * z + y * w)
-    r10 = 2 * (x * y + z * w)
-    r11 = 1 - 2 * (x * x + z * z)
-    r12 = 2 * (y * z - x * w)
-    r20 = 2 * (x * z - y * w)
-    r21 = 2 * (y * z + x * w)
-    r22 = 1 - 2 * (x * x + y * y)
-    vx, vy, vz = v_mx[0], v_mx[1], v_mx[2]
-    return ca.vertcat(
-        r00 * vx + r01 * vy + r02 * vz,
-        r10 * vx + r11 * vy + r12 * vz,
-        r20 * vx + r21 * vy + r22 * vz,
-    )

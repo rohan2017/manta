@@ -25,6 +25,7 @@ from dataclasses import dataclass
 import casadi as ca
 import numpy as np
 
+from ._casadi import densify as _densify
 from ...estimation.state_spec import StateSpec
 
 
@@ -75,21 +76,6 @@ class EkfFunctions:
     @property
     def n_inputs(self) -> int:
         return len(self.input_names)
-
-
-def _densify(fn: ca.Function, name: str) -> ca.Function:
-    """Rewrap a `ca.Function` so its outputs are dense (row/col-major fill
-    for the flat-C / Eigen interface) and rename to a codegen-safe symbol.
-    Dense outputs (state/measurement vectors) pass through unchanged."""
-    ins = [ca.MX.sym(fn.name_in(i), fn.size1_in(i), fn.size2_in(i))
-           for i in range(fn.n_in())]
-    outs = fn(*ins)
-    if fn.n_out() == 1:
-        outs = [outs]
-    outs = [ca.densify(o) for o in outs]
-    return ca.Function(name, ins, outs,
-                       [fn.name_in(i) for i in range(fn.n_in())],
-                       [fn.name_out(i) for i in range(fn.n_out())])
 
 
 def extract_ekf(ekf) -> EkfFunctions:

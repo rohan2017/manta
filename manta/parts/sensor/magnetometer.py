@@ -41,9 +41,9 @@ class Magnetometer(Part):
                   (a clean reading).
     """
 
-    B_noise = WhiteNoise("vec3", frame=PartFrame, sigma=0.0)
+    B_noise = WhiteNoise("R3", frame=PartFrame, sigma=0.0)
 
-    B = Output(shape="vec3")
+    B = Output(shape="R3")
 
     def update(self, ctx) -> PartUpdate:
         # ctx.position is already the sensor's world-frame mount point

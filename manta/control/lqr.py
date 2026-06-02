@@ -21,7 +21,11 @@ uncontrolled position / attitude integrators sit on the unit circle, so
 the Riccati iteration won't converge). Regulate the *controllable* subset
 with `track=` — e.g. `track=["c.position", "c.velocity"]` for a craft
 with 3-axis thrust — and the rest is frozen at `x_ref`. `track=None`
-(full state) is for genuinely fully-actuated systems.
+(full state) is for genuinely fully-actuated systems. Unlike the EKF's
+`track` (which is *closed* over the dynamics), LQR's is taken verbatim:
+freezing the uncontrollable states at the operating point is the whole
+point — it's what makes the reduced system stabilizable. So `Q` is sized
+to exactly the slots you list (their summed tangent dim).
 
 `Q` (tracked-tangent²) and `R` (n_inputs²) are the LQR **cost** weights —
 not the EKF's process/measurement noise (same letters, different role).
@@ -43,6 +47,7 @@ import casadi as ca
 import numpy as np
 
 from ..linearization import Linearization
+from ..linearized_world import flatten_nested, freeze_complement, resolve_suffix
 from ..sim import Sim
 from ..estimation.state_spec import StateSpec
 from ..tick_signature import walk_tick_signature
@@ -74,18 +79,6 @@ def _solve_dare(A, B, Q, R, *, max_iter: int = 10000, tol: float = 1e-12):
     BtP = B.T @ P
     K = np.linalg.solve(R + BtP @ B, BtP @ A)
     return K, P
-
-
-def _flatten_nested(nested: dict) -> dict:
-    """`{owner: {slot: v}}` → `{"owner.slot": v}`; passes flat dicts through."""
-    flat: dict[str, Any] = {}
-    for owner, slots in nested.items():
-        if isinstance(slots, dict):
-            for slot, v in slots.items():
-                flat[f"{owner}.{slot}"] = v
-        else:
-            flat[owner] = slots
-    return flat
 
 
 class LQR:
@@ -140,20 +133,15 @@ class LQR:
                 "LQR: world has no Part Inputs — no control authority.")
 
         # --- operating point (flat, merged over initial state) -------------
-        ref_flat = _flatten_nested(world._initial_state_dict())
-        ref_flat.update(_flatten_nested(x_ref))
+        ref_flat = flatten_nested(world._initial_state_dict())
+        ref_flat.update(flatten_nested(x_ref))
         x_ref_full = full_spec.pack(
             {k: v for k, v in ref_flat.items() if k in full_spec})
 
         u_full = dict(sig.input_defaults)
         for k, v in (u_ref or {}).items():
-            key = k if k in u_full else next(
-                (n for n in self.input_names if n.endswith("." + k)), k)
-            if key not in u_full:
-                raise KeyError(
-                    f"LQR: unknown input {k!r}; available "
-                    f"{sorted(self.input_names)}")
-            u_full[key] = float(v)
+            full = resolve_suffix(k, self.input_names, label="input", who="LQR")
+            u_full[full] = float(v)
         u_ref_vec = np.array([u_full[n] for n in self.input_names], dtype=float)
         self.x_ref, self.u_ref = x_ref_full, u_ref_vec
 
@@ -169,15 +157,21 @@ class LQR:
                 raise KeyError(
                     f"LQR: track references unknown slot(s) {sorted(unknown)}; "
                     f"available {sorted(all_names)}.")
+            # `track` is taken VERBATIM here — deliberately NOT closed over
+            # the dynamics the way the EKF's is. For an underactuated craft
+            # the whole point is to freeze the uncontrollable states (e.g.
+            # attitude) at the operating point so the reduced regulated
+            # system is stabilizable; closing the set would pull those right
+            # back in (a body-frame thrust makes velocity depend on
+            # orientation) and the Riccati solve would diverge. Freezing a
+            # coupled state at `x_ref` is the reduced-order modeling choice
+            # the user is making — its coupling column drops from A/B by
+            # design, and is exact at the equilibrium where the frozen state
+            # equals its reference.
             kept = set(track)
             spec = StateSpec.subset(full_spec, kept)
             self.tracked = [s.name for s in full_spec.slots if s.name in kept]
-            frozen = {}
-            for s in full_spec.slots:
-                if s.name not in kept:
-                    val = ref_flat.get(s.name, np.zeros(s.dim))
-                    frozen[s.name] = np.atleast_1d(
-                        np.asarray(val, dtype=float)).reshape(-1)
+            frozen = freeze_complement(full_spec, kept, ref_flat)
         self._spec = spec
 
         lin = Linearization(
@@ -210,7 +204,7 @@ class LQR:
         chunks = []
         for s in spec.slots:
             fs = full_spec.slot(s.name)
-            chunks.append(x_full_sym[fs.offset : fs.offset + fs.dim])
+            chunks.append(x_full_sym[fs.ambient_offset : fs.ambient_offset + fs.ambient_dim])
         x_sub_sym = ca.vertcat(*chunks) if chunks else x_full_sym
         dx = spec.boxminus_sym(x_sub_sym, ca.DM(x_ref_sub.reshape(-1, 1)))
         u_expr = ca.DM(u_ref_vec.reshape(-1, 1)) - ca.DM(self.K) @ dx

@@ -241,6 +241,35 @@ class Linearization:
                 out.add(sot[int(j)])
         return out
 
+    def dependency_closure(self, seed_slots) -> set[str]:
+        """Expand `seed_slots` to the set closed under the dynamics `F`.
+
+        Backward reachability on the structural dependency graph:
+        `F_sym[i, j] != 0` (structurally) means slot-row i's next value
+        depends on slot-col j, so keeping i requires keeping j. Iterate from
+        `seed_slots` to a fixpoint over the slot-level graph (slot
+        granularity keeps an SO(3) orientation atomic). Both the EKF
+        (`track=`) and LQR use this, so a subset is always self-consistent —
+        a tracked slot's dynamics never silently depend on a frozen one.
+        """
+        sot = slot_of_tan(self.spec)
+        pattern = np.array(ca.DM(self.F_sym.sparsity()))
+        rows, cols = np.nonzero(pattern)
+        deps: dict[str, set[str]] = {}
+        for i, j in zip(rows.tolist(), cols.tolist()):
+            a, b = sot[i], sot[j]
+            if a != b:
+                deps.setdefault(a, set()).add(b)
+        kept = set(seed_slots)
+        frontier = list(seed_slots)
+        while frontier:
+            s = frontier.pop()
+            for dep in deps.get(s, ()):
+                if dep not in kept:
+                    kept.add(dep)
+                    frontier.append(dep)
+        return kept
+
     def _compute_blocks(self, n_tangent: int) -> list:
         """Partition the tangent state into independent subsystems.
 
@@ -315,7 +344,7 @@ class Linearization:
                 sliced.append(t_sym)
             elif name in self.spec:
                 slot = self.spec.slot(name)
-                sliced.append(x_sym[slot.offset : slot.offset + slot.dim])
+                sliced.append(x_sym[slot.ambient_offset : slot.ambient_offset + slot.ambient_dim])
             elif name in frozen:
                 val = np.atleast_1d(
                     np.asarray(frozen[name], dtype=float)).reshape(-1, 1)
@@ -339,7 +368,7 @@ class Linearization:
         chunks = []
         for slot in self.spec.slots:
             r = outputs_by_name[slot.name]
-            if r.shape != (slot.dim, 1):
-                r = ca.reshape(r, slot.dim, 1)
+            if r.shape != (slot.ambient_dim, 1):
+                r = ca.reshape(r, slot.ambient_dim, 1)
             chunks.append(r)
         return ca.vertcat(*chunks)

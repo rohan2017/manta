@@ -20,14 +20,14 @@ from manta.ir.wrench import Wrench
 class _FrameProbe(Part):
     """Exposes a few kinematic quantities in several reference frames so a
     test can read them out of the state dict."""
-    vel_world   = Output(shape="vec3")
-    vel_craft   = Output(shape="vec3")
-    vel_parent  = Output(shape="vec3")
-    vel_part     = Output(shape="vec3")
-    acc_part     = Output(shape="vec3")
-    omega_craft  = Output(shape="vec3")
-    omega_parent = Output(shape="vec3")
-    omega_part   = Output(shape="vec3")
+    vel_world   = Output(shape="R3")
+    vel_craft   = Output(shape="R3")
+    vel_parent  = Output(shape="R3")
+    vel_part     = Output(shape="R3")
+    acc_part     = Output(shape="R3")
+    omega_craft  = Output(shape="R3")
+    omega_parent = Output(shape="R3")
+    omega_part   = Output(shape="R3")
 
     def update(self, ctx) -> PartUpdate:
         zero = Vec3[PartFrame].constant((0.0, 0.0, 0.0))

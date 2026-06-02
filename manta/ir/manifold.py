@@ -17,19 +17,15 @@ Three op flavors, ONE underlying math definition per manifold:
   * numeric      — `boxplus_num` on flat numpy arrays. Used by the ESKF
     update to apply a Kalman correction onto the manifold.
 
-The value and numeric paths delegate to the same kernel the symbolic
-path emits (`_so3_exp` / `_so3_log` for SO(3)), so there is exactly one
-definition of each manifold's math — no parallel implementation to drift.
+All three flavors delegate to the shared kernels in `ir._rotation`
+(`so3_exp` / `so3_log` / `quat_mul` / `quat_conj` for SO(3), plus their
+numpy twins), so there is exactly one definition of each manifold's math —
+no parallel implementation to drift.
 
 `StateSlot.manifold` holds one of these instances. Backends map
 `manifold.kind` to a concrete type via their own registry
 (e.g. `codegen/cpp/types.py`); backend code never lives on this class, so
 the IR stays backend-agnostic.
-
-`_so3_exp` and `_so3_log` are deliberately branch-free (eps-regularized
-in place of an `if_else`) because CasADi's autodiff walks both branches
-of a conditional, and the non-Taylor branch had `d(sin(0)/0)/dω = NaN`
-that poisoned every Jacobian extracted from a tick using boxplus.
 
 Adding a new manifold kind:
   1. Subclass `Manifold` with a new `kind` string and structural dims.
@@ -49,68 +45,9 @@ from typing import Any, ClassVar
 import casadi as ca
 import numpy as np
 
+from ._rotation import quat_conj, quat_mul, quat_mul_np, so3_exp, so3_exp_np, so3_log
 from .frames import FrameError, _capture_user_source
 from .types import Quat, Scalar, Vec3
-
-
-# ---------------------------------------------------------------------------
-# SO(3) math kernel — shared by every op flavor
-# ---------------------------------------------------------------------------
-
-def _so3_exp(omega_mx) -> ca.MX:
-    """Map a 3-vector to a unit quaternion via the SO(3) exponential.
-
-    Branch-free, smooth everywhere. The trick: add a tiny epsilon under
-    the sqrt so the denominator never hits zero. For ω=0 the formula
-    `sin(eps/2) / eps` evaluates to ~0.5 (since sin(x) ≈ x for tiny x);
-    for nonzero ω the eps is dominated by |ω|² and the result is exact
-    to roundoff.
-
-    Avoids `ca.if_else` because CasADi's autodiff evaluates BOTH
-    branches; the non-Taylor branch had `d(sin(0)/0)/dω` = NaN, which
-    poisoned every EKF Jacobian we tried to extract from a tick using
-    boxplus.
-    """
-    eps_sq = 1.0e-30
-    theta = ca.sqrt(ca.dot(omega_mx, omega_mx) + eps_sq)
-    half_theta = theta * 0.5
-    w = ca.cos(half_theta)
-    s_over_theta = ca.sin(half_theta) / theta     # → 0.5 at ω=0 (smooth)
-    v = omega_mx * s_over_theta
-    return ca.vertcat(w, v[0], v[1], v[2])
-
-
-def _so3_log(q_mx) -> ca.MX:
-    """Map a unit quaternion to its 3-vector tangent.
-
-    Branch-free via the same eps-regularization as _so3_exp. The
-    composite `2·atan2(|v|, w) / |v|` is smooth at the identity
-    quaternion (q = (1, 0, 0, 0)): both numerator and denominator scale
-    as |v| there, so the ratio approaches the well-defined limit 2.
-    """
-    eps_sq = 1.0e-30
-    w = q_mx[0]
-    v = ca.vertcat(q_mx[1], q_mx[2], q_mx[3])
-    v_norm = ca.sqrt(ca.dot(v, v) + eps_sq)
-    # Always use the positive-w hemisphere to avoid the double cover.
-    # sign(0) returns 0 in CasADi; offset slightly so sign(w=0) = +1.
-    sign = ca.sign(w + 1.0e-30)
-    w_pos = w * sign
-    v_pos = v * sign
-    coeff = 2.0 * ca.atan2(v_norm, w_pos) / v_norm
-    return v_pos * coeff
-
-
-def _quat_mul_mx(a_mx, b_mx) -> ca.MX:
-    """Hamilton product of two (w, x, y, z) quaternion MX columns."""
-    w1, x1, y1, z1 = a_mx[0], a_mx[1], a_mx[2], a_mx[3]
-    w2, x2, y2, z2 = b_mx[0], b_mx[1], b_mx[2], b_mx[3]
-    return ca.vertcat(
-        w1*w2 - x1*x2 - y1*y2 - z1*z2,
-        w1*x2 + x1*w2 + y1*z2 - z1*y2,
-        w1*y2 - x1*z2 + y1*w2 + z1*x2,
-        w1*z2 + x1*y2 - y1*x2 + z1*w2,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +106,26 @@ class Manifold(ABC):
         for groups, zero for vectors). Returned as a numpy array of
         shape `storage_shape` or a scalar."""
 
+    # ---- IR construction (typed input / zero / add) ------------------
+    # These build the typed IR value for this manifold occurrence, so the
+    # world tick and the Noise plumbing never branch on `kind` — the
+    # manifold subclass IS the dispatch. A vector manifold declared
+    # without a frame takes `default_frame` (the world tick passes
+    # CraftFrame for Part state, WorldFrame for disturbance state).
+
+    @abstractmethod
+    def ir_input(self, name: str, *, default_frame=None):
+        """Typed IR *input* symbol — `Scalar`/`Vec3[frame]`/`Quat[from,to]`."""
+
+    @abstractmethod
+    def ir_zero(self, *, default_frame=None):
+        """Typed IR zero / identity value for this manifold."""
+
+    @abstractmethod
+    def ir_add(self, value, delta_mx, *, default_frame=None):
+        """Type-preserving `value ⊕ delta_mx` (raw MX), used by random-walk
+        state updates: `bias_next = bias + √dt · driver`."""
+
 
 # ---------------------------------------------------------------------------
 # Concrete manifolds
@@ -208,6 +165,15 @@ class ScalarManifold(Manifold):
 
     def default_value(self):
         return 0.0
+
+    def ir_input(self, name, *, default_frame=None):
+        return Scalar.input(name)
+
+    def ir_zero(self, *, default_frame=None):
+        return Scalar.from_mx(ca.MX(0.0))
+
+    def ir_add(self, value, delta_mx, *, default_frame=None):
+        return Scalar.from_mx(value._mx + delta_mx)
 
 
 @dataclass(frozen=True)
@@ -262,6 +228,25 @@ class R3Manifold(Manifold):
 
     def default_value(self):
         return np.zeros(3, dtype=float)
+
+    def _resolved_frame(self, default_frame):
+        frame = self.frame or default_frame
+        if frame is None:
+            raise ValueError(
+                "R3Manifold: no frame available — set frame= on the manifold "
+                "or pass default_frame to ir_input/ir_zero/ir_add.")
+        return frame
+
+    def ir_input(self, name, *, default_frame=None):
+        return Vec3[self._resolved_frame(default_frame)].input(name)
+
+    def ir_zero(self, *, default_frame=None):
+        return Vec3[self._resolved_frame(default_frame)].from_mx(
+            ca.MX.zeros(3, 1))
+
+    def ir_add(self, value, delta_mx, *, default_frame=None):
+        return Vec3[self._resolved_frame(default_frame)].from_mx(
+            value._mx + delta_mx)
 
 
 @dataclass(frozen=True)
@@ -332,30 +317,29 @@ class SO3Manifold(Manifold):
         return Vec3(self.boxminus_sym(a._mx, b._mx), frame=a._from_frame)
 
     def boxplus_sym(self, x_mx, delta_mx):
-        return _quat_mul_mx(_so3_exp(delta_mx), x_mx)
+        return quat_mul(so3_exp(delta_mx), x_mx)
 
     def boxminus_sym(self, a_mx, b_mx):
-        b_conj = ca.vertcat(b_mx[0], -b_mx[1], -b_mx[2], -b_mx[3])
-        return _so3_log(_quat_mul_mx(a_mx, b_conj))
+        return so3_log(quat_mul(a_mx, quat_conj(b_mx)))
 
     def boxplus_num(self, x, delta):
-        omega = np.asarray(delta, dtype=float)
-        theta = float(np.linalg.norm(omega) + 1e-30)
-        half  = 0.5 * theta
-        w     = np.cos(half)
-        v     = omega * (np.sin(half) / theta)
-        dq    = np.array([w, v[0], v[1], v[2]])
-        w1, x1, y1, z1 = dq
-        w2, x2, y2, z2 = np.asarray(x, dtype=float)
-        return np.array([
-            w1*w2 - x1*x2 - y1*y2 - z1*z2,
-            w1*x2 + x1*w2 + y1*z2 - z1*y2,
-            w1*y2 - x1*z2 + y1*w2 + z1*x2,
-            w1*z2 + x1*y2 - y1*x2 + z1*w2,
-        ])
+        return quat_mul_np(so3_exp_np(delta), x)
 
     def default_value(self):
         return np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
+
+    def ir_input(self, name, *, default_frame=None):
+        return Quat[self.from_frame, self.to_frame].input(name)
+
+    def ir_zero(self, *, default_frame=None):
+        return Quat[self.from_frame, self.to_frame].from_mx(
+            ca.MX([1.0, 0.0, 0.0, 0.0]))
+
+    def ir_add(self, value, delta_mx, *, default_frame=None):
+        raise NotImplementedError(
+            "SO3Manifold.ir_add: random-walk on SO(3) is undefined "
+            "(quaternions don't add Euclidean-ly). Use a vector manifold for "
+            "an RW bias, or boxplus for attitude integration.")
 
 
 # ---------------------------------------------------------------------------

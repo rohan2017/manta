@@ -102,21 +102,26 @@ class StateSlot:
     """One named slot in the flat layout.
 
     Attrs:
-        name        — string key in the tick dict (e.g., "position",
-                      "wheel.angle"). Same key the tick function uses.
-        offset      — start index in the ambient vector.
-        manifold    — `Manifold` instance describing the slot's storage
-                      and tangent dims. `dim` and `tangent_dim` are
-                      derived. Backends key on `manifold.kind`.
+        name           — string key in the tick dict (e.g., "position",
+                         "wheel.angle"). Same key the tick function uses.
+        ambient_offset — start index in the ambient vector.
+        manifold       — `Manifold` instance describing the slot's storage
+                         and tangent dims. `ambient_dim` and `tangent_dim`
+                         are derived. Backends key on `manifold.kind`.
         tangent_offset — start index in the tangent vector.
+
+    The ambient pair (`ambient_offset`/`ambient_dim`) and the tangent pair
+    (`tangent_offset`/`tangent_dim`) are named symmetrically on purpose:
+    covariance / Jacobian work indexes by the *tangent* pair, packing /
+    unpacking by the *ambient* pair, and mixing them is a classic bug.
     """
     name: str
-    offset: int
+    ambient_offset: int
     manifold: Manifold
     tangent_offset: int
 
     @property
-    def dim(self) -> int:
+    def ambient_dim(self) -> int:
         return self.manifold.ambient_dim
 
     @property
@@ -130,7 +135,7 @@ class StateSpec:
     def __init__(self, slots: list[StateSlot]) -> None:
         self._slots = list(slots)
         self._slot_by_name = {s.name: s for s in self._slots}
-        self._ambient_dim = sum(s.dim for s in self._slots)
+        self._ambient_dim = sum(s.ambient_dim for s in self._slots)
         self._tangent_dim = sum(s.tangent_dim for s in self._slots)
         # Map this spec's indices back into the spec it was derived from.
         # For a freshly-built (full) spec this is the identity; `subset`
@@ -160,7 +165,7 @@ class StateSpec:
         def add(name: str, manifold: Manifold):
             nonlocal offset, tan_offset
             slots.append(StateSlot(name=name,
-                                   offset=offset,
+                                   ambient_offset=offset,
                                    manifold=manifold,
                                    tangent_offset=tan_offset))
             offset += manifold.ambient_dim
@@ -184,7 +189,7 @@ class StateSpec:
         def add(name: str, manifold: Manifold):
             nonlocal offset, tan_offset
             slots.append(StateSlot(name=name,
-                                   offset=offset,
+                                   ambient_offset=offset,
                                    manifold=manifold,
                                    tangent_offset=tan_offset))
             offset += manifold.ambient_dim
@@ -209,7 +214,7 @@ class StateSpec:
         tan_offset = 0
         for name, manifold in layout:
             slots.append(StateSlot(name=name,
-                                   offset=offset,
+                                   ambient_offset=offset,
                                    manifold=manifold,
                                    tangent_offset=tan_offset))
             offset += manifold.ambient_dim
@@ -237,14 +242,14 @@ class StateSpec:
         for s in full_spec.slots:
             if s.name not in kept:
                 continue
-            ambient_keep.extend(range(s.offset, s.offset + s.dim))
+            ambient_keep.extend(range(s.ambient_offset, s.ambient_offset + s.ambient_dim))
             tangent_keep.extend(
                 range(s.tangent_offset, s.tangent_offset + s.tangent_dim))
             slots.append(StateSlot(name=s.name,
-                                   offset=offset,
+                                   ambient_offset=offset,
                                    manifold=s.manifold,
                                    tangent_offset=tan_offset))
-            offset += s.dim
+            offset += s.ambient_dim
             tan_offset += s.tangent_dim
         sub = cls(slots)
         sub._ambient_keep_idx = np.array(ambient_keep, dtype=int)
@@ -359,11 +364,11 @@ class StateSpec:
         for slot in self._slots:
             value = state_dict[slot.name]
             arr = np.atleast_1d(np.asarray(value, dtype=float)).reshape(-1)
-            if arr.size != slot.dim:
+            if arr.size != slot.ambient_dim:
                 raise ValueError(
-                    f"StateSpec.pack: slot {slot.name!r} expects dim {slot.dim}, "
+                    f"StateSpec.pack: slot {slot.name!r} expects dim {slot.ambient_dim}, "
                     f"got len={arr.size}")
-            flat[slot.offset : slot.offset + slot.dim] = arr
+            flat[slot.ambient_offset : slot.ambient_offset + slot.ambient_dim] = arr
         return flat
 
     def unpack(self, flat: np.ndarray) -> dict[str, Any]:
@@ -375,8 +380,8 @@ class StateSpec:
                 f"got {flat.shape}")
         out: dict[str, Any] = {}
         for slot in self._slots:
-            chunk = flat[slot.offset : slot.offset + slot.dim]
-            if slot.dim == 1:
+            chunk = flat[slot.ambient_offset : slot.ambient_offset + slot.ambient_dim]
+            if slot.ambient_dim == 1:
                 out[slot.name] = float(chunk[0])
             else:
                 out[slot.name] = chunk.copy()
@@ -399,7 +404,7 @@ class StateSpec:
         """
         chunks: list[ca.MX] = []
         for slot in self._slots:
-            x_chunk = x_ambient[slot.offset : slot.offset + slot.dim]
+            x_chunk = x_ambient[slot.ambient_offset : slot.ambient_offset + slot.ambient_dim]
             d_chunk = delta_tangent[
                 slot.tangent_offset : slot.tangent_offset + slot.tangent_dim]
             chunks.append(slot.manifold.boxplus_sym(x_chunk, d_chunk))
@@ -414,8 +419,8 @@ class StateSpec:
         """
         chunks: list[ca.MX] = []
         for slot in self._slots:
-            a_chunk = x_a[slot.offset : slot.offset + slot.dim]
-            b_chunk = x_b[slot.offset : slot.offset + slot.dim]
+            a_chunk = x_a[slot.ambient_offset : slot.ambient_offset + slot.ambient_dim]
+            b_chunk = x_b[slot.ambient_offset : slot.ambient_offset + slot.ambient_dim]
             chunks.append(slot.manifold.boxminus_sym(a_chunk, b_chunk))
         return ca.vertcat(*chunks)
 
@@ -427,7 +432,7 @@ class StateSpec:
         x = np.asarray(x_ambient, dtype=float).copy()
         d = np.asarray(delta_tangent, dtype=float)
         for slot in self._slots:
-            x_chunk = x[slot.offset : slot.offset + slot.dim]
+            x_chunk = x[slot.ambient_offset : slot.ambient_offset + slot.ambient_dim]
             d_chunk = d[slot.tangent_offset :
                         slot.tangent_offset + slot.tangent_dim]
             new_chunk = slot.manifold.boxplus_num(x_chunk, d_chunk)
@@ -436,5 +441,5 @@ class StateSpec:
             # special-case the manifold here.
             if slot.manifold.storage_shape == (4,):
                 new_chunk = new_chunk / np.linalg.norm(new_chunk)
-            x[slot.offset : slot.offset + slot.dim] = new_chunk
+            x[slot.ambient_offset : slot.ambient_offset + slot.ambient_dim] = new_chunk
         return x

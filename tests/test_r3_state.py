@@ -24,7 +24,7 @@ class _R3StatePart(Part):
     """A no-op Part that carries a single R3 state and exposes it as
     an Output. Used to verify the R3-state plumbing end-to-end."""
     bias = State(init=(1.0, 2.0, 3.0), manifold="R3", frame=WorldFrame)
-    bias_out = Output(shape="vec3")
+    bias_out = Output(shape="R3")
 
     def update(self, ctx) -> PartUpdate:
         zero = Vec3[PartFrame].constant((0.0, 0.0, 0.0))
@@ -113,7 +113,7 @@ def test_state_spec_picks_up_r3_state_slot():
     w.add_craft(c)
     spec = StateSpec.from_world(w)
     slot = spec.slot("c.p.bias")
-    assert slot.dim              == 3
+    assert slot.ambient_dim              == 3
     assert slot.tangent_dim      == 3
     assert slot.manifold.kind    == "vec"
 

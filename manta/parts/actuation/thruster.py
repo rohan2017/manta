@@ -59,8 +59,8 @@ class Thruster(Part):
     torque_quad: "tuple[float, float, float]" = Parameter((0.0, 0.0, 0.0))
     throttle: float = Input(default=0.0)
 
-    force_noise  = WhiteNoise("vec3", frame=PartFrame, sigma=0.0)
-    torque_noise = WhiteNoise("vec3", frame=PartFrame, sigma=0.0)
+    force_noise  = WhiteNoise("R3", frame=PartFrame, sigma=0.0)
+    torque_noise = WhiteNoise("R3", frame=PartFrame, sigma=0.0)
 
     def update(self, ctx):
         t  = self.throttle

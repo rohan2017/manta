@@ -35,10 +35,6 @@ def _current_graph() -> "Graph":
     return g
 
 
-def _try_current_graph():
-    return getattr(_local, "graph", None)
-
-
 class Graph:
     """The container for an IR being assembled.
 
@@ -248,21 +244,6 @@ class CompiledGraph:
             val = result[name]
             out[name] = _to_numpy(val)
         return out
-
-    # ----- Codegen -------------------------------------------------------
-
-    def generate_c(self, filename: str, *, with_header: bool = True) -> None:
-        """Emit a self-contained C source file via CasADi's codegen.
-
-        This produces the flat-array, no-stdlib C that CasADi's standard
-        codegen targets — suitable for embedded targets without an Eigen
-        runtime. A later manta-specific backend can walk the graph to
-        produce readable Eigen-style C++ instead.
-        """
-        opts = {}
-        if with_header:
-            opts["with_header"] = True
-        self.casadi_function.generate(filename, opts)
 
     def __repr__(self) -> str:
         inputs  = ", ".join(self._input_specs)

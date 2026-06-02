@@ -27,7 +27,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from ..ir.types import Vec3
-from ..parts.base import Input, Noise, State, _Declaration
+from ..parts.base import DeclarationHost
 
 
 # Global counter for default disturbance names. Disturbances participate
@@ -37,7 +37,7 @@ from ..parts.base import Input, Noise, State, _Declaration
 _DISTURBANCE_NAME_COUNTER = itertools.count()
 
 
-class Disturbance(ABC):
+class Disturbance(DeclarationHost, ABC):
     """Base for one contribution to a Field.
 
     Subclass and implement `contribute_at_sym(point, t)`. The returned
@@ -93,50 +93,7 @@ class Disturbance(ABC):
             self.combining = combining
         self._apply_declarations(overrides)
 
-    # --- Declaration walking ------------------------------------------
-
-    def _apply_declarations(self, overrides: dict[str, Any]) -> None:
-        decls = self._declarations()
-        noise_sigma_keys = {
-            f"{n}_sigma" for n, d in decls.items() if isinstance(d, Noise)
-        }
-        unknown = set(overrides) - set(decls) - noise_sigma_keys
-        if unknown:
-            raise TypeError(
-                f"{type(self).__name__}({self.name!r}): unknown "
-                f"parameter(s) {sorted(unknown)}. Declared: "
-                f"{sorted(set(decls) | noise_sigma_keys)}")
-        for attr_name, decl in decls.items():
-            value = overrides.get(attr_name, decl.default)
-            setattr(self, attr_name, value)
-            if isinstance(decl, Noise):
-                setattr(self, f"{attr_name}_sigma",
-                        float(overrides.get(f"{attr_name}_sigma",
-                                            decl.sigma)))
-
-    @classmethod
-    def _declarations(cls) -> dict[str, _Declaration]:
-        decls: dict[str, _Declaration] = {}
-        for klass in reversed(cls.__mro__):
-            for nm, value in vars(klass).items():
-                if isinstance(value, _Declaration):
-                    decls[nm] = value
-        return decls
-
-    @classmethod
-    def state_declarations(cls) -> dict[str, State]:
-        return {n: d for n, d in cls._declarations().items()
-                if isinstance(d, State)}
-
-    @classmethod
-    def noise_declarations(cls) -> dict[str, Noise]:
-        return {n: d for n, d in cls._declarations().items()
-                if isinstance(d, Noise)}
-
-    @classmethod
-    def input_declarations(cls) -> dict[str, Input]:
-        return {n: d for n, d in cls._declarations().items()
-                if isinstance(d, Input)}
+    # --- Declaration walking: inherited from DeclarationHost ----------
 
     # --- Abstract contract --------------------------------------------
 

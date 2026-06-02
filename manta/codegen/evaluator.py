@@ -51,9 +51,9 @@ class ArgSource(Enum):
     """How to fill one positional slot of a flat-C kernel call."""
     STATE = "state"        # the packed state buffer
     INPUTS = "inputs"      # the packed inputs buffer
-    DT = "dt"              # &dt, from the method's dt parameter
+    DT = "dt"              # &dt — from the method's dt param, or a synthesized
+                           # zero when the method exposes no dt (e.g. measure_*)
     T = "t"               # &t, from the method's t parameter
-    ZERO_DT = "zero_dt"    # a locally-declared `double dt = 0.0` (e.g. measure)
 
 
 class ReturnKind(Enum):
@@ -79,8 +79,6 @@ class ReturnSpec:
     dim:       int = 0        # VEC
     rows:      int = 0        # MATRIX
     cols:      int = 0        # MATRIX
-    state_res: int = 0        # OUTPUTS_AND_STATE: result index carrying State
-    out_res:   int = 1        # OUTPUTS_AND_STATE: result index carrying Outputs
 
 
 @dataclass(frozen=True)

@@ -46,6 +46,8 @@ from __future__ import annotations
 import casadi as ca
 import numpy as np
 
+from .ir._rotation import R_from_axis_angle
+
 
 # ---------------------------------------------------------------------------
 # Public entry point
@@ -98,7 +100,7 @@ def symbolic_inertia_rollup(root_part) -> dict:
             angle_attr = part.angle
             angle_mx = (angle_attr._mx if hasattr(angle_attr, "_mx")
                         else ca.MX(float(angle_attr)))
-            R_in_from_out_mx = _R_from_axis_angle_mx(axis_mx, angle_mx)
+            R_in_from_out_mx = R_from_axis_angle(axis_mx, angle_mx)
             R_craft_from_output_mx = ca.mtimes(
                 R_craft_from_input_mx, R_in_from_out_mx)
         else:
@@ -168,26 +170,6 @@ def symbolic_inertia_rollup(root_part) -> dict:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _R_from_axis_angle_mx(axis_mx, angle_mx):
-    """Rodrigues' formula in MX. `axis_mx` is 3×1; normalized symbolically
-    with an eps softener so a degenerate (zero) axis doesn't crash. Returns
-    a 3×3 MX expressing the rotation matrix R(axis, angle)."""
-    n_sq = ca.mtimes(axis_mx.T, axis_mx) + 1.0e-30
-    n    = ca.sqrt(n_sq)
-    u    = axis_mx / n                # 3×1 unit axis
-    c    = ca.cos(angle_mx)
-    s    = ca.sin(angle_mx)
-    ux, uy, uz = u[0], u[1], u[2]
-    zero = ca.MX(0.0)
-    K = ca.vertcat(
-        ca.horzcat(zero, -uz, uy),
-        ca.horzcat(uz, zero, -ux),
-        ca.horzcat(-uy, ux, zero),
-    )
-    eye3 = ca.MX.eye(3)
-    return eye3 + s * K + (1.0 - c) * ca.mtimes(K, K)
-
 
 def _evaluate_at_zero(expr_mx, root_part) -> np.ndarray:
     """Evaluate `expr_mx` with every Joint's angle/rate MX symbol substituted

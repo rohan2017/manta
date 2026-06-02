@@ -78,10 +78,10 @@ from __future__ import annotations
 
 from typing import Any
 
-import casadi as ca
 import numpy as np
 
-from ..linearization import Linearization, slot_of_tan
+from ..linearization import Linearization
+from ..linearized_world import flatten_nested, freeze_complement, resolve_suffix
 from .state_spec import StateSpec, resolve_slotset
 
 
@@ -133,13 +133,6 @@ class EKF:
         # Full state layout across every craft + disturbance. `self.spec`
         # ends up either this (track=None) or a `StateSpec.subset` of it.
         full_spec = StateSpec.from_world(world)
-
-        # Each part belongs to exactly one craft. Cache the lookup so
-        # `ekf.update(part, ...)` can route to the right state slice.
-        self._craft_of_part: dict[int, "Craft"] = {}
-        for craft in self.crafts:
-            for part in craft.parts:
-                self._craft_of_part[id(part)] = craft
 
         # Compile the est-side world tick using the world's registered
         # fields + couplings.
@@ -205,10 +198,7 @@ class EKF:
             chosen_sensor_names = [n for n in all_sensor_names if n in chosen]
 
         # Flat initial-state values (source of frozen-slot constants).
-        init_flat: dict[str, Any] = {}
-        for owner_name, owner_state in world._initial_state_dict().items():
-            for k, v in owner_state.items():
-                init_flat[f"{owner_name}.{k}"] = v
+        init_flat = flatten_nested(world._initial_state_dict())
 
         # --- State subsetting via dependency closure --------------------
         if track is None:
@@ -229,25 +219,16 @@ class EKF:
             seed: set[str] = set(full_lin.observed_slots)
             for craft_name, slotset in track.items():
                 seed |= resolve_slotset(craft_name, slotset)
-            kept = self._closure(full_spec, full_lin.F_sym, seed)
+            kept = full_lin.dependency_closure(seed)
             self.spec = StateSpec.subset(full_spec, kept)
-            # Freeze every full-spec slot we are not keeping.
-            for s in full_spec.slots:
-                if s.name not in kept:
-                    val = init_flat.get(s.name, np.zeros(s.dim))
-                    frozen[s.name] = np.atleast_1d(
-                        np.asarray(val, dtype=float)).reshape(-1)
+            freeze_complement(full_spec, kept, init_flat, into=frozen)
 
         # --- Linearize over the (sub)spec → predict/F/L + sensors -------
         lin = Linearization(
             cf, self.spec, frozen=frozen,
             input_names=self._input_names, noise_specs=self._noise_specs,
             outputs=chosen_sensor_names, build_functions=True)
-        self._lin     = lin
         self._x_sym   = lin.x_sym
-        self._u_sym   = lin.u_sym
-        self._n_sym   = lin.n_sym
-        self._n_noise = lin.n_noise
         self._f_fn    = lin.predict_fn
         self._F_fn    = lin.F_fn
         self._L_fn    = lin.L_fn
@@ -285,91 +266,33 @@ class EKF:
         return len(self._blocks)
 
     # ------------------------------------------------------------------
-    # State subsetting (dependency closure over the linearized dynamics)
+    # Name resolution / input vector (see manta.linearized_world)
     # ------------------------------------------------------------------
-
-    def _closure(self, full_spec, F_sym, seed_slots) -> set[str]:
-        """Backward reachability on the structural dependency graph.
-
-        `F_sym[i, j] != 0` (structurally) means slot-row i's next value
-        depends on slot-col j — so if i is kept, j must be too. Iterate
-        from `seed_slots` to a fixpoint over the slot-level graph (slot
-        granularity keeps SO3 orientation atomic).
-        """
-        sot = slot_of_tan(full_spec)
-        pattern = np.array(ca.DM(F_sym.sparsity()))
-        rows, cols = np.nonzero(pattern)
-        deps: dict[str, set[str]] = {}
-        for i, j in zip(rows.tolist(), cols.tolist()):
-            a, b = sot[i], sot[j]
-            if a != b:
-                deps.setdefault(a, set()).add(b)
-        kept = set(seed_slots)
-        frontier = list(seed_slots)
-        while frontier:
-            s = frontier.pop()
-            for dep in deps.get(s, ()):
-                if dep not in kept:
-                    kept.add(dep)
-                    frontier.append(dep)
-        return kept
 
     @staticmethod
     def _resolve_names(user_names, candidates, label: str) -> set[str]:
         """Resolve user-supplied names (full or unambiguous suffix) against
         a candidate list; raise on unknown/ambiguous."""
-        resolved: set[str] = set()
-        for key in user_names:
-            if key in candidates:
-                resolved.add(key)
-                continue
-            matches = [n for n in candidates if n.endswith("." + key)]
-            if len(matches) == 1:
-                resolved.add(matches[0])
-            elif len(matches) > 1:
-                raise KeyError(
-                    f"EKF: ambiguous {label} name {key!r}; matches "
-                    f"{matches}. Use the fully-qualified form.")
-            else:
-                raise KeyError(
-                    f"EKF: unknown {label} name {key!r}. Available: "
-                    f"{sorted(candidates)}")
-        return resolved
-
+        return {resolve_suffix(k, candidates, label=label, who="EKF")
+                for k in user_names}
 
     def _build_u(self, u: dict[str, float] | None) -> np.ndarray:
         """Resolve `u` to a flat input vector in `_input_names` order.
 
-        Accepts either full names (`"drone.t.throttle"`) or
-        craft-relative shorthand (`"t.throttle"`) when the shorthand
-        uniquely identifies one input across all crafts.
+        Accepts either full names (`"drone.t.throttle"`) or craft-relative
+        shorthand (`"t.throttle"`) when the shorthand uniquely identifies
+        one input across all crafts.
         """
         if not self._input_names:
             return np.zeros(0)
         if u is None:
             return self._u_defaults.copy()
-        # Resolve each user-supplied key to a full input name.
-        resolved: dict[str, float] = {}
-        for user_key, value in u.items():
-            if user_key in self._input_names:
-                resolved[user_key] = float(value)
-                continue
-            candidates = [n for n in self._input_names
-                          if n.endswith("." + user_key)]
-            if len(candidates) == 1:
-                resolved[candidates[0]] = float(value)
-            elif len(candidates) > 1:
-                raise KeyError(
-                    f"EKF.predict: ambiguous input name {user_key!r}; "
-                    f"matches {candidates}. Use the fully-qualified form.")
-            else:
-                raise KeyError(
-                    f"EKF.predict: unknown input name {user_key!r}. "
-                    f"Available: {sorted(self._input_names)}")
         out = self._u_defaults.copy()
-        for i, name in enumerate(self._input_names):
-            if name in resolved:
-                out[i] = resolved[name]
+        index = {n: i for i, n in enumerate(self._input_names)}
+        for user_key, value in u.items():
+            full = resolve_suffix(user_key, self._input_names,
+                                  label="input", who="EKF.predict")
+            out[index[full]] = float(value)
         return out
 
     # Predict / update / state_dict / reset / x / P live on the
@@ -393,17 +316,17 @@ def measurement_slot(spec: StateSpec, name: str):
     """Return an h_sym callable that reads slot `name` directly from x."""
     slot = spec.slot(name)
     def h_sym(x):
-        return x[slot.offset : slot.offset + slot.dim]
+        return x[slot.ambient_offset : slot.ambient_offset + slot.ambient_dim]
     return h_sym
 
 
 def measurement_component(spec: StateSpec, name: str, component: int):
     """Return an h_sym callable for a single component of a slot."""
     slot = spec.slot(name)
-    if not (0 <= component < slot.dim):
+    if not (0 <= component < slot.ambient_dim):
         raise IndexError(
-            f"measurement_component: slot {name!r} has dim {slot.dim}, "
+            f"measurement_component: slot {name!r} has dim {slot.ambient_dim}, "
             f"component {component} out of range")
     def h_sym(x):
-        return x[slot.offset + component]
+        return x[slot.ambient_offset + component]
     return h_sym

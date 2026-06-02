@@ -71,7 +71,7 @@ class CraftWindBubble(Disturbance):
     # Overlapping bubbles average instead of summing.
     combining = "averaged"
 
-    wind = RandomWalkNoise("vec3", frame=WorldFrame, sigma=0.0)
+    wind = RandomWalkNoise("R3", frame=WorldFrame, sigma=0.0)
 
     def __init__(self,
                  craft,
