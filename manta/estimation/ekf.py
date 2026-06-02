@@ -4,16 +4,20 @@
   * a `StateSpec` (joint state across every craft + every state-bearing
     disturbance). `track=` carves a subset out of this — see below.
   * a `Linearization` over the world tick (`manta.linearization`), which
-    produces the symbolic predict (`_f_fn`), tangent-space F (`_F_fn`),
-    process-noise gain L (`_L_fn`), and per-output h/H/L_h — all CasADi
-    functions. The EKF does the model introspection (which tick inputs
-    are Inputs vs. Noise, which outputs are sensors) and the Kalman
-    bookkeeping (Σ, state subsetting, sensor table); the Jacobian
-    machinery is the shared `Linearization` transform (also the seam an
-    LQR/iLQR would reuse).
+    produces the tangent-space `F`, process-noise gain `L`, and per-output
+    `h`/`H`/`L_h` (the Jacobian machinery — also the seam LQR/iLQR reuse).
+  * **the full Kalman recursion as fused `ca.Function`s** via
+    `Linearization.kalman_functions`: a predict step `_predict_fn`
+    `(x,P,Q,u,dt,t) → (x',P')`, a process-noise kernel `_process_noise_fn`
+    `(x,u,dt,t) → Q = L Σ Lᵀ`, and a per-sensor Joseph update `_update_fns`
+    `(x,P,z,u,t) → (x',P')`. The linear algebra lives HERE, once — both
+    backends (numpy + emitted C++) just *evaluate* these kernels; neither
+    reimplements the predict / Joseph update. The EKF still does the model
+    introspection (Inputs vs Noise, which outputs are sensors) and exposes
+    the building-block Jacobians for analysis (`observability`).
   * Per-sensor measurement bundles: `_sensors[(id(part), output_name)]`
-    holds the cached h/H/L_h ca.Function objects, the sensor dim,
-    and a back-ref to the owning part + craft.
+    holds the sensor's `update_fn` (+ the h/H/L_h Jacobians for analysis),
+    the sensor dim, and a back-ref to the owning part + craft.
 
 The result is an IR — a description of the symbolic predict/measurement
 graph. Lower to a backend to actually run::
@@ -254,6 +258,16 @@ class EKF:
                 "full":   full,
             }
 
+        # The full Kalman recursion, symbolic + once (see
+        # `Linearization.kalman_functions`): predict + per-sensor Joseph
+        # update as fused ca.Functions. Both backends EVALUATE these —
+        # neither reimplements the linear algebra. `_update_fns` is keyed by
+        # the sensor's full name; pair it with `_sensors` for routing.
+        self._predict_fn, self._process_noise_fn, _upd = lin.kalman_functions()
+        self._update_fns = _upd
+        for key, o in self._sensors.items():
+            o["update_fn"] = _upd[o["full"]]
+
         # Mutable runtime state (`_x`, `_P`) lives on the backend
         # evaluator (`NumpyEKF`), not on the IR. The IR keeps the
         # symbolic functions + sensor table; backends instantiate
@@ -303,8 +317,8 @@ class EKF:
     #     ekf = TargetNumpy(EKF(world))
     #     ekf.predict(dt=dt, t=t)
     #     ekf.update(part, gyro=z)
-    # The IR holds the symbolic functions (_f_fn, _F_fn, _L_fn,
-    # _sensors) the backends need.
+    # The IR holds the baked Kalman kernels (_predict_fn,
+    # _process_noise_fn, _update_fns) the backends evaluate.
 
 
 

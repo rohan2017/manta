@@ -193,9 +193,12 @@ int main() {
 """
 
 
-def test_ekf_multicraft_per_block_roundtrip(tmp_path: Path):
-    """Per-block covariance propagation (independent crafts) matches numpy,
-    and the cross-block covariance stays exactly zero."""
+def test_ekf_multicraft_roundtrip(tmp_path: Path):
+    """Multi-craft covariance propagation (independent crafts) matches numpy,
+    and the cross-block covariance stays exactly zero. The predict is one
+    dense `F P Fᵀ + Q` kernel; because F is block-diagonal under the
+    independent-subsystem partition, the off-block terms it computes are
+    structural zeros — so cross-block P never becomes nonzero."""
     cxx = next((c for c in ("c++", "g++", "clang++") if shutil.which(c)), None)
     cc = next((c for c in ("cc", "gcc", "clang") if shutil.which(c)), None)
     if cxx is None or cc is None:
@@ -209,7 +212,6 @@ def test_ekf_multicraft_per_block_roundtrip(tmp_path: Path):
     w, a, b = _two_craft_world()
     assert EKF(w).n_blocks == 2
     result = TargetCpp(EKF(w), tmp_path, class_name="TwoEkf")
-    assert "Per-block" in result.wrapper_cpp.read_text()
 
     k_obj, w_obj = tmp_path / "k.o", tmp_path / "w.o"
     for cmd in (

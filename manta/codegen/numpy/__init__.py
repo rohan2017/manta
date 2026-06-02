@@ -518,25 +518,20 @@ class NumpyEKF:
         """
         ekf = self._ekf
         u_vec = ekf._build_u(u)
-        x_new = np.asarray(ekf._f_fn(self._x, u_vec, dt, t)).reshape(-1)
-        F     = np.asarray(ekf._F_fn(self._x, u_vec, dt, t))
-        L = None
-        if Q is None and ekf._L_fn is not None:
-            L = np.asarray(ekf._L_fn(self._x, u_vec, dt, t))
-        P = self._P
-        for idx in ekf._blocks:
-            sub = np.ix_(idx, idx)
-            Fbb = F[sub]
-            if Q is not None:
-                Qbb = Q[sub]
-            elif L is not None:
-                Lb  = L[idx, :]
-                Qbb = Lb @ ekf._Sigma @ Lb.T
-            else:
-                Qbb = 0.0
-            P[sub] = Fbb @ P[sub] @ Fbb.T + Qbb
-        self._x = x_new
-        self._P = 0.5 * (P + P.T)
+        # Process-noise covariance: caller override, else the model's
+        # state-dependent Q = L Σ Lᵀ (auto-built kernel), else zero.
+        if Q is not None:
+            Q_eff = np.asarray(Q, dtype=float)
+        elif ekf._process_noise_fn is not None:
+            Q_eff = np.asarray(ekf._process_noise_fn(self._x, u_vec, dt, t))
+        else:
+            n = ekf.spec.tangent_dim
+            Q_eff = np.zeros((n, n))
+        # The whole predict (x' = f; P' = F P Fᵀ + Q) is one baked kernel —
+        # no linear algebra here. See `Linearization.kalman_functions`.
+        x_new, P_new = ekf._predict_fn(self._x, self._P, Q_eff, u_vec, dt, t)
+        self._x = np.asarray(x_new).reshape(-1)
+        self._P = np.asarray(P_new)
 
     # ---- Update --------------------------------------------------------
 
@@ -584,23 +579,16 @@ class NumpyEKF:
 
     def _apply_sensor_update(self, spec_o: dict[str, Any], z,
                              u_vec: np.ndarray) -> None:
-        """Evaluate one sensor's cached h/H/R at the current state + `u_vec`
-        and fold the measurement `z` in via the Joseph-form update."""
-        ekf = self._ekf
+        """Fold a sensor measurement in via its baked Joseph-update kernel
+        (h/H/R + the manifold correction are all inside the kernel)."""
         z_arr = np.atleast_1d(np.asarray(z, dtype=float)).reshape(-1)
         if z_arr.size != spec_o["dim"]:
             raise ValueError(
                 f"NumpyEKF: {spec_o['full']}: expected z of size "
                 f"{spec_o['dim']}, got {z_arr.size}.")
-        h_val = np.asarray(spec_o["h_fn"](self._x, u_vec, 0.0, 0.0)
-                            ).reshape(-1)
-        H     = np.asarray(spec_o["H_fn"](self._x, u_vec, 0.0, 0.0))
-        if spec_o["L_h_fn"] is not None:
-            L_h = np.asarray(spec_o["L_h_fn"](self._x, u_vec, 0.0, 0.0))
-            R   = L_h @ ekf._Sigma @ L_h.T
-        else:
-            R   = np.zeros((spec_o["dim"], spec_o["dim"]))
-        self._apply_update(z_arr, h_val, H, R)
+        x_new, P_new = spec_o["update_fn"](self._x, self._P, z_arr, u_vec, 0.0)
+        self._x = np.asarray(x_new).reshape(-1)
+        self._P = np.asarray(P_new)
 
     # ---- Measurement bus + step ----------------------------------------
 

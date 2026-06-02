@@ -73,13 +73,11 @@ def _emit_ekf_cpp(ekf, out_dir, *, class_name, basename=None,
     base = basename or class_name.lower()
 
     funcs = extract_ekf(ekf)
-    fns = [funcs.predict_fn, funcs.F_fn, funcs.boxplus_fn]
-    if funcs.L_fn is not None:
-        fns.append(funcs.L_fn)
+    fns = [funcs.predict_fn]
+    if funcs.process_noise_fn is not None:
+        fns.append(funcs.process_noise_fn)
     for s in funcs.sensors:
-        fns += [s.h_fn, s.H_fn]
-        if s.L_h_fn is not None:
-            fns.append(s.L_h_fn)
+        fns.append(s.update_fn)
     kpaths = emit_kernel_list(fns, out_dir, basename=base)
     wpaths = emit_ekf_wrapper(funcs, ekf.world, out_dir,
                               class_name=class_name, basename=base,

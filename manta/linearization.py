@@ -75,6 +75,7 @@ class OutputLinearization:
     observed_cols: np.ndarray
     h_sym:         ca.MX
     H_sym:         ca.MX
+    L_h_sym:       ca.MX | None        # ∂h/∂noise|₀ (None if no noise)
     h_fn:          ca.Function | None
     H_fn:          ca.Function | None
     L_h_fn:        ca.Function | None
@@ -169,9 +170,23 @@ class Linearization:
         self.F_fn       = None
         self.B_fn       = None
         self.L_fn       = None
+        self.L_sym      = None       # ∂δ_out/∂noise|₀ expr (None if no noise)
         self.Sigma      = None
         self.blocks: list = []
         self._L_pattern = None
+
+        # L_sym (noise gain) + Σ — symbolic, always built when there is
+        # noise (the Kalman recursion in `kalman_functions` needs the
+        # expressions, not just the convenience ca.Functions).
+        if self.n_noise > 0:
+            delta_out_n = spec.boxminus_sym(x_new_n, x_new_0)
+            self.L_sym = ca.substitute(
+                ca.jacobian(delta_out_n, n_sym), n_sym, zero_n)
+            self._L_pattern = np.array(ca.DM(self.L_sym.sparsity()))
+            sigmas_sq: list[float] = []
+            for ns in noise_specs:
+                sigmas_sq.extend([ns.sigma ** 2] * ns.dim)
+            self.Sigma = np.diag(sigmas_sq)
 
         if build_functions:
             self.predict_fn = ca.Function(
@@ -179,16 +194,8 @@ class Linearization:
             self.F_fn = ca.Function("F", args, [self.F_sym], argn, ["F"])
             if self.B_sym is not None:
                 self.B_fn = ca.Function("B", args, [self.B_sym], argn, ["B"])
-            if self.n_noise > 0:
-                delta_out_n = spec.boxminus_sym(x_new_n, x_new_0)
-                L_sym = ca.substitute(
-                    ca.jacobian(delta_out_n, n_sym), n_sym, zero_n)
-                self._L_pattern = np.array(ca.DM(L_sym.sparsity()))
-                self.L_fn = ca.Function("L", args, [L_sym], argn, ["L"])
-                sigmas_sq: list[float] = []
-                for ns in noise_specs:
-                    sigmas_sq.extend([ns.sigma ** 2] * ns.dim)
-                self.Sigma = np.diag(sigmas_sq)
+            if self.L_sym is not None:
+                self.L_fn = ca.Function("L", args, [self.L_sym], argn, ["L"])
 
         # --- per-output h / H / L_h ----------------------------------------
         self.outputs: dict[str, OutputLinearization] = {}
@@ -208,19 +215,23 @@ class Linearization:
             self._h_supports.append(cols)
             h_sym = ca.substitute(h_n_flat, n_sym, zero_n)   # noise-zeroed h(x)
 
+            # L_h (∂h/∂noise) — symbolic, built whenever there is noise.
+            L_h_sym = None
+            if self.n_noise > 0:
+                L_h_sym = ca.substitute(
+                    ca.jacobian(h_n_flat, n_sym), n_sym, zero_n)
+
             h_fn = H_fn = L_h_fn = None
             if build_functions:
                 safe = full.replace(".", "_")
                 h_fn = ca.Function(f"h_{safe}", args, [h_sym], argn, ["h"])
                 H_fn = ca.Function(f"H_{safe}", args, [H_sym], argn, ["H"])
-                if self.n_noise > 0:
-                    L_h_sym = ca.substitute(
-                        ca.jacobian(h_n_flat, n_sym), n_sym, zero_n)
+                if L_h_sym is not None:
                     L_h_fn = ca.Function(
                         f"Lh_{safe}", args, [L_h_sym], argn, ["L_h"])
             self.outputs[full] = OutputLinearization(
                 full=full, dim=h_dim, observed_cols=cols,
-                h_sym=h_sym, H_sym=H_sym,
+                h_sym=h_sym, H_sym=H_sym, L_h_sym=L_h_sym,
                 h_fn=h_fn, H_fn=H_fn, L_h_fn=L_h_fn)
 
         if build_functions:
@@ -269,6 +280,73 @@ class Linearization:
                     kept.add(dep)
                     frontier.append(dep)
         return kept
+
+    def kalman_functions(self):
+        """Build the full symbolic EKF recursion as `ca.Function`s — the
+        logic that otherwise lives hand-written per backend.
+
+        Returns `(predict_fn, process_noise_fn, updates)`:
+
+          * `predict_fn(x, P, Q, u, dt, t) -> (x_new, P_new)`
+            with `P_new = F P Fᵀ + Q`.
+          * `process_noise_fn(x, u, dt, t) -> Q` = `L Σ Lᵀ`, or `None` when
+            the model declares no process noise (caller supplies Q).
+          * `updates[full](x, P, z, u, t) -> (x_new, P_new)` — the Joseph
+            update for one sensor: `R = L_h Σ L_hᵀ`, gain via the
+            codegen-safe `ca.solve(S, ·, "ldl")` (SPD `S`), correction via
+            `spec.boxplus_sym` (so SO(3) etc. stay manifold-correct).
+
+        Everything is one fused graph per function, so CasADi CSE shares
+        `f`/`F` and the backends — numpy or emitted C — just evaluate it.
+        """
+        spec = self.spec
+        n_tan = spec.tangent_dim
+        x, u = self.x_sym, self.u_sym
+        dt, t = self.dt_sym, self.t_sym
+        P = ca.MX.sym("P", n_tan, n_tan)
+        Q = ca.MX.sym("Q", n_tan, n_tan)
+        Sig = ca.DM(self.Sigma) if self.Sigma is not None else None
+
+        # predict:  x' = f(x,u,dt,t);  P' = F P Fᵀ + Q
+        P_pred = self.F_sym @ P @ self.F_sym.T + Q
+        P_pred = 0.5 * (P_pred + P_pred.T)
+        predict_fn = ca.Function(
+            "ekf_predict", [x, P, Q, u, dt, t], [self.x_new, P_pred],
+            ["x", "P", "Q", "u", "dt", "t"], ["x_new", "P_new"])
+
+        process_noise_fn = None
+        if self.L_sym is not None and Sig is not None:
+            Qexpr = self.L_sym @ Sig @ self.L_sym.T
+            process_noise_fn = ca.Function(
+                "ekf_process_noise", [x, u, dt, t], [Qexpr],
+                ["x", "u", "dt", "t"], ["Q"])
+
+        # per-sensor Joseph update (h/H/L_h evaluated at dt=0, as a
+        # measurement is dt-independent — matches the numpy reference).
+        eye = ca.MX.eye(n_tan)
+        zero_dt = ca.MX.zeros(1, 1)
+        updates: dict[str, ca.Function] = {}
+        for full, o in self.outputs.items():
+            d = o.dim
+            z = ca.MX.sym("z", d)
+            h = ca.substitute(o.h_sym, dt, zero_dt)
+            H = ca.substitute(o.H_sym, dt, zero_dt)
+            if o.L_h_sym is not None and Sig is not None:
+                L_h = ca.substitute(o.L_h_sym, dt, zero_dt)
+                R = L_h @ Sig @ L_h.T
+            else:
+                R = ca.MX.zeros(d, d)
+            S = H @ P @ H.T + R
+            K = ca.solve(S, (P @ H.T).T, "ldl").T      # P Hᵀ S⁻¹  (S SPD)
+            x_upd = spec.boxplus_sym(x, K @ (z - h))
+            IKH = eye - K @ H
+            P_upd = IKH @ P @ IKH.T + K @ R @ K.T
+            P_upd = 0.5 * (P_upd + P_upd.T)
+            safe = full.replace(".", "_")
+            updates[full] = ca.Function(
+                f"ekf_update_{safe}", [x, P, z, u, t], [x_upd, P_upd],
+                ["x", "P", "z", "u", "t"], ["x_new", "P_new"])
+        return predict_fn, process_noise_fn, updates
 
     def _compute_blocks(self, n_tangent: int) -> list:
         """Partition the tangent state into independent subsystems.
