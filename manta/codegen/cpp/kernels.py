@@ -39,33 +39,35 @@ def emit_kernels(funcs: WorldFunctions,
     Returns:
         Dict with absolute paths to the emitted `.c` and `.h` files.
     """
-    out_dir  = Path(out_dir).resolve()
-    out_dir.mkdir(parents=True, exist_ok=True)
     base = basename or funcs.world_name
-
-    gen = ca.CodeGenerator(
-        f"{base}_kernels.c",
-        {
-            "cpp": False,                # plain C, not C++.
-            "with_header": True,          # emit .h alongside.
-            "with_mem":    False,         # we don't need memory allocators.
-            "verbose":     False,
-        },
-    )
-    gen.add(funcs.predict_fn)
-    gen.add(funcs.predict_jacobian_fn)
+    fns = [funcs.predict_fn, funcs.predict_jacobian_fn]
     for o in funcs.outputs:
-        gen.add(o.h_fn)
-        gen.add(o.H_fn)
+        fns += [o.h_fn, o.H_fn]
+    return emit_kernel_list(fns, out_dir, basename=base)
+
+
+def emit_kernel_list(fns, out_dir: str | Path, *, basename: str) -> dict[str, Path]:
+    """Emit an explicit list of `ca.Function`s into one `<basename>_kernels.c/.h`.
+
+    The general entry point used by every transform's backend (Sim adds its
+    predict/Jacobian/sensor bundle; the EKF adds `L` + `boxplus`; the LQR
+    adds `control`). Any `ca.Function` works."""
+    out_dir = Path(out_dir).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    gen = ca.CodeGenerator(
+        f"{basename}_kernels.c",
+        {"cpp": False, "with_header": True, "with_mem": False, "verbose": False},
+    )
+    for fn in fns:
+        gen.add(fn)
     gen.generate(str(out_dir) + os.sep)
 
-    c_path = out_dir / f"{base}_kernels.c"
-    h_path = out_dir / f"{base}_kernels.h"
+    c_path = out_dir / f"{basename}_kernels.c"
+    h_path = out_dir / f"{basename}_kernels.h"
     if not c_path.exists() or not h_path.exists():
         raise RuntimeError(
             f"emit_kernels: CasADi didn't emit expected files at {out_dir}. "
             f"Got: {sorted(p.name for p in out_dir.iterdir())}")
-
     return {"c": c_path, "h": h_path}
 
 

@@ -193,7 +193,9 @@ an IR and produces a runtime:
 | `TargetNumpy(sim)` | Sim | NumpyWorld (`step`/`initial_state`) |
 | `TargetNumpy(ekf)` | EKF | NumpyEKF (`predict`/`update`/`step`/`state_dict`/`reset`) |
 | `TargetNumpy(lqr)` | LQR | NumpyLQR (`control`/`u`/`K`) |
-| `TargetCpp(sim, out_dir, class_name)` | Sim | Buildable C++ static library |
+| `TargetCpp(sim, out_dir, class_name)` | Sim | C++ static lib: pure evaluator (predict + measure) |
+| `TargetCpp(ekf, out_dir, class_name)` | EKF | C++ static lib: stateful filter (`predict` + `update_*`, Joseph form) |
+| `TargetCpp(lqr, out_dir, class_name)` | LQR | C++ static lib: stateless `control(x)` |
 
 Adding a backend (TensorFlow eager, raw embedded C, GPU CUDA) is one new
 `Target` subclass: implement `lower_sim` / `lower_ekf` / `lower_lqr` (the
@@ -225,7 +227,7 @@ manta/                     library package
     codegen/               Backends (one subpackage per target language)
         numpy/             TargetNumpy + NumpyWorld + NumpyEKF + NumpyLQR
         cpp/               TargetCpp + extract / kernels / wrapper / cmake
-tests/                     358 tests
+tests/                     378 tests
 examples/                  quickstart + physics/ + vehicles/
     _viz.py                rerun visualization helpers
     _control.py            keyboard (pynput) + scripted-fallback control
@@ -275,15 +277,11 @@ Visualized demos need the rerun SDK (`.venv/bin/pip install rerun-sdk`); pass
 
 In active development. The public API (`World`, `Craft`, `Sim`, `EKF`,
 `LQR`, `TargetNumpy`, `TargetCpp`) is settled enough that the demos
-and 358 tests don't carry compat shims. Open items:
+and 378 tests don't carry compat shims. The full deploy-to-robot path now
+lowers to C++ — `TargetCpp` handles `Sim`, `EKF` (mutable state + Joseph
+update), and `LQR` (feed-forward control law), each verified against the
+numpy backend by a compile-and-run roundtrip test. Open items:
 
-- **`TargetCpp(ekf, …)` / `TargetCpp(lqr, …)`** — estimator and
-  controller lowering to C++. The sim lowers today; the EKF/LQR IRs
-  carry the same Jacobian bundles (via the shared `Linearization`), so
-  the C++ side needs a mutable-state + Joseph-form-update layer (EKF)
-  and a feed-forward control-law emit (LQR). This is the missing piece
-  of the deploy-to-robot path — today you can lower the simulator, but
-  the estimator/controller you'd actually run onboard stay in Python.
 - **`iLQR` / `MPC`** — the `Linearization` seam emits symbolic A/B/H, so
   trajectory-tracking controllers reuse it; the iterative solve lives in
   the backend (not the IR), per the design.
@@ -326,10 +324,6 @@ and 358 tests don't carry compat shims. Open items:
   Fixing it collapsed that error to ~0 (submarine est error: 2.2 m peak →
   ~4 mm). `DVL` also gained a `velocity_noise` channel (it had none, so its
   EKF R was singular).
-- **C++ wrapper `t` plumbing** — the generated C++ `predict()`/`measure_*`
-  methods hardcode the world clock to `0.0` (the kernel ABI has the slot,
-  the wrapper doesn't expose it). Harmless for time-invariant dynamics,
-  wrong for time-varying ones. Fix before relying on the C++ backend.
 - **Multi-craft EKF over coupled worlds** — works for parallel
   independent crafts (block-decomposed predict is wired); field-mediated
   cross-craft coupling in the *estimator* is untested at scale.

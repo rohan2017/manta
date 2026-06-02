@@ -16,69 +16,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ...estimation.state_spec import StateSlot
 from .extract import WorldFunctions
-from .types import cpp_type_for
+from . import _structs as S
 
-
-# ---------------------------------------------------------------------------
-# Identifier helpers
-# ---------------------------------------------------------------------------
-
-def _cpp_ident(name: str) -> str:
-    """Convert a manta slot/output name (dot-separated) into a valid
-    C++ identifier (underscore-separated)."""
-    return name.replace(".", "_")
-
-
-def _eigen_type_for(slot: StateSlot) -> str:
-    return cpp_type_for(slot.manifold).decl
-
-
-def _state_field_init(slot: StateSlot, world) -> str:
-    """C++ initializer expression for a world State-struct field.
-
-    Slot names are `<craft>.<sub>` where `<sub>` is either:
-      * a rigid-body slot (`position`/`orientation`/`velocity`/
-        `angular_velocity`) → manifold default,
-      * a User State `<part>.<state>` → declaration's `init` value,
-      * an RW-bias `<part>.<bias>` → zero (matches `initial_state`),
-      * a Disturbance state — handled by the disturbance branch below.
-    """
-    cpp = cpp_type_for(slot.manifold)
-    head, _, rest = slot.name.partition(".")
-    # Per-craft slot?
-    craft = next((c for c in world.crafts if c.name == head), None)
-    if craft is not None:
-        if "." in rest:
-            part_name, sub = rest.split(".", 1)
-            part = next(p for p in craft.parts if p.name == part_name)
-            if sub in part.state_declarations():
-                return cpp.literal(getattr(part, sub))
-            from ...parts.base import RandomWalkNoise
-            if (sub in part.noise_declarations()
-                    and isinstance(part.noise_declarations()[sub],
-                                   RandomWalkNoise)):
-                return cpp.zero
-            raise RuntimeError(
-                f"wrapper: per-craft slot {slot.name!r} is not a State "
-                f"or RW bias.")
-        # Rigid-body slot — manifold default.
-        return cpp.zero
-    # Per-disturbance slot.
-    from ...fields.base import Disturbance
-    for field in world.fields:
-        for dist in field._disturbances:
-            if isinstance(dist, Disturbance) and dist.name == head:
-                from ...parts.base import RandomWalkNoise
-                if (rest in dist.noise_declarations()
-                        and isinstance(dist.noise_declarations()[rest],
-                                       RandomWalkNoise)):
-                    return cpp.zero
-                if rest in dist.state_declarations():
-                    return cpp.literal(getattr(dist, rest))
-    raise RuntimeError(
-        f"wrapper: slot {slot.name!r} doesn't resolve to a known owner.")
+# The struct/pack/identifier helpers are shared with the EKF + LQR wrappers
+# (see `cpp/_structs.py`) so the three backends emit identical structs.
+_cpp_ident = S.cpp_ident
+_eigen_type_for = S.eigen_type_for
+_state_field_init = S.state_field_init
 
 
 # ---------------------------------------------------------------------------
@@ -174,20 +119,20 @@ def _build_hpp(funcs: WorldFunctions,
     # ----- Methods -----
     lines.append("    State initial_state() const;")
     lines.append("")
-    lines.append("    State predict(const State& x, const Inputs& u, double dt) const;")
+    lines.append("    State predict(const State& x, const Inputs& u, double dt, double t = 0.0) const;")
     lines.append(
         f"    Eigen::Matrix<double, tangent_dim, tangent_dim> "
-        f"predict_jacobian(const State& x, const Inputs& u, double dt) const;")
+        f"predict_jacobian(const State& x, const Inputs& u, double dt, double t = 0.0) const;")
     lines.append("")
     for o in funcs.outputs:
         ret_ty = _eigen_vec_type(o.out_dim)
         lines.append(
             f"    {ret_ty} measure_{_cpp_ident(o.full_name)}("
-            f"const State& x, const Inputs& u) const;")
+            f"const State& x, const Inputs& u, double t = 0.0) const;")
         lines.append(
             f"    Eigen::Matrix<double, {o.out_dim}, tangent_dim> "
             f"measure_{_cpp_ident(o.full_name)}_jacobian("
-            f"const State& x, const Inputs& u) const;")
+            f"const State& x, const Inputs& u, double t = 0.0) const;")
         lines.append("")
 
     lines.append("};")
@@ -196,23 +141,8 @@ def _build_hpp(funcs: WorldFunctions,
     return "\n".join(lines) + "\n"
 
 
-def _eigen_vec_type(dim: int) -> str:
-    if dim == 1:
-        return "double"
-    if dim == 3:
-        return "Eigen::Vector3d"
-    if dim == 4:
-        return "Eigen::Vector4d"
-    return f"Eigen::Matrix<double, {dim}, 1>"
-
-
-def _input_default(input_full_name: str, world) -> float:
-    """Resolve `<craft>.<part>.<input>` to its part-instance value."""
-    craft_name, rest = input_full_name.split(".", 1)
-    part_name, input_name = rest.split(".", 1)
-    craft = next(c for c in world.crafts if c.name == craft_name)
-    part = next(p for p in craft.parts if p.name == part_name)
-    return float(getattr(part, input_name))
+_eigen_vec_type = S.eigen_vec_type
+_input_default = S.input_default
 
 
 # ---------------------------------------------------------------------------
@@ -291,13 +221,12 @@ def _build_cpp(funcs: WorldFunctions,
     # ----- predict -----
     pname = funcs.predict_fn.name()
     lines.append(
-        f"{qcls}::State {qcls}::predict(const State& x, const Inputs& u, double dt) const {{")
+        f"{qcls}::State {qcls}::predict(const State& x, const Inputs& u, double dt, double t) const {{")
     lines.append(f"    double x_in[{spec.ambient_dim}], x_out[{spec.ambient_dim}];")
     if funcs.n_inputs > 0:
         lines.append(f"    double u_in[{funcs.n_inputs}];")
     else:
         lines.append("    double u_in[1] = {0.0};   // placeholder, never read")
-    lines.append("    double t = 0.0;   // world-clock time; not yet plumbed through C++ wrapper")
     lines.append("    pack_state(x, x_in);")
     lines.append("    pack_inputs(u, u_in);")
     # CasADi's SZ_ARG / SZ_RES are the FULL working sizes (named inputs +
@@ -321,14 +250,13 @@ def _build_cpp(funcs: WorldFunctions,
     fn = funcs.predict_jacobian_fn.name()
     lines.append(
         f"Eigen::Matrix<double, {qcls}::tangent_dim, {qcls}::tangent_dim> "
-        f"{qcls}::predict_jacobian(const State& x, const Inputs& u, double dt) const {{")
+        f"{qcls}::predict_jacobian(const State& x, const Inputs& u, double dt, double t) const {{")
     lines.append(f"    double x_in[{spec.ambient_dim}];")
     if funcs.n_inputs > 0:
         lines.append(f"    double u_in[{funcs.n_inputs}];")
     else:
         lines.append("    double u_in[1] = {0.0};")
     lines.append(f"    Eigen::Matrix<double, {qcls}::tangent_dim, {qcls}::tangent_dim, Eigen::ColMajor> F;")
-    lines.append("    double t = 0.0;")
     lines.append("    pack_state(x, x_in);")
     lines.append("    pack_inputs(u, u_in);")
     lines.append(f"    const double* arg[{fn}_SZ_ARG] = {{0}};")
@@ -350,14 +278,13 @@ def _build_cpp(funcs: WorldFunctions,
         H_fn = o.H_fn.name()
 
         lines.append(
-            f"{ret_ty} {qcls}::measure_{ident}(const State& x, const Inputs& u) const {{")
+            f"{ret_ty} {qcls}::measure_{ident}(const State& x, const Inputs& u, double t) const {{")
         lines.append(f"    double x_in[{spec.ambient_dim}];")
         if funcs.n_inputs > 0:
             lines.append(f"    double u_in[{funcs.n_inputs}];")
         else:
             lines.append("    double u_in[1] = {0.0};")
         lines.append("    double dt = 0.0;")    # h doesn't depend on dt in our parts
-        lines.append("    double t  = 0.0;")
         if o.out_dim == 1:
             lines.append("    double y = 0.0;")
         else:
@@ -380,14 +307,13 @@ def _build_cpp(funcs: WorldFunctions,
 
         lines.append(
             f"Eigen::Matrix<double, {o.out_dim}, {qcls}::tangent_dim> "
-            f"{qcls}::measure_{ident}_jacobian(const State& x, const Inputs& u) const {{")
+            f"{qcls}::measure_{ident}_jacobian(const State& x, const Inputs& u, double t) const {{")
         lines.append(f"    double x_in[{spec.ambient_dim}];")
         if funcs.n_inputs > 0:
             lines.append(f"    double u_in[{funcs.n_inputs}];")
         else:
             lines.append("    double u_in[1] = {0.0};")
         lines.append("    double dt = 0.0;")
-        lines.append("    double t  = 0.0;")
         lines.append(
             f"    Eigen::Matrix<double, {o.out_dim}, {qcls}::tangent_dim, Eigen::ColMajor> H;")
         lines.append("    pack_state(x, x_in);")

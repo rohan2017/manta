@@ -22,8 +22,11 @@ from pathlib import Path
 
 from .cmake import emit_cmakelists
 from .extract import WorldFunctions, extract
-from .kernels import emit_kernels
+from .extract_ekf import EkfFunctions, extract_ekf, _densify
+from .kernels import emit_kernels, emit_kernel_list
 from .wrapper import emit_wrapper
+from .ekf_wrapper import emit_ekf_wrapper
+from .lqr_wrapper import emit_lqr_wrapper
 
 
 @dataclass(frozen=True)
@@ -36,7 +39,7 @@ class EmitResult:
     wrapper_cpp:   Path
     cmakelists:    Path
     class_name:    str
-    funcs:         WorldFunctions
+    funcs:         object       # WorldFunctions (Sim) or EkfFunctions (EKF)
 
 
 def _emit_world_cpp(cw,
@@ -80,3 +83,47 @@ def _emit_world_cpp(cw,
         class_name=class_name,
         funcs=funcs,
     )
+
+
+def _emit_ekf_cpp(ekf, out_dir, *, class_name, basename=None,
+                  namespace="manta_gen") -> EmitResult:
+    """Emit a buildable C++ EKF library (mutable state + Joseph update)."""
+    out_dir = Path(out_dir).resolve()
+    base = basename or class_name.lower()
+
+    funcs = extract_ekf(ekf)
+    fns = [funcs.predict_fn, funcs.F_fn, funcs.boxplus_fn]
+    if funcs.L_fn is not None:
+        fns.append(funcs.L_fn)
+    for s in funcs.sensors:
+        fns += [s.h_fn, s.H_fn]
+        if s.L_h_fn is not None:
+            fns.append(s.L_h_fn)
+    kpaths = emit_kernel_list(fns, out_dir, basename=base)
+    wpaths = emit_ekf_wrapper(funcs, ekf.world, out_dir,
+                              class_name=class_name, basename=base,
+                              namespace=namespace)
+    cmake_path = emit_cmakelists(out_dir, library_name=class_name, basename=base)
+    return EmitResult(
+        out_dir=out_dir, kernels_c=kpaths["c"], kernels_h=kpaths["h"],
+        wrapper_hpp=wpaths["hpp"], wrapper_cpp=wpaths["cpp"],
+        cmakelists=cmake_path, class_name=class_name, funcs=funcs)
+
+
+def _emit_lqr_cpp(lqr, out_dir, *, class_name, basename=None,
+                  namespace="manta_gen") -> EmitResult:
+    """Emit a buildable C++ LQR library (stateless feed-forward control law)."""
+    out_dir = Path(out_dir).resolve()
+    base = basename or class_name.lower()
+
+    control_fn = _densify(lqr.control_fn, f"{lqr.world.name}_lqr_control")
+    kpaths = emit_kernel_list([control_fn], out_dir, basename=base)
+    wpaths = emit_lqr_wrapper(lqr.spec, list(lqr.input_names),
+                              control_fn.name(), lqr.world, out_dir,
+                              class_name=class_name, basename=base,
+                              namespace=namespace)
+    cmake_path = emit_cmakelists(out_dir, library_name=class_name, basename=base)
+    return EmitResult(
+        out_dir=out_dir, kernels_c=kpaths["c"], kernels_h=kpaths["h"],
+        wrapper_hpp=wpaths["hpp"], wrapper_cpp=wpaths["cpp"],
+        cmakelists=cmake_path, class_name=class_name, funcs=lqr)
