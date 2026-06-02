@@ -197,6 +197,26 @@ class StateSpec:
         return cls(slots)
 
     @classmethod
+    def from_layout(cls, layout) -> "StateSpec":
+        """Build a spec from an ordered list of `(name, Manifold)` pairs.
+
+        The world-agnostic constructor: a `RecurrenceBlock` (PID, Madgwick,
+        the IMU integrator) declares its internal state this way, with no
+        craft / world to walk. Offsets densify from 0 in the given order.
+        """
+        slots: list[StateSlot] = []
+        offset = 0
+        tan_offset = 0
+        for name, manifold in layout:
+            slots.append(StateSlot(name=name,
+                                   offset=offset,
+                                   manifold=manifold,
+                                   tangent_offset=tan_offset))
+            offset += manifold.ambient_dim
+            tan_offset += manifold.tangent_dim
+        return cls(slots)
+
+    @classmethod
     def subset(cls, full_spec: "StateSpec",
                kept_names) -> "StateSpec":
         """Build a standalone spec over a subset of `full_spec`'s slots.

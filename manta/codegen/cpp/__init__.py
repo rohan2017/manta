@@ -25,7 +25,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..target import Target
-from .emit import _emit_world_cpp, _emit_ekf_cpp, _emit_lqr_cpp
+from .emit import (
+    _emit_world_cpp, _emit_ekf_cpp, _emit_lqr_cpp, _emit_recurrence_cpp,
+)
 
 
 class _CppBackend(Target):
@@ -52,6 +54,11 @@ class _CppBackend(Target):
                   basename=None, namespace="manta_gen", **opts):
         return _emit_lqr_cpp(lqr, out_dir, class_name=class_name,
                              basename=basename, namespace=namespace)
+
+    def lower_recurrence(self, block, *, out_dir, class_name,
+                         basename=None, namespace="manta_gen", **opts):
+        return _emit_recurrence_cpp(block, out_dir, class_name=class_name,
+                                    basename=basename, namespace=namespace)
 
 
 def TargetCpp(ir,

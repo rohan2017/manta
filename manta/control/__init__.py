@@ -6,8 +6,11 @@ runtime via `Target*`.
 
   * `LQR(world, ...)` — infinite-horizon discrete LQR about an operating
     point; a baked state-feedback control law.
+  * `PID(kp, ki, kd, ...)` — a scalar PID controller; a freestanding
+    `recurrence` block (no world needed), lowered by the same backends.
 """
 
 from .lqr import LQR
+from .pid import PID
 
-__all__ = ["LQR"]
+__all__ = ["LQR", "PID"]

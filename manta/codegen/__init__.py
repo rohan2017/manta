@@ -25,7 +25,9 @@ Adding a backend (TensorFlow, raw embedded C, CUDA, …) is one new
 
 from .target import Target
 from .cpp    import TargetCpp
-from .numpy  import NoiseDriver, NumpyEKF, NumpyWorld, TargetNumpy
+from .numpy  import (
+    NoiseDriver, NumpyEKF, NumpyRecurrence, NumpyWorld, TargetNumpy,
+)
 
 __all__ = ["Target", "TargetNumpy", "TargetCpp",
-           "NumpyWorld", "NumpyEKF", "NoiseDriver"]
+           "NumpyWorld", "NumpyEKF", "NumpyRecurrence", "NoiseDriver"]

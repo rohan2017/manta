@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from manta import Craft, Sim, TargetNumpy, World
+from manta import PID, Craft, Sim, TargetNumpy, World
 from manta.fields import CollisionField, FluidField, GravityField
 from manta.parts import Collider, DragSurface, Joint, Mass, Naca00xx, Thruster
 
@@ -117,10 +117,12 @@ def main() -> None:
                 color=(60, 60, 70))
         viz.point("world/target", TARGET, color=(90, 230, 120), radius=0.4)
 
-    # PID pointing gains, sized to the (small) gimbal-joint inertia. The
-    # integral trims the steady-state offset; KD damps the rate.
-    KP, KI, KD = 2.0, 5.0, 0.5
-    integ = {"pan": 0.0, "tilt": 0.0}
+    # One `PID` block per gimbal axis, sized to the (small) gimbal-joint
+    # inertia: the integral trims the steady-state offset; the derivative
+    # (on the measured angle) damps the rate. Same block you'd lower to C++
+    # with TargetCpp(PID(...)) and run onboard.
+    pid = {axis: TargetNumpy(PID(kp=2.0, ki=5.0, kd=0.5, integral_limit=2.0))
+           for axis in ("pan", "tilt")}
     n = int(duration / dt)
     print(f"{'t (s)':>6} {'boat xy':>16} {'heading°':>9} {'pan°':>7} "
           f"{'tilt°':>7} {'aim err°':>9}")
@@ -143,11 +145,12 @@ def main() -> None:
             des_tilt = -np.arctan2(v[2], np.hypot(v[0], v[1]))
             for joint, des in (("pan", des_pan), ("tilt", des_tilt)):
                 ang = float(state["boat"][f"{joint}.angle"])
-                rate = float(state["boat"][f"{joint}.rate"])
-                err = _wrap(des - ang)
-                integ[joint] = np.clip(integ[joint] + err * dt, -2.0, 2.0)
+                # Fold the shortest-arc wrap into the setpoint so the PID's
+                # error is _wrap(des − ang); its derivative-on-measurement
+                # then damps the joint rate.
+                sp = ang + _wrap(des - ang)
                 state["boat"][f"{joint}.torque_cmd"] = \
-                    KP * err + KI * integ[joint] - KD * rate
+                    pid[joint].step(dt, setpoint=sp, measurement=ang)["command"]
 
             state = sim.step(state, dt=dt)
 

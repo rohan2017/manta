@@ -27,6 +27,7 @@ from .kernels import emit_kernels, emit_kernel_list
 from .wrapper import emit_wrapper
 from .ekf_wrapper import emit_ekf_wrapper
 from .lqr_wrapper import emit_lqr_wrapper
+from .recurrence_wrapper import emit_recurrence_wrapper
 
 
 @dataclass(frozen=True)
@@ -127,3 +128,21 @@ def _emit_lqr_cpp(lqr, out_dir, *, class_name, basename=None,
         out_dir=out_dir, kernels_c=kpaths["c"], kernels_h=kpaths["h"],
         wrapper_hpp=wpaths["hpp"], wrapper_cpp=wpaths["cpp"],
         cmakelists=cmake_path, class_name=class_name, funcs=lqr)
+
+
+def _emit_recurrence_cpp(block, out_dir, *, class_name, basename=None,
+                         namespace="manta_gen") -> EmitResult:
+    """Emit a buildable C++ library for a `recurrence` block (PID / Madgwick
+    / IMU integrator): a stateful class with one `step(...)` over the baked
+    kernel. The single generic path every recurrence block shares."""
+    out_dir = Path(out_dir).resolve()
+    base = basename or class_name.lower()
+
+    kpaths = emit_kernel_list([block.update_fn], out_dir, basename=base)
+    wpaths = emit_recurrence_wrapper(block, out_dir, class_name=class_name,
+                                     basename=base, namespace=namespace)
+    cmake_path = emit_cmakelists(out_dir, library_name=class_name, basename=base)
+    return EmitResult(
+        out_dir=out_dir, kernels_c=kpaths["c"], kernels_h=kpaths["h"],
+        wrapper_hpp=wpaths["hpp"], wrapper_cpp=wpaths["cpp"],
+        cmakelists=cmake_path, class_name=class_name, funcs=block)

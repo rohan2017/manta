@@ -932,6 +932,149 @@ class NumpyLQR:
 
 
 # ---------------------------------------------------------------------------
+# NumpyRecurrence — runtime for any `recurrence` block (PID, Madgwick, IMU)
+# ---------------------------------------------------------------------------
+
+class NumpyRecurrence:
+    """Native-Python evaluator for a `recurrence` block.
+
+    Holds the ambient state `_x`; `step()` evaluates the block's single
+    baked `update_fn` and stores the result. There is **no boxplus at
+    runtime** — the manifold integration is inside the kernel — so this one
+    class drives every recurrence block (PID, Madgwick/Mahony, the IMU
+    integrator) unchanged. Exposes a direct call form (`step(dt, **inputs)`)
+    and signal-bus ports (`input(...)` / `output(...)` / `compute(...)`).
+    """
+
+    def __init__(self, block) -> None:
+        from ...recurrence import RecurrenceBlock
+        if not isinstance(block, RecurrenceBlock):
+            raise TypeError(
+                f"NumpyRecurrence: expected a RecurrenceBlock, got "
+                f"{type(block).__name__}")
+        self._b = block
+        self._x = block.x0.copy()
+        self._y = np.zeros(block.output_dim)
+        self._t = 0.0
+        self._in_ports:  dict[str, Any] = {}
+        self._out_ports: dict[str, Any] = {}
+
+    # ---- IR passthroughs ----------------------------------------------
+
+    @property
+    def block(self):
+        return self._b
+
+    @property
+    def spec(self):
+        return self._b.spec
+
+    # ---- State + step --------------------------------------------------
+
+    def state(self) -> dict[str, Any]:
+        """Current state by slot name (e.g. `{"integral": …}`)."""
+        return self._b.spec.unpack(self._x)
+
+    def reset(self, state: dict | None = None) -> None:
+        """Reset to the block's initial state, or overlay `state` (a
+        `{slot_name: value}` dict) over it."""
+        if state is None:
+            self._x = self._b.x0.copy()
+        else:
+            base = self._b.spec.unpack(self._b.x0)
+            base.update(state)
+            self._x = self._b.spec.pack(base)
+        self._y = np.zeros(self._b.output_dim)
+
+    def _pack_u(self, inputs: dict) -> np.ndarray:
+        u = np.zeros(self._b.input_dim)
+        off = 0
+        for p in self._b.inputs:
+            if p.name not in inputs:
+                raise KeyError(
+                    f"NumpyRecurrence.step: missing input {p.name!r}; "
+                    f"required: {[pp.name for pp in self._b.inputs]}")
+            v = np.atleast_1d(np.asarray(inputs[p.name], dtype=float)).reshape(-1)
+            if v.size != p.dim:
+                raise ValueError(
+                    f"NumpyRecurrence.step: input {p.name!r} expects dim "
+                    f"{p.dim}, got {v.size}.")
+            u[off:off + p.dim] = v
+            off += p.dim
+        return u
+
+    def step(self, dt: float, *, t: float | None = None,
+             **inputs) -> dict[str, Any]:
+        """Advance one step and return the readouts by output-port name.
+
+        `inputs` supplies every declared input port by name. `t` is the
+        step-start time (defaults to the runtime's internal clock).
+        """
+        tt = self._t if t is None else t
+        u = self._pack_u(inputs)
+        x_next, y = self._b.update_fn(self._x, u, dt, tt)
+        self._x = np.asarray(x_next).reshape(-1)
+        self._y = np.asarray(y).reshape(-1)
+        self._t = tt + dt
+        return self.outputs()
+
+    def outputs(self) -> dict[str, Any]:
+        """Last-computed readouts by port name (scalars unwrapped)."""
+        out: dict[str, Any] = {}
+        off = 0
+        for p in self._b.outputs:
+            seg = self._y[off:off + p.dim]
+            out[p.name] = float(seg[0]) if p.dim == 1 else seg.copy()
+            off += p.dim
+        return out
+
+    # ---- Signal-bus ports ----------------------------------------------
+
+    def input(self, name: str):
+        """Consumer port for an input (latched / zero-order-hold). Wire a
+        producer into it, or `set()` it yourself; `compute()` reads it."""
+        from ...signal import Signal
+        port = self._port(name, [p.name for p in self._b.inputs], "input")
+        if port not in self._in_ports:
+            dim = next(p.dim for p in self._b.inputs if p.name == port)
+            self._in_ports[port] = Signal(port, dim=dim, latched=True)
+        return self._in_ports[port]
+
+    def output(self, name: str):
+        """Producer port for a readout, refreshed after each `compute()`."""
+        from ...signal import Signal
+        port = self._port(name, [p.name for p in self._b.outputs], "output")
+        if port not in self._out_ports:
+            dim = next(p.dim for p in self._b.outputs if p.name == port)
+            self._out_ports[port] = Signal(port, dim=dim)
+        return self._out_ports[port]
+
+    def compute(self, dt: float, *, t: float | None = None) -> dict[str, Any]:
+        """Read the wired input ports, step, and publish to output ports."""
+        tt = self._t if t is None else t
+        inputs: dict[str, Any] = {}
+        for name, port in self._in_ports.items():
+            v = port.latched_value(tt)
+            if v is not None:
+                inputs[name] = v
+        out = self.step(dt, t=tt, **inputs)
+        for name, port in self._out_ports.items():
+            port.set(np.atleast_1d(np.asarray(out[name])).ravel(), t=self._t)
+        return out
+
+    @staticmethod
+    def _port(name: str, candidates: list[str], label: str) -> str:
+        if name in candidates:
+            return name
+        raise KeyError(
+            f"NumpyRecurrence: unknown {label} port {name!r}. Available: "
+            f"{candidates}")
+
+    def __repr__(self) -> str:
+        return f"<NumpyRecurrence over {self._b!r}>"
+
+
+# ---------------------------------------------------------------------------
 # TargetNumpy factory
 # ---------------------------------------------------------------------------
 
@@ -949,6 +1092,9 @@ class _NumpyBackend(Target):
 
     def lower_lqr(self, lqr, **opts):
         return NumpyLQR(lqr)
+
+    def lower_recurrence(self, block, **opts):
+        return NumpyRecurrence(block)
 
 
 def TargetNumpy(ir):
