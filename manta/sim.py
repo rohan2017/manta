@@ -53,9 +53,10 @@ class Sim:
     verified against the world's registry.
     """
 
-    # Lowerable-block kind (see manta.codegen.block.KIND_SIM): a backend
-    # lowers a Sim through its `lower_sim` handler.
-    RUNTIME_KIND = "sim"
+    # Lowerable-block kind: Sim is a pure-evaluator block (see
+    # manta.codegen.block.KIND_EVALUATOR / manta.codegen.evaluator), lowered
+    # through the backend's `lower_evaluator` handler.
+    RUNTIME_KIND = "evaluator"
 
     def __init__(self, world: "World") -> None:
         # Walk planets once, in registration order. A planet may create

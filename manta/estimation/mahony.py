@@ -1,7 +1,7 @@
 """Mahony — a gyro + accelerometer attitude (AHRS) filter with bias estimation.
 
 `Mahony(kp, ki, …)` is a `recurrence` block (a sibling of `Madgwick`,
-lowered by the same `lower_recurrence` path — zero backend code). It is the
+lowered by the same `lower_evaluator` path — zero backend code). It is the
 explicit complementary filter on SO(3): the orientation error is the cross
 product of the measured accelerometer direction with the estimate's
 predicted gravity, and that error drives the gyro through a PI law. The

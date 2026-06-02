@@ -57,12 +57,14 @@ class Port:
 
 
 class RecurrenceBlock:
-    """Base for a stateful manifold recurrence lowered via the ``recurrence``
-    runtime kind. Subclasses call `_build_recurrence(...)`; the base owns the
-    block contract every backend reads: `spec` (state manifold layout),
-    `inputs` / `outputs` (ports), `update_fn` (the single kernel), `x0`."""
+    """Base for a stateful manifold recurrence — a (stateful) pure-evaluator
+    block lowered via the ``evaluator`` runtime kind (see
+    `manta.codegen.evaluator`), with one `step` entry point. Subclasses call
+    `_build_recurrence(...)`; the base owns the block contract every backend
+    reads: `spec` (state manifold layout), `inputs` / `outputs` (ports),
+    `update_fn` (the single kernel), `x0`."""
 
-    RUNTIME_KIND = "recurrence"
+    RUNTIME_KIND = "evaluator"
 
     def _build_recurrence(self, *, name, state, inputs, outputs, x0,
                           recurrence) -> None:

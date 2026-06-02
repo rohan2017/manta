@@ -14,12 +14,12 @@ import numpy as np
 import pytest
 
 from manta import Madgwick, TargetCpp, TargetNumpy
-from manta.codegen.block import KIND_RECURRENCE, block_kind
+from manta.codegen.block import KIND_EVALUATOR, block_kind
 
 
 def test_madgwick_is_recurrence_block():
     f = Madgwick(beta=0.1)
-    assert block_kind(f) == KIND_RECURRENCE
+    assert block_kind(f) == KIND_EVALUATOR
     assert [p.name for p in f.inputs] == ["gyro", "accel"]
     assert [p.name for p in f.outputs] == ["orientation"]
 

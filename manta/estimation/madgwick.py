@@ -1,7 +1,7 @@
 """Madgwick — a gyro + accelerometer attitude (AHRS) filter.
 
 `Madgwick(beta, …)` is a `recurrence` block (a sibling of `PID`, lowered by
-the same `lower_recurrence` backend path). It fuses a rate gyro with an
+the same `lower_evaluator` backend path). It fuses a rate gyro with an
 accelerometer into a single orientation quaternion using Madgwick's
 gradient-descent complementary filter — the gyro integrates the fast
 motion, and a normalized gradient step nudges the estimate so the

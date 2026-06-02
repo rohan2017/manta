@@ -15,8 +15,8 @@ call (a `NotImplementedError` naming the supported kinds) rather than
 silently or deep in a stack.
 
 That is what makes a half-finished backend obvious, and what makes adding
-a block free: a new `recurrence` filter reuses the existing
-`lower_recurrence` handler with zero backend edits.
+a block free: a new evaluator block (e.g. another filter) reuses the
+existing `lower_evaluator` handler with zero backend edits.
 
 The public `TargetNumpy(...)` / `TargetCpp(...)` callables are thin
 wrappers over the concrete backends below. Adding a backend = one
@@ -35,10 +35,9 @@ class Target(ABC):
     """Backend contract: lower a block to an artifact.
 
     Subclasses implement one `lower_<kind>` method per runtime kind they
-    support (e.g. `lower_sim`, `lower_ekf`, `lower_lqr`,
-    `lower_recurrence`). Each handler takes the block plus backend-specific
-    keyword options (e.g. `out_dir`, `class_name` for a file-emitting
-    backend); `lower_block` forwards them.
+    support (e.g. `lower_evaluator`, `lower_ekf`). Each handler takes the
+    block plus backend-specific keyword options (e.g. `out_dir`,
+    `class_name` for a file-emitting backend); `lower_block` forwards them.
     """
 
     name: str = "target"

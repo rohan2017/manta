@@ -1,7 +1,7 @@
 """PID — a scalar proportional-integral-derivative controller.
 
 `PID(kp, ki, kd, …)` is a `recurrence` block (a sibling of `LQR`, lowered
-by the same single `lower_recurrence` backend path). It carries its own
+by the same single `lower_evaluator` backend path). It carries its own
 state — the integral accumulator and the previous measurement — and bakes
 the control law into one `ca.Function` the runtime evaluates each step:
 

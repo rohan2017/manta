@@ -4,20 +4,24 @@
 buildable C++ static-library project on disk, all on the same flat-C
 kernels + typed Eigen wrapper machinery:
 
-  * `Sim` → a pure evaluator (predict + per-Output measurement).
+  * evaluator blocks (`Sim`, `LQR`, recurrence) → one generic typed class
+    with a method per entry point (Sim: predict + per-Output measurement +
+    Jacobians; LQR: `control(x)`; recurrence: stateful `step`).
   * `EKF` → a stateful filter: mutable state `x` + covariance `P`, with
             `predict` (`F P Fᵀ + L Σ Lᵀ`) and per-sensor Joseph-form
             `update_*` (runtime `R = L_h Σ L_hᵀ`, manifold correction via
             a `boxplus` kernel).
-  * `LQR` → a stateless feed-forward `control(x)` over the baked law.
 
 Internals:
     extract.py / extract_ekf.py — IR → per-function ca.Function objects
     kernels.py                  — ca.Function → flat C source
     _structs.py                 — shared State/Inputs + pack/unpack emit
-    wrapper.py / ekf_wrapper.py / lqr_wrapper.py — typed Eigen classes
+    evaluator_spec.py           — IR → backend-neutral EvaluatorSpec
+    evaluator_wrapper.py        — EvaluatorSpec → one generic Eigen class
+    ekf_wrapper.py              — the EKF typed Eigen class
+    wrapper.py                  — back-compat shim (Sim `emit_wrapper`)
     cmake.py                    — CMakeLists.txt fragment
-    emit.py                     — `_emit_{world,ekf,lqr}_cpp()` orchestration
+    emit.py                     — `_emit_{evaluator,ekf}_cpp()` orchestration
 """
 
 from __future__ import annotations
@@ -25,40 +29,28 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..target import Target
-from .emit import (
-    _emit_world_cpp, _emit_ekf_cpp, _emit_lqr_cpp, _emit_recurrence_cpp,
-)
+from .emit import _emit_evaluator_cpp, _emit_ekf_cpp
 
 
 class _CppBackend(Target):
-    """C++ backend. Lowers `Sim` to a pure evaluator, `EKF` to a stateful
-    filter (mutable state + Joseph update), and `LQR` to a stateless
-    feed-forward `control(x)` law — all on the same flat-C kernels +
-    Eigen-typed wrapper machinery. Each `lower_<kind>` handler is the
-    backend's support for one runtime kind; a block whose kind has no
-    handler fails loudly at `lower_block` (see `manta.codegen.target`)."""
+    """C++ backend. Two runtime kinds: `evaluator` (Sim, LQR, and the
+    recurrence blocks — all pure ``ca.Function`` evaluators, lowered by one
+    generic typed-entry-point emitter) and `ekf` (a stateful filter: mutable
+    state + Joseph update, native Eigen linear algebra). A block whose kind
+    has no handler fails loudly at `lower_block` (see
+    `manta.codegen.target`)."""
 
     name = "TargetCpp"
 
-    def lower_sim(self, sim, *, out_dir, class_name,
-                  basename=None, namespace="manta_gen", **opts):
-        return _emit_world_cpp(sim, out_dir, class_name=class_name,
-                               basename=basename, namespace=namespace)
+    def lower_evaluator(self, block, *, out_dir, class_name,
+                        basename=None, namespace="manta_gen", **opts):
+        return _emit_evaluator_cpp(block, out_dir, class_name=class_name,
+                                   basename=basename, namespace=namespace)
 
     def lower_ekf(self, ekf, *, out_dir, class_name,
                   basename=None, namespace="manta_gen", **opts):
         return _emit_ekf_cpp(ekf, out_dir, class_name=class_name,
                              basename=basename, namespace=namespace)
-
-    def lower_lqr(self, lqr, *, out_dir, class_name,
-                  basename=None, namespace="manta_gen", **opts):
-        return _emit_lqr_cpp(lqr, out_dir, class_name=class_name,
-                             basename=basename, namespace=namespace)
-
-    def lower_recurrence(self, block, *, out_dir, class_name,
-                         basename=None, namespace="manta_gen", **opts):
-        return _emit_recurrence_cpp(block, out_dir, class_name=class_name,
-                                    basename=basename, namespace=namespace)
 
 
 def TargetCpp(ir,

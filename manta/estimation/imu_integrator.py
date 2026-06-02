@@ -1,7 +1,7 @@
 """IMUIntegrator — strapdown inertial dead-reckoning from accel + gyro.
 
 `IMUIntegrator(gravity, …)` is a `recurrence` block (a sibling of the AHRS
-filters, lowered by the same `lower_recurrence` path — zero backend code).
+filters, lowered by the same `lower_evaluator` path — zero backend code).
 It mechanizes the strapdown INS equations: integrate the body-frame gyro
 into attitude, rotate the body-frame specific force into the world frame,
 add gravity, and integrate that into velocity and position.

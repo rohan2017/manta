@@ -7,19 +7,24 @@ integrator). A backend dispatches on a block's `RUNTIME_KIND` — a member
 of the small closed set below — rather than on its Python type. So adding
 a block that reuses an existing runtime shape (e.g. another ``recurrence``
 filter) costs **no backend code at all**: the backend already has a
-`lower_recurrence` handler, and the new block just declares the kind plus
+`lower_evaluator` handler, and the new block just declares the kind plus
 its own kernels.
 
 Runtime kinds (a backend supports a kind iff it defines ``lower_<kind>``):
 
-  * ``"sim"``        — forward-dynamics tick; state threaded by the caller.
-  * ``"ekf"``        — stateful Kalman filter (predict + measurement update).
-  * ``"lqr"``        — stateless baked feedback law ``u(x)``.
-  * ``"recurrence"`` — stateful manifold recurrence ``x' = f(x, u, dt)``
-                       with an optional readout ``y = h(x)``; the shape
-                       shared by PID, Madgwick/Mahony, and the IMU
-                       strapdown integrator. One generic runtime per
-                       backend serves every block of this kind.
+  * ``"evaluator"`` — a pure-evaluator block: its whole runtime is
+                      "evaluate baked ``ca.Function``s." Covers `Sim`
+                      (forward dynamics, state threaded by the caller),
+                      `LQR` (a stateless baked control law), AND every
+                      `RecurrenceBlock` (PID, Madgwick/Mahony, the IMU
+                      integrator — stateful ``x' = f(x, u, dt)`` with a
+                      readout). They differ only in their typed *entry
+                      points*, so one generic lowering serves them all
+                      (see `manta.codegen.evaluator`).
+  * ``"ekf"``       — stateful Kalman filter (predict + measurement
+                      update). NOT an evaluator: it needs native linear
+                      algebra + the feed/step measurement bus, so it keeps
+                      its own kind.
 
 The kinds live here as string constants so the set stays closed and
 greppable; `RUNTIME_KIND` on an IR class names which one it is. This is
@@ -32,12 +37,10 @@ from __future__ import annotations
 from typing import ClassVar, Protocol, runtime_checkable
 
 # --- The closed set of runtime kinds a Target switches on -------------------
-KIND_SIM:        str = "sim"
-KIND_EKF:        str = "ekf"
-KIND_LQR:        str = "lqr"
-KIND_RECURRENCE: str = "recurrence"
+KIND_EVALUATOR: str = "evaluator"
+KIND_EKF:       str = "ekf"
 
-ALL_KINDS: tuple[str, ...] = (KIND_SIM, KIND_EKF, KIND_LQR, KIND_RECURRENCE)
+ALL_KINDS: tuple[str, ...] = (KIND_EVALUATOR, KIND_EKF)
 
 
 @runtime_checkable

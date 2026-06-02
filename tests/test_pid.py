@@ -14,12 +14,12 @@ import numpy as np
 import pytest
 
 from manta import PID, TargetCpp, TargetNumpy
-from manta.codegen.block import KIND_RECURRENCE, block_kind
+from manta.codegen.block import KIND_EVALUATOR, block_kind
 
 
 def test_pid_is_recurrence_block():
     pid = PID(kp=1.0, ki=0.5, kd=0.1)
-    assert block_kind(pid) == KIND_RECURRENCE
+    assert block_kind(pid) == KIND_EVALUATOR
     assert [p.name for p in pid.inputs] == ["setpoint", "measurement"]
     assert [p.name for p in pid.outputs] == ["command"]
 

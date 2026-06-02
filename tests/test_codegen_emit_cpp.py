@@ -66,15 +66,15 @@ def test_target_cpp_unsupported_kind_raises():
 
 
 def test_ir_blocks_declare_runtime_kind():
-    """Sim / EKF / LQR each declare the runtime kind the dispatch keys on."""
+    """Sim and LQR are evaluator blocks; EKF keeps its own kalman kind."""
     from manta import EKF
-    from manta.codegen.block import KIND_EKF, KIND_LQR, KIND_SIM, block_kind
+    from manta.codegen.block import KIND_EKF, KIND_EVALUATOR, block_kind
     from manta.control import LQR
 
-    assert block_kind(_hover_world()) == KIND_SIM
+    assert block_kind(_hover_world()) == KIND_EVALUATOR
     w = _hover_world().world
     assert EKF(w).RUNTIME_KIND == KIND_EKF
-    assert LQR.RUNTIME_KIND == KIND_LQR
+    assert LQR.RUNTIME_KIND == KIND_EVALUATOR
 
 
 def _make_simple_craft():

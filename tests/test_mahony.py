@@ -13,12 +13,12 @@ import numpy as np
 import pytest
 
 from manta import Mahony, TargetCpp, TargetNumpy
-from manta.codegen.block import KIND_RECURRENCE, block_kind
+from manta.codegen.block import KIND_EVALUATOR, block_kind
 
 
 def test_mahony_is_recurrence_block():
     f = Mahony(kp=0.5, ki=0.1)
-    assert block_kind(f) == KIND_RECURRENCE
+    assert block_kind(f) == KIND_EVALUATOR
     assert [p.name for p in f.inputs] == ["gyro", "accel"]
     assert [p.name for p in f.outputs] == ["orientation"]
     assert [s.name for s in f.spec.slots] == ["orientation", "gyro_bias"]

@@ -1080,22 +1080,30 @@ class NumpyRecurrence:
 # ---------------------------------------------------------------------------
 
 class _NumpyBackend(Target):
-    """Native-Python backend: all three transforms lower to in-memory
-    runtime evaluators."""
+    """Native-Python backend: every block lowers to an in-memory runtime
+    evaluator. The `evaluator` kind maps to the ergonomic façade for the
+    concrete block (Sim→NumpyWorld, LQR→NumpyLQR, recurrence→NumpyRecurrence
+    — they share the kind/lowering, not the runtime surface); `ekf` maps to
+    NumpyEKF."""
 
     name = "TargetNumpy"
 
-    def lower_sim(self, sim, **opts):
-        return NumpyWorld(sim)
+    def lower_evaluator(self, block, **opts):
+        from ...sim import Sim
+        from ...control.lqr import LQR
+        from ...recurrence import RecurrenceBlock
+        if isinstance(block, Sim):
+            return NumpyWorld(block)
+        if isinstance(block, LQR):
+            return NumpyLQR(block)
+        if isinstance(block, RecurrenceBlock):
+            return NumpyRecurrence(block)
+        raise TypeError(
+            f"TargetNumpy: {type(block).__name__} is not an evaluator block "
+            f"(expected Sim, LQR, or a RecurrenceBlock).")
 
     def lower_ekf(self, ekf, **opts):
         return NumpyEKF(ekf)
-
-    def lower_lqr(self, lqr, **opts):
-        return NumpyLQR(lqr)
-
-    def lower_recurrence(self, block, **opts):
-        return NumpyRecurrence(block)
 
 
 def TargetNumpy(ir):
