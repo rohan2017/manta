@@ -195,9 +195,12 @@ an IR and produces a runtime:
 | `TargetNumpy(lqr)` | LQR | NumpyLQR (`control`/`u`/`K`) |
 | `TargetCpp(sim, out_dir, class_name)` | Sim | Buildable C++ static library |
 
-Adding a backend (TensorFlow eager, raw embedded C, GPU CUDA) is one
-new `Target*` constructor consuming the same IR. Adding a transform
-(`LQR`, a future `iLQR`/`MPC`) reuses the shared `Linearization` seam.
+Adding a backend (TensorFlow eager, raw embedded C, GPU CUDA) is one new
+`Target` subclass: implement `lower_sim` / `lower_ekf` / `lower_lqr` (the
+`Target` ABC holds the IR-type dispatch, so a half-finished backend's
+unsupported hook raises `NotImplementedError` at the call rather than
+failing silently). Adding a transform (`LQR`, a future `iLQR`/`MPC`)
+reuses the shared `Linearization` seam.
 
 ## Layout
 
@@ -222,25 +225,45 @@ manta/                     library package
     codegen/               Backends (one subpackage per target language)
         numpy/             TargetNumpy + NumpyWorld + NumpyEKF + NumpyLQR
         cpp/               TargetCpp + extract / kernels / wrapper / cmake
-tests/                     323 tests
-examples/                  11 runnable demos
+tests/                     358 tests
+examples/                  quickstart + physics/ + vehicles/
+    _viz.py                rerun visualization helpers
+    _control.py            keyboard (pynput) + scripted-fallback control
+    quickstart.py          install sanity check (numpy Sim, apex height)
+    physics/               bouncing_ball / spinning_top / foucault_pendulum
+    vehicles/              quadcopter / glider / submarine / hydrofoil
 ```
 
 ## Demos
 
+Start with the install sanity check — a ball thrown into uniform gravity,
+run on the numpy backend, reporting the apex height it reached:
+
 ```bash
-.venv/bin/python -m examples.hover_demo            # IMU + EKF, RW bias
-.venv/bin/python -m examples.lqr_hover_demo        # Sim + EKF + LQR closed loop
-.venv/bin/python -m examples.submarine_demo        # PointBuoy + DragSurface
-.venv/bin/python -m examples.spinning_top_demo     # gyroscopic precession
-.venv/bin/python -m examples.dual_craft_demo       # multi-craft + Tether
-.venv/bin/python -m examples.quadcopter_demo       # polynomial Thruster
-.venv/bin/python -m examples.glider_demo           # NACA airfoil
-.venv/bin/python -m examples.bouncing_ball_demo    # CollisionField
-.venv/bin/python -m examples.pan_tilt_gimbal_demo  # nested Joints
-.venv/bin/python -m examples.coriolis_drop_demo    # Planet-frame init
-.venv/bin/python -m examples.foucault_demo         # tether-suspended pendulum
+.venv/bin/python -m examples.quickstart
 ```
+
+The rest are organized into **physics** (each with a [rerun](https://rerun.io)
+3-D visualization) and **vehicles** (visualization + keyboard control, with
+a self-running scripted fallback so they work unattended):
+
+```bash
+# physics/ — visualized
+.venv/bin/python -m examples.physics.bouncing_ball       # Collider + CollisionField
+.venv/bin/python -m examples.physics.spinning_top        # gyroscopic precession (Joint)
+.venv/bin/python -m examples.physics.foucault_pendulum   # Planet + Tether + Coriolis
+
+# vehicles/ — visualized + keyboard (add --keyboard for live control)
+.venv/bin/python -m examples.vehicles.quadcopter         # Sim + EKF + LQR closed loop
+.venv/bin/python -m examples.vehicles.glider             # NACA wing, fly-by-wire
+.venv/bin/python -m examples.vehicles.submarine          # PointBuoy + DVL + EKF
+.venv/bin/python -m examples.vehicles.hydrofoil          # nested-Joint laser gimbal (PID)
+```
+
+Visualized demos need the rerun SDK (`.venv/bin/pip install rerun-sdk`); pass
+`--no-viz` to run any of them headless. Vehicle demos take `--keyboard`
+(live `pynput` control), `--no-viz`, and `--duration`. Shared helpers live in
+`examples/_viz.py` (rerun) and `examples/_control.py` (keyboard / scripted).
 
 ## Running tests
 
@@ -251,8 +274,8 @@ examples/                  11 runnable demos
 ## Status
 
 In active development. The public API (`World`, `Craft`, `Sim`, `EKF`,
-`LQR`, `TargetNumpy`, `TargetCpp`) is settled enough that the 11 demos
-and 323 tests don't carry compat shims. Open items:
+`LQR`, `TargetNumpy`, `TargetCpp`) is settled enough that the demos
+and 358 tests don't carry compat shims. Open items:
 
 - **`TargetCpp(ekf, …)` / `TargetCpp(lqr, …)`** — estimator and
   controller lowering to C++. The sim lowers today; the EKF/LQR IRs
@@ -264,6 +287,31 @@ and 323 tests don't carry compat shims. Open items:
 - **`iLQR` / `MPC`** — the `Linearization` seam emits symbolic A/B/H, so
   trajectory-tracking controllers reuse it; the iterative solve lives in
   the backend (not the IR), per the design.
+- **Observability analysis** (shipped — `manta.estimation.observability`)
+  — a faithful EKF of a correct model is still only as good as the model's
+  *observability* (a property of dynamics + sensor set + **operating
+  point**, not of the model alone): unobservable modes drift silently
+  while the covariance looks tight. `observability(EKF(world))` (or
+  `numpy_ekf.observability()`) builds the observability matrix from the
+  symbolic `F`/`H` at an operating point and reports rank + which state
+  slots are unobservable. It flags, e.g., that GPS + DVL + gyro can't see
+  absolute heading **at rest** (only through a maneuver) — so a compass
+  earns its place. Local + operating-point-dependent by nature; check a
+  few representative points. Follow-ups: a Gramian-along-trajectory variant
+  and a NEES consistency check.
+- **EKF measurement timing** (fixed) — `NumpyEKF.step` now folds a
+  measurement *before* propagating over its interval (update-then-predict),
+  because the sim emits sensor outputs from the interval's *start* state.
+  The old predict-then-update order met a start-of-interval reading with
+  the end-of-interval state, biasing rate-derived states (orientation) by
+  O(dt) — a gyro-only EKF drifted heading where a naive integrator didn't.
+  Fixing it collapsed that error to ~0 (submarine est error: 2.2 m peak →
+  ~4 mm). `DVL` also gained a `velocity_noise` channel (it had none, so its
+  EKF R was singular).
+- **C++ wrapper `t` plumbing** — the generated C++ `predict()`/`measure_*`
+  methods hardcode the world clock to `0.0` (the kernel ABI has the slot,
+  the wrapper doesn't expose it). Harmless for time-invariant dynamics,
+  wrong for time-varying ones. Fix before relying on the C++ backend.
 - **Multi-craft EKF over coupled worlds** — works for parallel
   independent crafts (block-decomposed predict is wired); field-mediated
   cross-craft coupling in the *estimator* is untested at scale.
