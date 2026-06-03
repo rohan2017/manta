@@ -1051,6 +1051,13 @@ class _NumpyBackend(Target):
     def lower_ekf(self, ekf, **opts):
         return NumpyEKF(ekf)
 
+    def lower_module(self, module, **opts):
+        """The generic Module lowering (see `manta.ir.module`): produces a
+        `NumpyModule` — State storage + an entry-point method each — with no
+        feature-specific code. Knows nothing about Sim/EKF/LQR/PID."""
+        from .module import NumpyModule
+        return NumpyModule(module)
+
 
 def TargetNumpy(ir):
     """Native-Python backend factory.
