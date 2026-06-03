@@ -223,7 +223,7 @@ class Noise(_Declaration):
         the runtime `<name>_sigma` attribute on the owner."""
         return float(getattr(owner, f"{name}_sigma")) > 0.0
 
-    # ---- Input-name classification (extract.py / ekf.py) --------------
+    # ---- Input-name classification (tick_signature.py / ekf.py) -------
 
     def driver_input_name(self, name: str) -> str:
         """The name of this channel's per-tick stochastic input. For

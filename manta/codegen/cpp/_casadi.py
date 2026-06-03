@@ -1,9 +1,9 @@
 """Shared CasADi ↔ C glue for the C++ backend.
 
-Backend-internal helpers that several emitters/extractors need, kept here
-so neither has to reach into the other (the EKF wrapper and the generic
-evaluator wrapper both emit kernel calls; the LQR builder and the EKF
-extractor both densify functions). Pure CasADi / string plumbing — no IR.
+Backend-internal helpers the generic emitter needs: `emit_kernel_call`
+(flat-C arg/res/iw/w boilerplate for a baked kernel) and `densify` (dense
+row/col-major outputs + a codegen-safe rename for the flat-C / Eigen
+interface). Pure CasADi / string plumbing — no IR.
 """
 
 from __future__ import annotations

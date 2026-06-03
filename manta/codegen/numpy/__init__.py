@@ -1,15 +1,21 @@
 """TargetNumpy — native-Python runtime evaluator backend.
 
-`TargetNumpy(ir)` dispatches by IR type:
+Kernel execution + state for every runtime go through the generic
+`NumpyModule` (`manta.codegen.numpy.module`, built from `to_module(ir)`);
+these classes are the thin per-IR ergonomic adapters over it (nested-dict
+translation, the signal bus / ports, the noise driver). `TargetNumpy(ir)`
+dispatches by IR type:
 
-  * `TargetNumpy(Sim)` → `NumpyWorld` with `.step()` and
-    `.initial_state()`.
-  * `TargetNumpy(EKF)`           → `NumpyEKF` with `.predict()`,
-    `.update()`, `.state_dict()`, `.reset()`, `.x`, `.P`.
+  * `Sim`             → `NumpyWorld`      (`.step()`, `.outputs()`,
+                                           `.initial_state()`, bus ports).
+  * `EKF`             → `NumpyEKF`        (`.predict()`, `.update()`,
+                                           `.feed()`/`.step()`, `.state_dict()`,
+                                           `.reset()`, `.x`, `.P`).
+  * `LQR`             → `NumpyLQR`        (`.control()`, `.u()`, `.K`).
+  * `RecurrenceBlock` → `NumpyRecurrence` (`.step()`, `.compute()`).
 
-The IR objects themselves (`Sim`, `EKF`) describe the
-compiled symbolic graph but are not directly callable for ticking /
-predicting — choose a target to get the runtime.
+The IR objects themselves describe the compiled symbolic graph but are not
+directly callable — choose a target to get the runtime.
 """
 
 from __future__ import annotations
@@ -574,8 +580,7 @@ class NumpyEKF:
                 Q: np.ndarray | None = None) -> None:
         """Advance the nominal state and tangent covariance by `dt`.
 
-        Args mirror `EKF.predict` from the old monolithic class:
-        `dt` (timestep), `t` (world-clock time), `u` (per-tick part
+        Args: `dt` (timestep), `t` (world-clock time), `u` (per-tick part
         Input override dict), `Q` (process-noise override; default is
         auto-assembly from registered Noise channels).
 
@@ -1000,7 +1005,10 @@ class NumpyRecurrence:
         """Read the wired input ports, step, and publish to output ports."""
         tt = self._t if t is None else t
         out = self.step(dt, t=tt, **self._ports.pull(tt))
-        self._ports.publish(out, t=self._t)
+        # Publish at the start-of-step instant `tt` (consistent with the sim
+        # `out`/EKF estimate ports, which all stamp producers at start-of-step
+        # for the bus's sample-and-hold / staleness gates).
+        self._ports.publish(out, t=tt)
         return out
 
     @staticmethod

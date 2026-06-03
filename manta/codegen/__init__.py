@@ -15,12 +15,14 @@ The pipeline:
 Each backend is a self-contained subpackage under `manta.codegen`:
 
     codegen/
-      numpy/          TargetNumpy + NumpyWorld + NumpyEKF
-      cpp/            TargetCpp + extract / kernels / wrapper / cmake
-      <future>/       new languages slot in here
+      module_build.py  to_module(block) → the backend-neutral Module IR
+      numpy/           TargetNumpy + NumpyModule (the generic runtime)
+      cpp/             TargetCpp + module_emit (the generic emitter)
+      <future>/        new languages slot in here
 
 Adding a backend (TensorFlow, raw embedded C, CUDA, …) is one new
-`Target*` constructor consuming the same IR.
+`Target*` that translates a `ca.Function` + implements one generic
+`lower_module(Module)` — no per-feature code.
 """
 
 from .target import Target

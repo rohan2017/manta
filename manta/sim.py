@@ -53,9 +53,9 @@ class Sim:
     verified against the world's registry.
     """
 
-    # Lowerable-block kind: Sim is a pure-evaluator block (see
-    # manta.codegen.block.KIND_EVALUATOR / manta.codegen.evaluator), lowered
-    # through the backend's `lower_evaluator` handler.
+    # Lowerable-block kind (see `manta.codegen.block`). Both backends lower a
+    # Sim via the generic Module path (`to_module` → `lower_module`); the
+    # `evaluator` kind just routes `lower_block` to that path.
     RUNTIME_KIND = "evaluator"
 
     def __init__(self, world: "World") -> None:

@@ -67,10 +67,11 @@ ekf = TargetNumpy(EKF(w))
 state = sim.initial_state()
 state["drone"]["t.throttle"] = 1.5 * 9.81           # hover
 for t in np.arange(0, 3, 0.005):
-    state = sim.step(state, dt=0.005, t=t)
+    state = sim.step(state, dt=0.005, t=t)          # next state (truth)
+    reading = sim.outputs()                         # sensor readings, this step
     ekf.predict(dt=0.005, t=t, u={"t.throttle": 1.5 * 9.81})
-    ekf.update(drone.parts[-2], gyro=state["drone"]["imu.gyro"])
-    ekf.update(drone.parts[-1], position=state["drone"]["gps.position"])
+    ekf.update(drone.parts[-2], gyro=reading["drone"]["imu.gyro"])
+    ekf.update(drone.parts[-1], position=reading["drone"]["gps.position"])
 
 print(ekf.state_dict()["drone"]["position"])
 ```
@@ -212,22 +213,24 @@ manta/                     library package
     craft.py               Craft + TickContext + Newton-Euler integrator
     world.py               World (the declarative model)
     sim.py                 Sim (forward-dynamics IR transform)
-    world_tick.py          World-tick compile (one CasADi function per world)
+    recurrence.py          RecurrenceBlock base (PID/Madgwick/Mahony/IMU)
     linearization.py       Manifold-aware F / B / H / L (shared seam)
-    tick_signature.py      Tick I/O classifier (Inputs / Noise / sensors)
-    kinematics.py          Symbolic kinematic-chain pass
-    inertia.py             Symbolic inertia rollup
-    ir/                    Frames, types, Graph, Manifold, Wrench
+    linearized_system.py   LinearizedSystem (slot/sensor/subset machinery)
+    bus.py                 MeasurementBus + PortSet (backend-agnostic bus)
+    signal.py              Signal value-channel + wire()
+    tick/                  World-tick compile + kinematics/inertia/signature
+    ir/                    Frames, types, Graph, Manifold, Wrench, Module
     parts/                 Part base + stock parts (sensor/actuation/aero/…)
     fields/                Field + Disturbance + stock + CraftWindBubble
     planets/               Planet ABC, Earth, PlanetFrameFluid, PlanetState
     couplings/             Coupling ABC + Tether
     estimation/            EKF (IR) + StateSpec + measurement helpers
-    control/               LQR (IR)
-    codegen/               Backends (one subpackage per target language)
-        numpy/             TargetNumpy + NumpyWorld + NumpyEKF + NumpyLQR
-        cpp/               TargetCpp + extract / kernels / wrapper / cmake
-tests/                     378 tests
+    control/               LQR (IR) + PID
+    codegen/               Backends (one generic Module lowering per target)
+        module_build.py    to_module(block) → backend-neutral Module IR
+        numpy/             TargetNumpy + the generic NumpyModule runtime
+        cpp/               TargetCpp + the generic module_emit emitter
+tests/                     410 tests
 examples/                  quickstart + physics/ + vehicles/
     _viz.py                rerun visualization helpers
     _control.py            keyboard (pynput) + scripted-fallback control

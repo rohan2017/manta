@@ -143,12 +143,6 @@ class EntryPoint:
     synthesize_zero: tuple[str, ...] = ()
     port_from: dict[str, str] = field(default_factory=dict)
 
-    def reads_state(self, layout: StateLayout) -> tuple[str, ...]:
-        return tuple(a for a in self.kernel_args if a in layout)
-
-    def reads_ports(self, layout: StateLayout) -> tuple[str, ...]:
-        return tuple(a for a in self.kernel_args if a not in layout)
-
 
 @dataclass
 class Module:

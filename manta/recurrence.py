@@ -57,12 +57,12 @@ class Port:
 
 
 class RecurrenceBlock:
-    """Base for a stateful manifold recurrence — a (stateful) pure-evaluator
-    block lowered via the ``evaluator`` runtime kind (see
-    `manta.codegen.evaluator`), with one `step` entry point. Subclasses call
-    `_build_recurrence(...)`; the base owns the block contract every backend
-    reads: `spec` (state manifold layout), `inputs` / `outputs` (ports),
-    `update_fn` (the single kernel), `x0`."""
+    """Base for a stateful manifold recurrence — lowered (like Sim/EKF/LQR)
+    via the generic Module path (`to_module` → `lower_module`), with one
+    `step` entry point. Subclasses call `_build_recurrence(...)`; the base
+    owns the block contract `to_module` reads: `spec` (state manifold
+    layout), `inputs` / `outputs` (ports), `update_fn` (the single kernel),
+    `x0`."""
 
     RUNTIME_KIND = "evaluator"
 

@@ -29,7 +29,7 @@ def test_target_cpp_produces_expected_files(tmp_path: Path):
     for p in expected:
         assert p.exists(), p
     assert result.class_name == "Drone"
-    # WorldFunctions are carried in the result for cross-checking.
+    # A small funcs summary (world_name / dims) is carried for cross-checking.
     assert result.funcs.world_name == "hover_world"
     assert result.funcs.ambient_dim == 13
     assert result.funcs.tangent_dim == 12

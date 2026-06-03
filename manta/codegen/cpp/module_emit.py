@@ -189,7 +189,9 @@ def _method_decl(ep, ctx) -> str:
 
 
 def _params(ep, ctx, *, decl: bool):
-    """Typed parameter list in canonical order: State, z, u, dt, t."""
+    """Typed method parameters: a threaded `State` (when not held) first,
+    then each exposed port in `kernel_args` order (skipping members and
+    internally-filled args) — `u`→Inputs, `z*`→vector, `dt`/`t`→double."""
     out = []
     reads_state_x = any(a == "x" for a in ep.kernel_args)
     x_is_param = reads_state_x and not ctx.held
@@ -225,15 +227,17 @@ def _method_body(ep, ctx) -> list[str]:
         n = sum(f.dim for f in u_port.fields) if u_port else 0
         L.append(f"    double u_in[{max(n, 1)}];"
                  + ("" if n else "   // no inputs"))
+    # Internally-filled args: a scalar synthesized to zero (a measurement's
+    # dt) → `double a = 0.0;`; a matrix filled to zero or via `port_from`
+    # (the EKF's Q) → `Cov am = Cov::Zero();`.
     for a in ep.synthesize_zero:
-        if a == "dt":
-            L.append("    double dt = 0.0;")
-    # matrix ports filled internally (Q): declare + (port_from) compute
-    for a in ep.kernel_args:
         port = _port(ctx.m, a)
-        if a in ep.port_from or (a in ep.synthesize_zero and port is not None
-                                 and len(port.shape) == 2):
+        if port is not None and len(port.shape) == 2:
             L.append(f"    Cov {a}m = Cov::Zero();")
+        else:
+            L.append(f"    double {a} = 0.0;")
+    for a in ep.port_from:
+        L.append(f"    Cov {a}m = Cov::Zero();")
     # result buffers for returns
     if ret == "inputs":
         L.append(f"    double u_out[{max(sum(f.dim for f in u_port.fields), 1)}];")
@@ -289,7 +293,7 @@ def _arg_expr(a, ep, ctx) -> str:
         port = _port(ctx.m, a)
         if port is not None and len(port.shape) == 2:
             return f"{a}m.data()"
-        return "&dt" if a == "dt" else f"&{a}"   # scalar zero already declared
+        return f"&{a}"                            # scalar zero already declared
     if a.startswith("z"):
         port = _port(ctx.m, a)
         return "&z" if port.size == 1 else "z.data()"
@@ -413,13 +417,13 @@ def emit_module_cpp(module, out_dir, *, class_name: str,
     if u_port is not None:
         C += _pack_inputs(u_port, q) + [""]
     if ctx.held:
-        init = ["x = State{};"] + [f"{mf.name} = "
-                                   f"({_matrix_init(mf)});" for mf in ctx.mats]
+        init = ["x = State{};"] + [f"{mf.name} = ({_matrix_init(mf)});"
+                                   for mf in ctx.mats]
         C += [f"{q}::{q}() {{ {' '.join(init)} }}", ""]
         if ctx.mats:
             args = ", ".join(["const State& x0"]
                              + [f"const Cov& {mf.name}0" for mf in ctx.mats])
-            sets = " ".join([f"x = x0;"]
+            sets = " ".join(["x = x0;"]
                             + [f"{mf.name} = {mf.name}0;" for mf in ctx.mats])
             C += [f"void {q}::reset({args}) {{ {sets} }}", ""]
     for ep in entries:

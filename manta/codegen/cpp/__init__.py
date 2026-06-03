@@ -13,15 +13,13 @@ kernels + typed Eigen wrapper machinery:
             a `boxplus` kernel).
 
 Internals:
-    extract.py / extract_ekf.py — IR → per-function ca.Function objects
-    kernels.py                  — ca.Function → flat C source
-    _structs.py                 — shared State/Inputs + pack/unpack emit
-    evaluator_spec.py           — IR → backend-neutral EvaluatorSpec
-    evaluator_wrapper.py        — EvaluatorSpec → one generic Eigen class
-    ekf_wrapper.py              — the EKF typed Eigen class
-    wrapper.py                  — back-compat shim (Sim `emit_wrapper`)
-    cmake.py                    — CMakeLists.txt fragment
-    emit.py                     — `_emit_{evaluator,ekf}_cpp()` orchestration
+    module_emit.py — the ONE generic `emit_module_cpp(Module)` → typed class
+    emit.py        — `emit_module(block)`: to_module → emit_module_cpp → result
+    kernels.py     — ca.Function → flat C source
+    _structs.py    — shared State pack/unpack emit
+    _casadi.py     — densify + flat-C kernel-call boilerplate
+    types.py       — Manifold.kind → Eigen type registry
+    cmake.py       — CMakeLists.txt fragment
 """
 
 from __future__ import annotations
@@ -62,15 +60,15 @@ def TargetCpp(ir,
     """C++ codegen target.
 
     Args:
-        ir          — a `Sim`, `EKF`, or `LQR` IR.
+        ir          — a `Sim`, `EKF`, `LQR`, or recurrence-block IR.
         out_dir     — destination directory (created if missing).
         class_name  — C++ class name. Conventionally PascalCase.
         basename    — filename stem; defaults to `class_name.lower()`.
         namespace   — C++ namespace enclosing the emitted class.
 
     Returns:
-        `EmitResult` (from `manta.codegen.cpp.emit`) with paths to
-        every emitted file plus the `WorldFunctions` bundle.
+        `EmitResult` (from `manta.codegen.cpp.emit`) with paths to every
+        emitted file plus a small `funcs` summary (world_name / dims).
     """
     return _CppBackend().lower_block(ir, out_dir=out_dir, class_name=class_name,
                                      basename=basename, namespace=namespace)

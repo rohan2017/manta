@@ -1,14 +1,13 @@
 """Block → `Module` builders — the one place a transform's IR is reshaped
 into the backend-neutral `Module` (`manta.ir.module`).
 
-Every analysis transform (`Sim`, `LQR`, the recurrence filters; the `EKF`
-follows once its state is the `(x, P)` two-field layout) maps onto a Module:
-a typed State + named `ca.Function`s + typed entry points. A backend then
-consumes only the Module — it never sees `Sim`/`LQR`/`RecurrenceBlock`. This
-generalizes the old per-shape `EvaluatorSpec` builders
-(`codegen/cpp/evaluator_spec.py`); the Sim branch reuses the existing flat
-`extract()` (its location under `cpp/` is incidental — it produces
-backend-neutral `ca.Function`s).
+Every analysis transform (`Sim`, `EKF`, `LQR`, the recurrence filters) maps
+onto a Module: a typed State + named `ca.Function`s + typed entry points. A
+backend then consumes only the Module — it never sees `Sim`/`EKF`/`LQR`/
+`RecurrenceBlock`. This is the single source both backends lower; it
+generalizes (and replaced) the old per-shape `EvaluatorSpec` builders. The
+Sim branch builds its kernels directly from `Linearization` over the world
+tick (predict / step / F / per-output h, H).
 
 `to_module(block)` dispatches on the concrete IR type.
 """

@@ -1,7 +1,7 @@
 """Flat-C math kernels emitted by CasADi's CodeGenerator.
 
-Bundles every ca.Function from a `WorldFunctions` (predict, predict
-Jacobian, per-Output h/H pairs) into a single C source + header pair.
+Bundles an arbitrary list of `ca.Function`s (a Module's kernels — predict,
+step, F, per-output h/H, the EKF recursion, …) into one C source + header.
 
 The emitted C is:
   * standalone (no CasADi runtime needed at link time);
