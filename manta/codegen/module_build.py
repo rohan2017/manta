@@ -24,7 +24,7 @@ from ..ir.module import EntryPoint, Module, Port, StateField, StateLayout
 
 def module_for_sim(sim) -> Module:
     from .cpp.extract import extract
-    from ..linearized_world import flatten_nested
+    from ..linearized_system import flatten_nested
 
     funcs = extract(sim)
     spec = funcs.spec
@@ -91,7 +91,7 @@ def module_for_recurrence(block) -> Module:
 
 def module_for_ekf(ekf) -> Module:
     import numpy as np
-    from ..linearized_world import flatten_nested
+    from ..linearized_system import flatten_nested
 
     spec = ekf.spec
     tan = spec.tangent_dim

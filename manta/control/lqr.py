@@ -41,16 +41,10 @@ LQR at the rate you intend to run the controller.
 
 from __future__ import annotations
 
-from typing import Any
-
 import casadi as ca
 import numpy as np
 
-from ..linearization import Linearization
-from ..linearized_world import flatten_nested, freeze_complement, resolve_suffix
-from ..sim import Sim
-from ..estimation.state_spec import StateSpec
-from ..tick import walk_tick_signature
+from ..linearized_system import LinearizedSystem, resolve_suffix
 
 
 def _solve_dare(A, B, Q, R, *, max_iter: int = 10000, tol: float = 1e-12):
@@ -118,73 +112,42 @@ class LQR:
         if not world.crafts:
             raise ValueError("LQR: world has no crafts.")
 
-        # Reuse Sim(world) for world-prep + the compiled tick.
-        self._sim = Sim(world)
-        self.world = world
-        cf = self._sim.tick.casadi_function
-        full_spec = StateSpec.from_world(world)
-        self.spec = full_spec
-
-        sig = walk_tick_signature(cf, world, full_spec)
-        self.input_names = sig.input_names
+        # All the linearization plumbing — tick compile, signature, the
+        # VERBATIM tracked subset frozen at the operating point, and
+        # B = ∂f/∂u — lives in `LinearizedSystem`. `track` is taken verbatim
+        # (NOT closed over the dynamics like the EKF's): for an underactuated
+        # craft the whole point is to freeze the uncontrollable states (e.g.
+        # attitude) at the operating point so the reduced system is
+        # stabilizable; closing the set would pull them back and the Riccati
+        # solve would diverge. The reference point doubles as the freeze value.
+        sys = LinearizedSystem(world, track=track, inputs=None,
+                               close_track=False, control=True, ref=x_ref)
+        self.sys     = sys
+        self.world   = world
+        self.spec    = sys.full_spec      # full layout (the law gathers from it)
+        self._spec   = sys.spec           # tracked subspec
+        self.tracked = sys.tracked
+        self.input_names = sys.input_names
         n_u = len(self.input_names)
         if n_u == 0:
             raise ValueError(
                 "LQR: world has no Part Inputs — no control authority.")
 
-        # --- operating point (flat, merged over initial state) -------------
-        ref_flat = flatten_nested(world._initial_state_dict())
-        ref_flat.update(flatten_nested(x_ref))
-        x_ref_full = full_spec.pack(
-            {k: v for k, v in ref_flat.items() if k in full_spec})
-
-        u_full = dict(sig.input_defaults)
+        # --- operating point ----------------------------------------------
+        u_full = dict(sys.input_defaults)
         for k, v in (u_ref or {}).items():
             full = resolve_suffix(k, self.input_names, label="input", who="LQR")
             u_full[full] = float(v)
         u_ref_vec = np.array([u_full[n] for n in self.input_names], dtype=float)
+        x_ref_full = sys.pack_ref(sys.full_spec)
         self.x_ref, self.u_ref = x_ref_full, u_ref_vec
 
-        # --- regulate full state, or a tracked subset (rest frozen) --------
-        if track is None:
-            spec = full_spec
-            frozen: dict[str, Any] = {}
-            self.tracked = [s.name for s in full_spec.slots]
-        else:
-            all_names = {s.name for s in full_spec.slots}
-            unknown = set(track) - all_names
-            if unknown:
-                raise KeyError(
-                    f"LQR: track references unknown slot(s) {sorted(unknown)}; "
-                    f"available {sorted(all_names)}.")
-            # `track` is taken VERBATIM here — deliberately NOT closed over
-            # the dynamics the way the EKF's is. For an underactuated craft
-            # the whole point is to freeze the uncontrollable states (e.g.
-            # attitude) at the operating point so the reduced regulated
-            # system is stabilizable; closing the set would pull those right
-            # back in (a body-frame thrust makes velocity depend on
-            # orientation) and the Riccati solve would diverge. Freezing a
-            # coupled state at `x_ref` is the reduced-order modeling choice
-            # the user is making — its coupling column drops from A/B by
-            # design, and is exact at the equilibrium where the frozen state
-            # equals its reference.
-            kept = set(track)
-            spec = StateSpec.subset(full_spec, kept)
-            self.tracked = [s.name for s in full_spec.slots if s.name in kept]
-            frozen = freeze_complement(full_spec, kept, ref_flat)
-        self._spec = spec
-
-        lin = Linearization(
-            cf, spec, frozen=frozen, input_names=sig.input_names,
-            noise_specs=sig.noise, outputs=[], control=True)
-
-        # Operating point in the (sub)spec's ambient layout.
-        x_ref_sub = spec.pack(
-            {k: v for k, v in ref_flat.items() if k in spec})
-        A = np.array(lin.F_fn(x_ref_sub, u_ref_vec, dt, 0.0))
-        B = np.array(lin.B_fn(x_ref_sub, u_ref_vec, dt, 0.0))
+        # A = F, B = ∂f/∂u, both at the operating point (subspec ambient).
+        x_ref_sub = sys.pack_ref(sys.spec)
+        A = np.array(sys.F(x_ref_sub, u_ref_vec, dt, 0.0))
+        B = np.array(sys.B(x_ref_sub, u_ref_vec, dt, 0.0))
         self.A, self.B = A, B
-        n_x = spec.tangent_dim
+        n_x = sys.spec.tangent_dim
 
         Qm = np.eye(n_x) if Q is None else np.asarray(Q, dtype=float)
         Rm = np.eye(n_u) if R is None else np.asarray(R, dtype=float)
@@ -200,6 +163,7 @@ class LQR:
 
         # --- baked control law: u = u_ref − K·(x_tracked ⊟ x_ref_tracked).
         # Takes the FULL ambient state; gathers the tracked slots from it.
+        full_spec, spec = sys.full_spec, sys.spec
         x_full_sym = ca.MX.sym("x", full_spec.ambient_dim, 1)
         chunks = []
         for s in spec.slots:

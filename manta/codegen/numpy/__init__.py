@@ -20,7 +20,7 @@ import casadi as ca
 import numpy as np
 
 from ..target import Target
-from ...linearized_world import resolve_suffix
+from ...linearized_system import resolve_suffix
 
 # Output-shape → vector dimension, for sizing sensor-output ports.
 _SHAPE_DIM = {"R1": 1, "R3": 3, "SO3": 4}

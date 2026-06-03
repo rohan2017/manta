@@ -84,9 +84,8 @@ from typing import Any
 
 import numpy as np
 
-from ..linearization import Linearization
-from ..linearized_world import flatten_nested, freeze_complement, resolve_suffix
-from .state_spec import StateSpec, resolve_slotset
+from ..linearized_system import LinearizedSystem, resolve_suffix
+from .state_spec import StateSpec
 
 
 class EKF:
@@ -121,141 +120,44 @@ class EKF:
                      `None` keeps every Part input; excluded inputs are
                      frozen at their default.
         """
-        # Ensure planet disturbances are registered + PlanetState
-        # initial values resolved (idempotent).
-        if not world._planets_registered:
-            for p in world._planets:
-                p.register_disturbances(world)
-            world._planets_registered = True
-        world._resolve_planet_state_overrides()
+        # All slot/sensor/subset machinery — world prep, tick compile,
+        # signature, input/state subsetting, the dependency closure, and the
+        # Linearization — lives in `LinearizedSystem`. The EKF is then just
+        # "the Kalman recursion over a linearized system": read the math off
+        # it (predict/F/L + per-sensor h/H) and fuse it into kernels.
+        sys = LinearizedSystem(world, track=track, sensors=sensors,
+                               inputs=inputs, close_track=True)
+        self.sys     = sys
+        self.world   = world
+        self.crafts  = sys.crafts
+        self.spec    = sys.spec
+        self._sample_rates = sys.sample_rates
+        self._noise_specs  = sys.noise_specs
+        self._input_names  = sys.input_names
+        self._u_defaults   = sys.u_defaults
 
-        self.world  = world
-        self.crafts = tuple(world.crafts)
-        if not self.crafts:
-            raise ValueError("EKF: world has no crafts.")
+        lin = sys.lin
+        self._x_sym  = lin.x_sym
+        self._f_fn   = lin.predict_fn
+        self._F_fn   = lin.F_fn
+        self._L_fn   = lin.L_fn
+        self._Sigma  = lin.Sigma
+        # Independent-subsystem partition of the tangent state (block-diagonal
+        # predict — Σ O(n_b³) instead of O(n³); see `Linearization`).
+        self._blocks = lin.blocks
 
-        # Full state layout across every craft + disturbance. `self.spec`
-        # ends up either this (track=None) or a `StateSpec.subset` of it.
-        full_spec = StateSpec.from_world(world)
-
-        # Compile the est-side world tick using the world's registered
-        # fields + couplings.
-        from ..tick import compile_world_tick
-        from ..fields import (
-            CollisionField, FluidField, GravityField, MagField,
-        )
-        compiled_tick = compile_world_tick(
-            list(self.crafts), list(world._couplings),
-            gravity_field=world.get_field(GravityField),
-            fluid_field=world.get_field(FluidField),
-            mag_field=world.get_field(MagField),
-            collision_field=world.get_field(CollisionField),
-        )
-        cf = compiled_tick.casadi_function
-        # Per-input rate declarations (ctx.hold) — the runtime gates its
-        # command ports so predict sees the same ZOH command as truth.
-        self._sample_rates = getattr(compiled_tick, "sample_rates", {})
-
-        # Classify the tick's I/O against the model — Inputs (→ u), Noise
-        # channels (→ process noise), and candidate sensors. Shared with
-        # the C++ extractor; membership in the FULL spec is the "is this a
-        # state slot?" check.
-        from ..tick import walk_tick_signature
-        sig = walk_tick_signature(cf, world, full_spec)
-        self._noise_specs = sig.noise
-        all_input_defaults = sig.input_defaults
-
-        # `frozen` collects every tick input the symbolic graph should
-        # treat as a baked constant rather than a live variable: excluded
-        # Inputs first, then any frozen (untracked) state slots once the
-        # closure runs.
-        frozen: dict[str, Any] = {}
-        if inputs is None:
-            self._input_names = sig.input_names
-        else:
-            chosen_inputs = self._resolve_names(
-                inputs, sig.input_names, "input")
-            for n in sig.input_names:
-                if n not in chosen_inputs:
-                    frozen[n] = all_input_defaults[n]
-            self._input_names = [n for n in sig.input_names
-                                 if n in chosen_inputs]
-        self._u_defaults = np.array(
-            [all_input_defaults[n] for n in self._input_names], dtype=float)
-
-        # Candidate sensors = every Part Output. Default keeps all.
-        all_sensor_names = sig.sensor_names
-        sensor_lookup = {s.full: (s.part, s.craft, s.output_name)
-                         for s in sig.sensors}
-        if sensors is None:
-            if track is None:
-                chosen_sensor_names = list(all_sensor_names)
-            else:
-                # Default to sensors on tracked crafts only — otherwise an
-                # untracked craft's sensor would auto-expand the state and
-                # pull that craft back in. Bring in another craft's
-                # measurement (relative nav) by listing it explicitly.
-                chosen_sensor_names = [n for n in all_sensor_names
-                                       if n.split(".", 1)[0] in track]
-        else:
-            chosen = self._resolve_names(sensors, all_sensor_names, "sensor")
-            chosen_sensor_names = [n for n in all_sensor_names if n in chosen]
-
-        # Flat initial-state values (source of frozen-slot constants).
-        init_flat = flatten_nested(world._initial_state_dict())
-
-        # --- State subsetting via dependency closure --------------------
-        if track is None:
-            self.spec = full_spec
-        else:
-            craft_names = {c.name for c in self.crafts}
-            unknown = set(track) - craft_names
-            if unknown:
-                raise KeyError(
-                    f"EKF: track references unknown craft(s) "
-                    f"{sorted(unknown)}; world has {sorted(craft_names)}.")
-            # Linearize the FULL state (structure only) to read F's
-            # dependency pattern + each chosen sensor's observed slots.
-            full_lin = Linearization(
-                cf, full_spec, frozen=dict(frozen),
-                input_names=self._input_names, noise_specs=self._noise_specs,
-                outputs=chosen_sensor_names, build_functions=False)
-            seed: set[str] = set(full_lin.observed_slots)
-            for craft_name, slotset in track.items():
-                seed |= resolve_slotset(craft_name, slotset)
-            kept = full_lin.dependency_closure(seed)
-            self.spec = StateSpec.subset(full_spec, kept)
-            freeze_complement(full_spec, kept, init_flat, into=frozen)
-
-        # --- Linearize over the (sub)spec → predict/F/L + sensors -------
-        lin = Linearization(
-            cf, self.spec, frozen=frozen,
-            input_names=self._input_names, noise_specs=self._noise_specs,
-            outputs=chosen_sensor_names, build_functions=True)
-        self._x_sym   = lin.x_sym
-        self._f_fn    = lin.predict_fn
-        self._F_fn    = lin.F_fn
-        self._L_fn    = lin.L_fn
-        self._Sigma   = lin.Sigma
-        # Independent-subsystem partition of the tangent state. With one
-        # block the predict is the usual dense propagation; with several
-        # (e.g. uncoupled crafts estimated jointly) each propagates on its
-        # own, turning the O(n³) covariance step into Σ O(n_b³).
-        self._blocks  = lin.blocks
-        # Wrap each output's linearization with its part/craft metadata,
-        # keyed for `ekf.update(part, **measurements)` routing.
+        # Sensor table re-keyed by `(id(part), out_name)` for
+        # `ekf.update(part, **measurements)` routing (sys keys by full name).
         self._sensors: dict[tuple[int, str], dict[str, Any]] = {}
-        for full in chosen_sensor_names:
-            part, craft, out_name = sensor_lookup[full]
-            o = lin.outputs[full]
-            self._sensors[(id(part), out_name)] = {
-                "dim":    o.dim,
-                "h_fn":   o.h_fn,
-                "H_fn":   o.H_fn,
-                "L_h_fn": o.L_h_fn,
-                "part":   part,
-                "craft":  craft,
-                "full":   full,
+        for full, o in sys.sensors.items():
+            self._sensors[(id(o["part"]), o["out_name"])] = {
+                "dim":    o["dim"],
+                "h_fn":   o["h_fn"],
+                "H_fn":   o["H_fn"],
+                "L_h_fn": o["L_h_fn"],
+                "part":   o["part"],
+                "craft":  o["craft"],
+                "full":   o["full"],
             }
 
         # The full Kalman recursion, symbolic + once (see
@@ -280,7 +182,7 @@ class EKF:
         return len(self._blocks)
 
     # ------------------------------------------------------------------
-    # Name resolution / input vector (see manta.linearized_world)
+    # Name resolution / input vector (see manta.linearized_system)
     # ------------------------------------------------------------------
 
     @staticmethod
