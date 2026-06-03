@@ -124,9 +124,9 @@ def test_ekf_python_cpp_roundtrip(tmp_path: Path):
     thr = 1.5 * 9.81
     for i in range(100):
         ekf.predict(0.01, t=0.0, u={"t.throttle": thr})
-        ekf.update(g_part, gyro=np.zeros(3))
+        ekf.update("g.gyro", np.zeros(3))
         if i % 5 == 0:
-            ekf.update(gps_part, position=np.array([0.2 + 0.001 * i, -0.1, 5.0]))
+            ekf.update("gps.position", np.array([0.2 + 0.001 * i, -0.1, 5.0]))
 
     est = ekf.state_dict()["drone"]
     P = ekf.P
@@ -244,8 +244,8 @@ def test_ekf_multicraft_roundtrip(tmp_path: Path):
         ekf.predict(0.01, t=0.0,
                     u={"a.t.throttle": 9.81, "b.t.throttle": 9.81})
         if i % 5 == 0:
-            ekf.update(gps_a, position=np.array([0.1, 0, 5.0]))
-            ekf.update(gps_b, position=np.array([3.0, 0, 5.0]))
+            ekf.update("a.gps.position", np.array([0.1, 0, 5.0]))
+            ekf.update("b.gps.position", np.array([3.0, 0, 5.0]))
     est, P = ekf.state_dict(), ekf.P
     np.testing.assert_allclose(cpp["ap"], est["a"]["position"].ravel(), atol=1e-7)
     np.testing.assert_allclose(cpp["bp"], est["b"]["position"].ravel(), atol=1e-7)

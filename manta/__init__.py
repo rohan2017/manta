@@ -7,16 +7,16 @@ Three layers:
      Parts declare `Parameter` / `State` / `Input` / `Output` /
      `Noise` channels at class scope.
 
-  2. **IR** — compile to symbolic. `Sim(world)` returns a
-     `Sim` (one CasADi tick function over every craft +
-     every coupling). `EKF(world)` returns an EKF carrying the
-     symbolic predict + auto-built per-sensor measurement bundles.
-     Neither is directly callable.
+  2. **Transform** — compile to symbolic + emit the typed Module IR.
+     `Sim(world)` linearizes the world tick; `EKF(world)` writes the
+     Kalman recursion over it; `LQR(world, …)` solves Riccati. Each
+     exposes `.module()` — a typed `Module` (state + kernels + entry
+     points). None is directly callable.
 
-  3. **Target** — lower IR to a backend. `TargetNumpy(cw)` returns
-     a `NumpyWorld` you `.step()`; `TargetNumpy(ekf)` returns a
-     `NumpyEKF` you `.predict()` / `.update()`. Future
-     `TargetCpp(...)` will emit C++ for embedded use.
+  3. **Target** — lower a Module to a backend. `TargetNumpy(x)` returns
+     the one `NumpyRuntime` (its surface derives from the Module: sim
+     `.step()`/`.outputs()`, filter `.predict()`/`.update()`/`.feed()`,
+     …); `TargetCpp(x, …)` emits a typed C++ library for embedded use.
 
 Standard usage::
 
@@ -39,7 +39,7 @@ Standard usage::
     for _ in range(N):
         state = sim.step(state, dt=dt, t=t)
         ekf.predict(dt=dt, t=t)
-        ekf.update(drone.parts[-1], gyro=state["drone"]["imu.gyro"])
+        ekf.update("imu.gyro", sim.outputs()["drone"]["imu.gyro"])
         t += dt
 
 The low-level IR (`manta.ir`) is still exported for advanced use

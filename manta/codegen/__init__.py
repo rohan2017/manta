@@ -2,34 +2,27 @@
 
 The pipeline:
 
-  1. **Model**: declarative — `World`, `Craft`, `EKF`, fields, parts,
-     planets.
-  2. **IR**: result of compiling the model. `Sim(world)` returns
-     a `Sim` (a CasADi function + metadata); `EKF(world)`
-     returns an `EKF` object that holds the symbolic predict /
-     measurement bundle. These are *descriptions*, not runtimes.
-  3. **Target**: lowers an IR to a backend-specific runtime. The
-     native-Python `TargetNumpy(...)` is the default. `TargetCpp(...)`
-     emits C++ source for embedding in firmware / other binaries.
+  1. **Model**: declarative — `World`, `Craft`, fields, parts, planets.
+  2. **Transform**: `Sim(world)`, `EKF(world)`, `LQR(world)`, a recurrence
+     block — each owns its math and emits a typed `Module`
+     (`manta.ir.module`) via `.module()`.
+  3. **Target**: lowers a Module to a backend. `TargetNumpy(x)` → the one
+     native-Python `NumpyRuntime`; `TargetCpp(x, …)` → a buildable C++
+     library via the one generic emitter.
 
-Each backend is a self-contained subpackage under `manta.codegen`:
+Each backend is a self-contained subpackage:
 
     codegen/
-      module_build.py  to_module(block) → the backend-neutral Module IR
-      numpy/           TargetNumpy + NumpyModule (the generic runtime)
-      cpp/             TargetCpp + module_emit (the generic emitter)
-      <future>/        new languages slot in here
+      target.py   as_module — the backend entry-point contract
+      numpy/      TargetNumpy + NumpyRuntime + NoiseDriver
+      cpp/        TargetCpp + module_emit (the generic emitter)
+      <future>/   new languages slot in here
 
-Adding a backend (TensorFlow, raw embedded C, CUDA, …) is one new
-`Target*` that translates a `ca.Function` + implements one generic
-`lower_module(Module)` — no per-feature code.
+Adding a backend = translate a `ca.Function` + one generic lowering of a
+`Module`. No per-transform code, anywhere.
 """
 
-from .target import Target
-from .cpp    import TargetCpp
-from .numpy  import (
-    NoiseDriver, NumpyEKF, NumpyRecurrence, NumpyWorld, TargetNumpy,
-)
+from .cpp import TargetCpp
+from .numpy import NoiseDriver, NumpyRuntime, TargetNumpy
 
-__all__ = ["Target", "TargetNumpy", "TargetCpp",
-           "NumpyWorld", "NumpyEKF", "NumpyRecurrence", "NoiseDriver"]
+__all__ = ["TargetNumpy", "TargetCpp", "NumpyRuntime", "NoiseDriver"]

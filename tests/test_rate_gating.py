@@ -50,8 +50,7 @@ def test_sample_rate_captured_on_tick():
     c.add(GatedThruster("th", rate=50.0))
     w = World().add_field(GravityField(g=(0, 0, 0)))
     w.add_craft(c, position=(0, 0, 0))
-    sim = TargetNumpy(Sim(w))
-    assert sim.tick.sample_rates == {
+    assert Sim(w).tick.sample_rates == {
         "c.gps.position": 10.0, "c.th.throttle": 50.0}
 
 
@@ -61,8 +60,7 @@ def test_no_rate_means_empty_map():
     c.add(PositionSensor("gps"))            # rate=None default
     w = World().add_field(GravityField(g=(0, 0, 0)))
     w.add_craft(c, position=(0, 0, 0))
-    sim = TargetNumpy(Sim(w))
-    assert sim.tick.sample_rates == {}
+    assert Sim(w).tick.sample_rates == {}
 
 
 # ---------------------------------------------------------------------------

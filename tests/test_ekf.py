@@ -291,11 +291,12 @@ def test_ekf_jacobian_for_constant_velocity_model_is_identity_plus_dt():
     c.add(Mass("body", mass=1.0))
     _ekf_world = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
     _ekf_world.add_craft(c)
-    ekf = TargetNumpy(EKF(_ekf_world))
+    ekf_t = EKF(_ekf_world)
+    ekf = TargetNumpy(ekf_t)
 
     dt = 0.05
-    u_vec = np.zeros(len(ekf.ekf._input_names))   # craft has no Inputs.
-    F = np.asarray(ekf.ekf._F_fn(ekf.x, u_vec, dt, 0.0))
+    u_vec = np.zeros(len(ekf_t.sys.input_names))  # craft has no Inputs.
+    F = np.asarray(ekf_t._F_fn(ekf.x, u_vec, dt, 0.0))
     # Tangent layout: position[0:3], orientation[3:6], velocity[6:9],
     # angular_velocity[9:12]. F is 12×12.
     assert F.shape == (12, 12)

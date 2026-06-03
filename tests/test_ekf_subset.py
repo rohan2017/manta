@@ -111,8 +111,8 @@ def test_subset_matches_full_on_kept_block():
         full.predict(dt=dt, t=i * dt)
         subset.predict(dt=dt, t=i * dt)
         z = np.array([0.0, 0.0, 100.0]) + rng.normal(0, 0.2, 3)
-        full.update(gps_a, position=z)
-        subset.update(gps_a, position=z)
+        full.update("a.gps.position", z)
+        subset.update("a.gps.position", z)
 
     # Craft a is the first 12 tangent / 13 ambient slots of the full spec.
     np.testing.assert_allclose(subset.x[:13], full.x[:13], atol=1e-9)
@@ -156,10 +156,9 @@ def test_opt_in_sensor_exclusion():
     assert fulls == {"drone.gps.position"}
 
     rt = TargetNumpy(e)
-    imu_part = next(p for p in c.parts if p.name == "imu")
     # The IMU was excluded — feeding it is an error.
     try:
-        rt.update(imu_part, gyro=np.zeros(3))
+        rt.update("imu.gyro", np.zeros(3))
         raised = False
     except KeyError:
         raised = True

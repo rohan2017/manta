@@ -14,8 +14,7 @@ from manta import World, Craft, Sim, LQR, TargetNumpy
 from manta.fields import GravityField
 from manta.parts import Mass, Thruster
 from manta.estimation.state_spec import StateSpec
-from manta.tick import walk_tick_signature
-from manta.linearization import Linearization
+from manta.linearized_system import LinearizedSystem
 
 M, G = 2.0, 9.81
 
@@ -49,19 +48,16 @@ def _lqr(**kw):
 
 def test_control_jacobian_matches_finite_difference():
     w, c = _flyer()
-    cf = Sim(w).tick.casadi_function
-    spec = StateSpec.from_world(w)
-    sig = walk_tick_signature(cf, w, spec)
-    lin = Linearization(cf, spec, frozen={}, input_names=sig.input_names,
-                        noise_specs=sig.noise, outputs=[], control=True)
+    lin = LinearizedSystem(w, close_track=False, control=True)
+    spec = lin.spec
     x0 = spec.pack({f"c.{k}": v for k, v in
                     c.initial_state(position=(0, 0, 10)).items()
                     if f"c.{k}" in spec})
-    u0 = np.zeros(len(sig.input_names))
-    u0[sig.input_names.index("c.tz.throttle")] = M * G
+    u0 = np.zeros(len(lin.input_names))
+    u0[lin.input_names.index("c.tz.throttle")] = M * G
     dt = 0.02
     B = np.array(lin.B_fn(x0, u0, dt, 0.0))
-    assert B.shape == (spec.tangent_dim, len(sig.input_names))
+    assert B.shape == (spec.tangent_dim, len(lin.input_names))
 
     xa = ca.MX.sym("a", spec.ambient_dim); xb = ca.MX.sym("b", spec.ambient_dim)
     bm = ca.Function("bm", [xa, xb], [spec.boxminus_sym(xa, xb)])
@@ -75,13 +71,9 @@ def test_control_jacobian_matches_finite_difference():
 
 
 def test_control_jacobian_off_by_default():
-    """EKF/codegen don't pay for B — it's only built with control=True."""
+    """The EKF doesn't pay for B — it's only built with control=True."""
     w, _ = _flyer()
-    cf = Sim(w).tick.casadi_function
-    spec = StateSpec.from_world(w)
-    sig = walk_tick_signature(cf, w, spec)
-    lin = Linearization(cf, spec, frozen={}, input_names=sig.input_names,
-                        noise_specs=sig.noise, outputs=[])
+    lin = LinearizedSystem(w, close_track=False)
     assert lin.B_sym is None and lin.B_fn is None
 
 

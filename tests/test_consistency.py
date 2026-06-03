@@ -75,7 +75,7 @@ def test_observable_subspace_isolates_modeling_from_observability():
     shrinking covariance on an unobservable direction."""
     from manta import EKF, TargetNumpy
     w = _hover_world()
-    basis = TargetNumpy(EKF(w)).observability().basis
+    basis = EKF(w).observability().basis
     kw = dict(dt=0.01, steps=300, control={"t.throttle": M * G},
               runs=20, seed=0)
     full = nees(w, **kw)

@@ -79,7 +79,8 @@ def main() -> None:
     sim = TargetNumpy(Sim(w))
     sim.attach_driver(NoiseDriver(seed=5))
 
-    ekf = TargetNumpy(EKF(w))
+    ekf_ir = EKF(w)
+    ekf = TargetNumpy(ekf_ir)
     ekf.reset(state={"sub": c.initial_state(position=(0.0, 0.0, -8.0))},
               P=np.eye(ekf.spec.tangent_dim) * 0.1)
     # Wire the sensor + command bus: position fix + DVL body-velocity +
@@ -99,10 +100,11 @@ def main() -> None:
     # heading (it's only observable while turning) — so it has no absolute
     # reference and can wander on long straight legs. The magnetometer
     # makes orientation observable everywhere.
-    no_compass = ekf.observability(
+    no_compass = ekf_ir.observability(
         sensors=["sub.imu.gyro", "sub.dvl.velocity", "sub.gps.position"])
-    print(f"observability — full suite: {ekf.observability().rank}/"
-          f"{ekf.observability().tangent_dim}; without compass: "
+    full_rep = ekf_ir.observability()
+    print(f"observability — full suite: {full_rep.rank}/"
+          f"{full_rep.tangent_dim}; without compass: "
           f"{no_compass.rank}/{no_compass.tangent_dim} "
           f"(unobservable: {', '.join(n for n, _ in no_compass.unobservable) or 'none'})\n")
 

@@ -1,33 +1,46 @@
-"""Sim — forward-dynamics IR for a World.
+"""Sim — the forward-dynamics transform of a World.
 
-`Sim(world)` is one analysis transform over the model, a sibling of
-`EKF(world)` (`manta.estimation.ekf`): it compiles every craft + every
-coupling into a single CasADi tick. Lower it to a backend to run::
+`Sim(world)` validates the model and linearizes the compiled world tick
+(via `LinearizedSystem`); `sim.module(noise=…)` emits the typed `Module` a
+backend lowers. The with/without-noise choice is made HERE, at IR
+construction — the two are different Modules and lowering just lowers:
 
-    from manta import World, Sim, TargetNumpy
+* ``module(noise=True)`` — the **oracle** (simulation truth): one `step`
+  entry, the full forward tick — it advances the state AND returns every
+  sensor reading, all from one noise draw (so a driven run's state and
+  readings share the same realization; pass zeros for a noiseless oracle)::
 
-    w = World()
-    w.add_field(GravityField().add_uniform((0, 0, -9.81)))
-    drone = Craft("drone"); drone.add(Mass("body", mass=1.0))
-    w.add_craft(drone, position=(0, 0, 100))
+      step(x; u, noise, dt, t) -> x', readings…
 
-    sim   = TargetNumpy(Sim(w))          # native-Python runtime
+* ``module(noise=False)`` — the **deploy** shape (what runs on a robot
+  against real sensors): noiseless forward map, per-sensor measurement
+  models, and their Jacobians::
+
+      predict(x; u, dt, t) -> x'           predict_jacobian -> F
+      measure_<s>(x; u, t) -> reading      measure_<s>_jacobian -> H
+
+State is THREADED (the caller owns it; nothing is held). Run it::
+
+    sim   = TargetNumpy(Sim(w))               # lowers module(noise=True)
     state = sim.initial_state()
-    for _ in range(N):
-        state = sim.step(state, dt=0.01, t=t)
+    state = sim.step(state, dt=0.01)           # next state (truth)
+    sim.outputs()                              # this step's readings
 
-`Sim` is the IR; `TargetNumpy(Sim(...))` / `TargetCpp(Sim(...), ...)` are
-the runtime evaluators that consume it. State is nested by owner:
-`state["drone"]["position"]`, plus one top-level key per state-bearing
-disturbance (e.g. a CraftWindBubble's estimated wind at
-`state["drone_wind"]["wind"]`).
+    TargetCpp(Sim(w).module(noise=False), out, class_name="Drone")
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from .fields import CollisionField, FluidField, GravityField, MagField
+import casadi as ca
+import numpy as np
+
+from .ir.module import (
+    EntryPoint, Hosting, Module, Port, PortField, PortRef, Role, StateField,
+    StateLayout, StateRef,
+)
+from .linearized_system import LinearizedSystem, flatten_nested
 
 if TYPE_CHECKING:
     from .craft import Craft
@@ -35,44 +48,21 @@ if TYPE_CHECKING:
 
 
 class Sim:
-    """Forward-dynamics IR for a World — the compiled symbolic tick.
-
-    `Sim(world)` compiles every craft + every coupling into a single
-    CasADi tick function (covering field-mediated craft-to-craft coupling
-    automatically — a wake or wind bubble is just a disturbance whose
-    graph reads another craft's state in the same tick). The Sim itself
-    only describes the symbolic graph; lower it to a backend to run::
-
-        sim   = TargetNumpy(Sim(world))    # native-Python runtime
-        state = sim.initial_state()
-        state = sim.step(state, dt=0.01)
-
-    Construction prepares the world once: every registered Planet's
-    `register_disturbances(world)` runs, PlanetState initial seeds resolve
-    to WorldFrame, and per-part `requires_fields` / `requires_planet` are
-    verified against the world's registry.
-    """
-
-    # Lowerable-block kind (see `manta.codegen.block`). Both backends lower a
-    # Sim via the generic Module path (`to_module` → `lower_module`); the
-    # `evaluator` kind just routes `lower_block` to that path.
-    RUNTIME_KIND = "evaluator"
+    """Forward-dynamics transform: model validation + the linearized tick,
+    emitting oracle/deploy Modules."""
 
     def __init__(self, world: "World") -> None:
-        # Walk planets once, in registration order. A planet may create
-        # field instances via `world.get_or_create_field(...)`.
+        # Planet prep first (idempotent): planets may register the very
+        # fields parts require below.
         if not world._planets_registered:
-            for planet in world._planets:
-                planet.register_disturbances(world)
+            for p in world._planets:
+                p.register_disturbances(world)
             world._planets_registered = True
-
-        # Resolve any PlanetState-wrapped initial conditions to WorldFrame
-        # seeds at t=0.
         world._resolve_planet_state_overrides()
 
         # Verify per-part `requires_fields` / `requires_planet` against the
-        # world's registry. Stamp each craft with a back-pointer so parts
-        # can introspect fields/planets via TickContext helpers.
+        # world's registry, and stamp the craft back-pointers parts use to
+        # introspect fields/planets via TickContext.
         for entry in world._crafts:
             craft = entry["craft"]
             craft._world = world
@@ -82,67 +72,124 @@ class Sim:
                             isinstance(f, req_cls) for f in world.fields):
                         raise ValueError(
                             f"World '{world.name}': part "
-                            f"{type(part).__name__}('{part.name}') "
-                            f"requires a registered {req_cls.__name__} but "
-                            f"none is attached to this world.")
+                            f"{type(part).__name__}('{part.name}') requires "
+                            f"a registered {req_cls.__name__} but none is "
+                            f"attached to this world.")
                 req_planet = getattr(type(part), "requires_planet", None)
                 if req_planet is not None and not any(
                         isinstance(p, req_planet) for p in world._planets):
                     raise ValueError(
                         f"World '{world.name}': part "
-                        f"{type(part).__name__}('{part.name}') "
-                        f"requires a {req_planet.__name__} planet but "
-                        f"none is registered with this world.")
-
+                        f"{type(part).__name__}('{part.name}') requires a "
+                        f"{req_planet.__name__} planet but none is "
+                        f"registered with this world.")
         if not world._crafts:
             raise ValueError(
                 f"World '{world.name}': no crafts added; nothing to compile.")
 
-        # One tick, all crafts. compile_world_tick handles N=1 cleanly —
-        # the only difference is that slot names get prefixed with
-        # `<craft.name>.` to disambiguate across crafts. `Sim.step`
-        # (on the backend) translates between the user-facing nested state
-        # dict and that flat-prefixed casadi input naming.
-        from .tick import compile_world_tick
-        all_crafts = [e["craft"] for e in world._crafts]
-        tick = compile_world_tick(
-            all_crafts, list(world._couplings),
-            gravity_field=world._fields.get(GravityField),
-            fluid_field=world._fields.get(FluidField),
-            mag_field=world._fields.get(MagField),
-            collision_field=world._fields.get(CollisionField))
+        self._sys = LinearizedSystem(world)     # full state, all sensors
+        self.world = world
+        self.crafts = self._sys.crafts
 
-        self._world   = world
-        self._tick    = tick
-        self._initial = world._initial_state_dict()
-        self._crafts  = tuple(all_crafts)
-
-    # ---- Accessors ------------------------------------------------------
+    # ------------------------------------------------------------------
 
     @property
-    def world(self) -> "World":
-        return self._world
-
-    @property
-    def crafts(self) -> "tuple[Craft, ...]":
-        return self._crafts
+    def sys(self) -> LinearizedSystem:
+        return self._sys
 
     @property
     def tick(self):
-        """The single CompiledGraph driving every craft in this world.
+        """The compiled world tick (named CasADi I/O)."""
+        return self._sys.tick
 
-        Inputs are flat-prefixed (`<owner>.<slot>`, `dt`, `t`).
-        Backends consume this directly; users typically work through
-        a target wrapper (`TargetNumpy(Sim(world)).step(...)`).
-        """
-        return self._tick
+    def module(self, noise: bool = True) -> Module:
+        """Emit the typed Module — oracle (`noise=True`) or deploy."""
+        sys = self._sys
+        spec = sys.spec
+        init_flat = flatten_nested(self.world._initial_state_dict())
+        x0 = spec.pack({k: v for k, v in init_flat.items() if k in spec})
+        x_field = StateField("x", "manifold", (spec.ambient_dim,),
+                             init=x0, manifold=spec)
+        # A command's declared default is the MODEL's initial value: an
+        # `add_craft(..., **{"t.throttle": x0})` override wins over the
+        # Part-declared default.
+        u_port = Port("u", Role.CONTROL, (len(sys.input_names),),
+                      fields=tuple(
+                          PortField(n, 1, float(np.asarray(init_flat.get(
+                              n, sys.input_defaults[n])).ravel()[0]),
+                                    rate=sys.sample_rates.get(n))
+                          for n in sys.input_names))
+        dtp, tp = Port("dt", Role.TIMESTEP), Port("t", Role.TIME)
+        meas_ports = [Port(full, Role.MEASUREMENT, (s.dim,),
+                           rate=sys.sample_rates.get(full))
+                      for full, s in sys.sensors.items()]
+        sensor_fulls = list(sys.sensors)
 
-    @property
-    def initial(self) -> dict[str, dict[str, Any]]:
-        """Raw nested initial-state dict (NOT a deep copy — backends
-        copy as needed)."""
-        return self._initial
+        if noise:
+            # Oracle: the full forward tick, one noise draw → state + readings.
+            noise_port = Port(
+                "noise", Role.NOISE, (sys.n_noise,),
+                fields=tuple(PortField(c.full, c.dim, 0.0, sigma=c.sigma)
+                             for c in sys.noise_specs))
+            step_fn = ca.Function(
+                "step",
+                [sys.x_sym, sys.u_sym, sys.n_sym, sys.dt_sym, sys.t_sym],
+                [sys.x_new_noisy] + [
+                    ca.reshape(sys.sensors[f].h_noisy_sym,
+                               sys.sensors[f].dim, 1) for f in sensor_fulls],
+                ["x", "u", "noise", "dt", "t"],
+                ["x_new"] + [f.replace(".", "_") for f in sensor_fulls])
+            return Module(
+                name=self.world.name, state=StateLayout((x_field,)),
+                ports=(u_port, noise_port, dtp, tp, *meas_ports),
+                functions={"step": step_fn},
+                entry_points=(EntryPoint(
+                    "step", "step",
+                    (StateRef("x"), PortRef("u"), PortRef("noise"),
+                     PortRef("dt"), PortRef("t")),
+                    writes=("x",), returns=tuple(sensor_fulls)),),
+                hosting=Hosting.THREADED)
+
+        # Deploy: noiseless forward map + measurement models + Jacobians.
+        # A measurement is dt-independent — dt is eliminated at construction,
+        # so the measure kernels honestly take (x, u, t).
+        tan = spec.tangent_dim
+        zero_dt = ca.MX.zeros(1, 1)
+        functions = {"predict": sys.predict_fn, "predict_jacobian": sys.F_fn}
+        ports = [u_port, dtp, tp, *meas_ports,
+                 Port("F", Role.MATRIX, (tan, tan))]
+        entries = [
+            EntryPoint("predict", "predict",
+                       (StateRef("x"), PortRef("u"), PortRef("dt"),
+                        PortRef("t")), writes=("x",)),
+            EntryPoint("predict_jacobian", "predict_jacobian",
+                       (StateRef("x"), PortRef("u"), PortRef("dt"),
+                        PortRef("t")), returns=("F",)),
+        ]
+        margs = [sys.x_sym, sys.u_sym, sys.t_sym]
+        margn = ["x", "u", "t"]
+        for full, s in sys.sensors.items():
+            ident = full.replace(".", "_")
+            h = ca.substitute(s.h_sym, sys.dt_sym, zero_dt)
+            H = ca.substitute(s.H_sym, sys.dt_sym, zero_dt)
+            functions[f"measure_{ident}"] = ca.Function(
+                f"h_{ident}", margs, [h], margn, ["h"])
+            functions[f"measure_{ident}_jacobian"] = ca.Function(
+                f"H_{ident}", margs, [H], margn, ["H"])
+            ports.append(Port(f"H_{ident}", Role.MATRIX, (s.dim, tan)))
+            entries.append(EntryPoint(
+                f"measure_{ident}", f"measure_{ident}",
+                (StateRef("x"), PortRef("u"), PortRef("t")),
+                returns=(full,)))
+            entries.append(EntryPoint(
+                f"measure_{ident}_jacobian", f"measure_{ident}_jacobian",
+                (StateRef("x"), PortRef("u"), PortRef("t")),
+                returns=(f"H_{ident}",)))
+        return Module(
+            name=self.world.name, state=StateLayout((x_field,)),
+            ports=tuple(ports), functions=functions,
+            entry_points=tuple(entries), hosting=Hosting.THREADED)
 
     def __repr__(self) -> str:
-        names = ", ".join(c.name for c in self._crafts)
+        names = ", ".join(c.name for c in self.crafts)
         return f"<Sim crafts=[{names}]>"

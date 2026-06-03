@@ -2,66 +2,61 @@
 
 A **Module** is the whole ontology in one object: a typed **State** plus a
 set of named **Functions**, exposed through typed **EntryPoint** methods.
-`Sim`, `EKF`, `LQR`, and every recurrence filter (PID, Madgwick, …) are all
-just Modules with different state + entry points — so a backend implements
-exactly one generic `lower_module(Module)` (plus a way to run a
-`ca.Function`) and gets every feature for free, with no feature-specific
-backend code. This generalizes the old `EvaluatorSpec` along three axes:
+`Sim`, `EKF`, `LQR`, and every recurrence filter are just Modules with
+different state + entry points, so a backend implements exactly one generic
+`lower_module(Module)` (plus a way to run a `ca.Function`) and gets every
+feature for free.
 
-  * **State** can hold plain tensors (an EKF's covariance `P`), not only
-    manifold slots;
-  * an **EntryPoint** can take extra *runtime* inputs (a measurement `z`)
-    via named **Port**s, not only `state/inputs/dt/t`;
-  * an EntryPoint can write *multiple* State fields (`x` and `P`).
+The IR is *typed*: every kernel argument is a `StateRef` or a `PortRef` —
+nothing else — and every Port carries a `Role`. Backends dispatch on those
+types/roles; there are no name conventions ("dt", "z_…") and no lowering
+flags. A transform builds *honest kernels* (each kernel takes exactly the
+arguments it uses; specializations like a dt-free measurement or an
+auto-process-noise predict are baked symbolically at construction), so the
+entry set handed to a backend is final — lowering just lowers.
 
 This module is pure data — it imports nothing heavy and knows nothing about
-any backend. The per-backend `lower_module` reads it; the per-transform
-builders (`manta.codegen.module_build`) produce it.
+any backend or transform. Each transform's `.module()` produces it.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from math import prod
 from typing import Any
 
+
+# ---------------------------------------------------------------------------
+# State
+# ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class StateField:
     """One field of a Module's persistent State.
 
-    `kind` selects how a backend stores + (if needed) corrects the field:
+    * ``kind="manifold"`` — a packed ambient state vector; `manifold` carries
+      the descriptor (a `StateSpec`: slot names, ambient/tangent layout,
+      boxplus). `shape == (ambient_dim,)`.
+    * ``kind="matrix"`` — a plain Euclidean tensor (the EKF covariance).
 
-      * ``"manifold"`` — a packed ambient state vector whose tangent
-        corrections are manifold-aware. `manifold` carries the descriptor
-        (a `StateSpec`, or any object with `boxplus_num`); `shape` is the
-        ambient shape, e.g. `(ambient_dim,)`.
-      * ``"matrix"`` / ``"vector"`` / ``"scalar"`` — a plain Euclidean
-        tensor (covariance, integral term, …); ambient == tangent.
-
-    `init` is the field's default value (ndarray / scalar / identity),
-    used to allocate fresh State.
+    `init` is the field's default value (a packed ndarray), used to allocate
+    fresh State and to render typed-struct defaults.
     """
     name: str
-    kind: str
+    kind: str                  # "manifold" | "matrix"
     shape: tuple[int, ...]
     init: Any = None
-    manifold: Any = None      # descriptor for kind=="manifold" (e.g. StateSpec)
+    manifold: Any = None       # StateSpec for kind == "manifold"
 
     @property
     def size(self) -> int:
-        """Flat element count."""
         return int(prod(self.shape)) if self.shape else 1
 
 
 @dataclass(frozen=True)
 class StateLayout:
-    """The ordered set of State fields a Module carries.
-
-    Subsumes the manifold-only `StateSpec` (a StateSpec becomes one
-    `kind="manifold"` field here). A Module with no persistent state (e.g.
-    `LQR`) has an empty layout.
-    """
+    """The ordered State fields a Module carries (empty for stateless)."""
     fields: tuple[StateField, ...] = ()
 
     @property
@@ -78,89 +73,136 @@ class StateLayout:
         return any(f.name == name for f in self.fields)
 
 
+class Hosting(Enum):
+    """How a runtime hosts the State.
+
+    * ``HELD``     — the runtime owns mutable state members; entry points
+                     read and write them in place (EKF, recurrence).
+    * ``THREADED`` — state is passed in and returned by the caller; the
+                     runtime holds nothing (Sim, and trivially stateless
+                     blocks like LQR).
+    """
+    HELD = "held"
+    THREADED = "threaded"
+
+
+# ---------------------------------------------------------------------------
+# Ports
+# ---------------------------------------------------------------------------
+
+class Role(Enum):
+    """What a Port *is* — backends type parameters/returns from this.
+
+    * ``CONTROL``     — the control vector `u`; `fields` name each Part
+                        Input (with defaults) so typed backends emit an
+                        Inputs struct.
+    * ``MEASUREMENT`` — one sensor channel: produced by a Sim entry
+                        (a reading) and/or consumed by a filter update (`z`).
+    * ``NOISE``       — the stochastic draw vector; `fields` name each
+                        channel (with its σ) so a driver can bind to it.
+    * ``TIME``        — world-clock time `t` (defaults to 0 at call sites).
+    * ``TIMESTEP``    — the integration step `dt` (always required).
+    * ``STATE``       — a full ambient manifold state passed as data (the
+                        LQR's input); `manifold` carries the StateSpec and
+                        `init` the reference/operating point.
+    * ``OUTPUT``      — a named readout bundle (a recurrence's outputs);
+                        `fields` name the components.
+    * ``MATRIX``      — a plain matrix value (a covariance `Q`, a Jacobian).
+    """
+    CONTROL = "control"
+    MEASUREMENT = "measurement"
+    NOISE = "noise"
+    TIME = "time"
+    TIMESTEP = "timestep"
+    STATE = "state"
+    OUTPUT = "output"
+    MATRIX = "matrix"
+
+
 @dataclass(frozen=True)
 class PortField:
-    """One named sub-component of a structured Port — e.g. one Part Input
-    inside the `u` control vector, or one named readout inside a recurrence
-    block's output. Carries the `default` so a typed backend (C++) can build
-    the struct without reaching back to the model."""
+    """One named sub-component of a structured Port — a Part Input inside
+    `u`, a noise channel inside `noise`, a readout inside `y`. `default`
+    seeds typed-struct members; `sigma` is the channel's σ for NOISE."""
     name: str
     dim: int
     default: Any = 0.0
+    sigma: float | None = None     # NOISE channels: the declared σ
+    rate: float | None = None      # CONTROL inputs: declared intake rate (Hz)
 
 
 @dataclass(frozen=True)
 class Port:
-    """A runtime input to a method — supplied per call, never stored in
-    State (`u`, `z`, `dt`, `t`, `Q`, …). A scalar port has `shape == ()`.
-
-    `fields` optionally names the port's flat sub-components in order (the
-    individual Part Inputs in `u`, the named readouts in a recurrence's
-    output), so a typed backend can emit a named struct + flat pack/unpack;
-    an unstructured port (a bare `z`, `dt`, `Q`) leaves it empty.
-    """
+    """A typed value channel of a Module — a runtime input to a method, a
+    returned value, or both (a Sim reading that a filter later consumes)."""
     name: str
+    role: Role
     shape: tuple[int, ...] = ()
     fields: tuple[PortField, ...] = ()
-    manifold: Any = None     # StateSpec/Manifold when the port is a manifold
-                             # state vector (e.g. LQR's `x` input) — lets a
-                             # typed backend build the same struct as State.
+    manifold: Any = None       # StateSpec, for role == STATE
+    init: Any = None           # reference vector, for role == STATE
+    rate: float | None = None  # MEASUREMENT: declared sample rate (Hz)
 
     @property
     def size(self) -> int:
         return int(prod(self.shape)) if self.shape else 1
 
 
+# ---------------------------------------------------------------------------
+# Entry points
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class StateRef:
+    """A kernel argument that is a State field (by name)."""
+    name: str
+
+
+@dataclass(frozen=True)
+class PortRef:
+    """A kernel argument that is a Port value supplied per call (by name)."""
+    name: str
+
+
+KernelArg = "StateRef | PortRef"
+
+
 @dataclass(frozen=True)
 class EntryPoint:
     """One typed method backed by exactly one `ca.Function`.
 
-    `kernel_args` is the ordered list of names — each a State field or a
-    Port — laid out as the kernel's positional arguments. The kernel's
-    outputs are consumed in order: the first `len(writes_state)` outputs
-    update those State fields; the remaining outputs are returned to the
-    caller under the names in `returns`.
-
-    The remaining fields are lowering hints a typed backend uses and the
-    numpy runtime ignores (it supplies every kernel arg or defaults dt/t):
-
-      * `deploy`         — part of the deployable surface? `step` (the
-                           driven-oracle Sim variant) sets False so a deploy
-                           backend lowers `predict` instead.
-      * `synthesize_zero`— kernel args the method does NOT expose, filled
-                           with zero (a measurement is dt-independent → `dt`).
-      * `port_from`      — `{port: entry}`: a port the method computes
-                           internally by calling another entry's kernel
-                           (the EKF's `Q` from `process_noise`), rather than
-                           taking it as a parameter.
+    `args` lays out the kernel's positional arguments — each a `StateRef`
+    or a `PortRef`, nothing else. The kernel's outputs are consumed in
+    order: the first `len(writes)` update those State fields; the remaining
+    outputs are returned under the Ports named in `returns`.
     """
     method: str
-    fn: str                                  # key into Module.functions
-    kernel_args: tuple[str, ...] = ()
-    writes_state: tuple[str, ...] = ()
-    returns: tuple[str, ...] = ()
-    deploy: bool = True
-    synthesize_zero: tuple[str, ...] = ()
-    port_from: dict[str, str] = field(default_factory=dict)
+    fn: str                                   # key into Module.functions
+    args: tuple[Any, ...] = ()                # StateRef | PortRef
+    writes: tuple[str, ...] = ()              # State field names
+    returns: tuple[str, ...] = ()             # Port names
 
+
+# ---------------------------------------------------------------------------
+# Module
+# ---------------------------------------------------------------------------
 
 @dataclass
 class Module:
     """A stateful unit = State + named Functions + typed methods.
 
     `functions` is the only thing a backend translates; `entry_points`
-    describe the methods to expose over them. `analysis` holds extra
-    `ca.Function`s surfaced for IR-level analysis (e.g. the EKF's `F`/`H`
-    for observability) but NOT lowered as runtime methods.
+    describe the methods to expose over them — a backend lowers ALL of
+    them, unconditionally. `analysis` holds extra `ca.Function`s surfaced
+    for IR-level analysis (observability) but not lowered as methods.
     """
     name: str
     state: StateLayout
     ports: tuple[Port, ...]
-    functions: dict[str, Any]                # {name: ca.Function}
+    functions: dict[str, Any]                 # {name: ca.Function}
     entry_points: tuple[EntryPoint, ...]
+    hosting: Hosting = Hosting.THREADED
     analysis: dict[str, Any] = field(default_factory=dict)
-    held: bool = False    # State lives as runtime members (EKF/recurrence)
-                          # vs. threaded by the caller / stateless (Sim/LQR).
 
     def port(self, name: str) -> Port:
         for p in self.ports:
@@ -168,12 +210,28 @@ class Module:
                 return p
         raise KeyError(f"Module {self.name!r}: no port {name!r}.")
 
+    def ports_by_role(self, role: Role) -> tuple[Port, ...]:
+        return tuple(p for p in self.ports if p.role is role)
+
     def entry(self, method: str) -> EntryPoint:
         for ep in self.entry_points:
             if ep.method == method:
                 return ep
         raise KeyError(f"Module {self.name!r}: no entry point {method!r}.")
 
+    @property
+    def spec(self):
+        """The manifold StateSpec this Module's state/struct is built from —
+        a manifold State field's, else a STATE-role port's, else None."""
+        for f in self.state.fields:
+            if f.kind == "manifold":
+                return f.manifold
+        for p in self.ports:
+            if p.role is Role.STATE and p.manifold is not None:
+                return p.manifold
+        return None
+
     def __repr__(self) -> str:
         return (f"<Module {self.name!r} state={list(self.state.names)} "
-                f"methods={[e.method for e in self.entry_points]}>")
+                f"methods={[e.method for e in self.entry_points]} "
+                f"{self.hosting.value}>")

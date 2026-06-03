@@ -7,7 +7,6 @@ import pytest
 
 from manta import Craft, Sim, World
 from manta.fields import GravityField
-from manta.codegen.module_build import to_module
 from manta.codegen.cpp.kernels import emit_kernel_list
 from manta.parts import IMU, Mass, PositionSensor, Thruster
 
@@ -31,7 +30,7 @@ def _sim_kernels(m):
 
 
 def test_emit_kernels_produces_c_and_h(tmp_path: Path):
-    m = to_module(_hover_world())
+    m = _hover_world().module(noise=False)
     paths = emit_kernel_list(_sim_kernels(m), tmp_path,
                              basename=m.name)
     assert paths["c"].exists()
@@ -41,7 +40,7 @@ def test_emit_kernels_produces_c_and_h(tmp_path: Path):
 
 
 def test_kernel_header_declares_every_function(tmp_path: Path):
-    m = to_module(_hover_world())
+    m = _hover_world().module(noise=False)
     paths = emit_kernel_list(_sim_kernels(m), tmp_path,
                              basename=m.name)
     header_text = paths["h"].read_text()
@@ -63,7 +62,7 @@ def test_kernel_c_compiles_with_cc(tmp_path: Path):
     if cc is None:
         pytest.skip("no C compiler on PATH")
 
-    m = to_module(_hover_world())
+    m = _hover_world().module(noise=False)
     paths = emit_kernel_list(_sim_kernels(m), tmp_path,
                              basename=m.name)
 

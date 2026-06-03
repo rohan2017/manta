@@ -99,7 +99,7 @@ def test_python_cpp_roundtrip(tmp_path: Path):
     # ---- 1: TargetCpp ----
     w      = _hover_world()
     cw     = Sim(w)
-    result = TargetCpp(cw, tmp_path, class_name="Drone")
+    result = TargetCpp(cw.module(noise=False), tmp_path, class_name="Drone")
 
     # ---- 2: compile kernels + wrapper ----
     k_obj = tmp_path / "kernels.o"
@@ -145,21 +145,21 @@ def test_python_cpp_roundtrip(tmp_path: Path):
         state = sim.step(state, dt=0.005)
 
     # ---- 6: Jacobian sanity checks via the same Module kernels ----
-    from manta.codegen.module_build import to_module
-    from manta.estimation.state_spec import StateSpec
-    m = to_module(cw)
-    spec = StateSpec.from_world(cw.world)
+    m = cw.module(noise=False)
+    spec = m.spec
     flat = {f"drone.{k}": v for k, v in state["drone"].items()
             if f"drone.{k}" in spec}
     x_flat = spec.pack(flat)
     u_flat = np.array([state["drone"]["t.throttle"]])
-    F_py = np.asarray(m.functions["F"](x_flat, u_flat, 0.005, 0.0))
+    F_py = np.asarray(
+        m.functions["predict_jacobian"](x_flat, u_flat, 0.005, 0.0))
+    # honest measure kernels take (x, u, t) — no dt
     H_pos_py = np.asarray(
-        m.functions["H_drone_gps_position"](x_flat, u_flat, 0.005, 0.0))
+        m.functions["measure_drone_gps_position_jacobian"](x_flat, u_flat, 0.0))
     gps_py_new = np.asarray(
-        m.functions["h_drone_gps_position"](x_flat, u_flat, 0.005, 0.0)).ravel()
+        m.functions["measure_drone_gps_position"](x_flat, u_flat, 0.0)).ravel()
     gyro_py_new = np.asarray(
-        m.functions["h_drone_g_gyro"](x_flat, u_flat, 0.005, 0.0)).ravel()
+        m.functions["measure_drone_g_gyro"](x_flat, u_flat, 0.0)).ravel()
 
     # ---- 7: compare ----
     ATOL = 1e-10

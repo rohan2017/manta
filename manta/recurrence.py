@@ -57,14 +57,11 @@ class Port:
 
 
 class RecurrenceBlock:
-    """Base for a stateful manifold recurrence — lowered (like Sim/EKF/LQR)
-    via the generic Module path (`to_module` → `lower_module`), with one
-    `step` entry point. Subclasses call `_build_recurrence(...)`; the base
-    owns the block contract `to_module` reads: `spec` (state manifold
-    layout), `inputs` / `outputs` (ports), `update_fn` (the single kernel),
-    `x0`."""
-
-    RUNTIME_KIND = "evaluator"
+    """Base for a stateful manifold recurrence. Subclasses call
+    `_build_recurrence(...)`; the base assembles the single `step` kernel
+    and emits the typed `Module` (held state `x`; named input/output ports)
+    via `module()` — like every transform, it lowers through the one
+    generic backend path."""
 
     def _build_recurrence(self, *, name, state, inputs, outputs, x0,
                           recurrence) -> None:
@@ -126,6 +123,33 @@ class RecurrenceBlock:
         self.update_fn = ca.Function(
             f"{name}_recurrence", [x_sym, u_sym, dt_sym, t_sym], [x_next, y],
             ["x", "u", "dt", "t"], ["x_next", "y"])
+
+    def module(self):
+        """The typed `Module` IR a backend lowers: held state `x`, one
+        `step(x; u, dt, t) -> y` entry, named input/output port fields."""
+        from .ir.module import (
+            EntryPoint, Hosting, Module, Port, PortField, PortRef, Role,
+            StateField, StateLayout, StateRef,
+        )
+        spec = self.spec
+        return Module(
+            name=self.name,
+            state=StateLayout((StateField(
+                "x", "manifold", (spec.ambient_dim,),
+                init=self.x0.copy(), manifold=spec),)),
+            ports=(
+                Port("u", Role.CONTROL, (self.input_dim,), fields=tuple(
+                    PortField(p.name, p.dim, 0.0) for p in self.inputs)),
+                Port("y", Role.OUTPUT, (self.output_dim,), fields=tuple(
+                    PortField(p.name, p.dim, 0.0) for p in self.outputs)),
+                Port("dt", Role.TIMESTEP), Port("t", Role.TIME),
+            ),
+            functions={"step": self.update_fn},
+            entry_points=(EntryPoint(
+                "step", "step",
+                (StateRef("x"), PortRef("u"), PortRef("dt"), PortRef("t")),
+                writes=("x",), returns=("y",)),),
+            hosting=Hosting.HELD)
 
     def __repr__(self) -> str:
         ins = ",".join(p.name for p in self.inputs)

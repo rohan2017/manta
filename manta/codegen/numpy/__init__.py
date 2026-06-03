@@ -1,21 +1,25 @@
-"""TargetNumpy — native-Python runtime evaluator backend.
+"""TargetNumpy — the native-Python backend: ONE runtime for every Module.
 
-Kernel execution + state for every runtime go through the generic
-`NumpyModule` (`manta.codegen.numpy.module`, built from `to_module(ir)`);
-these classes are the thin per-IR ergonomic adapters over it (nested-dict
-translation, the signal bus / ports, the noise driver). `TargetNumpy(ir)`
-dispatches by IR type:
+`TargetNumpy(x)` lowers a typed `Module` (or any transform exposing
+`.module()` — `Sim`, `EKF`, `LQR`, a recurrence block) to a single
+`NumpyRuntime`. There are no per-transform runtime classes: the runtime's
+surface is *derived from the Module's structure* —
 
-  * `Sim`             → `NumpyWorld`      (`.step()`, `.outputs()`,
-                                           `.initial_state()`, bus ports).
-  * `EKF`             → `NumpyEKF`        (`.predict()`, `.update()`,
-                                           `.feed()`/`.step()`, `.state_dict()`,
-                                           `.reset()`, `.x`, `.P`).
-  * `LQR`             → `NumpyLQR`        (`.control()`, `.u()`, `.K`).
-  * `RecurrenceBlock` → `NumpyRecurrence` (`.step()`, `.compute()`).
+  * THREADED + an oracle ``step`` entry (a Sim)   → dict-state functional
+    `step(state, dt)` / bus `step(dt)`, `outputs()`, `out`/`command` ports,
+    `attach_driver` (feeds the NOISE port).
+  * HELD + MEASUREMENT ports (a filter)           → `predict`/`update`
+    (by sensor *name*), `feed`/`step` (the measurement bus), `x`/`P`,
+    `reset`, `state_dict`, `meas`/`command`/`estimate` ports.
+  * HELD + an OUTPUT port (a recurrence)          → `step(dt, **inputs)`,
+    `outputs()`, `reset`, `input`/`output` ports, `compute`.
+  * THREADED + a ``control`` entry (a regulator)  → `u(x)`,
+    `control(state_dict)`, `estimate`/`command` ports, `compute`.
 
-The IR objects themselves describe the compiled symbolic graph but are not
-directly callable — choose a target to get the runtime.
+Everything is driven by the IR's types: slot names come from the manifold
+spec, input/sensor/noise names + defaults/σ/rates from the Ports. The
+backend never mentions a transform. `call(method, values)` is the generic
+escape hatch onto any entry point.
 """
 
 from __future__ import annotations
@@ -25,89 +29,283 @@ from typing import Any, Callable
 import casadi as ca
 import numpy as np
 
-from ..target import Target
+from ...bus import MeasurementBus, PortSet
+from ...ir.module import Hosting, Module, PortRef, Role, StateRef
 from ...linearized_system import resolve_suffix
 
-# Output-shape → vector dimension, for sizing sensor-output ports.
-_SHAPE_DIM = {"R1": 1, "R3": 3, "SO3": 4}
+
+def _split(full: str) -> tuple[str, str]:
+    owner, rest = full.split(".", 1)
+    return owner, rest
 
 
-# ---------------------------------------------------------------------------
-# NumpyWorld — runtime for Sim
-# ---------------------------------------------------------------------------
+class NumpyRuntime:
+    """The one native-Python runtime over a typed `Module`."""
 
-class NumpyWorld:
-    """Nested-dict + signal-bus adapter over a `Sim` Module.
+    def __init__(self, module: Module) -> None:
+        self.module = module
+        self._spec = module.spec
+        self._state: dict[str, np.ndarray] = {}
+        for f in module.state.fields:
+            a = np.asarray(f.init, dtype=float)
+            self._state[f.name] = (a.reshape(f.shape) if f.kind == "matrix"
+                                   else a.reshape(-1).copy())
 
-    Kernel evaluation runs through the generic `NumpyModule` (the Sim
-    Module's `step` advances the state AND emits sensor readings from one
-    noise draw); this class adds the ergonomics — the nested state dict
-    ↔ flat translation, the optional `NoiseDriver`, and the bus ports.
+        ctrl = module.ports_by_role(Role.CONTROL)
+        self._u_port = ctrl[0] if ctrl else None
+        noi = module.ports_by_role(Role.NOISE)
+        self._noise_port = noi[0] if noi else None
+        self._meas_ports_ir = module.ports_by_role(Role.MEASUREMENT)
+        out = module.ports_by_role(Role.OUTPUT)
+        self._y_port = out[0] if out else None
+        st = module.ports_by_role(Role.STATE)
+        self._x_port = st[0] if st else None
+        self._methods = {e.method for e in module.entry_points}
 
-    Sensor readings are NOT in the state dict: a functional `step(state, dt)`
-    returns next state only; read the readings via `outputs()` (same step,
-    same noise draw) or wire the `out(...)` ports.
-    """
-
-    def __init__(self, cw) -> None:
-        from ...sim import Sim
-        from ..module_build import to_module
-        from .module import NumpyModule
-        from ...bus import PortSet
-        if not isinstance(cw, Sim):
-            raise TypeError(
-                f"NumpyWorld: expected Sim, got "
-                f"{type(cw).__name__}")
-        self._cw = cw
-        self._nm = NumpyModule(to_module(cw))     # generic execution engine
-        # Sensor readings from the most recent step (nested by owner). Kept
-        # OUT of the state dict — read via `outputs()` / wired `out` ports.
+        self._t = 0.0
+        self._driver: "NoiseDriver | None" = None
         self._outputs: dict[str, dict[str, Any]] = {}
-        # Optional stochastic noise source (see attach_driver). None ⇒
-        # the sim is a noiseless oracle: the noise port stays zero.
-        self._driver = None
-        # Bus plumbing (lazy): held state for `step(dt)`, producer/consumer
-        # ports managed by the shared PortSet.
         self._bus_state: dict | None = None
-        self._bus_t = 0.0
         self._ports = PortSet()
-        self._sig = None
-        self._spec = None
+        self._y = (np.zeros(self._y_port.size) if self._y_port is not None
+                   else None)
 
-    # ---- IR passthroughs ----------------------------------------------
+        # Filter surface: the measurement bus (mailboxes per MEASUREMENT
+        # port — possibly none — + ZOH commands + the estimate port). A
+        # held module with a `predict` entry IS a filter; a held module
+        # with an OUTPUT port is a recurrence.
+        self._bus: MeasurementBus | None = None
+        if module.hosting is Hosting.HELD and "predict" in self._methods:
+            self._bus = MeasurementBus(
+                self,
+                sensors={p.name: {"dim": p.size, "key": p.name}
+                         for p in self._meas_ports_ir},
+                input_names=self._input_names(),
+                sample_rates={f.name: f.rate for f in self._u_fields()
+                              if f.rate is not None},
+                estimate_dim=self._spec.ambient_dim,
+                estimate_layout={s.name: (s.ambient_offset, s.ambient_dim)
+                                 for s in self._spec.slots})
+
+    # ------------------------------------------------------------------
+    # The kernel engine (typed-arg gather → call → scatter)
+    # ------------------------------------------------------------------
+
+    def call(self, method: str, values: dict[str, Any] | None = None,
+             **kw) -> dict[str, np.ndarray]:
+        """Run one entry point. `values`/kwargs are keyed by port name
+        (use the dict for dotted names); TIME ports default to 0."""
+        vals = dict(values or {})
+        vals.update(kw)
+        return self._run(self.module.entry(method), vals)
+
+    def _run(self, ep, values: dict[str, Any]) -> dict[str, np.ndarray]:
+        m = self.module
+        args = []
+        for a in ep.args:
+            if isinstance(a, StateRef):
+                args.append(self._state[a.name])
+            elif isinstance(a, PortRef):
+                if a.name in values:
+                    args.append(values[a.name])
+                elif m.port(a.name).role is Role.TIME:
+                    args.append(0.0)
+                else:
+                    raise KeyError(
+                        f"{m.name}.{ep.method}: missing value for port "
+                        f"{a.name!r}.")
+            else:                                  # pragma: no cover
+                raise TypeError(f"unknown kernel arg {a!r}")
+        fn = m.functions[ep.fn]
+        res = fn(*args)
+        outs = [res] if fn.n_out() == 1 else list(res)
+        for i, w in enumerate(ep.writes):
+            fld = m.state.field(w)
+            arr = np.asarray(outs[i], dtype=float)
+            self._state[w] = (arr.reshape(fld.shape) if fld.kind == "matrix"
+                              else arr.reshape(-1))
+        ret: dict[str, np.ndarray] = {}
+        for name, o in zip(ep.returns, outs[len(ep.writes):]):
+            port = m.port(name)
+            a = np.asarray(o, dtype=float)
+            ret[name] = (a.reshape(port.shape) if len(port.shape) == 2
+                         else a.reshape(-1))
+        return ret
+
+    # ------------------------------------------------------------------
+    # Shared metadata helpers (all from the Module)
+    # ------------------------------------------------------------------
+
+    def _u_fields(self):
+        return self._u_port.fields if self._u_port is not None else ()
+
+    def _input_names(self) -> list[str]:
+        return [f.name for f in self._u_fields()]
+
+    def build_u(self, u: dict[str, Any] | None) -> np.ndarray:
+        """Resolve a `{name: value}` dict (full or suffix names) to the
+        flat control vector over the Module's declared defaults."""
+        fields = self._u_fields()
+        out = np.array([float(np.asarray(f.default).ravel()[0])
+                        for f in fields])
+        if u:
+            names = self._input_names()
+            idx = {n: i for i, n in enumerate(names)}
+            for k, v in u.items():
+                full = resolve_suffix(k, names, label="input",
+                                      who=type(self).__name__)
+                out[idx[full]] = float(np.asarray(v).ravel()[0])
+        return out
 
     @property
-    def world(self):
-        return self._cw.world
+    def spec(self):
+        return self._spec
 
     @property
-    def crafts(self):
-        return self._cw.crafts
+    def input_names(self) -> list[str]:
+        """The Module's declared control-input names, in order."""
+        return self._input_names()
+
+    # ==================================================================
+    # Sim surface (THREADED oracle: a `step` entry consuming NOISE)
+    # ==================================================================
+
+    def initial_state(self) -> dict[str, dict[str, Any]]:
+        """Fresh nested initial state: the manifold slots' defaults plus
+        input/noise placeholder entries (commands you may set; noise seeds
+        that stay at zero — a `NoiseDriver` draw never enters the dict)."""
+        spec = self._spec
+        x0 = self.module.state.field("x").init
+        nested: dict[str, dict[str, Any]] = {}
+        for full, val in spec.unpack(np.asarray(x0, dtype=float)).items():
+            owner, slot = _split(full)
+            nested.setdefault(owner, {})[slot] = val
+        for f in self._u_fields():
+            owner, rest = _split(f.name)
+            nested.setdefault(owner, {}).setdefault(rest, f.default)
+        if self._noise_port is not None:
+            for f in self._noise_port.fields:
+                owner, rest = _split(f.name)
+                nested.setdefault(owner, {}).setdefault(
+                    rest, np.zeros(f.dim) if f.dim > 1 else 0.0)
+        return nested
+
+    def step(self, state=None, dt=None, t: float | None = None, **inputs):
+        """Polymorphic step, by Module shape:
+
+        * Sim (threaded oracle) — functional `step(state, dt, t=0)` → next
+          state dict (readings via `outputs()`), or bus `step(dt[, t=…])`
+          advancing the held `self.state`.
+        * Filter (held + measurements) — `step(dt[, t=…[, Q=…]])`: fold
+          fresh measurements, then predict (the measurement bus).
+        * Recurrence (held + readouts) — `step(dt, **inputs)` → readouts.
+        """
+        if self._bus is not None:                      # filter
+            return self._bus.step(dt if dt is not None else state,
+                                  t=t, **inputs)
+        if self.module.hosting is Hosting.HELD:        # recurrence
+            return self._recurrence_step(state, t=t, **inputs)
+        if isinstance(state, dict):                    # sim, functional
+            return self._functional_step(state, dt,
+                                         0.0 if t is None else t)
+        bus_dt = dt if state is None else state        # sim, bus form
+        if bus_dt is None:
+            raise TypeError(f"{type(self).__name__}.step: provide dt")
+        return self._sim_bus_step(float(bus_dt), t)
+
+    def _functional_step(self, state: dict, dt: float,
+                         t: float = 0.0) -> dict[str, dict[str, Any]]:
+        spec = self._spec
+        flat: dict[str, Any] = {}
+        for owner, slots in state.items():
+            for slot, val in slots.items():
+                flat[f"{owner}.{slot}"] = val
+        self._state["x"] = spec.pack(
+            {k: v for k, v in flat.items() if k in spec})
+        u = np.array([float(np.asarray(flat.get(f.name, f.default)).ravel()[0])
+                      for f in self._u_fields()])
+        readings = self._run(self.module.entry("step"),
+                             {"u": u, "noise": self._noise_vec(flat),
+                              "dt": dt, "t": t})
+        new_state: dict[str, dict[str, Any]] = {k: {} for k in state}
+        for full, val in spec.unpack(self._state["x"]).items():
+            owner, slot = _split(full)
+            new_state.setdefault(owner, {})[slot] = val
+        # Preserve input-only entries (commands, noise placeholders); the
+        # sensor readings deliberately stay OUT of the state dict.
+        for owner, slots in state.items():
+            new_state.setdefault(owner, {})
+            for slot, val in slots.items():
+                if slot not in new_state[owner]:
+                    new_state[owner][slot] = val
+        self._outputs = {}
+        for full, reading in readings.items():
+            owner, slot = _split(full)
+            self._outputs.setdefault(owner, {})[slot] = reading
+        return new_state
+
+    def _noise_vec(self, flat: dict | None = None) -> np.ndarray:
+        """The flat noise draw, in port-field order: a `NoiseDriver` sample
+        takes precedence, else a channel value set directly in the state
+        dict (deterministic tests), else zero."""
+        port = self._noise_port
+        if port is None:
+            return np.zeros(0)
+        vec = np.zeros(port.size)
+        samples = self._driver.sample() if self._driver is not None else {}
+        off = 0
+        for f in port.fields:
+            if f.name in samples:
+                vec[off:off + f.dim] = np.asarray(samples[f.name]).ravel()
+            elif flat is not None and f.name in flat:
+                vec[off:off + f.dim] = np.asarray(flat[f.name]).ravel()
+            off += f.dim
+        return vec
+
+    def outputs(self) -> dict[str, dict[str, Any]]:
+        """Sensor readings from the most recent step (nested, realized
+        with that step's noise draw)."""
+        return self._outputs
 
     @property
-    def tick(self):
-        return self._cw.tick
+    def state(self):
+        """Held state. Sim bus mode: the nested dict (lazy-seeded, mutate
+        in place). Recurrence: `{slot: value}` by name."""
+        if self.module.hosting is Hosting.HELD:
+            return self._spec.unpack(self._state["x"])
+        if self._bus_state is None:
+            self._bus_state = self.initial_state()
+        return self._bus_state
 
-    # ---- Noise driver --------------------------------------------------
+    @state.setter
+    def state(self, value: dict) -> None:
+        if self.module.hosting is Hosting.HELD:
+            raise AttributeError("held state: use reset()")
+        self._bus_state = value
+
+    def _sim_bus_step(self, dt: float, t: float | None):
+        t0 = self._t if t is None else t
+        st = self.state
+        for full, v in self._ports.pull(t0).items():
+            owner, rest = _split(full)
+            st.setdefault(owner, {})[rest] = v
+        new = self._functional_step(st, dt, t0)
+        self._bus_state = new
+        self._t = t0 + dt
+        readings = {f"{o}.{s}": v for o, slots in self._outputs.items()
+                    for s, v in slots.items()}
+        self._ports.publish(readings, t0)
+        return new
 
     def attach_driver(self, driver: "NoiseDriver") -> "NoiseDriver":
-        """Attach a stochastic `NoiseDriver` so `step()` injects sensor +
-        process noise per the model's `Noise` channels.
-
-        Without a driver the sim is a noiseless oracle (the on-device
-        default — there you run against real sensors). With one, every
-        active (σ>0) Noise channel is sampled each step and fed into its
-        tick input, so truth is genuinely noisy *and* matches the very σ
-        the EKF uses to size R/Q. Returns the driver for one-liners::
-
-            sim.attach_driver(NoiseDriver(seed=7))
-        """
-        from ...estimation.state_spec import StateSpec
-        from ...tick import walk_tick_signature
-        cf  = self._cw.tick.casadi_function
-        sig = walk_tick_signature(
-            cf, self._cw.world, StateSpec.from_world(self._cw.world))
-        driver.bind(sig.noise)
+        """Attach a stochastic `NoiseDriver`: every active (σ>0) channel of
+        the Module's NOISE port is sampled each step, so truth is noisy
+        with the very σ the EKF reads for R/Q. Without one the sim is a
+        noiseless oracle."""
+        if self._noise_port is None:
+            raise ValueError(
+                f"{self.module.name}: module declares no noise port.")
+        driver.bind(self._noise_port.fields)
         self._driver = driver
         return driver
 
@@ -115,248 +313,365 @@ class NumpyWorld:
     def driver(self) -> "NoiseDriver | None":
         return self._driver
 
-    # ---- State + step --------------------------------------------------
-
-    def initial_state(self) -> dict[str, dict[str, Any]]:
-        """Fresh copy of the per-owner initial state."""
-        import copy
-        return copy.deepcopy(self._cw._initial)
-
-    def step(self, state=None, dt=None, t: float | None = None):
-        """Advance the world by `dt`. Returns a fresh state dict.
-
-        Two call forms:
-
-          * **functional** — `step(state, dt, t=0)`: pure, returns a new
-            state dict; nothing is held on the runtime. `state` may be a
-            craft or a field disturbance keyed by `<owner>.<slot>`.
-          * **bus** — `step(dt)` / `step(dt, t=...)`: advances the
-            runtime's *held* state (`sim.state`), pulling any wired
-            command ports in first and publishing sensor readings to the
-            wired output ports after. Use with `wire(...)`.
-
-        `t` is the world-clock time at the start of this step. In bus
-        mode, omitting it advances the runtime's internal clock by `dt`
-        each call (so published measurements carry an honest, increasing
-        timestamp the estimator's staleness check can trust).
-        """
-        if isinstance(state, dict):
-            return self._functional_step(state, dt, 0.0 if t is None else t)
-        bus_dt = dt if state is None else state
-        if bus_dt is None:
-            raise TypeError("NumpyWorld.step: provide dt")
-        return self._bus_step(float(bus_dt), t)
-
-    def _functional_step(self,
-                         state: dict[str, dict[str, Any]],
-                         dt: float,
-                         t: float = 0.0) -> dict[str, dict[str, Any]]:
-        spec = self._spec_obj()
-        sig = self._signature()
-        flat: dict[str, Any] = {}
-        for owner_name, owner_state in state.items():
-            for slot, val in owner_state.items():
-                flat[f"{owner_name}.{slot}"] = val
-
-        x = spec.pack({k: v for k, v in flat.items() if k in spec})
-        u = np.array(
-            [float(np.asarray(flat.get(n, sig.input_defaults[n])).ravel()[0])
-             for n in sig.input_names], dtype=float)
-        noise = self._noise_vec(flat)
-
-        # One forward tick: advances x AND emits readings (shared noise draw).
-        self._nm.state["x"] = x
-        readings = self._nm.step(u=u, noise=noise, dt=dt, t=t)
-        x_new = self._nm.state["x"]
-
-        new_state: dict[str, dict[str, Any]] = {k: {} for k in state}
-        for full, val in spec.unpack(x_new).items():
-            owner_name, slot = full.split(".", 1)
-            new_state.setdefault(owner_name, {})[slot] = val
-        # Preserve input-only slots (commands, noise placeholders) the tick
-        # doesn't write back — but NOT sensor readings (those leave the dict).
-        for owner_name, owner_state in state.items():
-            new_state.setdefault(owner_name, {})
-            for slot, val in owner_state.items():
-                if slot not in new_state[owner_name]:
-                    new_state[owner_name][slot] = val
-        # Sensor readings → outputs() (nested), kept out of the state dict.
-        self._outputs = {}
-        for full, reading in readings.items():
-            owner_name, slot = full.split(".", 1)
-            self._outputs.setdefault(owner_name, {})[slot] = reading
-        return new_state
-
-    def outputs(self) -> dict[str, dict[str, Any]]:
-        """Sensor readings from the most recent `step` (nested
-        `{owner: {part.output: reading}}`), realized with that step's noise
-        draw. Readings are NOT in the state dict — read them here (or wire
-        the `out(...)` ports)."""
-        return self._outputs
-
-    def _noise_vec(self, flat: dict | None = None) -> np.ndarray:
-        """The flat noise vector for the step kernel, in tick-signature order.
-
-        A `NoiseDriver` draw takes precedence; otherwise a channel value set
-        directly in the state dict (the deterministic-testing path, e.g.
-        `state[owner]["gyro_bias_driver"] = …`) is used; else zero."""
-        sig = self._signature()
-        n = sum(c.dim for c in sig.noise)
-        vec = np.zeros(n)
-        samples = self._driver.sample() if self._driver is not None else {}
-        off = 0
-        for c in sig.noise:
-            if c.full in samples:
-                vec[off:off + c.dim] = np.asarray(samples[c.full]).ravel()
-            elif flat is not None and c.full in flat:
-                vec[off:off + c.dim] = np.asarray(flat[c.full]).ravel()
-            off += c.dim
-        return vec
-
-    def _spec_obj(self):
-        if self._spec is None:
-            from ...estimation.state_spec import StateSpec
-            self._spec = StateSpec.from_world(self._cw.world)
-        return self._spec
-
-    # ---- Signal-bus ports + held-state stepping ------------------------
-
-    @property
-    def state(self) -> dict[str, dict[str, Any]]:
-        """The held state for bus-mode `step(dt)` — lazily seeded from
-        `initial_state()`. Returned by reference, so you can mutate it
-        in place (e.g. `sim.state["c"]["position"] = ...`)."""
-        if self._bus_state is None:
-            self._bus_state = self.initial_state()
-        return self._bus_state
-
-    @state.setter
-    def state(self, value: dict) -> None:
-        self._bus_state = value
-
     def out(self, name: str):
-        """Producer port for a sensor Output (`"craft.part.output"` or an
-        unambiguous suffix). Published each bus `step()` — at the part's
-        declared sample rate (`ctx.sample`) if any, else every tick."""
-        full = self._resolve(name, self._signature().sensor_names, "output")
-        return self._ports.producer(full, dim=self._output_dim(full),
-                                    rate=self._rate(full))
+        """Producer port for a sensor reading (rate-gated sample-and-hold;
+        published each bus step)."""
+        full = resolve_suffix(name, [p.name for p in self._meas_ports_ir],
+                              label="output", who=type(self).__name__)
+        port = self.module.port(full)
+        return self._ports.producer(full, dim=port.size, rate=port.rate)
 
     def command(self, name: str):
-        """Consumer port for an actuator Input. Pulled into the held
-        state before each bus `step()` (latched / zero-order-hold) — at
-        the part's declared intake rate (`ctx.hold`) if any."""
-        full = self._resolve(name, self._signature().input_names, "input")
-        return self._ports.consumer(full, dim=self._input_dim(full),
-                                    rate=self._rate(full))
+        """Port for a control input. On a sim/filter: a latched (ZOH)
+        consumer pulled before each step. On a regulator: the producer
+        `compute()` publishes to."""
+        if self._bus is not None:
+            return self._bus.command(name)
+        full = resolve_suffix(name, self._input_names(), label="input",
+                              who=type(self).__name__)
+        if "control" in self._methods:                 # regulator: producer
+            return self._ports.producer(full, dim=1)
+        f = next(f for f in self._u_fields() if f.name == full)
+        return self._ports.consumer(full, dim=f.dim, rate=f.rate)
 
-    def _rate(self, full: str):
-        return getattr(self._cw.tick, "sample_rates", {}).get(full)
+    # ==================================================================
+    # Filter surface (HELD + MEASUREMENT ports)
+    # ==================================================================
 
-    def _bus_step(self, dt: float, t: float | None) -> dict[str, dict[str, Any]]:
-        t0 = self._bus_t if t is None else t  # start-of-step world time
-        st = self.state                       # lazy-seed the held state
-        # Pull wired command ports (ZOH, rate-gated) into the held state.
-        for full, v in self._ports.pull(t0).items():
-            owner, rest = full.split(".", 1)
-            st.setdefault(owner, {})[rest] = v
-        new = self._functional_step(st, dt, t0)
-        self._bus_state = new
-        self._bus_t = t0 + dt
-        # Publish sensor readings (from this step's outputs, same noise draw),
-        # stamped at the start-of-step time, to the wired output ports —
-        # gated by each port's sample rate (sample-and-hold in between).
-        readings = {f"{owner}.{slot}": val
-                    for owner, slots in self._outputs.items()
-                    for slot, val in slots.items()}
-        self._ports.publish(readings, t0)
-        return new
+    @property
+    def x(self) -> np.ndarray:
+        return self._state["x"].copy()
 
-    # ---- Port resolution helpers --------------------------------------
+    @property
+    def P(self) -> np.ndarray:
+        return self._state["P"].copy()
 
-    def _signature(self):
-        if self._sig is None:
-            from ...estimation.state_spec import StateSpec
-            from ...tick import walk_tick_signature
-            cf = self._cw.tick.casadi_function
-            self._sig = walk_tick_signature(
-                cf, self._cw.world, StateSpec.from_world(self._cw.world))
-        return self._sig
+    def state_dict(self) -> dict[str, dict[str, Any]]:
+        """Current estimate nested by owner."""
+        nested: dict[str, dict[str, Any]] = {}
+        for full, val in self._spec.unpack(self._state["x"]).items():
+            owner, slot = _split(full)
+            nested.setdefault(owner, {})[slot] = val
+        return nested
 
-    @staticmethod
-    def _resolve(name: str, candidates: list[str], label: str) -> str:
-        return resolve_suffix(name, candidates, label=label, who="NumpyWorld")
+    def reset(self, state: dict | None = None, *,
+              P: np.ndarray | None = None) -> None:
+        """Reset held state. `state` is a nested/flat dict merged over
+        the Module's declared initial values, or a flat ambient vector
+        taken verbatim; `P` resets the covariance."""
+        x_field = self.module.state.field("x")
+        if isinstance(state, np.ndarray):
+            self._state["x"] = np.asarray(state, dtype=float).reshape(-1).copy()
+        elif state is not None:
+            base = self._spec.unpack(np.asarray(x_field.init, dtype=float))
+            for k, v in state.items():
+                if isinstance(v, dict):
+                    for slot, val in v.items():
+                        base[f"{k}.{slot}"] = val
+                else:
+                    base[k] = v
+            self._state["x"] = self._spec.pack(
+                {k: v for k, v in base.items() if k in self._spec})
+        elif P is None:
+            self._state["x"] = np.asarray(
+                x_field.init, dtype=float).reshape(-1).copy()
+            if "P" in self.module.state:
+                pf = self.module.state.field("P")
+                self._state["P"] = np.asarray(
+                    pf.init, dtype=float).reshape(pf.shape).copy()
+            if self._y is not None:
+                self._y = np.zeros(self._y_port.size)
+        if P is not None:
+            P = np.asarray(P, dtype=float)
+            expected = (self._spec.tangent_dim, self._spec.tangent_dim)
+            if P.shape != expected:
+                raise ValueError(
+                    f"reset: P shape {P.shape} doesn't match tangent dim "
+                    f"{expected}")
+            self._state["P"] = P.copy()
+        if self._bus is not None:
+            self._bus.publish_estimate()
 
-    def _output_dim(self, full: str) -> int | None:
-        for s in self._signature().sensors:
-            if s.full == full:
-                shape = s.part.output_declarations()[s.output_name].shape
-                return _SHAPE_DIM.get(shape)
-        return None
+    def predict(self, dt: float, *, t: float = 0.0,
+                u: dict[str, Any] | None = None,
+                Q: np.ndarray | None = None) -> None:
+        """Advance the estimate by `dt`. Process noise: the model's baked
+        `L Σ Lᵀ` unless an explicit `Q` overrides it."""
+        u_vec = self.build_u(u)
+        if Q is None:
+            self._run(self.module.entry("predict"),
+                      {"u": u_vec, "dt": dt, "t": t})
+        else:
+            self._run(self.module.entry("predict_with_Q"),
+                      {"Q": np.asarray(Q, dtype=float), "u": u_vec,
+                       "dt": dt, "t": t})
 
-    def _input_dim(self, full: str) -> int | None:
-        for ic in self._signature().inputs:
-            if ic.full == full:
-                d = ic.default
-                return 1 if np.ndim(d) == 0 else int(np.size(d))
-        return None
+    def update(self, target, z=None, R=None, *, t: float = 0.0,
+               u: dict[str, Any] | None = None) -> None:
+        """Fold one measurement.
+
+        * `update("gps.position", z)` — by sensor name (full or suffix),
+          through the baked Joseph-update kernel.
+        * `update(h_sym, z, R=R)` — a caller-supplied `h(x)` callable +
+          measurement covariance (custom measurements; numpy-only).
+        """
+        if callable(target):
+            if z is None or R is None:
+                raise TypeError("update(h_sym, z, R=...): z and R required")
+            return self._update_low_level(target, z, R)
+        self.fold(self._resolve_sensor(target),
+                  z, self.build_u(u if u is not None else
+                                  (self.inputs if self.inputs else None)),
+                  t=t)
+
+    def _resolve_sensor(self, name: str) -> str:
+        return resolve_suffix(name, [p.name for p in self._meas_ports_ir],
+                              label="sensor", who=type(self).__name__)
+
+    def fold(self, full: str, z, u_vec: np.ndarray, *,
+             t: float = 0.0) -> None:
+        """Fold one measurement (full sensor name) — the bus's hook."""
+        port = self.module.port(full)
+        z_arr = np.atleast_1d(np.asarray(z, dtype=float)).reshape(-1)
+        if z_arr.size != port.size:
+            raise ValueError(
+                f"update {full}: expected z of size {port.size}, got "
+                f"{z_arr.size}.")
+        self._run(self.module.entry(f"update_{full.replace('.', '_')}"),
+                  {full: z_arr, "u": u_vec, "t": t})
+
+    @property
+    def estimate_vector(self) -> np.ndarray:
+        return self._state["x"]
+
+    def _update_low_level(self, h_sym: Callable, z, R) -> None:
+        """Joseph update for a caller-supplied `h(x)` — built on the spec's
+        manifold ops; the one genuinely runtime-defined measurement."""
+        spec = self._spec
+        z = np.asarray(z, dtype=float).reshape(-1)
+        R = np.asarray(R, dtype=float)
+        if R.shape != (z.size, z.size):
+            raise ValueError(
+                f"update: R shape {R.shape} doesn't match z size {z.size}")
+        x_sym = ca.MX.sym("x", spec.ambient_dim, 1)
+        h_mx = h_sym(x_sym)
+        h_mx = ca.reshape(h_mx, h_mx.numel(), 1)
+        delta = ca.MX.sym("delta", spec.tangent_dim, 1)
+        h_pert = h_sym(spec.boxplus_sym(x_sym, delta))
+        h_pert = ca.reshape(h_pert, h_pert.numel(), 1)
+        H_sym = ca.substitute(ca.jacobian(h_pert, delta), delta,
+                              ca.MX.zeros(spec.tangent_dim, 1))
+        x_now = self._state["x"]
+        h_x = np.asarray(ca.Function("h", [x_sym], [h_mx])(x_now)).reshape(-1)
+        H = np.asarray(ca.Function("H", [x_sym], [H_sym])(x_now))
+        if h_x.size != z.size:
+            raise ValueError(
+                f"update: h(x) size {h_x.size} doesn't match z size {z.size}")
+        P = self._state["P"]
+        S = H @ P @ H.T + R
+        K = np.linalg.solve(S.T, (P @ H.T).T).T
+        self._state["x"] = spec.boxplus_num(x_now, K @ (z - h_x))
+        IKH = np.eye(spec.tangent_dim) - K @ H
+        P = IKH @ P @ IKH.T + K @ R @ K.T
+        self._state["P"] = 0.5 * (P + P.T)
+
+    # bus passthroughs (filter only)
+    @property
+    def inputs(self) -> dict:
+        return self._bus.inputs if self._bus is not None else {}
+
+    @inputs.setter
+    def inputs(self, value: dict) -> None:
+        self._bus.inputs = value
+
+    @property
+    def Q(self):
+        return self._bus.Q
+
+    @Q.setter
+    def Q(self, value) -> None:
+        self._bus.Q = value
+
+    def feed(self, name: str, z, *, t: float | None = None) -> None:
+        self._bus.feed(name, z, t=t)
+
+    def meas(self, name: str):
+        return self._bus.meas(name)
+
+    @property
+    def estimate(self):
+        """Producer port: the estimate as a flat ambient vector (filter),
+        or the consumer port a regulator reads."""
+        if self._bus is not None:
+            return self._bus.estimate
+        from ...signal import Signal
+        if getattr(self, "_est_in", None) is None:
+            self._est_in = Signal("estimate", dim=None)
+        return self._est_in
+
+    # ==================================================================
+    # Recurrence surface (HELD + an OUTPUT port)
+    # ==================================================================
+
+    def _recurrence_step(self, dt, *, t=None, **inputs):
+        tt = self._t if t is None else t
+        u = np.zeros(self._u_port.size)
+        off = 0
+        for f in self._u_fields():
+            if f.name not in inputs:
+                raise KeyError(
+                    f"step: missing input {f.name!r}; required: "
+                    f"{self._input_names()}")
+            v = np.atleast_1d(np.asarray(inputs[f.name],
+                                         dtype=float)).reshape(-1)
+            if v.size != f.dim:
+                raise ValueError(
+                    f"step: input {f.name!r} expects dim {f.dim}, got "
+                    f"{v.size}.")
+            u[off:off + f.dim] = v
+            off += f.dim
+        ret = self._run(self.module.entry("step"),
+                        {"u": u, "dt": dt, "t": tt})
+        self._y = ret[self._y_port.name]
+        self._t = tt + dt
+        return self.readouts()
+
+    def readouts(self) -> dict[str, Any]:
+        """Last-computed readouts by output-field name (scalars unwrapped)."""
+        out: dict[str, Any] = {}
+        off = 0
+        for f in self._y_port.fields:
+            seg = self._y[off:off + f.dim]
+            out[f.name] = float(seg[0]) if f.dim == 1 else seg.copy()
+            off += f.dim
+        return out
+
+    def input(self, name: str):
+        """Consumer port for a recurrence input (latched / ZOH)."""
+        names = self._input_names()
+        if name not in names:
+            raise KeyError(f"unknown input port {name!r}. Available: {names}")
+        f = next(f for f in self._u_fields() if f.name == name)
+        return self._ports.consumer(name, dim=f.dim)
+
+    def output(self, name: str):
+        """Producer port for a recurrence readout."""
+        names = [f.name for f in (self._y_port.fields if self._y_port else ())]
+        if name not in names:
+            raise KeyError(f"unknown output port {name!r}. Available: {names}")
+        f = next(f for f in self._y_port.fields if f.name == name)
+        return self._ports.producer(name, dim=f.dim)
+
+    # ==================================================================
+    # Regulator surface (THREADED + a `control` entry)
+    # ==================================================================
+
+    def u(self, x_flat) -> np.ndarray:
+        """Control vector for a flat ambient state (full-spec layout)."""
+        return self.call("control",
+                         {"x": np.asarray(x_flat, dtype=float)})["u"]
+
+    def control(self, state: dict) -> dict[str, float]:
+        """Map a state estimate (nested or flat dict) → `{input: value}`,
+        merged over the Module's reference point."""
+        spec = self._x_port.manifold
+        base = spec.unpack(np.asarray(self._x_port.init, dtype=float))
+        for k, v in state.items():
+            if isinstance(v, dict):
+                for slot, val in v.items():
+                    base[f"{k}.{slot}"] = val
+            else:
+                base[k] = v
+        x = spec.pack({k: v for k, v in base.items() if k in spec})
+        u_vec = self.u(x)
+        return {n: float(u_vec[i])
+                for i, n in enumerate(self._input_names())}
+
+    def compute(self, dt: float | None = None, *,
+                t: float | None = None) -> dict[str, Any]:
+        """Pull wired inputs, evaluate, publish to output ports.
+
+        Regulator: read the wired `estimate`, apply the control law,
+        publish each command. Recurrence: pull input ports, `step(dt)`,
+        publish readouts (stamped at start-of-step)."""
+        if "control" in self._methods:
+            est = self.estimate.read()
+            if est is None:
+                raise RuntimeError(
+                    "compute: estimate input is empty — wire a producer "
+                    "into `.estimate` (or set it) first.")
+            if isinstance(est, dict):
+                u = self.control(est)
+            else:
+                self._ensure_gather()
+                x_full = np.asarray(self._x_port.init, dtype=float).copy()
+                x_src = np.asarray(est, dtype=float).reshape(-1)
+                for foff, dim, soff in self._gather:
+                    x_full[foff:foff + dim] = x_src[soff:soff + dim]
+                u_vec = self.u(x_full)
+                u = {n: float(u_vec[i])
+                     for i, n in enumerate(self._input_names())}
+            for full, v in u.items():
+                self.command(full).set(v)
+            return u
+        tt = self._t if t is None else t
+        out = self._recurrence_step(dt, t=tt, **self._ports.pull(tt))
+        self._ports.publish(out, t=tt)        # start-of-step stamp
+        return out
+
+    def _ensure_gather(self) -> None:
+        if getattr(self, "_gather", None) is not None:
+            return
+        spec = self._x_port.manifold
+        src = self.estimate.source
+        layout = getattr(src, "layout", None) if src is not None else None
+        if layout is None:
+            raise RuntimeError(
+                "compute: wired estimate carries no layout; wire a filter's "
+                "`estimate` port (a flat vector + layout) or set a dict.")
+        self._gather = [
+            (spec.slot(name).ambient_offset, sdim, soff)
+            for name, (soff, sdim) in layout.items() if name in spec]
+
+    # ------------------------------------------------------------------
+
+    def observability(self, **kwargs):       # pragma: no cover - thin
+        raise AttributeError(
+            "observability is an IR-level analysis — call it on the EKF "
+            "transform: EKF(world, ...).observability(...)")
 
     def __repr__(self) -> str:
         drv = "" if self._driver is None else f" +{self._driver!r}"
-        return f"<NumpyWorld over {self._cw!r}{drv}>"
+        return f"<NumpyRuntime over {self.module!r}{drv}>"
 
 
 # ---------------------------------------------------------------------------
-# NoiseDriver — stochastic source for a Sim's Noise channels
+# NoiseDriver — stochastic source for a Module's NOISE port
 # ---------------------------------------------------------------------------
 
 class NoiseDriver:
-    """Draws the random samples that make a `Sim` genuinely noisy.
+    """Draws the per-step samples that make an oracle Module's noise live.
 
-    A model's `Noise` channels (WhiteNoise / RandomWalkNoise) only
-    declare a *distribution*; the compiled tick exposes each as an
-    ordinary input seeded to zero. Left alone, the sim is a noiseless
-    oracle. Attach a driver and every active (σ>0) channel is sampled
-    each `step()` and fed into its input — so the same σ that the EKF
-    reads to size R/Q now also shapes the truth it estimates.
-
-    Both kinds sample `N(0, σ²)` per component: WhiteNoise adds the draw
-    straight into the reading; RandomWalkNoise feeds its `_driver` input
-    and the kernel applies the √dt random-walk scaling. The driver is a
-    deliberately thin, swappable layer (kept *out* of the pure kernel),
-    so it lowers to a few lines in any target language and is simply
-    omitted for on-device deployment.
-
-    Usage::
-
-        sim = TargetNumpy(Sim(world))
-        sim.attach_driver(NoiseDriver(seed=7))
+    Binds to the NOISE port's fields (name, dim, σ); each `sample()` is an
+    independent `N(0, σ²)` draw per active channel. Deliberately thin and
+    swappable — kept out of the pure kernels — and simply omitted on a
+    deploy target.
     """
 
     def __init__(self, seed: int | None = None) -> None:
         self._seed = seed
-        self._rng  = np.random.default_rng(seed)
-        # (input_name, dim, sigma) per channel; filled by bind().
+        self._rng = np.random.default_rng(seed)
         self._channels: list[tuple[str, int, float]] = []
 
-    def bind(self, channels) -> None:
-        """Wire the driver to a list of `NoiseChannel` specs (from
-        `walk_tick_signature`). Called by `NumpyWorld.attach_driver`."""
-        self._channels = [(c.full, c.dim, c.sigma) for c in channels]
+    def bind(self, fields) -> None:
+        self._channels = [(f.name, f.dim, float(f.sigma or 0.0))
+                          for f in fields]
 
     def sample(self) -> dict[str, np.ndarray]:
-        """One independent `N(0, σ²)` draw per active channel.
-
-        Returns `{input_name: vec}`; inactive (σ=0) channels are omitted
-        so they keep their zero seed."""
-        out: dict[str, np.ndarray] = {}
-        for name, dim, sigma in self._channels:
-            if sigma > 0.0:
-                out[name] = self._rng.normal(0.0, sigma, dim)
-        return out
+        return {name: self._rng.normal(0.0, sigma, dim)
+                for name, dim, sigma in self._channels if sigma > 0.0}
 
     def reset(self) -> None:
-        """Re-seed to the construction seed for a reproducible rerun."""
         self._rng = np.random.default_rng(self._seed)
 
     def __repr__(self) -> str:
@@ -365,712 +680,12 @@ class NoiseDriver:
 
 
 # ---------------------------------------------------------------------------
-# NumpyEKF — runtime for EKF (mutable state + predict/update)
+# TargetNumpy
 # ---------------------------------------------------------------------------
 
-class NumpyEKF:
-    """Native-Python evaluator wrapping an `EKF` IR.
-
-    Holds mutable `_x` (ambient state vector) and `_P` (tangent
-    covariance). Calls the IR's compiled predict / measurement
-    functions during `predict()` and `update()`.
-    """
-
-    def __init__(self, ekf) -> None:
-        from ...estimation.ekf import EKF
-        if not isinstance(ekf, EKF):
-            raise TypeError(
-                f"NumpyEKF: expected EKF, got {type(ekf).__name__}")
-        from ..module_build import to_module
-        from .module import NumpyModule
-        self._ekf = ekf
-        # Generic execution engine: the EKF is a two-field (x, P) Module.
-        # Its predict / per-sensor Joseph update run through NumpyModule;
-        # this class adds the measurement bus + low-level custom-h update.
-        self._nm = NumpyModule(to_module(ekf))
-        # The Module seeds x from the world initial + P = 1e-2·I — the same
-        # seed this class used before. Realign x to _initial_x for any
-        # ordering nuance, then keep both in the Module's State.
-        self._nm.state["x"] = self._initial_x()
-
-        # The measurement bus (mailbox / feed / step / staleness / ZOH /
-        # estimate port) is backend-agnostic and lives in `MeasurementBus`,
-        # which drives this runtime through `build_u` / `fold` / `predict` /
-        # `estimate_vector`. This class keeps only the filter math.
-        from ...bus import MeasurementBus
-        self._bus = MeasurementBus(
-            self,
-            sensors={o["full"]: {"dim": o["dim"], "key": key}
-                     for key, o in ekf._sensors.items()},
-            input_names=ekf._input_names,
-            sample_rates=ekf._sample_rates,
-            estimate_dim=ekf.spec.ambient_dim,
-            estimate_layout={s.name: (s.ambient_offset, s.ambient_dim)
-                             for s in ekf.spec.slots})
-
-    def _initial_x(self) -> np.ndarray:
-        """Pack the world's nested initial-state dict into the spec's
-        flat ambient layout."""
-        ekf = self._ekf
-        init_flat: dict[str, Any] = {}
-        for owner_name, owner_state in ekf.world._initial_state_dict().items():
-            for k, v in owner_state.items():
-                init_flat[f"{owner_name}.{k}"] = v
-        init_for_pack = {k: v for k, v in init_flat.items() if k in ekf.spec}
-        return ekf.spec.pack(init_for_pack)
-
-    # Nominal state (ambient) + tangent covariance live in the Module's
-    # State; proxy them so the bus / properties / reset read & write the
-    # one place the generic engine updates.
-    @property
-    def _x(self) -> np.ndarray:
-        return self._nm.state["x"]
-
-    @_x.setter
-    def _x(self, v) -> None:
-        self._nm.state["x"] = np.asarray(v, dtype=float).reshape(-1)
-
-    @property
-    def _P(self) -> np.ndarray:
-        return self._nm.state["P"]
-
-    @_P.setter
-    def _P(self, v) -> None:
-        self._nm.state["P"] = np.asarray(v, dtype=float)
-
-    # ---- IR passthroughs ----------------------------------------------
-
-    @property
-    def ekf(self):
-        """The wrapped EKF IR (carries the symbolic functions,
-        sensor table, etc.)."""
-        return self._ekf
-
-    @property
-    def spec(self):
-        return self._ekf.spec
-
-    @property
-    def world(self):
-        return self._ekf.world
-
-    @property
-    def crafts(self):
-        return self._ekf.crafts
-
-    @property
-    def x(self) -> np.ndarray:
-        return self._x.copy()
-
-    @property
-    def P(self) -> np.ndarray:
-        return self._P.copy()
-
-    # ---- State view + reset --------------------------------------------
-
-    def state_dict(self) -> dict[str, dict[str, Any]]:
-        """Current estimate nested by owner — same shape as
-        `NumpyWorld.initial_state()`.
-        """
-        flat = self._ekf.spec.unpack(self._x)
-        nested: dict[str, dict[str, Any]] = {}
-        for full_name, val in flat.items():
-            owner_name, slot = full_name.split(".", 1)
-            nested.setdefault(owner_name, {})[slot] = val
-        return nested
-
-    def reset(self, *,
-              state: dict | None = None,
-              P: np.ndarray | None = None) -> None:
-        """Reset the EKF state and/or covariance.
-
-        `state` accepts either:
-          * Nested `{owner: {slot: value}}` (canonical, matches
-            `state_dict()`).
-          * Flat dict keyed by full slot name (`"<owner>.<slot>"`).
-        Missing entries fall back to the world's add_craft defaults.
-        """
-        ekf = self._ekf
-        if state is not None:
-            full_flat: dict[str, Any] = {}
-            for owner_name, owner_state in ekf.world._initial_state_dict().items():
-                for k, v in owner_state.items():
-                    full_flat[f"{owner_name}.{k}"] = v
-            for k, v in state.items():
-                if isinstance(v, dict):
-                    for slot, val in v.items():
-                        full_flat[f"{k}.{slot}"] = val
-                else:
-                    full_flat[k] = v
-            full_flat = {k: v for k, v in full_flat.items() if k in ekf.spec}
-            self._x = ekf.spec.pack(full_flat)
-        if P is not None:
-            P = np.asarray(P, dtype=float)
-            expected = (ekf.spec.tangent_dim, ekf.spec.tangent_dim)
-            if P.shape != expected:
-                raise ValueError(
-                    f"NumpyEKF.reset: P shape {P.shape} doesn't match "
-                    f"tangent dim {expected}")
-            self._P = P.copy()
-        self._bus.publish_estimate()
-
-    # ---- Signal bus (delegated to the backend-agnostic MeasurementBus) -
-
-    @property
-    def inputs(self) -> dict[str, Any]:
-        """Latched (ZOH) control commands read by `step()`'s predict."""
-        return self._bus.inputs
-
-    @inputs.setter
-    def inputs(self, value: dict) -> None:
-        self._bus.inputs = value
-
-    @property
-    def Q(self):
-        """Default process noise used by `step()` when none is passed."""
-        return self._bus.Q
-
-    @Q.setter
-    def Q(self, value) -> None:
-        self._bus.Q = value
-
-    def meas(self, name: str):
-        """Consumer port for a sensor measurement (see MeasurementBus)."""
-        return self._bus.meas(name)
-
-    def command(self, name: str):
-        """Consumer port for a known control input (see MeasurementBus)."""
-        return self._bus.command(name)
-
-    @property
-    def estimate(self):
-        """Producer port carrying the current estimate (see MeasurementBus).
-        Wire it into `lqr.estimate`."""
-        return self._bus.estimate
-
-    def feed(self, name: str, z, *, t: float | None = None) -> None:
-        """Drop a measurement into the bus mailbox (see MeasurementBus)."""
-        self._bus.feed(name, z, t=t)
-
-    def step(self, dt: float, *, t: float | None = None,
-             Q: np.ndarray | None = None) -> None:
-        """Fold interval-start measurements, then predict by `dt`
-        (update-then-predict; see MeasurementBus.step)."""
-        self._bus.step(dt, t=t, Q=Q)
-
-    # ---- FilterRuntime surface the MeasurementBus drives ---------------
-
-    def build_u(self, u: dict | None) -> np.ndarray:
-        return self._ekf._build_u(u)
-
-    def fold(self, sensor_key, z, u_vec: np.ndarray) -> None:
-        self._apply_sensor_update(self._ekf._sensors[sensor_key], z, u_vec)
-
-    @property
-    def estimate_vector(self) -> np.ndarray:
-        return self._x
-
-    # ---- Predict -------------------------------------------------------
-
-    def predict(self,
-                dt: float,
-                *,
-                t: float = 0.0,
-                u: dict[str, float] | None = None,
-                Q: np.ndarray | None = None) -> None:
-        """Advance the nominal state and tangent covariance by `dt`.
-
-        Args: `dt` (timestep), `t` (world-clock time), `u` (per-tick part
-        Input override dict), `Q` (process-noise override; default is
-        auto-assembly from registered Noise channels).
-
-        The covariance is propagated per independent-subsystem block
-        (`ekf._blocks`): with one block this is the usual dense
-        `F P Fᵀ + Q`; with several (uncoupled crafts estimated jointly)
-        each block propagates on its own — Σ O(n_b³) instead of O(n³).
-        Off-diagonal (cross-block) covariance stays zero by construction
-        of the partition, so it is never touched.
-        """
-        ekf = self._ekf
-        u_vec = ekf._build_u(u)
-        # Process-noise covariance: caller override, else the model's
-        # state-dependent Q = L Σ Lᵀ (auto-built kernel), else zero.
-        if Q is not None:
-            Q_eff = np.asarray(Q, dtype=float)
-        elif ekf._process_noise_fn is not None:
-            Q_eff = np.asarray(ekf._process_noise_fn(self._x, u_vec, dt, t))
-        else:
-            n = ekf.spec.tangent_dim
-            Q_eff = np.zeros((n, n))
-        # The whole predict (x' = f; P' = F P Fᵀ + Q) is one baked kernel —
-        # no linear algebra here (see `Linearization.kalman_functions`) — run
-        # through the generic engine, which reads x,P from State and writes
-        # both back.
-        self._nm.predict(Q=Q_eff, u=u_vec, dt=dt, t=t)
-
-    # ---- Update --------------------------------------------------------
-
-    def update(self, *args, **kwargs) -> None:
-        """Polymorphic update.
-
-        Sensor form (auto h, H, R from Noise declarations):
-            ekf.update(part, gyro=z_gyro, accel=z_accel)
-
-        Low-level form (caller-supplied h, R):
-            ekf.update(h_sym, z, R)
-            ekf.update(h_sym, z=z, R=R)
-        """
-        if args and callable(args[0]):
-            h_sym = args[0]
-            try:
-                z = args[1] if len(args) > 1 else kwargs["z"]
-                R = args[2] if len(args) > 2 else kwargs["R"]
-            except KeyError as e:
-                raise TypeError(
-                    f"NumpyEKF.update: low-level form needs h_sym + z + R; "
-                    f"missing {e}") from None
-            return self._update_low_level(h_sym, z, R)
-        if len(args) == 1 and not callable(args[0]):
-            return self._update_sensor(args[0], kwargs)
-        raise TypeError(
-            "NumpyEKF.update: pass (h_sym, z, R) for the low-level form "
-            "or (part, **{output_name: z}) for the sensor form.")
-
-    def _update_sensor(self, part, measurements: dict[str, Any]) -> None:
-        if not measurements:
-            raise ValueError(
-                f"NumpyEKF.update: no measurements provided for "
-                f"{type(part).__name__}('{part.name}').")
-        ekf = self._ekf
-        for out_name, z in measurements.items():
-            key = (id(part), out_name)
-            if key not in ekf._sensors:
-                avail = [k[1] for k in ekf._sensors if k[0] == id(part)]
-                raise KeyError(
-                    f"NumpyEKF.update: part '{part.name}' has no "
-                    f"registered output {out_name!r} (available: {avail}).")
-            self._apply_sensor_update(ekf._sensors[key], z,
-                                      ekf._u_defaults)
-
-    def _apply_sensor_update(self, spec_o: dict[str, Any], z,
-                             u_vec: np.ndarray) -> None:
-        """Fold a sensor measurement in via its baked Joseph-update kernel
-        (h/H/R + the manifold correction are all inside the kernel)."""
-        z_arr = np.atleast_1d(np.asarray(z, dtype=float)).reshape(-1)
-        if z_arr.size != spec_o["dim"]:
-            raise ValueError(
-                f"NumpyEKF: {spec_o['full']}: expected z of size "
-                f"{spec_o['dim']}, got {z_arr.size}.")
-        # Joseph update through the generic engine: one baked kernel
-        # (h/H/R + manifold correction inside) writes x,P back into State.
-        ident = spec_o["full"].replace(".", "_")
-        getattr(self._nm, f"update_{ident}")(
-            **{f"z_{ident}": z_arr, "u": u_vec, "t": 0.0})
-
-    def _update_low_level(self,
-                          h_sym: Callable[[ca.MX], ca.MX],
-                          z: np.ndarray,
-                          R: np.ndarray) -> None:
-        """Caller-supplied h(x) callable + R. Used for direct-slot
-        measurements (`measurement_slot` helpers)."""
-        ekf = self._ekf
-        z = np.asarray(z, dtype=float).reshape(-1)
-        R = np.asarray(R, dtype=float)
-        if R.shape != (z.size, z.size):
-            raise ValueError(
-                f"NumpyEKF.update: R shape {R.shape} doesn't match z size {z.size}")
-
-        h_mx = h_sym(ekf._x_sym)
-        h_mx = ca.reshape(h_mx, h_mx.numel(), 1)
-        delta = ca.MX.sym("delta_h", ekf.spec.tangent_dim, 1)
-        x_pert = ekf.spec.boxplus_sym(ekf._x_sym, delta)
-        h_pert = h_sym(x_pert)
-        h_pert = ca.reshape(h_pert, h_pert.numel(), 1)
-        H_sym = ca.substitute(
-            ca.jacobian(h_pert, delta),
-            delta, ca.MX.zeros(ekf.spec.tangent_dim, 1))
-
-        h_fn = ca.Function("h_low", [ekf._x_sym], [h_mx])
-        H_fn = ca.Function("H_low", [ekf._x_sym], [H_sym])
-        h_x  = np.asarray(h_fn(self._x)).reshape(-1)
-        H    = np.asarray(H_fn(self._x))
-        if h_x.size != z.size:
-            raise ValueError(
-                f"NumpyEKF.update: h(x) size {h_x.size} doesn't match z "
-                f"size {z.size}")
-        self._apply_update(z, h_x, H, R)
-
-    def _apply_update(self,
-                      z: np.ndarray,
-                      h_x: np.ndarray,
-                      H: np.ndarray,
-                      R: np.ndarray) -> None:
-        y = z - h_x
-        S = H @ self._P @ H.T + R
-        K = np.linalg.solve(S.T, (self._P @ H.T).T).T
-        delta_x = K @ y
-        self._x = self._ekf.spec.boxplus_num(self._x, delta_x)
-        I = np.eye(self._ekf.spec.tangent_dim)
-        IKH = I - K @ H
-        self._P = IKH @ self._P @ IKH.T + K @ R @ K.T
-        self._P = 0.5 * (self._P + self._P.T)
-
-    def observability(self, **kwargs):
-        """Local observability report for this EKF's sensor set at an
-        operating point (defaults to the world's initial state). See
-        `manta.estimation.observability`. Pass `sensors=[…]` to ask what a
-        subset of sensors would observe."""
-        from ...estimation.observability import observability
-        return observability(self._ekf, **kwargs)
-
-    def __repr__(self) -> str:
-        return f"<NumpyEKF over {self._ekf!r}>"
-
-
-# ---------------------------------------------------------------------------
-# NumpyLQR — runtime for LQR
-# ---------------------------------------------------------------------------
-
-class NumpyLQR:
-    """Native-Python evaluator wrapping an `LQR` IR.
-
-    Stateless: the gain is baked at construction, so `control` is a pure
-    function of the supplied state estimate."""
-
-    def __init__(self, lqr) -> None:
-        from ...control.lqr import LQR
-        from ..module_build import to_module
-        from .module import NumpyModule
-        if not isinstance(lqr, LQR):
-            raise TypeError(
-                f"NumpyLQR: expected LQR, got {type(lqr).__name__}")
-        self._lqr = lqr
-        self._nm = NumpyModule(to_module(lqr))      # generic execution engine
-        # Signal-bus ports (lazy): a state-estimate consumer + one
-        # command producer per control input.
-        self._est_in = None
-        self._cmd_ports: dict[str, Any] = {}
-        # Fixed gather from the wired estimate's layout → this LQR's full
-        # ambient layout: list of (full_offset, dim, src_offset). Built
-        # once on first compute() (None until then).
-        self._gather: "list[tuple[int, int, int]] | None" = None
-
-    @property
-    def K(self) -> np.ndarray:
-        return self._lqr.K
-
-    @property
-    def spec(self):
-        return self._lqr.spec
-
-    @property
-    def input_names(self) -> list:
-        return self._lqr.input_names
-
-    def u(self, x_flat) -> np.ndarray:
-        """Control vector for a flat ambient state (spec layout)."""
-        return self._nm.control(x=np.asarray(x_flat, dtype=float))["u"]
-
-    def control(self, state: dict) -> dict[str, float]:
-        """Map a state estimate → `{input_name: value}`.
-
-        `state` is nested `{owner: {slot: value}}` (e.g.
-        `NumpyEKF.state_dict()` or a `NumpyWorld` state) or flat
-        `{"owner.slot": value}`. Slots not supplied fall back to the
-        world's initial state.
-        """
-        lqr = self._lqr
-        flat: dict[str, Any] = {}
-        for owner_name, owner_state in lqr.world._initial_state_dict().items():
-            for k, v in owner_state.items():
-                flat[f"{owner_name}.{k}"] = v
-        for k, v in state.items():
-            if isinstance(v, dict):
-                for slot, val in v.items():
-                    flat[f"{k}.{slot}"] = val
-            else:
-                flat[k] = v
-        x = lqr.spec.pack({k: v for k, v in flat.items() if k in lqr.spec})
-        u_vec = self.u(x)
-        return {name: float(u_vec[i])
-                for i, name in enumerate(lqr.input_names)}
-
-    # ---- Signal-bus ports ----------------------------------------------
-
-    @property
-    def estimate(self):
-        """Consumer port for the state estimate this regulator acts on.
-        Wire `ekf.estimate` into it."""
-        from ...signal import Signal
-        if self._est_in is None:
-            self._est_in = Signal("estimate", dim=None)
-        return self._est_in
-
-    def command(self, name: str):
-        """Producer port for one control input (`"craft.part.input"` or an
-        unambiguous suffix). `compute()` writes the latest command here;
-        wire it into `sim.command(...)` / `ekf.command(...)`."""
-        from ...signal import Signal
-        full = self._resolve_input_full(name)
-        if full not in self._cmd_ports:
-            self._cmd_ports[full] = Signal(full, dim=1, latched=True)
-        return self._cmd_ports[full]
-
-    def compute(self) -> dict[str, float]:
-        """Read the wired estimate, evaluate the gain, and publish each
-        control to its `command` port. Returns the `{input: value}` dict.
-
-        The estimate is the producer's flat ambient vector; its slots are
-        scattered (by name, via a fixed precomputed gather) into this
-        LQR's full ambient layout over the operating-point base, then the
-        baked control law reads the tracked slots from it. A nested dict
-        is still accepted (e.g. an unwired estimate set by hand)."""
-        import numpy as np
-        est = self.estimate.read()
-        if est is None:
-            raise RuntimeError(
-                "NumpyLQR.compute: estimate input is empty — wire "
-                "`ekf.estimate` into `lqr.estimate` (or set it) first.")
-        if isinstance(est, dict):
-            u = self.control(est)                    # legacy / hand-set dict
-        else:
-            self._ensure_gather()
-            x_full = self._lqr.x_ref.copy()          # operating-point base
-            x_src  = np.asarray(est, dtype=float).reshape(-1)
-            for foff, dim, soff in self._gather:
-                x_full[foff:foff + dim] = x_src[soff:soff + dim]
-            u_vec = self.u(x_full)
-            u = {n: float(u_vec[i])
-                 for i, n in enumerate(self._lqr.input_names)}
-        for full, v in u.items():
-            self.command(full).set(v)
-        return u
-
-    def _ensure_gather(self) -> None:
-        """Build the fixed estimate→full-ambient gather from the wired
-        producer's `layout`. Each slot the producer exposes that also
-        exists in this LQR's full spec is copied by name; slots the
-        producer lacks keep their operating-point value (and untracked
-        slots are ignored by the control law anyway)."""
-        if self._gather is not None:
-            return
-        full = self._lqr.spec
-        src = self.estimate.source
-        layout = getattr(src, "layout", None) if src is not None else None
-        if layout is None:
-            raise RuntimeError(
-                "NumpyLQR.compute: wired estimate carries no layout; wire "
-                "`ekf.estimate` (a flat vector + layout) or set a dict.")
-        pairs: list[tuple[int, int, int]] = []
-        for name, (soff, sdim) in layout.items():
-            if name in full:
-                pairs.append((full.slot(name).ambient_offset, sdim, soff))
-        self._gather = pairs
-
-    def _resolve_input_full(self, name: str) -> str:
-        return resolve_suffix(name, self._lqr.input_names,
-                              label="input", who="NumpyLQR.command")
-
-    def __repr__(self) -> str:
-        return f"<NumpyLQR over {self._lqr!r}>"
-
-
-# ---------------------------------------------------------------------------
-# NumpyRecurrence — runtime for any `recurrence` block (PID, Madgwick, IMU)
-# ---------------------------------------------------------------------------
-
-class NumpyRecurrence:
-    """Signal-bus + ergonomic adapter for a `recurrence` block.
-
-    The kernel evaluation + state storage are delegated to the generic
-    `NumpyModule` (`to_module(block)`); this class only adds the
-    recurrence-flavored surface — the direct call form (`step(dt, **inputs)`)
-    that names input ports, the readout split, and the signal-bus ports
-    (`input(...)` / `output(...)` / `compute(...)`). There is no boxplus at
-    runtime (the manifold integration is inside the kernel), so the one
-    generic engine drives every recurrence block (PID, Madgwick/Mahony, the
-    IMU integrator) unchanged.
-    """
-
-    def __init__(self, block) -> None:
-        from ...recurrence import RecurrenceBlock
-        from ..module_build import to_module
-        from .module import NumpyModule
-        if not isinstance(block, RecurrenceBlock):
-            raise TypeError(
-                f"NumpyRecurrence: expected a RecurrenceBlock, got "
-                f"{type(block).__name__}")
-        from ...bus import PortSet
-        self._b = block
-        self._nm = NumpyModule(to_module(block))    # generic execution engine
-        self._y = np.zeros(block.output_dim)
-        self._t = 0.0
-        self._ports = PortSet()                      # input/output Signal ports
-
-    # Ambient state lives in the Module's State; proxy it so the bus /
-    # reset / `state` helpers below read & write one place.
-    @property
-    def _x(self) -> np.ndarray:
-        return self._nm.state["x"]
-
-    @_x.setter
-    def _x(self, v) -> None:
-        self._nm.state["x"] = np.asarray(v, dtype=float).reshape(-1)
-
-    # ---- IR passthroughs ----------------------------------------------
-
-    @property
-    def block(self):
-        return self._b
-
-    @property
-    def spec(self):
-        return self._b.spec
-
-    # ---- State + step --------------------------------------------------
-
-    @property
-    def state(self) -> dict[str, Any]:
-        """Current state by slot name (e.g. `{"integral": …}`)."""
-        return self._b.spec.unpack(self._x)
-
-    def reset(self, state: dict | None = None) -> None:
-        """Reset to the block's initial state, or overlay `state` (a
-        `{slot_name: value}` dict) over it."""
-        if state is None:
-            self._x = self._b.x0.copy()
-        else:
-            base = self._b.spec.unpack(self._b.x0)
-            base.update(state)
-            self._x = self._b.spec.pack(base)
-        self._y = np.zeros(self._b.output_dim)
-
-    def _pack_u(self, inputs: dict) -> np.ndarray:
-        u = np.zeros(self._b.input_dim)
-        off = 0
-        for p in self._b.inputs:
-            if p.name not in inputs:
-                raise KeyError(
-                    f"NumpyRecurrence.step: missing input {p.name!r}; "
-                    f"required: {[pp.name for pp in self._b.inputs]}")
-            v = np.atleast_1d(np.asarray(inputs[p.name], dtype=float)).reshape(-1)
-            if v.size != p.dim:
-                raise ValueError(
-                    f"NumpyRecurrence.step: input {p.name!r} expects dim "
-                    f"{p.dim}, got {v.size}.")
-            u[off:off + p.dim] = v
-            off += p.dim
-        return u
-
-    def step(self, dt: float, *, t: float | None = None,
-             **inputs) -> dict[str, Any]:
-        """Advance one step and return the readouts by output-port name.
-
-        `inputs` supplies every declared input port by name. `t` is the
-        step-start time (defaults to the runtime's internal clock).
-        """
-        tt = self._t if t is None else t
-        u = self._pack_u(inputs)
-        ret = self._nm.step(u=u, dt=dt, t=tt)     # generic engine; updates _x
-        self._y = ret["y"]
-        self._t = tt + dt
-        return self.outputs()
-
-    def outputs(self) -> dict[str, Any]:
-        """Last-computed readouts by port name (scalars unwrapped)."""
-        out: dict[str, Any] = {}
-        off = 0
-        for p in self._b.outputs:
-            seg = self._y[off:off + p.dim]
-            out[p.name] = float(seg[0]) if p.dim == 1 else seg.copy()
-            off += p.dim
-        return out
-
-    # ---- Signal-bus ports ----------------------------------------------
-
-    def input(self, name: str):
-        """Consumer port for an input (latched / zero-order-hold). Wire a
-        producer into it, or `set()` it yourself; `compute()` reads it."""
-        port = self._port(name, [p.name for p in self._b.inputs], "input")
-        dim = next(p.dim for p in self._b.inputs if p.name == port)
-        return self._ports.consumer(port, dim=dim)
-
-    def output(self, name: str):
-        """Producer port for a readout, refreshed after each `compute()`."""
-        port = self._port(name, [p.name for p in self._b.outputs], "output")
-        dim = next(p.dim for p in self._b.outputs if p.name == port)
-        return self._ports.producer(port, dim=dim)
-
-    def compute(self, dt: float, *, t: float | None = None) -> dict[str, Any]:
-        """Read the wired input ports, step, and publish to output ports."""
-        tt = self._t if t is None else t
-        out = self.step(dt, t=tt, **self._ports.pull(tt))
-        # Publish at the start-of-step instant `tt` (consistent with the sim
-        # `out`/EKF estimate ports, which all stamp producers at start-of-step
-        # for the bus's sample-and-hold / staleness gates).
-        self._ports.publish(out, t=tt)
-        return out
-
-    @staticmethod
-    def _port(name: str, candidates: list[str], label: str) -> str:
-        if name in candidates:
-            return name
-        raise KeyError(
-            f"NumpyRecurrence: unknown {label} port {name!r}. Available: "
-            f"{candidates}")
-
-    def __repr__(self) -> str:
-        return f"<NumpyRecurrence over {self._b!r}>"
-
-
-# ---------------------------------------------------------------------------
-# TargetNumpy factory
-# ---------------------------------------------------------------------------
-
-class _NumpyBackend(Target):
-    """Native-Python backend: every block lowers to an in-memory runtime
-    evaluator. The `evaluator` kind maps to the ergonomic façade for the
-    concrete block (Sim→NumpyWorld, LQR→NumpyLQR, recurrence→NumpyRecurrence
-    — they share the kind/lowering, not the runtime surface); `ekf` maps to
-    NumpyEKF."""
-
-    name = "TargetNumpy"
-
-    def lower_evaluator(self, block, **opts):
-        from ...sim import Sim
-        from ...control.lqr import LQR
-        from ...recurrence import RecurrenceBlock
-        if isinstance(block, Sim):
-            return NumpyWorld(block)
-        if isinstance(block, LQR):
-            return NumpyLQR(block)
-        if isinstance(block, RecurrenceBlock):
-            return NumpyRecurrence(block)
-        raise TypeError(
-            f"TargetNumpy: {type(block).__name__} is not an evaluator block "
-            f"(expected Sim, LQR, or a RecurrenceBlock).")
-
-    def lower_ekf(self, ekf, **opts):
-        return NumpyEKF(ekf)
-
-    def lower_module(self, module, **opts):
-        """The generic Module lowering (see `manta.ir.module`): produces a
-        `NumpyModule` — State storage + an entry-point method each — with no
-        feature-specific code. Knows nothing about Sim/EKF/LQR/PID."""
-        from .module import NumpyModule
-        return NumpyModule(module)
-
-
-def TargetNumpy(ir):
-    """Native-Python backend factory.
-
-    Lowers a compiled-model IR to a Python-native runtime evaluator.
-    Dispatches by IR type:
-
-      * `Sim` → `NumpyWorld` (`.step()`, `.initial_state()`).
-      * `EKF`           → `NumpyEKF`   (`.predict()`, `.update()`,
-                                        `.state_dict()`, `.reset()`,
-                                        `.x`, `.P`).
-      * `LQR`           → `NumpyLQR`   (`.control()`, `.u()`, `.K`).
-    """
-    return _NumpyBackend().lower_block(ir)
+def TargetNumpy(x) -> NumpyRuntime:
+    """Lower a typed `Module` — or any transform exposing `.module()`
+    (`Sim`, `EKF`, `LQR`, a recurrence block) — to the one native-Python
+    `NumpyRuntime`."""
+    from ..target import as_module
+    return NumpyRuntime(as_module(x, "TargetNumpy"))

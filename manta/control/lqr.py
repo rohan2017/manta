@@ -44,6 +44,9 @@ from __future__ import annotations
 import casadi as ca
 import numpy as np
 
+from ..ir.module import (
+    EntryPoint, Hosting, Module, Port, PortField, PortRef, Role, StateLayout,
+)
 from ..linearized_system import LinearizedSystem, resolve_suffix
 
 
@@ -98,11 +101,6 @@ class LQR:
         control_fn (`u(x_full)` baked `ca.Function`).
     """
 
-    # Lowerable-block kind: LQR is a (stateless) pure-evaluator block (see
-    # manta.codegen.block.KIND_EVALUATOR), lowered through the backend's
-    # `lower_evaluator` handler — its one entry point is `control(x) -> u`.
-    RUNTIME_KIND = "evaluator"
-
     def __init__(self, world, *,
                  x_ref: dict,
                  u_ref: dict | None = None,
@@ -144,8 +142,8 @@ class LQR:
 
         # A = F, B = ∂f/∂u, both at the operating point (subspec ambient).
         x_ref_sub = sys.pack_ref(sys.spec)
-        A = np.array(sys.F(x_ref_sub, u_ref_vec, dt, 0.0))
-        B = np.array(sys.B(x_ref_sub, u_ref_vec, dt, 0.0))
+        A = np.array(sys.F_fn(x_ref_sub, u_ref_vec, dt, 0.0))
+        B = np.array(sys.B_fn(x_ref_sub, u_ref_vec, dt, 0.0))
         self.A, self.B = A, B
         n_x = sys.spec.tangent_dim
 
@@ -174,6 +172,25 @@ class LQR:
         u_expr = ca.DM(u_ref_vec.reshape(-1, 1)) - ca.DM(self.K) @ dx
         self.control_fn = ca.Function(
             "lqr_u", [x_full_sym], [u_expr], ["x"], ["u"])
+
+        # --- the typed Module: stateless, one control(x) -> u entry --------
+        self._module = Module(
+            name=f"{world.name}_lqr", state=StateLayout(()),
+            ports=(
+                Port("x", Role.STATE, (full_spec.ambient_dim,),
+                     manifold=full_spec, init=x_ref_full),
+                Port("u", Role.CONTROL, (n_u,), fields=tuple(
+                    PortField(n, 1, float(u_full[n]))
+                    for n in self.input_names)),
+            ),
+            functions={"control": self.control_fn},
+            entry_points=(EntryPoint("control", "control",
+                                     (PortRef("x"),), returns=("u",)),),
+            hosting=Hosting.THREADED)
+
+    def module(self) -> Module:
+        """The typed `Module` IR a backend lowers."""
+        return self._module
 
     @property
     def closed_loop_eigs(self) -> np.ndarray:

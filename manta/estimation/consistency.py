@@ -201,8 +201,7 @@ def nees(world, *, dt: float, steps: int,
         # from N(truth, P0) so the initial NEES is itself χ²-distributed.
         x_truth0 = truth_vec(sim)
         x_est0 = spec.boxplus_num(x_truth0, L0 @ rng.standard_normal(n))
-        ekf.reset(P=P0)
-        ekf._x = x_est0.copy()
+        ekf.reset(state=x_est0, P=P0)
         ekf.Q = Q
         names = [s["full"] for s in ekf_ir._sensors.values()
                  if sensors is None or any(

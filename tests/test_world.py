@@ -25,8 +25,9 @@ def test_two_crafts_fall_independently():
     b.add(Mass("body", mass=5.0))
     w.add_craft(b, position=(10.0, 0.0, 100.0))
 
-    cw = TargetNumpy(Sim(w))
-    assert {c.name for c in cw.crafts} == {"alice", "bob"}
+    sim = Sim(w)
+    assert {c.name for c in sim.crafts} == {"alice", "bob"}
+    cw = TargetNumpy(sim)
 
     state = cw.initial_state()
     assert state["alice"]["position"][2] == 50.0
@@ -122,8 +123,9 @@ def test_compile_handles_multiple_independent_crafts():
     w.add_craft(_make_craft("a"))
     w.add_craft(_make_craft("b"))
     w.add_craft(_make_craft("c"))
-    cw = TargetNumpy(Sim(w))
-    assert {c.name for c in cw.crafts} == {"a", "b", "c"}
+    sim = Sim(w)
+    assert {c.name for c in sim.crafts} == {"a", "b", "c"}
+    cw = TargetNumpy(sim)
 
 
 def _make_craft(name: str) -> Craft:
@@ -142,8 +144,9 @@ def test_compiled_world_exposes_world_tick():
     w = World()
     c = Craft("solo"); c.add(Mass("body", mass=1.0))
     w.add_craft(c)
-    cw = TargetNumpy(Sim(w))
-    tick = cw.tick
+    sim = Sim(w)
+    cw = TargetNumpy(sim)
+    tick = sim.tick
     assert tick is not None
     # Direct tick call uses flat-prefixed names.
     state = cw.initial_state()["solo"]
@@ -156,6 +159,5 @@ def test_compiled_world_repr_lists_crafts():
     w = World()
     w.add_craft(_make_craft("a"))
     w.add_craft(_make_craft("b"))
-    cw = TargetNumpy(Sim(w))
-    r = repr(cw)
+    r = repr(Sim(w))
     assert "a" in r and "b" in r

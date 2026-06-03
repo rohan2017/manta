@@ -29,10 +29,10 @@ def _free_flyer(force_sigma):
 def test_thruster_noise_inert_by_default():
     """σ=0 ⇒ no process noise: the EKF's auto-Q velocity block is zero."""
     w, _ = _free_flyer(0.0)
-    rt = TargetNumpy(EKF(w))
-    ekf = rt._ekf
-    L = np.asarray(ekf._L_fn(rt.x, ekf._u_defaults, 0.02, 0.0))
-    Q = L @ ekf._Sigma @ L.T
+    ekf = EKF(w)
+    rt = TargetNumpy(ekf)
+    L = np.asarray(ekf.sys.L_fn(rt.x, ekf.sys.u_defaults, 0.02, 0.0))
+    Q = L @ ekf.sys.Sigma @ L.T
     assert np.allclose(Q, 0.0)
 
 
@@ -41,10 +41,10 @@ def test_thruster_noise_builds_velocity_Q():
     has a velocity block of (dt/m)²·σ² and nothing on position/attitude."""
     sigma, dt, m = 0.5, 0.02, 2.0
     w, _ = _free_flyer(sigma)
-    rt = TargetNumpy(EKF(w))
-    ekf = rt._ekf
-    L = np.asarray(ekf._L_fn(rt.x, ekf._u_defaults, dt, 0.0))
-    Q = L @ ekf._Sigma @ L.T
+    ekf = EKF(w)
+    rt = TargetNumpy(ekf)
+    L = np.asarray(ekf.sys.L_fn(rt.x, ekf.sys.u_defaults, dt, 0.0))
+    Q = L @ ekf.sys.Sigma @ L.T
     # Q/L are tangent-indexed; use tangent_offset (not the ambient offset).
     vel = ekf.spec.slot("c.velocity")
     qv = np.diag(Q)[vel.tangent_offset:vel.tangent_offset + 3]

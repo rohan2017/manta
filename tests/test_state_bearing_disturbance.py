@@ -100,7 +100,7 @@ def test_ekf_has_disturbance_state_and_noise_channel():
     assert ekf.spec.ambient_dim == 16
     assert ekf.spec.tangent_dim == 15
     # Auto-Q includes the wind driver as a process-noise channel.
-    full_names = [s.full for s in ekf._noise_specs]
+    full_names = [s.full for s in ekf.sys.noise_specs]
     assert "wind.velocity_driver" in full_names
 
 

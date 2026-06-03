@@ -9,7 +9,7 @@ that at setup instead of as a silent estimate drift.
 
 import numpy as np
 
-from manta import Craft, EKF, TargetNumpy, World
+from manta import Craft, EKF, World
 from manta.estimation import observability
 from manta.fields import FluidField, GravityField, MagField
 from manta.parts import (
@@ -55,7 +55,7 @@ def _excited():
 
 
 def test_full_suite_is_observable():
-    ekf = TargetNumpy(EKF(_sub_world()))
+    ekf = EKF(_sub_world())
     rep = ekf.observability()
     assert rep.observable
     assert rep.rank == rep.tangent_dim
@@ -66,7 +66,7 @@ def test_gps_dvl_gyro_leaves_heading_unobservable_at_rest():
     """The submarine drift, diagnosed: at rest / straight cruise, dropping
     the compass makes absolute yaw (orientation) fall out of the observable
     subspace — so it dead-reckons and drifts."""
-    ekf = TargetNumpy(EKF(_sub_world()))
+    ekf = EKF(_sub_world())
     rep = ekf.observability(
         sensors=["imu.gyro", "dvl.velocity", "gps.position"])
     assert not rep.observable
@@ -77,7 +77,7 @@ def test_gps_dvl_gyro_leaves_heading_unobservable_at_rest():
 def test_compass_restores_observability_at_rest():
     """A magnetometer makes heading observable everywhere — including at
     rest, with no maneuvering required."""
-    ekf = TargetNumpy(EKF(_sub_world()))
+    ekf = EKF(_sub_world())
     rep = ekf.observability(
         sensors=["imu.gyro", "dvl.velocity", "gps.position", "mag.B"])
     assert rep.observable
@@ -88,7 +88,7 @@ def test_heading_observability_is_excitation_dependent():
     turning + accelerating operating point GPS + DVL + gyro recover full
     rank, even though they don't at rest. That intermittency is the real
     nuance — heading drifts on straight legs and re-locks when turning."""
-    ekf = TargetNumpy(EKF(_sub_world()))
+    ekf = EKF(_sub_world())
     state, inputs = _excited()
     sensors = ["imu.gyro", "dvl.velocity", "gps.position"]
     assert not ekf.observability(sensors=sensors).observable        # at rest
@@ -97,7 +97,7 @@ def test_heading_observability_is_excitation_dependent():
 
 
 def test_gyro_only_loses_position_and_attitude():
-    ekf = TargetNumpy(EKF(_sub_world()))
+    ekf = EKF(_sub_world())
     rep = ekf.observability(sensors=["imu.gyro"])
     assert not rep.observable
     flagged = {name for name, _ in rep.unobservable}
@@ -105,14 +105,14 @@ def test_gyro_only_loses_position_and_attitude():
 
 
 def test_no_sensors_is_fully_unobservable():
-    ekf = TargetNumpy(EKF(_sub_world()))
+    ekf = EKF(_sub_world())
     rep = ekf.observability(sensors=[])
     assert rep.rank == 0
     assert not rep.observable
 
 
 def test_report_is_readable():
-    ekf = TargetNumpy(EKF(_sub_world()))
+    ekf = EKF(_sub_world())
     text = ekf.observability(
         sensors=["imu.gyro", "dvl.velocity", "gps.position"]).summary()
     assert "NOT fully observable" in text
@@ -120,12 +120,12 @@ def test_report_is_readable():
 
 
 def test_full_suite_observable_label():
-    ekf = TargetNumpy(EKF(_sub_world()))
+    ekf = EKF(_sub_world())
     assert "fully observable" in ekf.observability().summary()
 
 
 def test_observable_basis_shape():
-    rep = TargetNumpy(EKF(_sub_world())).observability(
+    rep = EKF(_sub_world()).observability(
         sensors=["imu.gyro", "dvl.velocity", "gps.position"])
     assert rep.basis.shape == (rep.tangent_dim, rep.rank)
 

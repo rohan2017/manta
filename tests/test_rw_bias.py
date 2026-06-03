@@ -167,7 +167,6 @@ def test_ekf_estimates_rw_bias_from_gyro_readings():
     P[12:15, 12:15] = np.eye(3) * 0.5
     ekf.reset(P=P)
 
-    imu_part = next(p for p in est_c.parts if p.name == "g")
 
     dt = 0.01
     t = 0.0
@@ -178,7 +177,7 @@ def test_ekf_estimates_rw_bias_from_gyro_readings():
         state = cw.step(state, t=t, dt=dt)
         gyro_z = np.array(cw.outputs()["drone"]["g.gyro"]).ravel()
         ekf.predict(dt=dt, t=t)
-        ekf.update(imu_part, gyro=gyro_z)
+        ekf.update("g.gyro", gyro_z)
         t += dt
 
     truth_bias = np.array(state["drone"]["g.gyro_bias"])
@@ -201,11 +200,12 @@ def test_auto_Q_for_rw_bias_scales_as_dt_sigma_squared():
     _, c = _build_world()
     w = World().add_field(GravityField().add_uniform((0.0, 0.0, -9.81)))
     w.add_craft(c, position=(0.0, 0.0, 5.0))
-    ekf = TargetNumpy(EKF(w))
+    ekf_t = EKF(w)
+    ekf = TargetNumpy(ekf_t)
     # The bias slot is tangent index 12-14 (after pos, ori, vel, ω).
     dt = 0.01
-    L = np.asarray(ekf.ekf._L_fn(ekf.x, np.zeros(0), dt, 0.0))
-    Q = L @ ekf.ekf._Sigma @ L.T
+    L = np.asarray(ekf_t.sys.L_fn(ekf.x, np.zeros(0), dt, 0.0))
+    Q = L @ ekf_t.sys.Sigma @ L.T
     bias_block = Q[12:15, 12:15]
     expected = dt * (0.02 ** 2) * np.eye(3)
     np.testing.assert_allclose(bias_block, expected, atol=1e-12)

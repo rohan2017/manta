@@ -1,9 +1,9 @@
 """Top-level C++ emission.
 
-`emit_module(block, …)` lowers any IR block (Sim / EKF / LQR / recurrence)
-to a buildable C++ static-library project on disk via the one generic path:
-`to_module(block)` → `emit_module_cpp` (kernels + typed wrapper + CMake). It
-is the body of `TargetCpp(...)`.
+`emit_module(x, …)` lowers a typed `Module` (or a transform exposing
+`.module()`) to a buildable C++ static-library project on disk via the one
+generic path: `emit_module_cpp` (kernels + typed wrapper + CMake). It is
+the body of `TargetCpp(...)`.
 
 The output directory layout::
 
@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
-from ..module_build import to_module
+from ..target import as_module
 from .module_emit import emit_module_cpp
 
 
@@ -35,19 +35,19 @@ class EmitResult:
     wrapper_cpp:   Path
     cmakelists:    Path
     class_name:    str
-    funcs:         object       # carries world_name / ambient_dim / tangent_dim
+    funcs:         object       # small summary: world_name / dims
 
 
-def emit_module(block, out_dir: str | Path, *, class_name: str,
+def emit_module(x, out_dir: str | Path, *, class_name: str,
                 basename: str | None = None,
                 namespace: str = "manta_gen") -> EmitResult:
-    """Lower one IR block to a C++ library via the generic Module path."""
+    """Lower one Module to a C++ library."""
     out_dir = Path(out_dir).resolve()
     base = basename or class_name.lower()
-    module = to_module(block)
+    module = as_module(x, "TargetCpp")
     paths = emit_module_cpp(module, out_dir, class_name=class_name,
                             basename=base, namespace=namespace)
-    spec = _spec_of(module)
+    spec = module.spec
     funcs = SimpleNamespace(
         world_name=module.name,
         ambient_dim=spec.ambient_dim if spec else 0,
@@ -57,13 +57,3 @@ def emit_module(block, out_dir: str | Path, *, class_name: str,
         kernels_h=paths["kernels_h"], wrapper_hpp=paths["hpp"],
         wrapper_cpp=paths["cpp"], cmakelists=paths["cmakelists"],
         class_name=class_name, funcs=funcs)
-
-
-def _spec_of(module):
-    for f in module.state.fields:
-        if f.kind == "manifold":
-            return f.manifold
-    for p in module.ports:
-        if p.manifold is not None:
-            return p.manifold
-    return None

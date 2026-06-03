@@ -1,30 +1,29 @@
-"""The ONE generic C++ lowering of a `Module` (`manta.ir.module`).
+"""The ONE generic C++ lowering of a typed `Module`.
 
-`emit_module_cpp(module, …)` renders any Module — Sim, EKF, LQR, or a
-recurrence block — to a typed C++ class on the same flat-double kernel ABI:
-a `State` struct (manifold-typed slots), an `Inputs`/`Outputs` struct when
-the module declares those ports, an `Eigen` covariance member for a matrix
-State field, and one method per *deployable* entry point (each pure
-pack → call-kernel → unpack/scatter). It reads ONLY the Module — there is no
-per-shape code and no `world` — which is the C++ half of the generic backend
-contract. This replaces the former per-shape `evaluator_spec` builders +
-`evaluator_wrapper` + `ekf_wrapper` + `extract`/`extract_ekf`.
+`emit_module_cpp(module, …)` renders any Module — a Sim (oracle or deploy),
+EKF, LQR, or recurrence — to a typed Eigen class on the flat-double kernel
+ABI. It reads ONLY the Module and dispatches ONLY on the IR's types:
+`StateRef`/`PortRef` kernel arguments and each Port's `Role`. There is no
+name matching, no per-shape code, and no filtering — every entry point
+lowers to a method, unconditionally.
 
-The method shape is derived from each entry:
-
-  * held State (EKF / recurrence) lives as members; otherwise it is threaded
-    as a `const State&` parameter (Sim / LQR);
-  * a kernel arg in `synthesize_zero` is filled with zero (a measurement's
-    `dt`); one in `port_from` is computed by calling another entry's kernel
-    (the EKF's `Q` from `process_noise`); the rest are typed parameters;
-  * the return is a State (a not-held `writes_state`), an Inputs/Outputs
-    struct (a return naming a fielded port), or an Eigen vector/matrix
-    (sized from the kernel's output) — e.g. a measurement or a Jacobian.
+  * State struct        ← the manifold spec (a State field's, or a
+                          STATE-role port's), defaults from its init.
+  * `Inputs`/`Outputs`  ← the CONTROL / OUTPUT ports' named fields.
+  * `Cov` member        ← a matrix State field (held covariance).
+  * one method / entry  ← HELD state lives as members (+ reset/state/
+                          covariance); THREADED state is a `const State&`
+                          parameter and a written manifold state is
+                          returned fresh. Multi-value entries (an oracle
+                          `step` returning state + readings) return an
+                          emitted `<Method>Result` struct.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+
+import numpy as np
 
 from . import _structs as S
 from ._casadi import densify as _densify
@@ -32,33 +31,50 @@ from ._casadi import emit_kernel_call as _call
 from .cmake import emit_cmakelists
 from .kernels import emit_kernel_list
 from .types import cpp_type_for
+from ...ir.module import Hosting, PortRef, Role, StateRef
 
 
 # ---------------------------------------------------------------------------
-# Module introspection
+# Resolved per-module context
 # ---------------------------------------------------------------------------
 
-def _spec_of(module):
-    """The manifold StateSpec this module's State struct is built from —
-    a manifold State field, else a manifold port (LQR's `x`)."""
-    for f in module.state.fields:
-        if f.kind == "manifold":
-            return f.manifold, f.init
-    for p in module.ports:
-        if p.manifold is not None:
-            return p.manifold, None
-    return None, None
+class _Ctx:
+    def __init__(self, module, kname: dict):
+        self.m = module
+        self.kname = kname                       # {fn key: emitted C symbol}
+        self.spec = module.spec
+        self.amb = self.spec.ambient_dim if self.spec else 0
+        self.tan = self.spec.tangent_dim if self.spec else 0
+        self.held = module.hosting is Hosting.HELD
+        self.mats = [f for f in module.state.fields if f.kind == "matrix"]
+        ctl = module.ports_by_role(Role.CONTROL)
+        self.u_port = ctl[0] if ctl else None
+        out = module.ports_by_role(Role.OUTPUT)
+        self.y_port = out[0] if out else None
+        st = module.ports_by_role(Role.STATE)
+        self.x_port = st[0] if st else None
+        # the manifold state's init vector (struct defaults)
+        self.x_init = None
+        for f in module.state.fields:
+            if f.kind == "manifold":
+                self.x_init = f.init
+        if self.x_init is None and self.x_port is not None:
+            self.x_init = self.x_port.init
+
+    def port(self, name):
+        return self.m.port(name)
+
+    def n_u(self) -> int:
+        return (sum(f.dim for f in self.u_port.fields)
+                if self.u_port is not None else 0)
 
 
-def _matrix_fields(module):
-    return [f for f in module.state.fields if f.kind == "matrix"]
+def _ident(name: str) -> str:
+    return S.cpp_ident(name)
 
 
-def _port(module, name):
-    for p in module.ports:
-        if p.name == name:
-            return p
-    return None
+def _mat_type(r: int, c: int) -> str:
+    return f"Eigen::Matrix<double, {r}, {c}>"
 
 
 # ---------------------------------------------------------------------------
@@ -70,45 +86,46 @@ def _state_struct(spec, init_vec) -> list[str]:
     for s in spec.slots:
         cpp = cpp_type_for(s.manifold)
         if init_vec is not None:
-            seg = init_vec[s.ambient_offset:s.ambient_offset + s.ambient_dim]
+            seg = np.asarray(init_vec, dtype=float)[
+                s.ambient_offset:s.ambient_offset + s.ambient_dim]
             init = (cpp.literal(float(seg[0])) if s.ambient_dim == 1
                     else cpp.literal([float(v) for v in seg]))
         else:
             init = cpp.zero
-        out.append(f"        {cpp.decl} {S.cpp_ident(s.name)} = {init};")
+        out.append(f"        {cpp.decl} {_ident(s.name)} = {init};")
     out.append("    };")
     return out
 
 
-def _struct_from_fields(name, fields, *, with_init: bool) -> list[str]:
+def _fields_struct(name, fields, *, with_init: bool) -> list[str]:
     out = [f"    struct {name} {{"]
     for f in fields:
         tp = S.eigen_vec_type(f.dim)
         if not with_init:
-            out.append(f"        {tp} {S.cpp_ident(f.name)};")
+            out.append(f"        {tp} {_ident(f.name)};")
         elif f.dim == 1:
-            out.append(f"        {tp} {S.cpp_ident(f.name)} = {float(f.default)!r};")
+            out.append(f"        {tp} {_ident(f.name)} = {float(f.default)!r};")
         else:
-            out.append(f"        {tp} {S.cpp_ident(f.name)} = {tp}::Zero();")
+            out.append(f"        {tp} {_ident(f.name)} = {tp}::Zero();")
     if not fields:
         out.append("        // (none)")
     out.append("    };")
     return out
 
 
-def _pack_inputs(u_port, qcls) -> list[str]:
-    out = [f"static void pack_inputs(const {qcls}::Inputs& u, double* uf) {{"]
-    if u_port is None or not u_port.fields:
-        out.append("    (void)u; (void)uf;")
+def _pack_fields_fn(struct: str, port, qcls: str, fname: str) -> list[str]:
+    out = [f"static void {fname}(const {qcls}::{struct}& v, double* flat) {{"]
+    if port is None or not port.fields:
+        out.append("    (void)v; (void)flat;")
     else:
         off = 0
-        for f in u_port.fields:
-            ident = S.cpp_ident(f.name)
+        for f in port.fields:
+            ident = _ident(f.name)
             if f.dim == 1:
-                out.append(f"    uf[{off}] = u.{ident};")
+                out.append(f"    flat[{off}] = v.{ident};")
             else:
                 for i in range(f.dim):
-                    out.append(f"    uf[{off + i}] = u.{ident}[{i}];")
+                    out.append(f"    flat[{off + i}] = v.{ident}[{i}];")
             off += f.dim
     out.append("}")
     return out
@@ -117,7 +134,7 @@ def _pack_inputs(u_port, qcls) -> list[str]:
 def _scatter_fields(fields, src, dst) -> list[str]:
     out, off = [], 0
     for f in fields:
-        ident = S.cpp_ident(f.name)
+        ident = _ident(f.name)
         if f.dim == 1:
             out.append(f"    {dst}.{ident} = {src}[{off}];")
         else:
@@ -128,213 +145,235 @@ def _scatter_fields(fields, src, dst) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Per-entry method generation
+# Method signatures (typed, from the IR)
 # ---------------------------------------------------------------------------
 
-class _Ctx:
-    """Resolved per-module facts the method emitters share."""
-    def __init__(self, module, kname):
-        self.m = module
-        self.kname = kname                  # {fn_key: emitted C symbol}
-        self.spec, _ = _spec_of(module)
-        self.amb = self.spec.ambient_dim if self.spec else 0
-        self.tan = self.spec.tangent_dim if self.spec else 0
-        self.held = module.held
-        self.mats = _matrix_fields(module)  # e.g. EKF P
-        self.fields = set(module.state.names)
+def _param_for(port, decl: bool) -> str | None:
+    """The typed C++ parameter for one PortRef, by Role."""
+    r = port.role
+    if r is Role.CONTROL:
+        return "const Inputs& u"
+    if r is Role.MEASUREMENT:
+        return f"const {S.eigen_vec_type(port.size)}& z"
+    if r is Role.NOISE:
+        return f"const {S.eigen_vec_type(max(port.size, 1))}& noise"
+    if r is Role.TIMESTEP:
+        return "double dt"
+    if r is Role.TIME:
+        return "double t = 0.0" if decl else "double t"
+    if r is Role.STATE:
+        return "const State& x"
+    if r is Role.MATRIX:
+        return f"const {_mat_type(*port.shape)}& {_ident(port.name)}"
+    raise NotImplementedError(f"param for role {r}")          # pragma: no cover
 
 
-def _ret_kind(ep, ctx):
-    """Classify an entry's return: 'state' | 'inputs' | 'outputs' |
-    ('vec', n) | ('mat', r, c) | 'void'."""
-    if not ep.returns:
-        return "state" if (ep.writes_state and not ctx.held) else "void"
-    name = ep.returns[0]
-    port = _port(ctx.m, name)
-    if port is not None and port.fields:
-        return "inputs" if name == "u" else "outputs"
-    fn = ctx.m.functions[ep.fn]
-    # return is the last kernel output (after writes_state outputs)
-    oi = len(ep.writes_state)
-    r, c = int(fn.size1_out(oi)), int(fn.size2_out(oi))
-    return ("vec", r) if c == 1 else ("mat", r, c)
-
-
-def _ret_type(ep, ctx, q=None) -> str:
-    """Return-type spelling; nested struct types qualified by `q` (for an
-    out-of-class definition) or left bare (for the in-class declaration)."""
-    ret = _ret_kind(ep, ctx)
-    pre = f"{q}::" if q else ""
-    if ret == "state":
-        return pre + "State"
-    if ret == "inputs":
-        return pre + "Inputs"
-    if ret == "outputs":
-        return pre + "Outputs"
-    if ret == "void":
-        return "void"
-    if ret[0] == "vec":
-        return S.eigen_vec_type(ret[1])
-    return f"Eigen::Matrix<double, {ret[1]}, {ret[2]}>"
-
-
-def _const(ep, ctx) -> str:
-    return " const" if not ctx.held and _ret_kind(ep, ctx) != "void" else ""
-
-
-def _method_decl(ep, ctx) -> str:
-    """In-class method declaration (with default args)."""
-    params = _params(ep, ctx, decl=True)
-    return f"{_ret_type(ep, ctx)} {ep.method}({', '.join(params)}){_const(ep, ctx)}"
-
-
-def _params(ep, ctx, *, decl: bool):
-    """Typed method parameters: a threaded `State` (when not held) first,
-    then each exposed port in `kernel_args` order (skipping members and
-    internally-filled args) — `u`→Inputs, `z*`→vector, `dt`/`t`→double."""
+def _params(ep, ctx, *, decl: bool) -> list[str]:
     out = []
-    reads_state_x = any(a == "x" for a in ep.kernel_args)
-    x_is_param = reads_state_x and not ctx.held
-    if x_is_param:
-        out.append("const State& x")
-    for a in ep.kernel_args:
-        if a in ctx.fields or a == "x":
-            continue                         # State / matrix members or x param
-        if a in ep.synthesize_zero or a in ep.port_from:
-            continue                         # filled internally
-        if a == "u":
-            out.append("const Inputs& u")
-        elif a.startswith("z"):
-            port = _port(ctx.m, a)
-            out.append(f"const {S.eigen_vec_type(port.size)}& z")
-        elif a == "dt":
-            out.append("double dt")
-        elif a == "t":
-            out.append("double t = 0.0" if decl else "double t")
+    if not ctx.held:
+        for a in ep.args:
+            if isinstance(a, StateRef):
+                out.append("const State& x")
+                break
+    for a in ep.args:
+        if isinstance(a, PortRef):
+            out.append(_param_for(ctx.port(a.name), decl))
     return out
 
 
+def _ret_type(ep, ctx, q: str | None = None) -> str:
+    """Return type. Composite (a written THREADED state plus returns, or
+    multiple returns) → the emitted `<Method>Result` struct."""
+    pre = f"{q}::" if q else ""
+    writes_state = "x" in ep.writes and not ctx.held
+    n_out = (1 if writes_state else 0) + len(ep.returns)
+    if n_out == 0:
+        return "void"
+    if n_out > 1:
+        return f"{pre}{_result_struct_name(ep)}"
+    if writes_state:
+        return pre + "State"
+    port = ctx.port(ep.returns[0])
+    if port.role is Role.CONTROL:
+        return pre + "Inputs"
+    if port.role is Role.OUTPUT:
+        return pre + "Outputs"
+    if len(port.shape) == 2:
+        return _mat_type(*port.shape)
+    return S.eigen_vec_type(port.size)
+
+
+def _result_struct_name(ep) -> str:
+    return "".join(w.capitalize() for w in ep.method.split("_")) + "Result"
+
+
+def _result_struct(ep, ctx) -> list[str]:
+    """Composite-return struct: the fresh State + each returned port."""
+    out = [f"    struct {_result_struct_name(ep)} {{"]
+    if "x" in ep.writes and not ctx.held:
+        out.append("        State x;")
+    for name in ep.returns:
+        port = ctx.port(name)
+        tp = (_mat_type(*port.shape) if len(port.shape) == 2
+              else S.eigen_vec_type(port.size))
+        out.append(f"        {tp} {_ident(name)};")
+    out.append("    };")
+    return out
+
+
+def _const(ep, ctx) -> str:
+    return "" if ctx.held and ep.writes else " const"
+
+
+def _method_decl(ep, ctx) -> str:
+    params = ", ".join(_params(ep, ctx, decl=True))
+    return f"{_ret_type(ep, ctx)} {ep.method}({params}){_const(ep, ctx)}"
+
+
+def _method_def_head(ep, ctx, q: str) -> str:
+    params = ", ".join(_params(ep, ctx, decl=False))
+    return (f"{_ret_type(ep, ctx, q=q)} {q}::{ep.method}({params})"
+            f"{_const(ep, ctx)}")
+
+
+# ---------------------------------------------------------------------------
+# Method bodies (typed-arg gather → kernel call → scatter/return)
+# ---------------------------------------------------------------------------
+
+def _arg_expr(a, ctx) -> str:
+    if isinstance(a, StateRef):
+        fld = ctx.m.state.field(a.name)
+        return "x_in" if fld.kind == "manifold" else f"{a.name}.data()"
+    port = ctx.port(a.name)
+    r = port.role
+    if r is Role.CONTROL:
+        return "u_in"
+    if r is Role.MEASUREMENT:
+        return "&z" if port.size == 1 else "z.data()"
+    if r is Role.NOISE:
+        return "noise.data()"
+    if r is Role.TIMESTEP:
+        return "&dt"
+    if r is Role.TIME:
+        return "&t"
+    if r is Role.STATE:
+        return "x_in"
+    if r is Role.MATRIX:
+        return f"{_ident(port.name)}.data()"
+    raise NotImplementedError(f"arg for role {r}")            # pragma: no cover
+
+
 def _method_body(ep, ctx) -> list[str]:
-    ret = _ret_kind(ep, ctx)
-    L = []
-    # --- buffers ---
-    if any(a == "x" for a in ep.kernel_args):
+    L: list[str] = []
+    reads_manifold = any(
+        (isinstance(a, StateRef)
+         and ctx.m.state.field(a.name).kind == "manifold")
+        or (isinstance(a, PortRef) and ctx.port(a.name).role is Role.STATE)
+        for a in ep.args)
+    writes_manifold = "x" in ep.writes
+    composite = _ret_type(ep, ctx).endswith("Result")
+
+    # buffers
+    if reads_manifold:
         L.append(f"    double x_in[{ctx.amb}];")
-    if "x" in ep.writes_state:
+    if writes_manifold:
         L.append(f"    double x_out[{ctx.amb}];")
-    u_port = _port(ctx.m, "u")
-    if any(a == "u" for a in ep.kernel_args):
-        n = sum(f.dim for f in u_port.fields) if u_port else 0
+    if any(isinstance(a, PortRef) and ctx.port(a.name).role is Role.CONTROL
+           for a in ep.args):
+        n = ctx.n_u()
         L.append(f"    double u_in[{max(n, 1)}];"
                  + ("" if n else "   // no inputs"))
-    # Internally-filled args: a scalar synthesized to zero (a measurement's
-    # dt) → `double a = 0.0;`; a matrix filled to zero or via `port_from`
-    # (the EKF's Q) → `Cov am = Cov::Zero();`.
-    for a in ep.synthesize_zero:
-        port = _port(ctx.m, a)
-        if port is not None and len(port.shape) == 2:
-            L.append(f"    Cov {a}m = Cov::Zero();")
+    matrix_writes = [w for w in ep.writes if w != "x"]
+    for w in matrix_writes:
+        L.append(f"    Cov {w}_out;")
+    ret_bufs: list[tuple[str, str]] = []      # (port name, buffer expr)
+    for name in ep.returns:
+        port = ctx.port(name)
+        buf = f"r_{_ident(name)}"
+        if port.role is Role.CONTROL:
+            L.append(f"    double {buf}[{max(ctx.n_u(), 1)}];")
+            ret_bufs.append((name, buf))
+        elif port.role is Role.OUTPUT:
+            ydim = sum(f.dim for f in port.fields)
+            L.append(f"    double {buf}[{max(ydim, 1)}];")
+            ret_bufs.append((name, buf))
+        elif len(port.shape) == 2:
+            L.append(f"    Eigen::Matrix<double, {port.shape[0]}, "
+                     f"{port.shape[1]}, Eigen::ColMajor> {buf};")
+            ret_bufs.append((name, f"{buf}.data()"))
+        elif port.size == 1:
+            L.append(f"    double {buf} = 0.0;")
+            ret_bufs.append((name, f"&{buf}"))
         else:
-            L.append(f"    double {a} = 0.0;")
-    for a in ep.port_from:
-        L.append(f"    Cov {a}m = Cov::Zero();")
-    # result buffers for returns
-    if ret == "inputs":
-        L.append(f"    double u_out[{max(sum(f.dim for f in u_port.fields), 1)}];")
-    elif ret == "outputs":
-        yp = _port(ctx.m, ep.returns[0])
-        L.append(f"    double y_out[{max(sum(f.dim for f in yp.fields), 1)}];")
-    elif isinstance(ret, tuple) and ret[0] == "vec":
-        L.append("    double yv = 0.0;" if ret[1] == 1
-                 else f"    {S.eigen_vec_type(ret[1])} yv = "
-                      f"{S.eigen_vec_type(ret[1])}::Zero();")
-    elif isinstance(ret, tuple) and ret[0] == "mat":
-        L.append(f"    Eigen::Matrix<double, {ret[1]}, {ret[2]}, "
-                 f"Eigen::ColMajor> M;")
-    matrix_writes = [f for f in ep.writes_state if f != "x"]
-    for mf in matrix_writes:
-        L.append("    Cov Pout;")
-    # --- pack ---
-    if any(a == "x" for a in ep.kernel_args):
+            tp = S.eigen_vec_type(port.size)
+            L.append(f"    {tp} {buf} = {tp}::Zero();")
+            ret_bufs.append((name, f"{buf}.data()"))
+
+    # pack
+    if reads_manifold:
         L.append("    pack_state(x, x_in);")
-    if any(a == "u" for a in ep.kernel_args):
+    if any(isinstance(a, PortRef) and ctx.port(a.name).role is Role.CONTROL
+           for a in ep.args):
         L.append("    pack_inputs(u, u_in);")
-    # --- port_from: compute a port via another entry's kernel ---
-    for port_name, src_entry in ep.port_from.items():
-        src = next(e for e in ctx.m.entry_points if e.method == src_entry)
-        args = [_arg_expr(a, ep, ctx) for a in src.kernel_args]
-        L += _call(ctx.kname[src.fn], args, [(0, f"{port_name}m.data()")])
-    # --- main kernel call ---
-    args = [_arg_expr(a, ep, ctx) for a in ep.kernel_args]
-    results = []
+
+    # kernel call
+    results: list[tuple[int, str]] = []
     oi = 0
-    for w in ep.writes_state:
-        results.append((oi, "x_out" if w == "x" else "Pout.data()"))
+    for w in ep.writes:
+        results.append((oi, "x_out" if w == "x" else f"{w}_out.data()"))
         oi += 1
-    results += _return_results(ret, oi)
-    L += _call(ctx.kname[ep.fn], args, results)
-    # --- unpack / scatter / return ---
-    L += _finish(ep, ctx, ret, matrix_writes)
-    return L
+    for (_, buf) in ret_bufs:
+        results.append((oi, buf))
+        oi += 1
+    L += _call(ctx.kname[ep.fn], [_arg_expr(a, ctx) for a in ep.args],
+               results)
 
-
-def _arg_expr(a, ep, ctx) -> str:
-    if a == "x":
-        return "x_in"
-    if a in ctx.fields:                       # matrix member (P)
-        return f"{a}.data()"
-    if a == "u":
-        return "u_in"
-    if a == "dt":
-        return "&dt"
-    if a == "t":
-        return "&t"
-    if a in ep.port_from or a in ep.synthesize_zero:
-        port = _port(ctx.m, a)
-        if port is not None and len(port.shape) == 2:
-            return f"{a}m.data()"
-        return f"&{a}"                            # scalar zero already declared
-    if a.startswith("z"):
-        port = _port(ctx.m, a)
-        return "&z" if port.size == 1 else "z.data()"
-    raise RuntimeError(f"emit: unhandled kernel arg {a!r} in {ep.method}")
-
-
-def _return_results(ret, oi):
-    if ret == "inputs":
-        return [(oi, "u_out")]
-    if ret == "outputs":
-        return [(oi, "y_out")]
-    if isinstance(ret, tuple) and ret[0] == "vec":
-        return [(oi, "&yv" if ret[1] == 1 else "yv.data()")]
-    if isinstance(ret, tuple) and ret[0] == "mat":
-        return [(oi, "M.data()")]
-    return []
-
-
-def _finish(ep, ctx, ret, matrix_writes) -> list[str]:
-    L = []
-    # held writes update members
-    if ctx.held and "x" in ep.writes_state:
+    # scatter / return
+    if ctx.held and writes_manifold:
         L.append("    unpack_state(x_out, x);")
-    for mf in matrix_writes:
-        L.append(f"    {mf} = Pout;")
-    if ret == "state":                        # not-held fresh State return
+    for w in matrix_writes:
+        L.append(f"    {w} = {w}_out;")
+
+    rt = _ret_type(ep, ctx)
+    if rt == "void":
+        return L
+    if composite:
+        L.append(f"    {rt} out;")
+        if writes_manifold and not ctx.held:
+            L.append("    unpack_state(x_out, out.x);")
+        for name, _ in ret_bufs:
+            L += _ret_assign(ctx, name, f"out.{_ident(name)}",
+                             raw=f"r_{_ident(name)}")
+        L.append("    return out;")
+        return L
+    if writes_manifold and not ctx.held:
         L += ["    State out;", "    unpack_state(x_out, out);",
               "    return out;"]
-    elif ret == "inputs":
-        u_port = _port(ctx.m, "u")
+        return L
+    name = ep.returns[0]
+    port = ctx.port(name)
+    if port.role is Role.CONTROL:
         L.append("    Inputs out;")
-        L += _scatter_fields(u_port.fields, "u_out", "out")
+        L += _scatter_fields(ctx.u_port.fields, f"r_{_ident(name)}", "out")
         L.append("    return out;")
-    elif ret == "outputs":
-        yp = _port(ctx.m, ep.returns[0])
+    elif port.role is Role.OUTPUT:
         L.append("    Outputs out;")
-        L += _scatter_fields(yp.fields, "y_out", "out")
+        L += _scatter_fields(port.fields, f"r_{_ident(name)}", "out")
         L.append("    return out;")
-    elif isinstance(ret, tuple) and ret[0] in ("vec", "mat"):
-        L.append("    return yv;" if ret[0] == "vec" else "    return M;")
+    else:
+        L.append(f"    return r_{_ident(name)};")
     return L
+
+
+def _ret_assign(ctx, name, dst, raw) -> list[str]:
+    """Copy a raw return buffer into a composite-result member."""
+    port = ctx.port(name)
+    if port.role in (Role.CONTROL, Role.OUTPUT):     # pragma: no cover
+        raise NotImplementedError(
+            "struct-valued member inside a composite result")
+    if len(port.shape) == 2 or port.size > 1:
+        return [f"    {dst} = {raw};"]
+    return [f"    {dst} = {raw};"]
 
 
 # ---------------------------------------------------------------------------
@@ -349,42 +388,32 @@ def emit_module_cpp(module, out_dir, *, class_name: str,
     base = basename or class_name.lower()
     q = class_name
 
-    entries = [e for e in module.entry_points if e.deploy]
-
-    # Collect + densify/rename the kernels every emitted method touches
-    # (entry kernels + any port_from source kernels).
-    needed: dict[str, object] = {}
-    for ep in entries:
-        needed[ep.fn] = module.functions[ep.fn]
-        for src_entry in ep.port_from.values():
-            se = next(e for e in module.entry_points if e.method == src_entry)
-            needed[se.fn] = module.functions[se.fn]
-    kname = {k: f"{base}_{k}" for k in needed}
-    kernels = [_densify(fn, kname[k]) for k, fn in needed.items()]
-
+    entries = list(module.entry_points)
+    kname = {ep.fn: f"{base}_{ep.fn}" for ep in entries}
+    kernels = [_densify(module.functions[k], n) for k, n in kname.items()]
     ctx = _Ctx(module, kname)
 
     # ---- header ----
-    spec = ctx.spec
     H = ["// Generated by manta.codegen. Do not edit by hand.", "",
          "#pragma once", "", "#include <Eigen/Dense>", "",
          f"namespace {namespace} {{", "", f"class {q} {{", "public:"]
-    if spec is not None:
+    if ctx.spec is not None:
         H += [f"    static constexpr int ambient_dim = {ctx.amb};",
               f"    static constexpr int tangent_dim = {ctx.tan};"]
     if ctx.mats:
         H.append("    using Cov = Eigen::Matrix<double, tangent_dim, "
                  "tangent_dim>;")
     H.append("")
-    if spec is not None:
-        _, init_vec = _spec_of(module)
-        H += _state_struct(spec, init_vec) + [""]
-    u_port = _port(module, "u")
-    if u_port is not None:
-        H += _struct_from_fields("Inputs", u_port.fields, with_init=True) + [""]
-    y_port = _port(module, "y")
-    if y_port is not None:
-        H += _struct_from_fields("Outputs", y_port.fields, with_init=False) + [""]
+    if ctx.spec is not None:
+        H += _state_struct(ctx.spec, ctx.x_init) + [""]
+    if ctx.u_port is not None:
+        H += _fields_struct("Inputs", ctx.u_port.fields, with_init=True) + [""]
+    if ctx.y_port is not None:
+        H += _fields_struct("Outputs", ctx.y_port.fields,
+                            with_init=False) + [""]
+    for ep in entries:
+        if _ret_type(ep, ctx).endswith("Result"):
+            H += _result_struct(ep, ctx) + [""]
     if ctx.held:
         H.append("    State x;")
         for mf in ctx.mats:
@@ -396,10 +425,10 @@ def emit_module_cpp(module, out_dir, *, class_name: str,
             H.append("    void reset(const State& x0) { x = x0; }")
         H.append("    const State& state() const { return x; }")
         for mf in ctx.mats:
-            H.append(f"    const Cov& covariance() const {{ return {mf.name}; }}")
+            H.append(f"    const Cov& covariance() const "
+                     f"{{ return {mf.name}; }}")
         H.append("")
-    elif spec is not None:
-        # Threaded (Sim/LQR): a convenience default-state constructor.
+    elif ctx.spec is not None:
         H += ["    State initial_state() const { return State{}; }", ""]
     for ep in entries:
         H.append(f"    {_method_decl(ep, ctx)};")
@@ -411,14 +440,15 @@ def emit_module_cpp(module, out_dir, *, class_name: str,
          f'#include "{base}.hpp"', "", "#include <Eigen/Dense>", "",
          'extern "C" {', f'#include "{base}_kernels.h"', "}", "",
          f"namespace {namespace} {{", ""]
-    if spec is not None:
-        C += S.pack_state_lines(spec, q) + [""]
-        C += S.unpack_state_lines(spec, q) + [""]
-    if u_port is not None:
-        C += _pack_inputs(u_port, q) + [""]
+    if ctx.spec is not None:
+        C += S.pack_state_lines(ctx.spec, q) + [""]
+        C += S.unpack_state_lines(ctx.spec, q) + [""]
+    if ctx.u_port is not None:
+        C += _pack_fields_fn("Inputs", ctx.u_port, q, "pack_inputs") + [""]
     if ctx.held:
-        init = ["x = State{};"] + [f"{mf.name} = ({_matrix_init(mf)});"
-                                   for mf in ctx.mats]
+        init = ["x = State{};"]
+        for mf in ctx.mats:
+            init.append(f"{mf.name} = ({_matrix_init(mf)});")
         C += [f"{q}::{q}() {{ {' '.join(init)} }}", ""]
         if ctx.mats:
             args = ", ".join(["const State& x0"]
@@ -427,8 +457,9 @@ def emit_module_cpp(module, out_dir, *, class_name: str,
                             + [f"{mf.name} = {mf.name}0;" for mf in ctx.mats])
             C += [f"void {q}::reset({args}) {{ {sets} }}", ""]
     for ep in entries:
-        head = f"{_method_def_head(ep, ctx, q)} {{"
-        C += [head] + _method_body(ep, ctx) + ["}", ""]
+        C += [f"{_method_def_head(ep, ctx, q)} {{"]
+        C += _method_body(ep, ctx)
+        C += ["}", ""]
     C += [f"}}  // namespace {namespace}"]
     (out_dir / f"{base}.cpp").write_text("\n".join(C) + "\n")
 
@@ -440,8 +471,7 @@ def emit_module_cpp(module, out_dir, *, class_name: str,
 
 
 def _matrix_init(mf) -> str:
-    """Constructor initializer for a held matrix member (EKF P0 = 1e-2·I)."""
-    import numpy as np
+    """Constructor initializer for a held matrix member (e.g. P0 = 1e-2·I)."""
     M = np.asarray(mf.init, dtype=float)
     if M.ndim == 2 and np.allclose(M, np.diag(np.diag(M))) and \
             np.allclose(np.diag(M), M[0, 0]):
@@ -450,10 +480,3 @@ def _matrix_init(mf) -> str:
     body = ", ".join(repr(float(M[i, j])) for i in range(rows)
                      for j in range(cols))
     return f"(Cov() << {body}).finished()"
-
-
-def _method_def_head(ep, ctx, q) -> str:
-    """Out-of-class definition head (nested types qualified, no defaults)."""
-    params = _params(ep, ctx, decl=False)
-    return (f"{_ret_type(ep, ctx, q=q)} {q}::{ep.method}"
-            f"({', '.join(params)}){_const(ep, ctx)}")

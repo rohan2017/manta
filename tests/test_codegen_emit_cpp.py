@@ -45,36 +45,12 @@ def test_target_cpp_custom_basename(tmp_path: Path):
     assert "my_robot.cpp" in cmake_text
 
 
-def test_target_cpp_rejects_non_ir():
-    """TargetCpp lowers Sim / EKF / LQR; a non-block object raises TypeError
-    (the kind dispatch in the Target ABC — no RUNTIME_KIND)."""
+def test_target_cpp_rejects_non_module():
+    """TargetCpp lowers a Module (or a transform exposing .module());
+    anything else raises TypeError."""
     import pytest
-    with pytest.raises(TypeError, match="not a lowerable block"):
+    with pytest.raises(TypeError, match="Module or a transform"):
         TargetCpp(object(), "/tmp/whatever", class_name="X")
-
-
-def test_target_cpp_unsupported_kind_raises():
-    """A block whose RUNTIME_KIND has no backend handler fails loudly at
-    lower_block, naming the kinds the backend does support."""
-    import pytest
-
-    class _FutureBlock:
-        RUNTIME_KIND = "mpc"
-
-    with pytest.raises(NotImplementedError, match="no lowering for block kind 'mpc'"):
-        TargetCpp(_FutureBlock(), "/tmp/whatever", class_name="X")
-
-
-def test_ir_blocks_declare_runtime_kind():
-    """Sim and LQR are evaluator blocks; EKF keeps its own kalman kind."""
-    from manta import EKF
-    from manta.codegen.block import KIND_EKF, KIND_EVALUATOR, block_kind
-    from manta.control import LQR
-
-    assert block_kind(_hover_world()) == KIND_EVALUATOR
-    w = _hover_world().world
-    assert EKF(w).RUNTIME_KIND == KIND_EKF
-    assert LQR.RUNTIME_KIND == KIND_EVALUATOR
 
 
 def _make_simple_craft():

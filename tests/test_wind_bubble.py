@@ -64,14 +64,15 @@ def test_wind_state_evolves_via_rw():
 
 def test_ekf_picks_up_wind_state_per_craft():
     w, crafts = _build_world(n_crafts=2, sigma=2e-3)
-    ekf = TargetNumpy(EKF(w))
+    ekf_t = EKF(w)
+    ekf = TargetNumpy(ekf_t)
     # 2 crafts × 13 rigid + 2 wind bubbles × 3 = 32 ambient.
     assert ekf.spec.ambient_dim == 32
     names = {s.name for s in ekf.spec.slots}
     assert {"c0_wind.wind", "c1_wind.wind"} <= names
     # Auto-Q assembles dt·σ² on each wind slot.
-    L = np.asarray(ekf.ekf._L_fn(ekf.x, np.zeros(0), 0.01, 0.0))
-    Q = L @ ekf.ekf._Sigma @ L.T
+    L = np.asarray(ekf_t.sys.L_fn(ekf.x, np.zeros(0), 0.01, 0.0))
+    Q = L @ ekf_t.sys.Sigma @ L.T
     # Both wind slots get dt·(2e-3)² = 4e-8 on diagonal.
     c0_wind_slot = ekf.spec.slot("c0_wind.wind")
     block = Q[c0_wind_slot.tangent_offset : c0_wind_slot.tangent_offset+3,
