@@ -71,8 +71,20 @@ class NumpyModule:
         for i, fname in enumerate(ep.writes_state):
             self.state[fname] = self._shape_field(outs[i], fname)
         rest = outs[len(ep.writes_state):]
-        return {name: np.asarray(r, dtype=float).reshape(-1)
-                for name, r in zip(ep.returns, rest)}
+        out: dict[str, np.ndarray] = {}
+        for name, r in zip(ep.returns, rest):
+            a = np.asarray(r, dtype=float)
+            shape = self._return_shape(name)
+            out[name] = a.reshape(shape) if shape else a.reshape(-1)
+        return out
+
+    def _return_shape(self, name: str):
+        """A returned value's natural shape, inferred from a same-named Port
+        (so a matrix output like the EKF's `Q` keeps 2-D). None ⇒ flatten."""
+        for p in self.module.ports:
+            if p.name == name and len(p.shape) > 1:
+                return p.shape
+        return None
 
     def _shape_field(self, val, fname: str) -> np.ndarray:
         a = np.asarray(val, dtype=float)

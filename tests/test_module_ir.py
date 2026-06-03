@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 
 from manta import World, Craft, Sim, LQR, PID, TargetNumpy
+from manta.estimation import EKF
 from manta.fields import GravityField
 from manta.parts import Mass, Thruster, PositionSensor
 from manta.estimation.state_spec import StateSpec
@@ -159,3 +160,64 @@ def test_lqr_parity():
         ref = facade.u(x)
         got = nm.control(x=x)["u"]
         np.testing.assert_allclose(got, ref, rtol=1e-12, atol=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# EKF parity — the filter "is not special": a two-field (x, P) Module whose
+# generic predict/update reproduce NumpyEKF bit-for-bit.
+# ---------------------------------------------------------------------------
+
+def _gps_world(noise=False):
+    c = Craft("c")
+    c.add(Mass("body", mass=1.0))
+    c.add(PositionSensor("gps", position_noise_sigma=0.5))
+    if noise:
+        c.add(Thruster("t", force=(0, 0, 1), force_noise_sigma=1.0))
+    w = World().add_field(GravityField(g=(0, 0, -9.81)))
+    w.add_craft(c, position=(0, 0, 100), velocity=(1, 0, 0))
+    return w, c
+
+
+def test_ekf_module_shape():
+    w, _ = _gps_world(noise=True)
+    m = to_module(EKF(w))
+    assert set(m.state.names) == {"x", "P"}
+    assert m.state.field("P").kind == "matrix"
+    methods = {e.method for e in m.entry_points}
+    assert "predict" in methods
+    assert "process_noise" in methods            # force_noise ⇒ model Q
+    assert "update_c_gps_position" in methods
+    assert m.entry("predict").writes_state == ("x", "P")
+
+
+def test_ekf_predict_update_parity():
+    w, c = _gps_world(noise=True)
+    gps = next(p for p in c.parts if p.name == "gps")
+    ekf_ir = EKF(w)
+    facade = TargetNumpy(ekf_ir)
+    nm = NumpyModule(to_module(ekf_ir))
+    tan = ekf_ir.spec.tangent_dim
+
+    np.testing.assert_allclose(nm.state["x"], facade.x, atol=1e-12)
+    np.testing.assert_allclose(nm.state["P"], facade.P, atol=1e-12)
+
+    u = ekf_ir._build_u({"t.throttle": 9.81})
+    dt = 0.02
+    rng = np.random.default_rng(3)
+    t = 0.0
+    for k in range(15):
+        # predict — model Q via the generic process_noise entry.
+        Q = nm.process_noise(u=u, dt=dt, t=t)["Q"]
+        assert Q.shape == (tan, tan)
+        nm.predict(u=u, dt=dt, t=t, Q=Q)
+        facade.predict(dt=dt, t=t, u={"t.throttle": 9.81})
+        np.testing.assert_allclose(nm.state["x"], facade.x, rtol=1e-9, atol=1e-9)
+        np.testing.assert_allclose(nm.state["P"], facade.P, rtol=1e-9, atol=1e-9)
+
+        if k % 3 == 0:               # fold a position fix in
+            z = facade.x[:3] + rng.normal(scale=0.2, size=3)
+            nm.update_c_gps_position(z_c_gps_position=z, u=u, t=0.0)
+            facade.update(gps, position=z)
+            np.testing.assert_allclose(nm.state["x"], facade.x, rtol=1e-9, atol=1e-9)
+            np.testing.assert_allclose(nm.state["P"], facade.P, rtol=1e-9, atol=1e-9)
+        t += dt

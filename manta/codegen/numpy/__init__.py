@@ -334,9 +334,17 @@ class NumpyEKF:
         if not isinstance(ekf, EKF):
             raise TypeError(
                 f"NumpyEKF: expected EKF, got {type(ekf).__name__}")
+        from ..module_build import to_module
+        from .module import NumpyModule
         self._ekf = ekf
-        self._x   = self._initial_x()
-        self._P   = np.eye(ekf.spec.tangent_dim) * 1e-2
+        # Generic execution engine: the EKF is a two-field (x, P) Module.
+        # Its predict / per-sensor Joseph update run through NumpyModule;
+        # this class adds the measurement bus + low-level custom-h update.
+        self._nm = NumpyModule(to_module(ekf))
+        # The Module seeds x from the world initial + P = 1e-2·I — the same
+        # seed this class used before. Realign x to _initial_x for any
+        # ordering nuance, then keep both in the Module's State.
+        self._nm.state["x"] = self._initial_x()
 
         # Measurement bus: one mailbox per registered sensor, in
         # registration order (= the order step() applies them). The user
@@ -373,6 +381,25 @@ class NumpyEKF:
                 init_flat[f"{owner_name}.{k}"] = v
         init_for_pack = {k: v for k, v in init_flat.items() if k in ekf.spec}
         return ekf.spec.pack(init_for_pack)
+
+    # Nominal state (ambient) + tangent covariance live in the Module's
+    # State; proxy them so the bus / properties / reset read & write the
+    # one place the generic engine updates.
+    @property
+    def _x(self) -> np.ndarray:
+        return self._nm.state["x"]
+
+    @_x.setter
+    def _x(self, v) -> None:
+        self._nm.state["x"] = np.asarray(v, dtype=float).reshape(-1)
+
+    @property
+    def _P(self) -> np.ndarray:
+        return self._nm.state["P"]
+
+    @_P.setter
+    def _P(self, v) -> None:
+        self._nm.state["P"] = np.asarray(v, dtype=float)
 
     # ---- IR passthroughs ----------------------------------------------
 
@@ -528,10 +555,10 @@ class NumpyEKF:
             n = ekf.spec.tangent_dim
             Q_eff = np.zeros((n, n))
         # The whole predict (x' = f; P' = F P Fᵀ + Q) is one baked kernel —
-        # no linear algebra here. See `Linearization.kalman_functions`.
-        x_new, P_new = ekf._predict_fn(self._x, self._P, Q_eff, u_vec, dt, t)
-        self._x = np.asarray(x_new).reshape(-1)
-        self._P = np.asarray(P_new)
+        # no linear algebra here (see `Linearization.kalman_functions`) — run
+        # through the generic engine, which reads x,P from State and writes
+        # both back.
+        self._nm.predict(Q=Q_eff, u=u_vec, dt=dt, t=t)
 
     # ---- Update --------------------------------------------------------
 
@@ -586,9 +613,11 @@ class NumpyEKF:
             raise ValueError(
                 f"NumpyEKF: {spec_o['full']}: expected z of size "
                 f"{spec_o['dim']}, got {z_arr.size}.")
-        x_new, P_new = spec_o["update_fn"](self._x, self._P, z_arr, u_vec, 0.0)
-        self._x = np.asarray(x_new).reshape(-1)
-        self._P = np.asarray(P_new)
+        # Joseph update through the generic engine: one baked kernel
+        # (h/H/R + manifold correction inside) writes x,P back into State.
+        ident = spec_o["full"].replace(".", "_")
+        getattr(self._nm, f"update_{ident}")(
+            **{f"z_{ident}": z_arr, "u": u_vec, "t": 0.0})
 
     # ---- Measurement bus + step ----------------------------------------
 

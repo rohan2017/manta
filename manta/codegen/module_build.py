@@ -85,6 +85,64 @@ def module_for_recurrence(block) -> Module:
 
 
 # ---------------------------------------------------------------------------
+# EKF — the proof the filter "is not special": a two-field (x, P) State, a
+# predict entry + one update entry per sensor, all baked ca.Functions.
+# ---------------------------------------------------------------------------
+
+def module_for_ekf(ekf) -> Module:
+    import numpy as np
+    from ..linearized_world import flatten_nested
+
+    spec = ekf.spec
+    tan = spec.tangent_dim
+
+    # Initial nominal state: pack the world's seed into the EKF (sub)spec
+    # (same source NumpyEKF uses). P seeds to the same 1e-2·I default.
+    init_flat = flatten_nested(ekf.world._initial_state_dict())
+    x0 = spec.pack({k: v for k, v in init_flat.items() if k in spec})
+    fields = (
+        StateField("x", "manifold", (spec.ambient_dim,), init=x0, manifold=spec),
+        StateField("P", "matrix", (tan, tan), init=np.eye(tan) * 1e-2),
+    )
+
+    n_u = len(ekf._input_names)
+    ports = [Port("u", (n_u,)), Port("dt", ()), Port("t", ()),
+             Port("Q", (tan, tan))]
+
+    # predict: x' = f, P' = F P Fᵀ + Q   (Q supplied as a port; the model's
+    # default Q comes from the `process_noise` entry below).
+    functions = {"predict": ekf._predict_fn}
+    entries = [EntryPoint("predict", "predict",
+                          ("x", "P", "Q", "u", "dt", "t"),
+                          writes_state=("x", "P"))]
+    if ekf._F_fn is not None:
+        functions["F"] = ekf._F_fn
+    analysis = {k: v for k, v in (("F", ekf._F_fn),) if v is not None}
+
+    if ekf._process_noise_fn is not None:
+        functions["process_noise"] = ekf._process_noise_fn
+        entries.append(EntryPoint("process_noise", "process_noise",
+                                  ("x", "u", "dt", "t"), returns=("Q",)))
+
+    # One Joseph-update entry per sensor: (x, P, z, u, t) -> (x, P).
+    for (_pid, _out), o in ekf._sensors.items():
+        full = o["full"]
+        ident = full.replace(".", "_")
+        zname = f"z_{ident}"
+        fn_key = f"update_{ident}"
+        functions[fn_key] = o["update_fn"]
+        ports.append(Port(zname, (o["dim"],)))
+        entries.append(EntryPoint(f"update_{ident}", fn_key,
+                                  ("x", "P", zname, "u", "t"),
+                                  writes_state=("x", "P")))
+        if o.get("H_fn") is not None:
+            analysis[f"H_{ident}"] = o["H_fn"]
+
+    return Module(f"{ekf.world.name}_ekf", StateLayout(fields), tuple(ports),
+                  functions, tuple(entries), analysis)
+
+
+# ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
 
@@ -93,12 +151,15 @@ def to_module(block) -> Module:
     from ..sim import Sim
     from ..control.lqr import LQR
     from ..recurrence import RecurrenceBlock
+    from ..estimation.ekf import EKF
     if isinstance(block, Sim):
         return module_for_sim(block)
     if isinstance(block, LQR):
         return module_for_lqr(block)
     if isinstance(block, RecurrenceBlock):
         return module_for_recurrence(block)
+    if isinstance(block, EKF):
+        return module_for_ekf(block)
     raise TypeError(
         f"to_module: {type(block).__name__} has no Module builder "
-        f"(expected Sim, LQR, or a RecurrenceBlock).")
+        f"(expected Sim, LQR, EKF, or a RecurrenceBlock).")
