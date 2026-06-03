@@ -31,36 +31,42 @@ _SHAPE_DIM = {"R1": 1, "R3": 3, "SO3": 4}
 # ---------------------------------------------------------------------------
 
 class NumpyWorld:
-    """Native-Python evaluator wrapping a `Sim` IR.
+    """Nested-dict + signal-bus adapter over a `Sim` Module.
 
-    Provides the user-facing tick API: `initial_state()` and
-    `step(state, dt, t=0)`. Internally calls the IR's CasADi function
-    after translating between the user's nested state dict and the
-    flat-prefixed casadi-input names.
+    Kernel evaluation runs through the generic `NumpyModule` (the Sim
+    Module's `step` advances the state AND emits sensor readings from one
+    noise draw); this class adds the ergonomics — the nested state dict
+    ↔ flat translation, the optional `NoiseDriver`, and the bus ports.
+
+    Sensor readings are NOT in the state dict: a functional `step(state, dt)`
+    returns next state only; read the readings via `outputs()` (same step,
+    same noise draw) or wire the `out(...)` ports.
     """
 
     def __init__(self, cw) -> None:
         from ...sim import Sim
+        from ..module_build import to_module
+        from .module import NumpyModule
+        from ...bus import PortSet
         if not isinstance(cw, Sim):
             raise TypeError(
                 f"NumpyWorld: expected Sim, got "
                 f"{type(cw).__name__}")
         self._cw = cw
+        self._nm = NumpyModule(to_module(cw))     # generic execution engine
+        # Sensor readings from the most recent step (nested by owner). Kept
+        # OUT of the state dict — read via `outputs()` / wired `out` ports.
+        self._outputs: dict[str, dict[str, Any]] = {}
         # Optional stochastic noise source (see attach_driver). None ⇒
-        # the sim is a noiseless oracle: Noise inputs stay at their
-        # zero seed, so a sensor reading equals its mean model.
+        # the sim is a noiseless oracle: the noise port stays zero.
         self._driver = None
-        # Signal-bus plumbing (lazy). `_bus_state` is the held state for
-        # the no-arg `step(dt)` form; `_out_ports` publish sensor
-        # readings; `_cmd_in_ports` receive actuator commands.
+        # Bus plumbing (lazy): held state for `step(dt)`, producer/consumer
+        # ports managed by the shared PortSet.
         self._bus_state: dict | None = None
         self._bus_t = 0.0
-        # Producer (sensor `out`) + consumer (actuator `command`) ports,
-        # managed by the shared PortSet (lazy lazy creation + ZOH pull +
-        # rate-gated publish).
-        from ...bus import PortSet
         self._ports = PortSet()
         self._sig = None
+        self._spec = None
 
     # ---- IR passthroughs ----------------------------------------------
 
@@ -139,32 +145,73 @@ class NumpyWorld:
                          state: dict[str, dict[str, Any]],
                          dt: float,
                          t: float = 0.0) -> dict[str, dict[str, Any]]:
-        flat: dict[str, Any] = {"dt": dt, "t": t}
+        spec = self._spec_obj()
+        sig = self._signature()
+        flat: dict[str, Any] = {}
         for owner_name, owner_state in state.items():
             for slot, val in owner_state.items():
                 flat[f"{owner_name}.{slot}"] = val
 
-        # Overlay fresh stochastic draws onto the (zero-seeded) Noise
-        # inputs. The samples live only in this tick's `flat` — they are
-        # never written back to `state`, so each step draws afresh.
-        if self._driver is not None:
-            for name, sample in self._driver.sample().items():
-                flat[name] = sample
+        x = spec.pack({k: v for k, v in flat.items() if k in spec})
+        u = np.array(
+            [float(np.asarray(flat.get(n, sig.input_defaults[n])).ravel()[0])
+             for n in sig.input_names], dtype=float)
+        noise = self._noise_vec(flat)
 
-        out = self._cw.tick(**flat)
+        # One forward tick: advances x AND emits readings (shared noise draw).
+        self._nm.state["x"] = x
+        readings = self._nm.step(u=u, noise=noise, dt=dt, t=t)
+        x_new = self._nm.state["x"]
 
         new_state: dict[str, dict[str, Any]] = {k: {} for k in state}
-        for key, val in out.items():
-            owner_name, slot = key.split(".", 1)
-            if owner_name not in new_state:
-                new_state[owner_name] = {}
-            new_state[owner_name][slot] = val
-        # Preserve input-only slots the tick doesn't write back.
+        for full, val in spec.unpack(x_new).items():
+            owner_name, slot = full.split(".", 1)
+            new_state.setdefault(owner_name, {})[slot] = val
+        # Preserve input-only slots (commands, noise placeholders) the tick
+        # doesn't write back — but NOT sensor readings (those leave the dict).
         for owner_name, owner_state in state.items():
+            new_state.setdefault(owner_name, {})
             for slot, val in owner_state.items():
                 if slot not in new_state[owner_name]:
                     new_state[owner_name][slot] = val
+        # Sensor readings → outputs() (nested), kept out of the state dict.
+        self._outputs = {}
+        for full, reading in readings.items():
+            owner_name, slot = full.split(".", 1)
+            self._outputs.setdefault(owner_name, {})[slot] = reading
         return new_state
+
+    def outputs(self) -> dict[str, dict[str, Any]]:
+        """Sensor readings from the most recent `step` (nested
+        `{owner: {part.output: reading}}`), realized with that step's noise
+        draw. Readings are NOT in the state dict — read them here (or wire
+        the `out(...)` ports)."""
+        return self._outputs
+
+    def _noise_vec(self, flat: dict | None = None) -> np.ndarray:
+        """The flat noise vector for the step kernel, in tick-signature order.
+
+        A `NoiseDriver` draw takes precedence; otherwise a channel value set
+        directly in the state dict (the deterministic-testing path, e.g.
+        `state[owner]["gyro_bias_driver"] = …`) is used; else zero."""
+        sig = self._signature()
+        n = sum(c.dim for c in sig.noise)
+        vec = np.zeros(n)
+        samples = self._driver.sample() if self._driver is not None else {}
+        off = 0
+        for c in sig.noise:
+            if c.full in samples:
+                vec[off:off + c.dim] = np.asarray(samples[c.full]).ravel()
+            elif flat is not None and c.full in flat:
+                vec[off:off + c.dim] = np.asarray(flat[c.full]).ravel()
+            off += c.dim
+        return vec
+
+    def _spec_obj(self):
+        if self._spec is None:
+            from ...estimation.state_spec import StateSpec
+            self._spec = StateSpec.from_world(self._cw.world)
+        return self._spec
 
     # ---- Signal-bus ports + held-state stepping ------------------------
 
@@ -210,13 +257,12 @@ class NumpyWorld:
         new = self._functional_step(st, dt, t0)
         self._bus_state = new
         self._bus_t = t0 + dt
-        # Publish sensor readings, stamped at the start-of-step time (the
-        # instant the reading observes), to the wired output ports —
+        # Publish sensor readings (from this step's outputs, same noise draw),
+        # stamped at the start-of-step time, to the wired output ports —
         # gated by each port's sample rate (sample-and-hold in between).
-        readings = {full: new[owner][slot]
-                    for full in self._ports.producers
-                    for owner, slot in [full.split(".", 1)]
-                    if owner in new and slot in new[owner]}
+        readings = {f"{owner}.{slot}": val
+                    for owner, slots in self._outputs.items()
+                    for slot, val in slots.items()}
         self._ports.publish(readings, t0)
         return new
 

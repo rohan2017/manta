@@ -177,8 +177,8 @@ def test_hover_with_eskf_tracks_ground_truth():
         sim = cw.step(sim, dt=dt)
 
         # Read noisy sensor outputs from the sim tick result.
-        gyro_clean = np.array(sim["drone"]["g.gyro"]).ravel()
-        pos_clean  = np.array(sim["drone"]["gps.position"]).ravel()
+        gyro_clean = np.array(cw.outputs()["drone"]["g.gyro"]).ravel()
+        pos_clean  = np.array(cw.outputs()["drone"]["gps.position"]).ravel()
         gyro_meas = gyro_clean + rng.normal(0.0, sigma_gyro, 3)
         pos_meas  = pos_clean  + rng.normal(0.0, sigma_pos,  3)
 
@@ -278,9 +278,9 @@ def test_eskf_nees_consistency_over_seeds():
         for i in range(n):
             sim["drone"]["t.throttle"] = thrust
             sim = cw.step(sim, dt=dt)
-            gyro_meas = (np.array(sim["drone"]["g.gyro"]).ravel()
+            gyro_meas = (np.array(cw.outputs()["drone"]["g.gyro"]).ravel()
                          + rng.normal(0.0, sigma_gyro, 3))
-            pos_meas  = (np.array(sim["drone"]["gps.position"]).ravel()
+            pos_meas  = (np.array(cw.outputs()["drone"]["gps.position"]).ravel()
                          + rng.normal(0.0, sigma_pos,  3))
             ekf.predict(dt=dt, u={"t.throttle": thrust}, Q=Q)
             ekf.update(h_gyro, gyro_meas, R_gyro)

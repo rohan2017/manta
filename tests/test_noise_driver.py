@@ -32,7 +32,7 @@ def test_no_driver_is_noiseless_oracle():
     assert sim.driver is None
     out = sim.step(sim.initial_state(), dt=0.02)
     np.testing.assert_allclose(
-        np.asarray(out["c"]["gps.position"]).ravel(),
+        np.asarray(sim.outputs()["c"]["gps.position"]).ravel(),
         [0.0, 0.0, 10.0], atol=1e-12)
 
 
@@ -44,7 +44,7 @@ def test_driver_with_zero_sigma_stays_oracle():
     sim.attach_driver(NoiseDriver(seed=1))
     out = sim.step(sim.initial_state(), dt=0.02)
     np.testing.assert_allclose(
-        np.asarray(out["c"]["gps.position"]).ravel(),
+        np.asarray(sim.outputs()["c"]["gps.position"]).ravel(),
         [0.0, 0.0, 10.0], atol=1e-12)
 
 
@@ -59,7 +59,7 @@ def test_white_noise_residual_matches_sigma():
     state = sim.initial_state()
     for _ in range(20000):
         state = sim.step(state, dt=0.02)
-        gps = np.asarray(state["c"]["gps.position"]).ravel()
+        gps = np.asarray(sim.outputs()["c"]["gps.position"]).ravel()
         truth = np.asarray(state["c"]["position"]).ravel()
         res.append(gps - truth)
     res = np.asarray(res)
@@ -88,7 +88,7 @@ def test_seed_is_reproducible():
     def first_reading(seed):
         sim.attach_driver(NoiseDriver(seed=seed))
         out = sim.step(sim.initial_state(), dt=0.02)
-        return np.asarray(out["c"]["gps.position"]).ravel()
+        return np.asarray(sim.outputs()["c"]["gps.position"]).ravel()
 
     np.testing.assert_array_equal(first_reading(11), first_reading(11))
     assert not np.allclose(first_reading(11), first_reading(12))
@@ -99,9 +99,11 @@ def test_driver_reset_replays_stream():
     sim = TargetNumpy(Sim(w))
     drv = NoiseDriver(seed=5)
     sim.attach_driver(drv)
-    a = np.asarray(sim.step(sim.initial_state(), dt=0.02)["c"]["gps.position"])
+    sim.step(sim.initial_state(), dt=0.02)
+    a = np.asarray(sim.outputs()["c"]["gps.position"])
     drv.reset()
-    b = np.asarray(sim.step(sim.initial_state(), dt=0.02)["c"]["gps.position"])
+    sim.step(sim.initial_state(), dt=0.02)
+    b = np.asarray(sim.outputs()["c"]["gps.position"])
     np.testing.assert_array_equal(a.ravel(), b.ravel())
 
 

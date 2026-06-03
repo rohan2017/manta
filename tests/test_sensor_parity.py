@@ -29,7 +29,7 @@ def test_dvl_stationary_craft_reads_zero():
     sim = TargetNumpy(Sim(w))
     state = sim.initial_state()
     state = sim.step(state, dt=0.001)
-    np.testing.assert_allclose(np.array(state["dvl_test"]["d.velocity"]).ravel(),
+    np.testing.assert_allclose(np.array(sim.outputs()["dvl_test"]["d.velocity"]).ravel(),
                                np.zeros(3), atol=1e-12)
 
 
@@ -43,7 +43,7 @@ def test_dvl_moving_craft_reads_anchor_velocity_when_unrotated():
     sim = TargetNumpy(Sim(w))
     state = sim.initial_state()
     state = sim.step(state, dt=0.001)
-    np.testing.assert_allclose(np.array(state["dvl_move"]["d.velocity"]).ravel(),
+    np.testing.assert_allclose(np.array(sim.outputs()["dvl_move"]["d.velocity"]).ravel(),
                                (1.5, -0.3, 2.0), atol=1e-12)
 
 
@@ -74,7 +74,7 @@ def test_dvl_rotated_craft_reads_rotated_velocity():
     # body velocity = R^T · anchor velocity.
     # R^T · (1,0,0) for +90° about z: R = [[0,-1,0],[1,0,0],[0,0,1]]
     # so R^T = [[0,1,0],[-1,0,0],[0,0,1]] and R^T·(1,0,0) = (0, -1, 0).
-    np.testing.assert_allclose(np.array(state["dvl_rot"]["d.velocity"]).ravel(),
+    np.testing.assert_allclose(np.array(sim.outputs()["dvl_rot"]["d.velocity"]).ravel(),
                                (0.0, -1.0, 0.0), atol=1e-9)
 
 
@@ -138,7 +138,7 @@ def test_magnetometer_reads_uniform_field_when_unrotated():
     state = cw.initial_state()
     state = cw.step(state, dt=0.001)
     np.testing.assert_allclose(
-        np.array(state["mag_craft"]["m.B"]).ravel(),
+        np.array(cw.outputs()["mag_craft"]["m.B"]).ravel(),
         (1.0, 2.0, 3.0), atol=1e-12)
 
 
@@ -155,7 +155,7 @@ def test_magnetometer_reads_rotated_field_under_craft_rotation():
     out = cw.step(state, dt=0.001)
     # R^T · (1,0,0) with R = +90° about z → (0, -1, 0) in body frame.
     np.testing.assert_allclose(
-        np.array(out["mag_rot"]["m.B"]).ravel(),
+        np.array(cw.outputs()["mag_rot"]["m.B"]).ravel(),
         (0.0, -1.0, 0.0), atol=1e-9)
 
 
@@ -168,7 +168,7 @@ def test_magnetometer_with_no_field_reads_zero():
     sim = TargetNumpy(Sim(w))
     state = sim.initial_state()
     state = sim.step(state, dt=0.001)
-    np.testing.assert_allclose(np.array(state["nomag"]["m.B"]).ravel(),
+    np.testing.assert_allclose(np.array(sim.outputs()["nomag"]["m.B"]).ravel(),
                                np.zeros(3), atol=1e-12)
 
 
@@ -190,7 +190,7 @@ def test_magnetometer_picks_up_dipole_at_local_position():
     out   = cw.step(state, dt=0.001)
     expected_z = 1e-7 * 2 * m / (1e7) ** 3
     np.testing.assert_allclose(
-        np.array(out["orbiter"]["m.B"]).ravel(),
+        np.array(cw.outputs()["orbiter"]["m.B"]).ravel(),
         (0.0, 0.0, expected_z), rtol=1e-9, atol=1e-15)
 
 
@@ -211,7 +211,7 @@ def test_magnetometer_samples_at_single_mount_offset():
         w.add_craft(c, position=(0, 0, craft_z))
         sim = TargetNumpy(Sim(w))
         out = sim.step(sim.initial_state(), dt=1e-3)
-        return np.array(out["c"]["mag.B"]).ravel()
+        return np.array(sim.outputs()["c"]["mag.B"]).ravel()
 
     offset_sensor = reading(Z, h)         # mounts at Z, offset h → samples Z+h
     flush_sensor  = reading(Z + h, 0.0)   # mounts at Z+h, no offset

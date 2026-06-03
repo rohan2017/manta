@@ -49,7 +49,7 @@ def test_to_module_shapes():
     m = to_module(Sim(w))
     assert isinstance(m, Module)
     assert m.state.names == ("x",)
-    assert {p.name for p in m.ports} == {"u", "dt", "t"}
+    assert {p.name for p in m.ports} == {"u", "noise", "dt", "t"}
     assert m.entry("step").writes_state == ("x",)
     assert "F" in m.analysis            # analysis fn, not a runtime method
 
@@ -82,6 +82,7 @@ def test_sim_step_parity():
     u = _u_defaults(sim, spec)
 
     nm = NumpyModule(to_module(sim))
+    noise = np.zeros(nm.module.port("noise").size)
     state = facade.initial_state()
     # generic runtime seeds x from the Module's declared init — same source.
     np.testing.assert_allclose(
@@ -91,7 +92,7 @@ def test_sim_step_parity():
     dt, t = 0.01, 0.0
     for _ in range(50):
         state = facade.step(state, dt, t)
-        nm.step(u=u, dt=dt, t=t)
+        nm.step(u=u, noise=noise, dt=dt, t=t)
         np.testing.assert_allclose(
             nm.state["x"],
             spec.pack({k: v for k, v in _flat(state).items() if k in spec}),

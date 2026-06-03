@@ -23,35 +23,61 @@ from ..ir.module import EntryPoint, Module, Port, StateField, StateLayout
 # ---------------------------------------------------------------------------
 
 def module_for_sim(sim) -> Module:
-    from .cpp.extract import extract
+    import casadi as ca
+    from ..estimation.state_spec import StateSpec
+    from ..linearization import Linearization
     from ..linearized_system import flatten_nested
+    from ..tick import walk_tick_signature
 
-    funcs = extract(sim)
-    spec = funcs.spec
+    world = sim.world
+    spec = StateSpec.from_world(world)
+    cf = sim.tick.casadi_function
+    sig = walk_tick_signature(cf, world, spec)
+    lin = Linearization(cf, spec, frozen={}, input_names=sig.input_names,
+                        noise_specs=sig.noise, outputs=sig.sensor_names,
+                        build_functions=True)
 
-    init_flat = flatten_nested(sim.world._initial_state_dict())
+    init_flat = flatten_nested(world._initial_state_dict())
     x0 = spec.pack({k: v for k, v in init_flat.items() if k in spec})
     x_field = StateField("x", "manifold", (spec.ambient_dim,),
                          init=x0, manifold=spec)
 
-    ports = (Port("u", (funcs.n_inputs,)), Port("dt", ()), Port("t", ()))
-    functions = {"step": funcs.predict_fn}
-    entries = [EntryPoint("step", "step", ("x", "u", "dt", "t"),
-                          writes_state=("x",))]
-    analysis = {"F": funcs.predict_jacobian_fn}
+    n_u = len(sig.input_names)
+    ports = [Port("u", (n_u,)), Port("noise", (lin.n_noise,)),
+             Port("dt", ()), Port("t", ())]
 
-    # Measurement entry points: h(x,u,t) -> reading. dt is a kernel arg the
-    # method feeds zero (a measurement is dt-independent), so no dt port on
-    # the method — the runtime supplies the kernel's dt slot as 0.
-    for o in funcs.outputs:
-        hk, Hk = f"h_{o.flat_name}", f"H_{o.flat_name}"
+    # The Sim `step` is the full forward tick — it advances the state AND
+    # emits every sensor reading, from ONE noise draw (so a driven runtime's
+    # state and readings share the same realization). Noise is a Port (the
+    # tick's honest signature); the noiseless oracle just passes zeros. The
+    # readings are RETURNED, not stored in State — the runtime publishes them
+    # to ports / `outputs()`, never into the state dict.
+    sensor_fulls = list(lin.outputs)
+    step_outs = [lin.x_new_noisy] + [
+        ca.reshape(lin.outputs[f].h_noisy_sym, lin.outputs[f].dim, 1)
+        for f in sensor_fulls]
+    step_names = ["x_new"] + [f.replace(".", "_") for f in sensor_fulls]
+    step_fn = ca.Function(
+        "step",
+        [lin.x_sym, lin.u_sym, lin.n_sym, lin.dt_sym, lin.t_sym],
+        step_outs, ["x", "u", "noise", "dt", "t"], step_names)
+    functions = {"step": step_fn}
+    entries = [EntryPoint("step", "step", ("x", "u", "noise", "dt", "t"),
+                          writes_state=("x",), returns=tuple(sensor_fulls))]
+    analysis = {"F": lin.F_fn}
+
+    # Measurement entry points: noiseless h(x,u,t) -> reading, WITHOUT
+    # stepping. dt is a kernel arg the method feeds zero (a measurement is
+    # dt-independent). Useful for inspection + the cpp path.
+    for full, o in lin.outputs.items():
+        ident = full.replace(".", "_")
+        hk, Hk = f"h_{ident}", f"H_{ident}"
         functions[hk] = o.h_fn
-        entries.append(EntryPoint(f"measure_{o.flat_name}", hk,
-                                  ("x", "u", "dt", "t"),
-                                  returns=(o.full_name,)))
+        entries.append(EntryPoint(f"measure_{ident}", hk,
+                                  ("x", "u", "dt", "t"), returns=(full,)))
         analysis[Hk] = o.H_fn
 
-    return Module(sim.world.name, StateLayout((x_field,)), ports,
+    return Module(world.name, StateLayout((x_field,)), tuple(ports),
                   functions, tuple(entries), analysis)
 
 

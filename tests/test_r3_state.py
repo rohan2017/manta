@@ -98,7 +98,7 @@ def test_r3_state_appears_in_outputs():
     state = sim.initial_state()
     state["c"]["p.bias"] = np.array([4.0, 5.0, 6.0])
     state = sim.step(state, dt=0.01)
-    np.testing.assert_allclose(state["c"]["p.bias_out"],
+    np.testing.assert_allclose(sim.outputs()["c"]["p.bias_out"],
                                 (4.0, 5.0, 6.0), atol=1e-12)
 
 

@@ -176,7 +176,7 @@ def test_ekf_estimates_rw_bias_from_gyro_readings():
         noise = sim_c.sample_noise(rng)
         state["drone"].update(noise)
         state = cw.step(state, t=t, dt=dt)
-        gyro_z = np.array(state["drone"]["g.gyro"]).ravel()
+        gyro_z = np.array(cw.outputs()["drone"]["g.gyro"]).ravel()
         ekf.predict(dt=dt, t=t)
         ekf.update(imu_part, gyro=gyro_z)
         t += dt

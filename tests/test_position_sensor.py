@@ -18,7 +18,7 @@ def test_position_sensor_at_origin_reads_craft_position():
     state = sim.initial_state()
 
     state = sim.step(state, dt=0.001)
-    np.testing.assert_allclose(np.array(state["p"]["gps.position"]).ravel(),
+    np.testing.assert_allclose(np.array(sim.outputs()["p"]["gps.position"]).ravel(),
                                np.array([3.0, -1.0, 2.5]), atol=1e-9)
 
 
@@ -38,7 +38,7 @@ def test_position_sensor_tracks_position_under_freefall():
     for _ in range(500):
         pos_in = np.array(state["p"]["position"]).ravel().copy()
         state  = sim.step(state, dt=0.001)
-        np.testing.assert_allclose(np.array(state["p"]["gps.position"]).ravel(),
+        np.testing.assert_allclose(np.array(sim.outputs()["p"]["gps.position"]).ravel(),
                                    pos_in, atol=1e-12)
 
 
@@ -58,5 +58,5 @@ def test_position_sensor_with_offset_adds_R_offset():
     state = sim.initial_state()
 
     state = sim.step(state, dt=0.001)
-    np.testing.assert_allclose(np.array(state["p"]["gps.position"]).ravel(),
+    np.testing.assert_allclose(np.array(sim.outputs()["p"]["gps.position"]).ravel(),
                                np.array([0.0, 1.0, 0.0]), atol=1e-9)

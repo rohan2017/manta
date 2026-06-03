@@ -96,8 +96,8 @@ def test_rotor_imu_reads_centripetal_and_spin():
     sim = _free_world(c, **{"wheel.rate": omega0})
     state = sim.step(sim.initial_state(), dt=1e-4)
 
-    gyro  = np.asarray(state["fly"]["imu.gyro"]).ravel()
-    accel = np.asarray(state["fly"]["imu.accel"]).ravel()
+    gyro  = np.asarray(sim.outputs()["fly"]["imu.gyro"]).ravel()
+    accel = np.asarray(sim.outputs()["fly"]["imu.accel"]).ravel()
 
     np.testing.assert_allclose(gyro, (0.0, 0.0, omega0), atol=1e-6)
     # Centripetal acceleration toward the axis; small body recoil tolerated.
@@ -118,7 +118,7 @@ def test_rotor_imu_centripetal_scales_with_rate_squared():
         c.add(wheel)
         sim = _free_world(c, **{"wheel.rate": omega0})
         state = sim.step(sim.initial_state(), dt=1e-4)
-        return float(np.asarray(state["fly"]["imu.accel"]).ravel()[0])
+        return float(np.asarray(sim.outputs()["fly"]["imu.accel"]).ravel()[0])
 
     np.testing.assert_allclose(accel_x(20.0), 4.0 * accel_x(10.0), rtol=3e-3)
 
@@ -145,7 +145,7 @@ def test_rotor_magnetometer_reads_in_sensor_frame():
     state = sim.step(sim.initial_state(), dt=1e-3)
 
     np.testing.assert_allclose(
-        np.asarray(state["compass"]["mag.B"]).ravel(),
+        np.asarray(sim.outputs()["compass"]["mag.B"]).ravel(),
         (0.0, -1.0, 0.0), atol=1e-9)
 
 

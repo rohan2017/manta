@@ -118,7 +118,7 @@ def test_so3_state_output_round_trips_the_quaternion():
     q = np.array([0.5, 0.5, 0.5, 0.5])   # already unit
     state["c"]["att.orientation_est"] = q
     state = sim.step(state, dt=0.01)
-    np.testing.assert_allclose(state["c"]["att.quat_out"], q, atol=1e-12)
+    np.testing.assert_allclose(sim.outputs()["c"]["att.quat_out"], q, atol=1e-12)
 
 
 # ---------------------------------------------------------------------------

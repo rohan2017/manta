@@ -79,6 +79,7 @@ class OutputLinearization:
     h_fn:          ca.Function | None
     H_fn:          ca.Function | None
     L_h_fn:        ca.Function | None
+    h_noisy_sym:   ca.MX | None = None  # h with noise kept LIVE (=h_sym at n=0)
 
 
 class Linearization:
@@ -147,6 +148,10 @@ class Linearization:
         x_pert_new = self._gather_state(outputs_pert)
         delta_out  = spec.boxminus_sym(x_pert_new, x_new_0)
         self.x_new = x_new_0          # predict expr (noise-zeroed)
+        # Noise-LIVE next state (noise kept symbolic). A driven Sim runtime
+        # evaluates this with sampled noise; the noiseless predict is just
+        # this at noise=0 (they coincide when the model has no noise).
+        self.x_new_noisy = x_new_n
         self.F_sym = ca.substitute(
             ca.jacobian(delta_out, delta_in),
             delta_in, ca.MX.zeros(n_tangent, 1))
@@ -232,7 +237,8 @@ class Linearization:
             self.outputs[full] = OutputLinearization(
                 full=full, dim=h_dim, observed_cols=cols,
                 h_sym=h_sym, H_sym=H_sym, L_h_sym=L_h_sym,
-                h_fn=h_fn, H_fn=H_fn, L_h_fn=L_h_fn)
+                h_fn=h_fn, H_fn=H_fn, L_h_fn=L_h_fn,
+                h_noisy_sym=h_n_flat)      # noise-live reading (=h_sym at n=0)
 
         if build_functions:
             self.blocks = self._compute_blocks(n_tangent)
