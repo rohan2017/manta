@@ -55,8 +55,11 @@ class NumpyWorld:
         # readings; `_cmd_in_ports` receive actuator commands.
         self._bus_state: dict | None = None
         self._bus_t = 0.0
-        self._out_ports: dict[str, Any] = {}
-        self._cmd_in_ports: dict[str, Any] = {}
+        # Producer (sensor `out`) + consumer (actuator `command`) ports,
+        # managed by the shared PortSet (lazy lazy creation + ZOH pull +
+        # rate-gated publish).
+        from ...bus import PortSet
+        self._ports = PortSet()
         self._sig = None
 
     # ---- IR passthroughs ----------------------------------------------
@@ -182,24 +185,17 @@ class NumpyWorld:
         """Producer port for a sensor Output (`"craft.part.output"` or an
         unambiguous suffix). Published each bus `step()` — at the part's
         declared sample rate (`ctx.sample`) if any, else every tick."""
-        from ...signal import Signal
         full = self._resolve(name, self._signature().sensor_names, "output")
-        if full not in self._out_ports:
-            self._out_ports[full] = Signal(
-                full, dim=self._output_dim(full), rate=self._rate(full))
-        return self._out_ports[full]
+        return self._ports.producer(full, dim=self._output_dim(full),
+                                    rate=self._rate(full))
 
     def command(self, name: str):
         """Consumer port for an actuator Input. Pulled into the held
         state before each bus `step()` (latched / zero-order-hold) — at
         the part's declared intake rate (`ctx.hold`) if any."""
-        from ...signal import Signal
         full = self._resolve(name, self._signature().input_names, "input")
-        if full not in self._cmd_in_ports:
-            self._cmd_in_ports[full] = Signal(
-                full, dim=self._input_dim(full), latched=True,
-                rate=self._rate(full))
-        return self._cmd_in_ports[full]
+        return self._ports.consumer(full, dim=self._input_dim(full),
+                                    rate=self._rate(full))
 
     def _rate(self, full: str):
         return getattr(self._cw.tick, "sample_rates", {}).get(full)
@@ -207,22 +203,21 @@ class NumpyWorld:
     def _bus_step(self, dt: float, t: float | None) -> dict[str, dict[str, Any]]:
         t0 = self._bus_t if t is None else t  # start-of-step world time
         st = self.state                       # lazy-seed the held state
-        # Pull wired command ports into the held state (ZOH, rate-gated).
-        for full, port in self._cmd_in_ports.items():
-            v = port.latched_value(t0)
-            if v is not None:
-                owner, rest = full.split(".", 1)
-                st.setdefault(owner, {})[rest] = v
+        # Pull wired command ports (ZOH, rate-gated) into the held state.
+        for full, v in self._ports.pull(t0).items():
+            owner, rest = full.split(".", 1)
+            st.setdefault(owner, {})[rest] = v
         new = self._functional_step(st, dt, t0)
         self._bus_state = new
         self._bus_t = t0 + dt
         # Publish sensor readings, stamped at the start-of-step time (the
         # instant the reading observes), to the wired output ports —
         # gated by each port's sample rate (sample-and-hold in between).
-        for full, port in self._out_ports.items():
-            owner, slot = full.split(".", 1)
-            if owner in new and slot in new[owner] and port.due(t0):
-                port.set(np.asarray(new[owner][slot]).ravel(), t=t0)
+        readings = {full: new[owner][slot]
+                    for full in self._ports.producers
+                    for owner, slot in [full.split(".", 1)]
+                    if owner in new and slot in new[owner]}
+        self._ports.publish(readings, t0)
         return new
 
     # ---- Port resolution helpers --------------------------------------
@@ -854,12 +849,12 @@ class NumpyRecurrence:
             raise TypeError(
                 f"NumpyRecurrence: expected a RecurrenceBlock, got "
                 f"{type(block).__name__}")
+        from ...bus import PortSet
         self._b = block
         self._nm = NumpyModule(to_module(block))    # generic execution engine
         self._y = np.zeros(block.output_dim)
         self._t = 0.0
-        self._in_ports:  dict[str, Any] = {}
-        self._out_ports: dict[str, Any] = {}
+        self._ports = PortSet()                      # input/output Signal ports
 
     # Ambient state lives in the Module's State; proxy it so the bus /
     # reset / `state` helpers below read & write one place.
@@ -945,33 +940,21 @@ class NumpyRecurrence:
     def input(self, name: str):
         """Consumer port for an input (latched / zero-order-hold). Wire a
         producer into it, or `set()` it yourself; `compute()` reads it."""
-        from ...signal import Signal
         port = self._port(name, [p.name for p in self._b.inputs], "input")
-        if port not in self._in_ports:
-            dim = next(p.dim for p in self._b.inputs if p.name == port)
-            self._in_ports[port] = Signal(port, dim=dim, latched=True)
-        return self._in_ports[port]
+        dim = next(p.dim for p in self._b.inputs if p.name == port)
+        return self._ports.consumer(port, dim=dim)
 
     def output(self, name: str):
         """Producer port for a readout, refreshed after each `compute()`."""
-        from ...signal import Signal
         port = self._port(name, [p.name for p in self._b.outputs], "output")
-        if port not in self._out_ports:
-            dim = next(p.dim for p in self._b.outputs if p.name == port)
-            self._out_ports[port] = Signal(port, dim=dim)
-        return self._out_ports[port]
+        dim = next(p.dim for p in self._b.outputs if p.name == port)
+        return self._ports.producer(port, dim=dim)
 
     def compute(self, dt: float, *, t: float | None = None) -> dict[str, Any]:
         """Read the wired input ports, step, and publish to output ports."""
         tt = self._t if t is None else t
-        inputs: dict[str, Any] = {}
-        for name, port in self._in_ports.items():
-            v = port.latched_value(tt)
-            if v is not None:
-                inputs[name] = v
-        out = self.step(dt, t=tt, **inputs)
-        for name, port in self._out_ports.items():
-            port.set(np.atleast_1d(np.asarray(out[name])).ravel(), t=self._t)
+        out = self.step(dt, t=tt, **self._ports.pull(tt))
+        self._ports.publish(out, t=self._t)
         return out
 
     @staticmethod

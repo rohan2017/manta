@@ -28,6 +28,48 @@ from .linearized_system import resolve_suffix
 from .signal import Signal
 
 
+class PortSet:
+    """Lazy named `Signal` ports + the pull/publish disciplines the block
+    runtimes share (sim, recurrence, …). Consumers are latched (zero-order-
+    hold); producers publish rate-gated. The runtime keeps its own
+    compute/step orchestration and just calls `pull()` then `publish()` —
+    the mechanical port bookkeeping (which the design wants to live once,
+    over `Signal`) is here, not duplicated per façade."""
+
+    def __init__(self) -> None:
+        self.consumers: dict[str, Signal] = {}
+        self.producers: dict[str, Signal] = {}
+
+    def consumer(self, name: str, *, dim: int | None = None,
+                 rate: float | None = None) -> Signal:
+        if name not in self.consumers:
+            self.consumers[name] = Signal(name, dim=dim, latched=True, rate=rate)
+        return self.consumers[name]
+
+    def producer(self, name: str, *, dim: int | None = None,
+                 rate: float | None = None) -> Signal:
+        if name not in self.producers:
+            self.producers[name] = Signal(name, dim=dim, rate=rate)
+        return self.producers[name]
+
+    def pull(self, t: float) -> dict[str, Any]:
+        """Latched value of every consumer port at time `t` (ZOH); omits
+        ports that have never received a value."""
+        out: dict[str, Any] = {}
+        for name, port in self.consumers.items():
+            v = port.latched_value(t)
+            if v is not None:
+                out[name] = v
+        return out
+
+    def publish(self, values: dict[str, Any], t: float) -> None:
+        """Set each producer whose name is in `values`, rate-gated by `due`
+        (sample-and-hold in between firings)."""
+        for name, port in self.producers.items():
+            if name in values and port.due(t):
+                port.set(np.atleast_1d(np.asarray(values[name])).ravel(), t=t)
+
+
 class FilterRuntime(Protocol):
     """The math-only surface the bus drives. A backend's filter runtime
     (e.g. `NumpyEKF`) implements it; the bus owns everything else."""
