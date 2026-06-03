@@ -25,6 +25,11 @@ __pycache__/
 .DS_Store
 prompts/
 
+# Local planning/audit notes — README is the only markdown tracked
+ARCHITECTURE_AUDIT.md
+ARCHITECTURE_TARGET.md
+REFACTOR_PLAN.md
+
 # Codegen output is committed (lives in examples/<ex>/generated/) so these
 # stay tracked. Do NOT add them here.
 *:Zone.Identifier
