@@ -15,7 +15,16 @@ backend-neutral `ca.Function`s).
 
 from __future__ import annotations
 
-from ..ir.module import EntryPoint, Module, Port, StateField, StateLayout
+from ..ir.module import (
+    EntryPoint, Module, Port, PortField, StateField, StateLayout,
+)
+
+
+def _input_port(name, input_names, defaults) -> Port:
+    """Build the `u` control Port carrying one named scalar field per Part
+    Input (so a typed backend emits an Inputs struct)."""
+    return Port(name, (len(input_names),), fields=tuple(
+        PortField(n, 1, float(defaults[n])) for n in input_names))
 
 
 # ---------------------------------------------------------------------------
@@ -42,9 +51,8 @@ def module_for_sim(sim) -> Module:
     x_field = StateField("x", "manifold", (spec.ambient_dim,),
                          init=x0, manifold=spec)
 
-    n_u = len(sig.input_names)
-    ports = [Port("u", (n_u,)), Port("noise", (lin.n_noise,)),
-             Port("dt", ()), Port("t", ())]
+    ports = [_input_port("u", sig.input_names, sig.input_defaults),
+             Port("noise", (lin.n_noise,)), Port("dt", ()), Port("t", ())]
 
     # The Sim `step` is the full forward tick — it advances the state AND
     # emits every sensor reading, from ONE noise draw (so a driven runtime's
@@ -61,9 +69,17 @@ def module_for_sim(sim) -> Module:
         "step",
         [lin.x_sym, lin.u_sym, lin.n_sym, lin.dt_sym, lin.t_sym],
         step_outs, ["x", "u", "noise", "dt", "t"], step_names)
-    functions = {"step": step_fn}
-    entries = [EntryPoint("step", "step", ("x", "u", "noise", "dt", "t"),
-                          writes_state=("x",), returns=tuple(sensor_fulls))]
+    # `predict` is the NOISELESS deploy-shaped forward map (x,u,dt,t)→x —
+    # what an on-device backend (C++) runs against real sensors. `step`
+    # (above) is the driven-oracle variant the numpy sim uses. Same tick;
+    # `predict` == `step`'s x output at noise=0.
+    functions = {"step": step_fn, "predict": lin.predict_fn}
+    entries = [
+        EntryPoint("step", "step", ("x", "u", "noise", "dt", "t"),
+                   writes_state=("x",), returns=tuple(sensor_fulls)),
+        EntryPoint("predict", "predict", ("x", "u", "dt", "t"),
+                   writes_state=("x",)),
+    ]
     analysis = {"F": lin.F_fn}
 
     # Measurement entry points: noiseless h(x,u,t) -> reading, WITHOUT
@@ -87,7 +103,11 @@ def module_for_sim(sim) -> Module:
 
 def module_for_lqr(lqr) -> Module:
     spec = lqr.spec                       # full ambient layout (the law gathers)
-    ports = (Port("x", (spec.ambient_dim,)),)
+    # `x` is a manifold state vector (carries the spec so a typed backend
+    # builds the same State struct); `u` is the returned control, named.
+    defaults = {n: 0.0 for n in lqr.input_names}
+    ports = (Port("x", (spec.ambient_dim,), manifold=spec),
+             _input_port("u", lqr.input_names, defaults))
     return Module(
         f"{lqr.world.name}_lqr", StateLayout(()), ports,
         {"control": lqr.control_fn},
@@ -102,7 +122,11 @@ def module_for_recurrence(block) -> Module:
     spec = block.spec
     x_field = StateField("x", "manifold", (spec.ambient_dim,),
                          init=block.x0.copy(), manifold=spec)
-    ports = (Port("u", (block.input_dim,)), Port("dt", ()), Port("t", ()))
+    u_port = Port("u", (block.input_dim,), fields=tuple(
+        PortField(p.name, p.dim, 0.0) for p in block.inputs))
+    y_port = Port("y", (block.output_dim,), fields=tuple(
+        PortField(p.name, p.dim, 0.0) for p in block.outputs))
+    ports = (u_port, y_port, Port("dt", ()), Port("t", ()))
     return Module(
         block.name, StateLayout((x_field,)), ports,
         {"step": block.update_fn},
@@ -131,9 +155,10 @@ def module_for_ekf(ekf) -> Module:
         StateField("P", "matrix", (tan, tan), init=np.eye(tan) * 1e-2),
     )
 
-    n_u = len(ekf._input_names)
-    ports = [Port("u", (n_u,)), Port("dt", ()), Port("t", ()),
-             Port("Q", (tan, tan))]
+    defaults = {n: float(d) for n, d in
+                zip(ekf._input_names, ekf._u_defaults)}
+    ports = [_input_port("u", ekf._input_names, defaults),
+             Port("dt", ()), Port("t", ()), Port("Q", (tan, tan))]
 
     # predict: x' = f, P' = F P Fᵀ + Q   (Q supplied as a port; the model's
     # default Q comes from the `process_noise` entry below).

@@ -100,6 +100,24 @@ def test_sim_step_parity():
         t += dt
 
 
+def test_sim_predict_equals_noiseless_step():
+    """The deploy-shaped noiseless `predict` == the driven `step`'s x output
+    at noise=0 (cpp runs `predict`; numpy runs `step`)."""
+    w, _ = _flyer()
+    sim = Sim(w)
+    spec = StateSpec.from_world(w)
+    u = _u_defaults(sim, spec)
+    a = NumpyModule(to_module(sim))
+    b = NumpyModule(to_module(sim))
+    noise = np.zeros(a.module.port("noise").size)
+    dt = 0.01
+    for _ in range(20):
+        a.step(u=u, noise=noise, dt=dt, t=0.0)     # driven (noise=0)
+        b.predict(u=u, dt=dt, t=0.0)               # deploy-shaped
+        np.testing.assert_allclose(a.state["x"], b.state["x"], rtol=1e-12,
+                                   atol=1e-12)
+
+
 def _flat(nested):
     out = {}
     for owner, slots in nested.items():

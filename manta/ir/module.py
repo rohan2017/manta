@@ -79,11 +79,32 @@ class StateLayout:
 
 
 @dataclass(frozen=True)
+class PortField:
+    """One named sub-component of a structured Port — e.g. one Part Input
+    inside the `u` control vector, or one named readout inside a recurrence
+    block's output. Carries the `default` so a typed backend (C++) can build
+    the struct without reaching back to the model."""
+    name: str
+    dim: int
+    default: Any = 0.0
+
+
+@dataclass(frozen=True)
 class Port:
     """A runtime input to a method — supplied per call, never stored in
-    State (`u`, `z`, `dt`, `t`, `Q`, …). A scalar port has `shape == ()`."""
+    State (`u`, `z`, `dt`, `t`, `Q`, …). A scalar port has `shape == ()`.
+
+    `fields` optionally names the port's flat sub-components in order (the
+    individual Part Inputs in `u`, the named readouts in a recurrence's
+    output), so a typed backend can emit a named struct + flat pack/unpack;
+    an unstructured port (a bare `z`, `dt`, `Q`) leaves it empty.
+    """
     name: str
     shape: tuple[int, ...] = ()
+    fields: tuple[PortField, ...] = ()
+    manifold: Any = None     # StateSpec/Manifold when the port is a manifold
+                             # state vector (e.g. LQR's `x` input) — lets a
+                             # typed backend build the same struct as State.
 
     @property
     def size(self) -> int:
