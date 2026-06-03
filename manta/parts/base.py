@@ -344,8 +344,7 @@ class State(_Declaration):
 
     def __init__(self, init, manifold="R1", frame=None) -> None:
         from ..ir.manifold import (
-            Manifold, ScalarManifold, R3Manifold, SO3Manifold,
-            manifold_from_shortcut,
+            Manifold, R3Manifold, SO3Manifold, manifold_from_shortcut,
         )
         if isinstance(manifold, Manifold):
             mfd = manifold
@@ -592,9 +591,10 @@ class Part(DeclarationHost):
 
     # --- Required + optional overrides ------------------------------------
 
-    def update(self, ctx: "TickContext"):
+    def update(self, ctx):
         """Compute this part's wrench contribution for the current tick.
-        Subclasses must override and return a `Wrench` or `PartUpdate`."""
+        `ctx` is the `manta.craft.TickContext`. Subclasses must override
+        and return a `Wrench` or `PartUpdate`."""
         raise NotImplementedError(
             f"{type(self).__name__}: must override update(self, ctx)")
 
@@ -681,24 +681,3 @@ class RootPart(CompositePart):
 
     def __init__(self, name: str) -> None:
         super().__init__(name)
-
-
-# NOTE: documentation-only stub.
-#
-# The real `TickContext` class lives in `manta/craft.py`. We
-# can't import it here at runtime because that would create a circular
-# import (craft imports parts.base). The stub below exists purely as
-# a forward-reference so user docstrings / IDE tooling have something
-# to point at when they say "the Part's update receives a TickContext".
-# Do NOT `isinstance(ctx, TickContext)` against this — that check
-# would always pass against the placeholder regardless of what `ctx`
-# actually is. The world-tick loop in world_tick.py constructs and
-# dispatches the concrete context directly.
-
-class TickContext:   # noqa: D401  (docstring is the API doc)
-    """Forward-reference stub. See `manta.craft.TickContext` for
-    the concrete class with fields gravity, gravity_field, fluid_field,
-    mag_field, collision_field, dt, position, orientation, velocity,
-    angular_velocity, velocity_body, R_craft_from_input,
-    acceleration_world, acceleration_body, angular_acceleration."""
-    __slots__ = ()

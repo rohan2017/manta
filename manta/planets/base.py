@@ -129,10 +129,6 @@ class Planet:
         """3×1 MX of the planet's center in WorldFrame (constant)."""
         return ca.DM(self.center.reshape(3, 1))
 
-    def axis_world_sym(self) -> ca.MX:
-        """3×1 MX of the unit rotation axis in WorldFrame (constant)."""
-        return ca.DM(self.axis.reshape(3, 1))
-
     def omega_world_sym(self) -> ca.MX:
         """3×1 MX of the angular-velocity vector in WorldFrame (constant)."""
         return ca.DM((self.omega * self.axis).reshape(3, 1))

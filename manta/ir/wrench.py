@@ -19,7 +19,6 @@ class Wrench:
 
         w = Wrench(force=Vec3[F](...), torque=Vec3[F](...))
         w = Wrench.zero(F)
-        w = Wrench.from_force_at(force=..., point=...)   # both in frame F
     """
 
     __slots__ = ("force", "torque", "_frame")
@@ -54,31 +53,6 @@ class Wrench:
         return cls(
             force=Vec3[frame].constant((0.0, 0.0, 0.0)),
             torque=Vec3[frame].constant((0.0, 0.0, 0.0)),
-        )
-
-    @classmethod
-    def from_force_at(cls, force: Vec3, point: Vec3) -> "Wrench":
-        """A force applied at `point` (in the same frame as `force`).
-        Produces torque about the frame's origin: τ = r × F."""
-        if not isinstance(force, Vec3) or not isinstance(point, Vec3):
-            raise TypeError(
-                f"Wrench.from_force_at: expected (Vec3, Vec3), got "
-                f"({type(force).__name__}, {type(point).__name__})")
-        if force._frame is not point._frame:
-            raise FrameError(
-                "Wrench.from_force_at",
-                expected=f"force and point share a frame",
-                got=f"force={force._frame.__name__}, "
-                    f"point={point._frame.__name__}",
-                source=_capture_user_source(),
-            )
-        return cls(force=force, torque=point.cross(force))
-
-    @classmethod
-    def from_torque(cls, torque: Vec3) -> "Wrench":
-        return cls(
-            force=Vec3[torque._frame].constant((0.0, 0.0, 0.0)),
-            torque=torque,
         )
 
     # --- Operators --------------------------------------------------------

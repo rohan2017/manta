@@ -8,8 +8,8 @@ event-plumbing for any predict/update filter on any backend — so the target
 architecture lifts it OUT of the runtime into this one layer over `Signal`
 ports (`manta.signal`). It drives a filter through a tiny *math-only*
 interface (`FilterRuntime` below): build a control vector, fold one sensor,
-predict, expose the estimate. A numpy filter satisfies it today; a torch one
-would tomorrow, and inherit the bus unchanged.
+predict, expose the estimate. `NumpyRuntime` satisfies it today; a torch
+runtime would tomorrow, and inherit the bus unchanged.
 
 The order is **update-then-predict**: a reading published over the step
 `[t, t+dt]` was sampled at its *start* `t`, so it is folded against the
@@ -72,7 +72,7 @@ class PortSet:
 
 class FilterRuntime(Protocol):
     """The math-only surface the bus drives. A backend's filter runtime
-    (e.g. `NumpyEKF`) implements it; the bus owns everything else."""
+    (e.g. `NumpyRuntime`) implements it; the bus owns everything else."""
 
     def build_u(self, u: dict | None) -> np.ndarray:
         """Resolve a `{name: value}` command dict to the flat control vector

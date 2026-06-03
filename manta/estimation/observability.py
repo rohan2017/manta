@@ -93,22 +93,19 @@ class ObservabilityReport:
 
 
 def _resolve_ir(ekf):
-    """Accept either an `EKF` IR or a `NumpyEKF` runtime (unwrap `._ekf`)."""
+    """Require the `EKF` transform (the runtime doesn't carry the IR)."""
     from .ekf import EKF
     if isinstance(ekf, EKF):
         return ekf
-    inner = getattr(ekf, "_ekf", None)
-    if isinstance(inner, EKF):
-        return inner
     raise TypeError(
-        f"observability: expected an EKF IR or NumpyEKF, got "
+        f"observability: expected the EKF transform (EKF(world, ...)), got "
         f"{type(ekf).__name__}")
 
 
 def _operating_point(ekf, state) -> np.ndarray:
     """Pack `state` (nested or flat, merged over the world's initial
     state) into the EKF spec's ambient vector — same convention as
-    `NumpyEKF.reset`."""
+    the runtime's `reset`."""
     spec = ekf.spec
     flat: dict[str, Any] = {}
     for owner, slots in ekf.world._initial_state_dict().items():
@@ -143,7 +140,7 @@ def observability(ekf, *, state=None, inputs=None, sensors=None,
     """Local observability of an `EKF` at an operating point.
 
     Args:
-        ekf      — an `EKF` IR (`EKF(world)`) or a `NumpyEKF`.
+        ekf      — the `EKF` transform (`EKF(world, ...)`).
         state    — operating-point state (nested `{owner: {slot: v}}` or
                    flat), merged over the world's initial state. Defaults
                    to the world's initial state.

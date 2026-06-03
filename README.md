@@ -10,41 +10,42 @@ embedded C++ via codegen.
 ## The pipeline
 
 Three layers, explicit at every boundary. The model is declarative; the
-IR layer is a set of **analysis transforms** over it — `Sim`, `EKF`,
-`LQR` are siblings, each consuming the model and the shared
-`Linearization` seam; a `Target*` lowers any transform's IR.
+**transforms** (`Sim`, `EKF`, `LQR`, the recurrence blocks) are siblings
+over it, each owning its math and emitting a typed `Module` IR; a
+`Target*` lowers any Module to a backend.
 
 ```
-Model            IR (transform)       Target              Runtime
+Model            Transform            Target              Result
 ─────────────────────────────────────────────────────────────────
-World        →   Sim(world)       →   TargetNumpy(sim) →  NumpyWorld
-                  (CasADi tick)                            .step() / .initial_state()
+World        →   Sim(world)       →   TargetNumpy(sim) →  NumpyRuntime
+                  (linearized tick)                        .step() / .outputs()
 
-World        →   EKF(world)       →   TargetNumpy(ekf) →  NumpyEKF
-                  (sym predict +                            .predict() / .update()
-                   sensor table)                            .step() / .state_dict()
+World        →   EKF(world)       →   TargetNumpy(ekf) →  NumpyRuntime
+                  (Kalman recursion,                       .predict() / .update()
+                   baked kernels)                          .feed() / .step()
 
-World        →   LQR(world, …)    →   TargetNumpy(lqr) →  NumpyLQR
-                  (gain K + baked                           .control(state) → {input: u}
-                   control law)
+World        →   LQR(world, …)    →   TargetNumpy(lqr) →  NumpyRuntime
+                  (Riccati → gain K,                       .control(state) → {input: u}
+                   baked control law)
 
-World        →   Sim(world)       →   TargetCpp(sim,…) →  <basename>.cpp/.hpp
-                                                            + flat-C kernels + CMake
+any of these →   .module()        →   TargetCpp(x, …)  →  <basename>.cpp/.hpp
+                                                           + flat-C kernels + CMake
 ```
 
 `Sim(world)`, `EKF(world)`, and `LQR(world, …)` are pure compile-time.
-They produce *descriptions* — CasADi function bundles, state specs,
-sensor tables, gains — that aren't directly callable. A `Target*`
-constructor lowers an IR to a backend-specific runtime; today that's
-native-Python (`TargetNumpy`, all three transforms) and Eigen-typed C++
-(`TargetCpp`, the sim today). The Jacobian machinery they share lives in
-one place — `manta.linearization.Linearization` (manifold-aware
-F / B / H / L, emitted as symbolic functions so each consumer evaluates
-at its own operating point).
+Each writes its math symbolically over the shared `LinearizedSystem`
+(manifold-aware F / B / H / L over the compiled world tick) and emits a
+typed `Module` — state layout + named CasADi kernels + typed entry
+points — that isn't directly callable. A `Target*` lowers the Module:
+`TargetNumpy` to the one native-Python `NumpyRuntime` (its surface is
+derived from the Module's shape), `TargetCpp` to a typed Eigen C++
+class. Backends contain no per-transform code.
 
 ## Quick example
 
 ```python
+import numpy as np
+
 from manta import World, Craft, Sim, EKF, TargetNumpy
 from manta.fields import GravityField
 from manta.parts import IMU, Mass, PositionSensor, Thruster
@@ -54,12 +55,12 @@ drone = Craft("drone")
 drone.add(Mass("body", mass=1.5, moi=(0.05, 0.05, 0.08)))
 drone.add(Thruster("t", force=(0, 0, 1)))
 drone.add(IMU("imu", gyro_noise_sigma=0.005, gyro_bias_sigma=1e-4))
-drone.add(PositionSensor("gps"))
+drone.add(PositionSensor("gps", position_noise_sigma=0.02))
 
 w = World().add_field(GravityField(g=(0, 0, -9.81)))
 w.add_craft(drone, position=(0, 0, 5))
 
-# Build the IR transforms, lower to native-Python.
+# Build the transforms, lower to native-Python.
 sim = TargetNumpy(Sim(w))
 ekf = TargetNumpy(EKF(w))
 
@@ -70,8 +71,8 @@ for t in np.arange(0, 3, 0.005):
     state = sim.step(state, dt=0.005, t=t)          # next state (truth)
     reading = sim.outputs()                         # sensor readings, this step
     ekf.predict(dt=0.005, t=t, u={"t.throttle": 1.5 * 9.81})
-    ekf.update(drone.parts[-2], gyro=reading["drone"]["imu.gyro"])
-    ekf.update(drone.parts[-1], position=reading["drone"]["gps.position"])
+    ekf.update("imu.gyro", reading["drone"]["imu.gyro"])
+    ekf.update("gps.position", reading["drone"]["gps.position"])
 
 print(ekf.state_dict()["drone"]["position"])
 ```
@@ -93,14 +94,19 @@ commands:
 
 ```python
 from manta import LQR
-import numpy as np
+
+# 3-axis thrust makes position + velocity controllable with attitude
+# frozen at the operating point. (A single-thruster craft regulates
+# through attitude instead — see the quadcopter demo.)
+drone.add(Thruster("tx", force=(1, 0, 0)))
+drone.add(Thruster("ty", force=(0, 1, 0)))
 
 lqr = TargetNumpy(LQR(
     w,
     x_ref={"drone": {"position": (0, 0, 10), "velocity": (0, 0, 0)}},
     u_ref={"t.throttle": 1.5 * 9.81},          # hover trim
     track=["drone.position", "drone.velocity"],
-    Q=np.diag([10, 10, 10, 1, 1, 1]), R=np.eye(1), dt=0.02))
+    Q=np.diag([10, 10, 10, 1, 1, 1]), R=np.eye(3), dt=0.02))
 
 u = lqr.control(ekf.state_dict())              # {input_name: command}
 ```
@@ -181,56 +187,52 @@ state-bearing disturbance:
   rigid-body orientation, R3 for vec3 states, R1 for scalars.
   Joseph-form measurement update.
 
-Lower to `TargetNumpy(EKF(w))` for Python; future
-`TargetCpp(EKF(w), ...)` for embedded.
+Lower to `TargetNumpy(EKF(w))` for Python or `TargetCpp(EKF(w), ...)`
+for embedded.
 
 ### Backends
 
-The `manta.targets` package houses the lowering. Each Target accepts
-an IR and produces a runtime:
+The `manta.codegen` package houses the lowering. Every transform emits
+the same typed `Module` IR (state layout + named CasADi kernels + typed
+entry points), and each backend implements exactly ONE generic lowering
+of a Module — no per-transform code anywhere:
 
 | Target | Accepts | Produces |
 |---|---|---|
-| `TargetNumpy(sim)` | Sim | NumpyWorld (`step`/`initial_state`) |
-| `TargetNumpy(ekf)` | EKF | NumpyEKF (`predict`/`update`/`step`/`state_dict`/`reset`) |
-| `TargetNumpy(lqr)` | LQR | NumpyLQR (`control`/`u`/`K`) |
-| `TargetCpp(sim, out_dir, class_name)` | Sim | C++ static lib: pure evaluator (predict + measure) |
-| `TargetCpp(ekf, out_dir, class_name)` | EKF | C++ static lib: stateful filter (`predict` + `update_*`, Joseph form) |
-| `TargetCpp(lqr, out_dir, class_name)` | LQR | C++ static lib: stateless `control(x)` |
+| `TargetNumpy(x)` | any Module / transform | `NumpyRuntime` — surface derived from the Module's shape (sim `step`/`outputs`, filter `predict`/`update`/`feed`/`step`, regulator `control`, recurrence `step`) |
+| `TargetCpp(x, out_dir, class_name)` | any Module / transform | C++ static lib: typed Eigen class over flat-C kernels (+ CMake) |
 
-Adding a backend (TensorFlow eager, raw embedded C, GPU CUDA) is one new
-`Target` subclass: implement `lower_sim` / `lower_ekf` / `lower_lqr` (the
-`Target` ABC holds the IR-type dispatch, so a half-finished backend's
-unsupported hook raises `NotImplementedError` at the call rather than
-failing silently). Adding a transform (`LQR`, a future `iLQR`/`MPC`)
-reuses the shared `Linearization` seam.
+Adding a backend (torch, JAX, raw embedded C) = a way to run/translate
+a `ca.Function` plus one generic `Module` lowering. Adding a transform
+(a future `iLQR`/`MPC`) reuses the shared `LinearizedSystem` and gets
+every backend for free.
 
 ## Layout
 
 ```
 manta/                     library package
     __init__.py            World / Craft / Sim / EKF / LQR / Target* surface
-    craft.py               Craft + TickContext + Newton-Euler integrator
+    craft.py               Craft + TickContext + inertial/wrench helpers
     world.py               World (the declarative model)
-    sim.py                 Sim (forward-dynamics IR transform)
+    sim.py                 Sim (forward-dynamics transform)
     recurrence.py          RecurrenceBlock base (PID/Madgwick/Mahony/IMU)
-    linearization.py       Manifold-aware F / B / H / L (shared seam)
-    linearized_system.py   LinearizedSystem (slot/sensor/subset machinery)
+    linearized_system.py   LinearizedSystem — manifold-aware F/B/H/L +
+                           slot/sensor/subset machinery (the shared seam)
     bus.py                 MeasurementBus + PortSet (backend-agnostic bus)
     signal.py              Signal value-channel + wire()
     tick/                  World-tick compile + kinematics/inertia/signature
     ir/                    Frames, types, Graph, Manifold, Wrench, Module
     parts/                 Part base + stock parts (sensor/actuation/aero/…)
     fields/                Field + Disturbance + stock + CraftWindBubble
-    planets/               Planet ABC, Earth, PlanetFrameFluid, PlanetState
+    planets/               Planet base, Earth, PlanetFrameFluid, PlanetState
     couplings/             Coupling ABC + Tether
-    estimation/            EKF (IR) + StateSpec + measurement helpers
-    control/               LQR (IR) + PID
+    estimation/            EKF + StateSpec + observability/NEES + filters
+    control/               LQR + PID
     codegen/               Backends (one generic Module lowering per target)
-        module_build.py    to_module(block) → backend-neutral Module IR
-        numpy/             TargetNumpy + the generic NumpyModule runtime
+        target.py          as_module — the backend entry-point contract
+        numpy/             TargetNumpy + the one NumpyRuntime + NoiseDriver
         cpp/               TargetCpp + the generic module_emit emitter
-tests/                     410 tests
+tests/                     407 tests
 examples/                  quickstart + physics/ + vehicles/
     _viz.py                rerun visualization helpers
     _control.py            keyboard (pynput) + scripted-fallback control
@@ -280,20 +282,20 @@ Visualized demos need the rerun SDK (`.venv/bin/pip install rerun-sdk`); pass
 
 In active development. The public API (`World`, `Craft`, `Sim`, `EKF`,
 `LQR`, `TargetNumpy`, `TargetCpp`) is settled enough that the demos
-and 378 tests don't carry compat shims. The full deploy-to-robot path now
+and 407 tests don't carry compat shims. The full deploy-to-robot path
 lowers to C++ — `TargetCpp` handles `Sim`, `EKF` (mutable state + Joseph
 update), and `LQR` (feed-forward control law), each verified against the
 numpy backend by a compile-and-run roundtrip test. Open items:
 
-- **`iLQR` / `MPC`** — the `Linearization` seam emits symbolic A/B/H, so
+- **`iLQR` / `MPC`** — `LinearizedSystem` emits symbolic A/B/H, so
   trajectory-tracking controllers reuse it; the iterative solve lives in
   the backend (not the IR), per the design.
 - **Observability analysis** (shipped — `manta.estimation.observability`)
   — a faithful EKF of a correct model is still only as good as the model's
   *observability* (a property of dynamics + sensor set + **operating
   point**, not of the model alone): unobservable modes drift silently
-  while the covariance looks tight. `observability(EKF(world))` (or
-  `numpy_ekf.observability()`) builds the observability matrix from the
+  while the covariance looks tight. `observability(EKF(world))` builds
+  the observability matrix from the
   symbolic `F`/`H` at an operating point and reports rank + which state
   slots are unobservable (+ an orthonormal **observable basis**). It flags,
   e.g., that GPS + DVL + gyro can't see absolute heading **at rest**. Local
@@ -318,7 +320,7 @@ numpy backend by a compile-and-run roundtrip test. Open items:
   observability issue). The residual overconfidence on unobservable
   directions is the known EKF-inconsistency-on-unobservable-modes problem;
   FEJ / observability-constrained EKF is the principled fix (future).
-- **EKF measurement timing** (fixed) — `NumpyEKF.step` now folds a
+- **EKF measurement timing** (fixed) — the filter's `step` folds a
   measurement *before* propagating over its interval (update-then-predict),
   because the sim emits sensor outputs from the interval's *start* state.
   The old predict-then-update order met a start-of-interval reading with
@@ -330,14 +332,8 @@ numpy backend by a compile-and-run roundtrip test. Open items:
 - **Multi-craft EKF over coupled worlds** — works for parallel
   independent crafts (block-decomposed predict is wired); field-mediated
   cross-craft coupling in the *estimator* is untested at scale.
-- **Parameter tuning** (`manta.tuning`) — placeholder; the design is an
+- **Parameter tuning** — planned; the design is an
   offline IPOPT fit of `tunable` Parameters against logged trajectories.
-
-## Design docs
-
-`prompts/` holds the design discussions that informed the current
-shape — frame hierarchy, estimator design, field-bus combining,
-disturbance state-carrier lift, etc.
 
 ## License
 

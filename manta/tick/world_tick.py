@@ -106,7 +106,7 @@ def compile_world_tick(crafts: list,
     # inside the ir.Graph block below — they pick up joint-angle
     # dependence when a Joint reorients a rotor.
     for craft in crafts:
-        ai = _aggregate_inertials(craft._parts)
+        ai = _aggregate_inertials(craft.parts)
         if ai["m_total"] <= 0.0:
             raise ValueError(
                 f"Craft '{craft.name}': total mass is "
@@ -306,7 +306,7 @@ def _trace_craft_pass1(craft,
     state_input_nodes: dict[Part, dict[str, Any]] = {}
     saved_state_attrs: dict[Part, dict[str, Any]] = {}
     saved_input_attrs: dict[Part, dict[str, Any]] = {}
-    for part in craft._parts:
+    for part in craft.parts:
         decls = part.state_declarations()
         if decls:
             part_states: dict[str, Any] = {}
@@ -324,7 +324,7 @@ def _trace_craft_pass1(craft,
         idecls = part.input_declarations()
         if idecls:
             saved_i: dict[str, Any] = {}
-            for iname, idecl in idecls.items():
+            for iname in idecls:
                 sym = ir.Scalar.input(prefix + f"{part.name}.{iname}")
                 saved_i[iname] = getattr(part, iname)
                 object.__setattr__(part, iname, sym)
@@ -336,7 +336,7 @@ def _trace_craft_pass1(craft,
     # synthesized state update.
     saved_noise_attrs: dict[Part, dict[str, Any]] = {}
     rw_bias_updates: list[tuple[str, Any]] = []   # (state_name, bias_next)
-    for part in craft._parts:
+    for part in craft.parts:
         ndecls = part.noise_declarations()
         if not ndecls:
             continue
@@ -365,7 +365,7 @@ def _trace_craft_pass1(craft,
     # rotor-mounted sensors + the moving-COM origin recoil).
     from ..parts.articulation.joint import Joint
     joint_accel_syms: dict[Any, Any] = {}
-    for part in craft._parts:
+    for part in craft.parts:
         if isinstance(part, Joint):
             joint_accel_syms[part] = ca.MX.sym(
                 f"{craft.name}_{part.name}_jaccel", 1, 1)
@@ -409,7 +409,7 @@ def _trace_craft_pass1(craft,
     sample_rates:      dict[str, float] = {}
     # (placeholder, real) for each joint's θ̈ — populated by the cascade.
     joint_accel_reals: list[tuple[Any, Any]] = []
-    for part in craft._parts:
+    for part in craft.parts:
         kin = kin_states[part]
         # A part's update() works entirely in its OWN frame. ctx exposes
         # each kinematic quantity as a frame-indexed view (X[Frame] = the
@@ -567,7 +567,7 @@ def _trace_craft_pass1(craft,
     m_total = inertia["m_total"]
     v_com_rel_mx = ca.MX.zeros(3, 1)
     a_com_rel_mx = ca.MX.zeros(3, 1)
-    for part in craft._parts:
+    for part in craft.parts:
         m = float(getattr(part, "mass", 0.0) or 0.0)
         if m <= 0.0:
             continue

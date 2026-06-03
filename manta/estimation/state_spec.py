@@ -42,12 +42,7 @@ from typing import Any
 import casadi as ca
 import numpy as np
 
-from ..ir.manifold import (
-    Manifold,
-    ScalarManifold,
-    R3Manifold,
-    SO3Manifold,
-)
+from ..ir.manifold import Manifold, R3Manifold, SO3Manifold
 
 
 class SlotSet(IntFlag):
@@ -137,11 +132,6 @@ class StateSpec:
         self._slot_by_name = {s.name: s for s in self._slots}
         self._ambient_dim = sum(s.ambient_dim for s in self._slots)
         self._tangent_dim = sum(s.tangent_dim for s in self._slots)
-        # Map this spec's indices back into the spec it was derived from.
-        # For a freshly-built (full) spec this is the identity; `subset`
-        # overrides it with the surviving full-spec indices.
-        self._ambient_keep_idx = np.arange(self._ambient_dim)
-        self._tangent_keep_idx = np.arange(self._tangent_dim)
 
     # ----- Construction --------------------------------------------------
 
@@ -229,32 +219,21 @@ class StateSpec:
         Slots are kept in their original `full_spec` order; ambient and
         tangent offsets re-densify from 0 so every existing method
         (pack/unpack/boxplus/boxminus) works on the result unchanged.
-        The returned spec also carries `ambient_keep_idx` /
-        `tangent_keep_idx` — the indices in `full_spec` that survive —
-        for slicing full-size vectors/covariances down to this subset.
         """
         kept = set(kept_names)
         slots: list[StateSlot] = []
         offset = 0
         tan_offset = 0
-        ambient_keep: list[int] = []
-        tangent_keep: list[int] = []
         for s in full_spec.slots:
             if s.name not in kept:
                 continue
-            ambient_keep.extend(range(s.ambient_offset, s.ambient_offset + s.ambient_dim))
-            tangent_keep.extend(
-                range(s.tangent_offset, s.tangent_offset + s.tangent_dim))
             slots.append(StateSlot(name=s.name,
                                    ambient_offset=offset,
                                    manifold=s.manifold,
                                    tangent_offset=tan_offset))
             offset += s.ambient_dim
             tan_offset += s.tangent_dim
-        sub = cls(slots)
-        sub._ambient_keep_idx = np.array(ambient_keep, dtype=int)
-        sub._tangent_keep_idx = np.array(tangent_keep, dtype=int)
-        return sub
+        return cls(slots)
 
     @staticmethod
     def _add_field_disturbance_slots(field, add) -> None:
@@ -313,19 +292,6 @@ class StateSpec:
     @property
     def tangent_dim(self) -> int:
         return self._tangent_dim
-
-    @property
-    def ambient_keep_idx(self) -> np.ndarray:
-        """Indices into the parent (full) spec's ambient vector that this
-        spec retains. Identity for a full spec; a gather map for a
-        `subset`."""
-        return self._ambient_keep_idx
-
-    @property
-    def tangent_keep_idx(self) -> np.ndarray:
-        """Indices into the parent (full) spec's tangent vector that this
-        spec retains."""
-        return self._tangent_keep_idx
 
     def slot(self, name: str) -> StateSlot:
         """Lookup a slot by name.

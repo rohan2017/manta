@@ -31,7 +31,7 @@ State is THREADED (the caller owns it; nothing is held). Run it::
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import casadi as ca
 import numpy as np
@@ -43,7 +43,6 @@ from .ir.module import (
 from .linearized_system import LinearizedSystem, flatten_nested
 
 if TYPE_CHECKING:
-    from .craft import Craft
     from .world import World
 
 

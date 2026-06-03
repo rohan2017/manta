@@ -20,7 +20,7 @@ Three layers:
 
 Standard usage::
 
-    from manta import World, Craft, EKF, TargetNumpy
+    from manta import World, Craft, Sim, EKF, TargetNumpy
     from manta.fields import GravityField
     from manta.parts import IMU, Mass, Thruster
 

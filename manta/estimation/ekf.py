@@ -173,10 +173,7 @@ class EKF:
         self._module = Module(
             name=f"{world.name}_ekf", state=StateLayout(fields),
             ports=tuple(ports), functions=functions,
-            entry_points=tuple(entries), hosting=Hosting.HELD,
-            analysis={"F": sys.F_fn,
-                      **{f"H_{f.replace('.', '_')}": s.H_fn
-                         for f, s in sys.sensors.items()}})
+            entry_points=tuple(entries), hosting=Hosting.HELD)
 
     def module(self) -> Module:
         """The typed `Module` IR a backend lowers."""

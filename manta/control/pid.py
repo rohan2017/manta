@@ -1,9 +1,9 @@
 """PID — a scalar proportional-integral-derivative controller.
 
-`PID(kp, ki, kd, …)` is a `recurrence` block (a sibling of `LQR`, lowered
-by the same single `lower_evaluator` backend path). It carries its own
-state — the integral accumulator and the previous measurement — and bakes
-the control law into one `ca.Function` the runtime evaluates each step:
+`PID(kp, ki, kd, …)` is a recurrence block (a sibling of `LQR`, lowered
+through the same generic Module path). It carries its own state — the
+integral accumulator and the previous measurement — and bakes the
+control law into one `ca.Function` the runtime evaluates each step:
 
     error   = setpoint − measurement
     integral ← clamp(integral + error·dt,  ±integral_limit)
@@ -34,7 +34,6 @@ Lower it like any block::
 from __future__ import annotations
 
 import casadi as ca
-import numpy as np
 
 from ..ir.manifold import ScalarManifold
 from ..recurrence import RecurrenceBlock

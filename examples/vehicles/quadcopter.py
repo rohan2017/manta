@@ -98,14 +98,15 @@ def main() -> None:
 
     # Full-state hover regulator (position + attitude + their rates).
     Q = np.diag([8, 8, 8, 0.5, 0.5, 0.5, 2, 2, 1, 0.2, 0.2, 0.2])
-    lqr = TargetNumpy(LQR(
+    lqr_t = LQR(
         w, x_ref={"quad": {"position": tuple(p0)}},
         u_ref={f"{r}.throttle": hover for r in ROTORS},
         track=["quad.position", "quad.velocity",
                "quad.orientation", "quad.angular_velocity"],
-        Q=Q, R=np.eye(4) * 0.5, dt=dt))
+        Q=Q, R=np.eye(4) * 0.5, dt=dt)
+    lqr = TargetNumpy(lqr_t)
     print(f"closed-loop |eig|max = "
-          f"{np.max(np.abs(lqr._lqr.closed_loop_eigs)):.4f}  (stable < 1)")
+          f"{np.max(np.abs(lqr_t.closed_loop_eigs)):.4f}  (stable < 1)")
 
     # Wire the sensor + command bus: GPS + gyro + accel → EKF; commands →
     # truth + EKF. The accelerometer sees the gravity direction, which is

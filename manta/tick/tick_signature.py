@@ -1,13 +1,12 @@
 """Tick-signature walker — classify a compiled world tick's I/O.
 
 The world tick (`compile_world_tick`) exposes flat-prefixed inputs and
-outputs. Both the EKF and the C++ extractor need the *same*
-classification of that signature against the model: which inputs are
-live Part Inputs (→ the control vector `u`), which are stochastic Noise
-drivers (→ process noise), and which Part Outputs are candidate
-measurements. This module is the single place that walks the signature;
-its result is what the caller hands to the world-agnostic
-`Linearization` transform.
+outputs. Every transform needs the *same* classification of that
+signature against the model: which inputs are live Part Inputs (→ the
+control vector `u`), which are stochastic Noise drivers (→ process
+noise), and which Part Outputs are candidate measurements. This module
+is the single place that walks the signature; its result is what
+`LinearizedSystem` consumes.
 
 `spec` membership answers "is this input a state slot?"; everything else
 is a per-owner Input, a Noise driver, or (for outputs) a sensor. Owners

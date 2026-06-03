@@ -21,7 +21,7 @@ any backend or transform. Each transform's `.module()` produces it.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from math import prod
 from typing import Any
@@ -193,8 +193,7 @@ class Module:
 
     `functions` is the only thing a backend translates; `entry_points`
     describe the methods to expose over them — a backend lowers ALL of
-    them, unconditionally. `analysis` holds extra `ca.Function`s surfaced
-    for IR-level analysis (observability) but not lowered as methods.
+    them, unconditionally.
     """
     name: str
     state: StateLayout
@@ -202,7 +201,6 @@ class Module:
     functions: dict[str, Any]                 # {name: ca.Function}
     entry_points: tuple[EntryPoint, ...]
     hosting: Hosting = Hosting.THREADED
-    analysis: dict[str, Any] = field(default_factory=dict)
 
     def port(self, name: str) -> Port:
         for p in self.ports:

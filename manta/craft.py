@@ -423,13 +423,6 @@ class Craft:
         return tuple(p for p in self.root.walk() if p is not self.root)
 
     @property
-    def _parts(self) -> list[Part]:
-        """Flat (DFS-order) part list used by the world-tick compile and
-        the `_aggregate_inertials` helper. Mutable-list mirror of the
-        `parts` tuple."""
-        return list(self.parts)
-
-    @property
     def total_mass(self) -> float:
         return sum(float(getattr(p, "mass", 0.0)) for p in self.parts)
 
@@ -451,7 +444,7 @@ class Craft:
         regardless of which noise channels are active).
         """
         out: dict[str, Any] = {}
-        for part in self._parts:
+        for part in self.parts:
             for nname, ndecl in part.noise_declarations().items():
                 sigma = float(getattr(part, f"{nname}_sigma"))
                 # Inert RW channels skip RNG entirely; everyone else
@@ -483,7 +476,7 @@ class Craft:
             "velocity":         np.asarray((0.0, 0.0, 0.0), dtype=float),
             "angular_velocity": np.asarray((0.0, 0.0, 0.0), dtype=float),
         }
-        for part in self._parts:
+        for part in self.parts:
             for sname, sdecl in part.state_declarations().items():
                 if sdecl.manifold.kind == "scalar":
                     state[f"{part.name}.{sname}"] = float(sdecl.init)
@@ -528,5 +521,5 @@ class Craft:
     # ----- Introspection --------------------------------------------------
 
     def __repr__(self) -> str:
-        parts = ", ".join(p.name for p in self._parts)
+        parts = ", ".join(p.name for p in self.parts)
         return f"<Craft '{self.name}' parts=[{parts}]>"

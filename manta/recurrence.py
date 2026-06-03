@@ -11,8 +11,8 @@ are all this shape. Crucially the manifold integration (e.g. SO(3) for an
 attitude filter) is baked **into the symbolic kernel** — `update_fn`
 returns the next *ambient* state directly — so the runtime that drives it
 never does a boxplus: it just evaluates one `ca.Function` and stores the
-result. That is what lets one generic runtime per backend serve every
-block of this kind (see `manta.codegen.target` / `manta.codegen.block`).
+result. That is what lets the one generic runtime per backend serve every
+block of this kind (see `manta.codegen.target`).
 
 A subclass builds its symbolic recurrence in `__init__` and hands it to
 `_build_recurrence(...)`:
@@ -44,7 +44,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import casadi as ca
-import numpy as np
 
 from .estimation.state_spec import StateSpec
 

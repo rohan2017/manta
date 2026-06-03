@@ -202,7 +202,7 @@ class Field(ABC):
         broadcast. Compound fields (FluidState) override."""
         from ..ir.types import Vec3 as _Vec3
         if isinstance(value, _Vec3):
-            return _Vec3[value._to_frame].from_mx(scalar * value._mx)
+            return _Vec3[value._frame].from_mx(scalar * value._mx)
         return scalar * value
 
     def _project_combine(self, running, contribution):
@@ -222,7 +222,7 @@ class Field(ABC):
         # would shrink the running sum gets ignored along the run.
         proj_clip   = ca.fmax(0.0, proj_scalar)
         residual    = c_mx - proj_clip * r_mx
-        return _Vec3[running._to_frame].from_mx(r_mx + residual)
+        return _Vec3[running._frame].from_mx(r_mx + residual)
 
     def __repr__(self) -> str:
         return (f"<{type(self).__name__} "

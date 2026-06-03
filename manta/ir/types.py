@@ -212,11 +212,6 @@ class Vec3(_IRValue):
         mx = ca.MX(ca.DM([float(value[0]), float(value[1]), float(value[2])]))
         return cls(mx, frame=frame)
 
-    @classmethod
-    def from_components(cls, x, y, z, frame):
-        mx = ca.vertcat(_as_mx(x), _as_mx(y), _as_mx(z))
-        return cls(mx, frame=frame)
-
     # ---- Properties -----------------------------------------------------
 
     @property
