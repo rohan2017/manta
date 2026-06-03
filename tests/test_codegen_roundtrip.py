@@ -144,21 +144,22 @@ def test_python_cpp_roundtrip(tmp_path: Path):
     for _ in range(200):
         state = sim.step(state, dt=0.005)
 
-    # ---- 6: Jacobian sanity checks via the same WorldFunctions ----
-    funcs = result.funcs
+    # ---- 6: Jacobian sanity checks via the same Module kernels ----
+    from manta.codegen.module_build import to_module
+    from manta.estimation.state_spec import StateSpec
+    m = to_module(cw)
+    spec = StateSpec.from_world(cw.world)
     flat = {f"drone.{k}": v for k, v in state["drone"].items()
-            if f"drone.{k}" in funcs.spec}
-    x_flat = funcs.spec.pack(flat)
+            if f"drone.{k}" in spec}
+    x_flat = spec.pack(flat)
     u_flat = np.array([state["drone"]["t.throttle"]])
-    F_py = np.asarray(
-        funcs.predict_jacobian_fn(x_flat, u_flat, 0.005, 0.0))
-    h_gps = next(o for o in funcs.outputs
-                 if o.full_name == "drone.gps.position")
-    h_gyr = next(o for o in funcs.outputs
-                 if o.full_name == "drone.g.gyro")
-    H_pos_py = np.asarray(h_gps.H_fn(x_flat, u_flat, 0.005, 0.0))
-    gps_py_new  = np.asarray(h_gps.h_fn(x_flat, u_flat, 0.005, 0.0)).ravel()
-    gyro_py_new = np.asarray(h_gyr.h_fn(x_flat, u_flat, 0.005, 0.0)).ravel()
+    F_py = np.asarray(m.functions["F"](x_flat, u_flat, 0.005, 0.0))
+    H_pos_py = np.asarray(
+        m.functions["H_drone_gps_position"](x_flat, u_flat, 0.005, 0.0))
+    gps_py_new = np.asarray(
+        m.functions["h_drone_gps_position"](x_flat, u_flat, 0.005, 0.0)).ravel()
+    gyro_py_new = np.asarray(
+        m.functions["h_drone_g_gyro"](x_flat, u_flat, 0.005, 0.0)).ravel()
 
     # ---- 7: compare ----
     ATOL = 1e-10

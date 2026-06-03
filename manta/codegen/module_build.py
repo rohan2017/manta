@@ -73,24 +73,33 @@ def module_for_sim(sim) -> Module:
     # what an on-device backend (C++) runs against real sensors. `step`
     # (above) is the driven-oracle variant the numpy sim uses. Same tick;
     # `predict` == `step`'s x output at noise=0.
-    functions = {"step": step_fn, "predict": lin.predict_fn}
+    functions = {"step": step_fn, "predict": lin.predict_fn, "F": lin.F_fn}
     entries = [
+        # `step` is the numpy driven-oracle variant (deploy=False); a deploy
+        # backend lowers `predict` + `measure_*` instead.
         EntryPoint("step", "step", ("x", "u", "noise", "dt", "t"),
-                   writes_state=("x",), returns=tuple(sensor_fulls)),
+                   writes_state=("x",), returns=tuple(sensor_fulls),
+                   deploy=False),
         EntryPoint("predict", "predict", ("x", "u", "dt", "t"),
                    writes_state=("x",)),
+        EntryPoint("predict_jacobian", "F", ("x", "u", "dt", "t"),
+                   returns=("F",)),
     ]
     analysis = {"F": lin.F_fn}
 
-    # Measurement entry points: noiseless h(x,u,t) -> reading, WITHOUT
-    # stepping. dt is a kernel arg the method feeds zero (a measurement is
-    # dt-independent). Useful for inspection + the cpp path.
+    # Measurement entries: noiseless h(x,u,t) -> reading + its Jacobian H,
+    # WITHOUT stepping. dt is dt-independent (synthesized zero, not exposed).
     for full, o in lin.outputs.items():
         ident = full.replace(".", "_")
         hk, Hk = f"h_{ident}", f"H_{ident}"
         functions[hk] = o.h_fn
+        functions[Hk] = o.H_fn
         entries.append(EntryPoint(f"measure_{ident}", hk,
-                                  ("x", "u", "dt", "t"), returns=(full,)))
+                                  ("x", "u", "dt", "t"), returns=(full,),
+                                  synthesize_zero=("dt",)))
+        entries.append(EntryPoint(f"measure_{ident}_jacobian", Hk,
+                                  ("x", "u", "dt", "t"), returns=(Hk,),
+                                  synthesize_zero=("dt",)))
         analysis[Hk] = o.H_fn
 
     return Module(world.name, StateLayout((x_field,)), tuple(ports),
@@ -131,7 +140,8 @@ def module_for_recurrence(block) -> Module:
         block.name, StateLayout((x_field,)), ports,
         {"step": block.update_fn},
         (EntryPoint("step", "step", ("x", "u", "dt", "t"),
-                    writes_state=("x",), returns=("y",)),))
+                    writes_state=("x",), returns=("y",)),),
+        held=True)
 
 
 # ---------------------------------------------------------------------------
@@ -163,17 +173,28 @@ def module_for_ekf(ekf) -> Module:
     # predict: x' = f, P' = F P Fᵀ + Q   (Q supplied as a port; the model's
     # default Q comes from the `process_noise` entry below).
     functions = {"predict": ekf._predict_fn}
-    entries = [EntryPoint("predict", "predict",
-                          ("x", "P", "Q", "u", "dt", "t"),
-                          writes_state=("x", "P"))]
-    if ekf._F_fn is not None:
-        functions["F"] = ekf._F_fn
-    analysis = {k: v for k, v in (("F", ekf._F_fn),) if v is not None}
-
+    # `Q` is computed internally — from the `process_noise` kernel when the
+    # model declares noise, else zero — never a method parameter.
     if ekf._process_noise_fn is not None:
         functions["process_noise"] = ekf._process_noise_fn
-        entries.append(EntryPoint("process_noise", "process_noise",
-                                  ("x", "u", "dt", "t"), returns=("Q",)))
+        predict = EntryPoint("predict", "predict",
+                             ("x", "P", "Q", "u", "dt", "t"),
+                             writes_state=("x", "P"),
+                             port_from={"Q": "process_noise"})
+        # Exposed for the numpy runtime (nm.process_noise); a deploy backend
+        # folds it into predict via port_from, so deploy=False here.
+        extra_process_noise = EntryPoint(
+            "process_noise", "process_noise", ("x", "u", "dt", "t"),
+            returns=("Q",), deploy=False)
+    else:
+        predict = EntryPoint("predict", "predict",
+                             ("x", "P", "Q", "u", "dt", "t"),
+                             writes_state=("x", "P"), synthesize_zero=("Q",))
+        extra_process_noise = None
+    entries = [predict]
+    if extra_process_noise is not None:
+        entries.append(extra_process_noise)
+    analysis = {k: v for k, v in (("F", ekf._F_fn),) if v is not None}
 
     # One Joseph-update entry per sensor: (x, P, z, u, t) -> (x, P).
     for (_pid, _out), o in ekf._sensors.items():
@@ -190,7 +211,7 @@ def module_for_ekf(ekf) -> Module:
             analysis[f"H_{ident}"] = o["H_fn"]
 
     return Module(f"{ekf.world.name}_ekf", StateLayout(fields), tuple(ports),
-                  functions, tuple(entries), analysis)
+                  functions, tuple(entries), analysis, held=True)
 
 
 # ---------------------------------------------------------------------------

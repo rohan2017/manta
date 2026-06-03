@@ -7,7 +7,7 @@ import pytest
 
 from manta import Craft, Sim, World
 from manta.fields import GravityField
-from manta.codegen.cpp.extract import extract
+from manta.codegen.module_build import to_module
 from manta.codegen.cpp.kernels import emit_kernel_list
 from manta.parts import IMU, Mass, PositionSensor, Thruster
 
@@ -24,20 +24,16 @@ def _hover_world() -> "Sim":
     return Sim(w)
 
 
-def _sim_kernel_fns(funcs):
-    """The flat-C kernels a Sim's WorldFunctions emits: predict + its
-    Jacobian + per-sensor h/H — the same list the cpp evaluator backend
-    feeds `emit_kernel_list`."""
-    fns = [funcs.predict_fn, funcs.predict_jacobian_fn]
-    for o in funcs.outputs:
-        fns += [o.h_fn, o.H_fn]
-    return fns
+def _sim_kernels(m):
+    """The flat-C kernels a Sim Module emits — every baked ca.Function it
+    carries (predict + step + Jacobian F + per-sensor h/H)."""
+    return list(m.functions.values())
 
 
 def test_emit_kernels_produces_c_and_h(tmp_path: Path):
-    funcs = extract(_hover_world())
-    paths = emit_kernel_list(_sim_kernel_fns(funcs), tmp_path,
-                             basename=funcs.world_name)
+    m = to_module(_hover_world())
+    paths = emit_kernel_list(_sim_kernels(m), tmp_path,
+                             basename=m.name)
     assert paths["c"].exists()
     assert paths["h"].exists()
     assert paths["c"].stat().st_size > 1000
@@ -45,12 +41,12 @@ def test_emit_kernels_produces_c_and_h(tmp_path: Path):
 
 
 def test_kernel_header_declares_every_function(tmp_path: Path):
-    funcs = extract(_hover_world())
-    paths = emit_kernel_list(_sim_kernel_fns(funcs), tmp_path,
-                             basename=funcs.world_name)
+    m = to_module(_hover_world())
+    paths = emit_kernel_list(_sim_kernels(m), tmp_path,
+                             basename=m.name)
     header_text = paths["h"].read_text()
 
-    expected_names = [fn.name() for fn in _sim_kernel_fns(funcs)]
+    expected_names = [fn.name() for fn in _sim_kernels(m)]
     for name in expected_names:
         pattern = rf"\b{re.escape(name)}\b"
         assert re.search(pattern, header_text), (
@@ -67,9 +63,9 @@ def test_kernel_c_compiles_with_cc(tmp_path: Path):
     if cc is None:
         pytest.skip("no C compiler on PATH")
 
-    funcs = extract(_hover_world())
-    paths = emit_kernel_list(_sim_kernel_fns(funcs), tmp_path,
-                             basename=funcs.world_name)
+    m = to_module(_hover_world())
+    paths = emit_kernel_list(_sim_kernels(m), tmp_path,
+                             basename=m.name)
 
     obj = tmp_path / "kernels.o"
     proc = subprocess.run(

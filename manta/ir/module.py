@@ -120,12 +120,28 @@ class EntryPoint:
     outputs are consumed in order: the first `len(writes_state)` outputs
     update those State fields; the remaining outputs are returned to the
     caller under the names in `returns`.
+
+    The remaining fields are lowering hints a typed backend uses and the
+    numpy runtime ignores (it supplies every kernel arg or defaults dt/t):
+
+      * `deploy`         — part of the deployable surface? `step` (the
+                           driven-oracle Sim variant) sets False so a deploy
+                           backend lowers `predict` instead.
+      * `synthesize_zero`— kernel args the method does NOT expose, filled
+                           with zero (a measurement is dt-independent → `dt`).
+      * `port_from`      — `{port: entry}`: a port the method computes
+                           internally by calling another entry's kernel
+                           (the EKF's `Q` from `process_noise`), rather than
+                           taking it as a parameter.
     """
     method: str
     fn: str                                  # key into Module.functions
     kernel_args: tuple[str, ...] = ()
     writes_state: tuple[str, ...] = ()
     returns: tuple[str, ...] = ()
+    deploy: bool = True
+    synthesize_zero: tuple[str, ...] = ()
+    port_from: dict[str, str] = field(default_factory=dict)
 
     def reads_state(self, layout: StateLayout) -> tuple[str, ...]:
         return tuple(a for a in self.kernel_args if a in layout)
@@ -149,6 +165,8 @@ class Module:
     functions: dict[str, Any]                # {name: ca.Function}
     entry_points: tuple[EntryPoint, ...]
     analysis: dict[str, Any] = field(default_factory=dict)
+    held: bool = False    # State lives as runtime members (EKF/recurrence)
+                          # vs. threaded by the caller / stateless (Sim/LQR).
 
     def port(self, name: str) -> Port:
         for p in self.ports:
