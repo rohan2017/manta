@@ -743,10 +743,13 @@ class NumpyLQR:
 
     def __init__(self, lqr) -> None:
         from ...control.lqr import LQR
+        from ..module_build import to_module
+        from .module import NumpyModule
         if not isinstance(lqr, LQR):
             raise TypeError(
                 f"NumpyLQR: expected LQR, got {type(lqr).__name__}")
         self._lqr = lqr
+        self._nm = NumpyModule(to_module(lqr))      # generic execution engine
         # Signal-bus ports (lazy): a state-estimate consumer + one
         # command producer per control input.
         self._est_in = None
@@ -770,8 +773,7 @@ class NumpyLQR:
 
     def u(self, x_flat) -> np.ndarray:
         """Control vector for a flat ambient state (spec layout)."""
-        return np.asarray(
-            self._lqr.control_fn(np.asarray(x_flat, dtype=float))).reshape(-1)
+        return self._nm.control(x=np.asarray(x_flat, dtype=float))["u"]
 
     def control(self, state: dict) -> dict[str, float]:
         """Map a state estimate → `{input_name: value}`.
@@ -882,28 +884,42 @@ class NumpyLQR:
 # ---------------------------------------------------------------------------
 
 class NumpyRecurrence:
-    """Native-Python evaluator for a `recurrence` block.
+    """Signal-bus + ergonomic adapter for a `recurrence` block.
 
-    Holds the ambient state `_x`; `step()` evaluates the block's single
-    baked `update_fn` and stores the result. There is **no boxplus at
-    runtime** — the manifold integration is inside the kernel — so this one
-    class drives every recurrence block (PID, Madgwick/Mahony, the IMU
-    integrator) unchanged. Exposes a direct call form (`step(dt, **inputs)`)
-    and signal-bus ports (`input(...)` / `output(...)` / `compute(...)`).
+    The kernel evaluation + state storage are delegated to the generic
+    `NumpyModule` (`to_module(block)`); this class only adds the
+    recurrence-flavored surface — the direct call form (`step(dt, **inputs)`)
+    that names input ports, the readout split, and the signal-bus ports
+    (`input(...)` / `output(...)` / `compute(...)`). There is no boxplus at
+    runtime (the manifold integration is inside the kernel), so the one
+    generic engine drives every recurrence block (PID, Madgwick/Mahony, the
+    IMU integrator) unchanged.
     """
 
     def __init__(self, block) -> None:
         from ...recurrence import RecurrenceBlock
+        from ..module_build import to_module
+        from .module import NumpyModule
         if not isinstance(block, RecurrenceBlock):
             raise TypeError(
                 f"NumpyRecurrence: expected a RecurrenceBlock, got "
                 f"{type(block).__name__}")
         self._b = block
-        self._x = block.x0.copy()
+        self._nm = NumpyModule(to_module(block))    # generic execution engine
         self._y = np.zeros(block.output_dim)
         self._t = 0.0
         self._in_ports:  dict[str, Any] = {}
         self._out_ports: dict[str, Any] = {}
+
+    # Ambient state lives in the Module's State; proxy it so the bus /
+    # reset / `state` helpers below read & write one place.
+    @property
+    def _x(self) -> np.ndarray:
+        return self._nm.state["x"]
+
+    @_x.setter
+    def _x(self, v) -> None:
+        self._nm.state["x"] = np.asarray(v, dtype=float).reshape(-1)
 
     # ---- IR passthroughs ----------------------------------------------
 
@@ -959,9 +975,8 @@ class NumpyRecurrence:
         """
         tt = self._t if t is None else t
         u = self._pack_u(inputs)
-        x_next, y = self._b.update_fn(self._x, u, dt, tt)
-        self._x = np.asarray(x_next).reshape(-1)
-        self._y = np.asarray(y).reshape(-1)
+        ret = self._nm.step(u=u, dt=dt, t=tt)     # generic engine; updates _x
+        self._y = ret["y"]
         self._t = tt + dt
         return self.outputs()
 
