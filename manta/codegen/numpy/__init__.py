@@ -346,30 +346,20 @@ class NumpyEKF:
         # ordering nuance, then keep both in the Module's State.
         self._nm.state["x"] = self._initial_x()
 
-        # Measurement bus: one mailbox per registered sensor, in
-        # registration order (= the order step() applies them). The user
-        # drops a reading in via feed(); step() consumes fresh ones.
-        self._meas: dict[str, dict[str, Any]] = {}
-        for key, spec_o in ekf._sensors.items():
-            self._meas[spec_o["full"]] = {
-                "value": None, "fresh": False, "t": None,
-                "dim": spec_o["dim"], "key": key,
-            }
-        # Latched (zero-order-hold) control inputs, read by step()'s
-        # predict. Full or craft-relative names; resolved per predict.
-        self.inputs: dict[str, float] = {}
-        # Filter clock — advances by dt each step (or to the supplied t).
-        self._t = 0.0
-        # Default process noise used by step() when none is passed.
-        self.Q: np.ndarray | None = None
-        # Signal-bus ports (lazy): measurement + command consumers and a
-        # state-estimate producer. `_seen_meas` tracks the last upstream
-        # version folded in, so a measurement is consumed once per fresh
-        # sample (multi-rate safe).
-        self._meas_ports: dict[str, Any] = {}
-        self._cmd_ports:  dict[str, Any] = {}
-        self._seen_meas:  dict[str, int] = {}
-        self._est_port = None
+        # The measurement bus (mailbox / feed / step / staleness / ZOH /
+        # estimate port) is backend-agnostic and lives in `MeasurementBus`,
+        # which drives this runtime through `build_u` / `fold` / `predict` /
+        # `estimate_vector`. This class keeps only the filter math.
+        from ...bus import MeasurementBus
+        self._bus = MeasurementBus(
+            self,
+            sensors={o["full"]: {"dim": o["dim"], "key": key}
+                     for key, o in ekf._sensors.items()},
+            input_names=ekf._input_names,
+            sample_rates=ekf._sample_rates,
+            estimate_dim=ekf.spec.ambient_dim,
+            estimate_layout={s.name: (s.ambient_offset, s.ambient_dim)
+                             for s in ekf.spec.slots})
 
     def _initial_x(self) -> np.ndarray:
         """Pack the world's nested initial-state dict into the spec's
@@ -475,51 +465,63 @@ class NumpyEKF:
                     f"NumpyEKF.reset: P shape {P.shape} doesn't match "
                     f"tangent dim {expected}")
             self._P = P.copy()
-        if self._est_port is not None:
-            self._est_port.set(self._x.copy())
+        self._bus.publish_estimate()
 
-    # ---- Signal-bus ports ----------------------------------------------
+    # ---- Signal bus (delegated to the backend-agnostic MeasurementBus) -
+
+    @property
+    def inputs(self) -> dict[str, Any]:
+        """Latched (ZOH) control commands read by `step()`'s predict."""
+        return self._bus.inputs
+
+    @inputs.setter
+    def inputs(self, value: dict) -> None:
+        self._bus.inputs = value
+
+    @property
+    def Q(self):
+        """Default process noise used by `step()` when none is passed."""
+        return self._bus.Q
+
+    @Q.setter
+    def Q(self, value) -> None:
+        self._bus.Q = value
 
     def meas(self, name: str):
-        """Consumer port for a sensor measurement (`"craft.part.output"`
-        or an unambiguous suffix). Wire a sim output into it, or `set()`
-        it yourself; `step()` folds it in once per fresh sample."""
-        from ...signal import Signal
-        full = self._resolve_meas_name(name)
-        if full not in self._meas_ports:
-            self._meas_ports[full] = Signal(full, dim=self._meas[full]["dim"])
-        return self._meas_ports[full]
+        """Consumer port for a sensor measurement (see MeasurementBus)."""
+        return self._bus.meas(name)
 
     def command(self, name: str):
-        """Consumer port for a known control input (drives the predict).
-        Latched / zero-order-hold, gated at the part's declared intake
-        rate (`ctx.hold`) so predict sees the same held command as truth."""
-        from ...signal import Signal
-        full = self._resolve_input_full(name)
-        if full not in self._cmd_ports:
-            rate = getattr(self._ekf, "_sample_rates", {}).get(full)
-            self._cmd_ports[full] = Signal(full, latched=True, rate=rate)
-        return self._cmd_ports[full]
+        """Consumer port for a known control input (see MeasurementBus)."""
+        return self._bus.command(name)
 
     @property
     def estimate(self):
-        """Producer port carrying the current state estimate as the flat
-        ambient vector (EKF spec layout), refreshed after every
-        `step()`/`reset()`. The port's `layout` ({slot: (offset, dim)})
-        lets a consumer build a fixed name-keyed gather into its own
-        layout — codegen-honest (a flat vector + a static index map, not
-        a nested dict). Wire it into `lqr.estimate`."""
-        from ...signal import Signal
-        if self._est_port is None:
-            self._est_port = Signal("estimate", dim=self.spec.ambient_dim)
-            self._est_port.layout = {
-                s.name: (s.ambient_offset, s.ambient_dim) for s in self.spec.slots}
-            self._est_port.set(self._x.copy())
-        return self._est_port
+        """Producer port carrying the current estimate (see MeasurementBus).
+        Wire it into `lqr.estimate`."""
+        return self._bus.estimate
 
-    def _resolve_input_full(self, name: str) -> str:
-        return resolve_suffix(name, self._ekf._input_names,
-                              label="input", who="NumpyEKF.command")
+    def feed(self, name: str, z, *, t: float | None = None) -> None:
+        """Drop a measurement into the bus mailbox (see MeasurementBus)."""
+        self._bus.feed(name, z, t=t)
+
+    def step(self, dt: float, *, t: float | None = None,
+             Q: np.ndarray | None = None) -> None:
+        """Fold interval-start measurements, then predict by `dt`
+        (update-then-predict; see MeasurementBus.step)."""
+        self._bus.step(dt, t=t, Q=Q)
+
+    # ---- FilterRuntime surface the MeasurementBus drives ---------------
+
+    def build_u(self, u: dict | None) -> np.ndarray:
+        return self._ekf._build_u(u)
+
+    def fold(self, sensor_key, z, u_vec: np.ndarray) -> None:
+        self._apply_sensor_update(self._ekf._sensors[sensor_key], z, u_vec)
+
+    @property
+    def estimate_vector(self) -> np.ndarray:
+        return self._x
 
     # ---- Predict -------------------------------------------------------
 
@@ -618,87 +620,6 @@ class NumpyEKF:
         ident = spec_o["full"].replace(".", "_")
         getattr(self._nm, f"update_{ident}")(
             **{f"z_{ident}": z_arr, "u": u_vec, "t": 0.0})
-
-    # ---- Measurement bus + step ----------------------------------------
-
-    def _resolve_meas_name(self, name: str) -> str:
-        """Resolve a full or craft-relative sensor name to its full key."""
-        return resolve_suffix(name, self._meas,
-                              label="sensor", who="NumpyEKF.feed")
-
-    def feed(self, name: str, z, *, t: float | None = None) -> None:
-        """Drop a measurement into the bus and mark it fresh.
-
-        `name` is a registered sensor's full `"craft.part.output"` name or
-        an unambiguous suffix. `t` is an optional measurement timestamp
-        used for staleness rejection in `step()`. The reading is consumed
-        (and the fresh flag cleared) by the next `step()`.
-        """
-        m = self._meas[self._resolve_meas_name(name)]
-        z_arr = np.atleast_1d(np.asarray(z, dtype=float)).reshape(-1)
-        if z_arr.size != m["dim"]:
-            raise ValueError(
-                f"NumpyEKF.feed: {name}: expected z of size {m['dim']}, "
-                f"got {z_arr.size}.")
-        m["value"] = z_arr
-        m["fresh"] = True
-        m["t"]     = t
-
-    def step(self, dt: float, *, t: float | None = None,
-             Q: np.ndarray | None = None) -> None:
-        """Fold the interval-start measurements, then predict by `dt`.
-
-        The sim emits sensor outputs from the *input* state, so a reading
-        published over the step `[t, t+dt]` is sampled at its start `t`.
-        It is therefore folded against the current (pre-predict) state —
-        **update-then-predict** — and only then is the state propagated
-        over `[t, t+dt]`. (Folding an interval-start reading *after* a full
-        predict — the earlier order — meets it with the `t+dt` state, which
-        biases rate-derived states like orientation by O(dt): during a
-        transient the innovation carries the rate's change over `dt`.)
-        After the call the held state is the prediction at `t+dt` — the
-        estimate to act on at that instant.
-
-        Pulls wired ports first: latched `command` ports refresh
-        `self.inputs` (ZOH), and each `meas` port whose upstream advanced
-        is dropped into the mailbox. `Q` overrides the process noise (else
-        `self.Q`, else model auto-assembly). A measurement stamped after
-        the current time is held for a later step; full out-of-sequence
-        handling is out of scope.
-        """
-        t_start = t if t is not None else self._t
-        # Pull wired command ports (ZOH, rate-gated) into the latched
-        # input dict — gated on the same clock as the sim so predict and
-        # truth hold the identical command.
-        for full, port in self._cmd_ports.items():
-            v = port.latched_value(t_start)
-            if v is not None:
-                self.inputs[full] = float(v) if np.ndim(v) == 0 else v
-        # Pull wired/own measurement ports: fold in once per fresh sample.
-        for full, port in self._meas_ports.items():
-            ver = port.cur_version
-            if ver > self._seen_meas.get(full, 0):
-                self._seen_meas[full] = ver
-                self.feed(full, port.read(), t=port.cur_t)
-
-        u_dict  = self.inputs if self.inputs else None
-        u_vec = self._ekf._build_u(u_dict)
-        # Update first: fold the interval-start measurements at the current
-        # (pre-predict) state, so the reading meets the state it observed.
-        for full, m in self._meas.items():
-            if not m["fresh"]:
-                continue
-            m["fresh"] = False
-            if m["t"] is not None and m["t"] < t_start - 1e-9:
-                continue  # stale: predates the current (pre-predict) state
-            self._apply_sensor_update(self._ekf._sensors[m["key"]],
-                                      m["value"], u_vec)
-        # Then predict over [t_start, t_start + dt].
-        self.predict(dt, t=t_start, u=u_dict,
-                     Q=Q if Q is not None else self.Q)
-        self._t = t_start + dt
-        if self._est_port is not None:
-            self._est_port.set(self._x.copy())
 
     def _update_low_level(self,
                           h_sym: Callable[[ca.MX], ca.MX],
