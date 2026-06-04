@@ -1,21 +1,26 @@
-"""Hydrofoil boat — drive it around while a gimballed laser tracks a buoy.
+"""Hydrofoil — climbs out of a waving Earth ocean onto its foils.
 
-A passively-stable surface craft you steer with the keyboard, carrying a
-two-axis (pan + tilt) **gimbal** built from nested `Joint`s. A small PD
-loop drives the two joints so the mounted "laser" stays locked on a fixed
-target buoy no matter how the boat moves — the laser ray is drawn in the
-viewer, sweeping to follow the buoy as you drive.
+The world is a real-scale `Earth` (point-mass gravity, ocean +
+atmosphere) centred at ``(0, 0, −R_EQ)`` so sea level is the world
+``z ≈ 0`` plane, with `SeaWaves` riding the boundary: the water/air
+interface is a moving sinusoid carrying deep-water orbital velocity, so
+the hull genuinely bobs at rest and the foils feel the moving water.
 
-What it showcases:
-  * **Nested articulation** — a pan `Joint` (yaw) hosting a tilt `Joint`
-    (pitch); each joint's reaction propagates down the chain to the hull.
-  * **Passive stability** — four hull contact `Collider`s float the boat
-    on a `CollisionField` water plane (pitch/roll-stable), a `Naca00xx`
-    foil adds lift, and offset `DragSurface` fins damp yaw, so you only
-    have to point-and-go.
-  * A simple **PD pointing controller** closed on the joint angles.
+The hull is nine `PointBuoy` + nine `DragSurface` elements on the
+corners and long-edge midpoints of an inverted triangular prism. Each
+samples the fluid at its own point, so buoyancy and hull drag fade
+element-by-element as the boat rises — `Earth(surface_smoothing=…)`
+turns the water/air switch into a smooth band, which both stabilizes
+the floating draft and gives the foils a lift-vs-ride-height slope
+(the surface-piercing self-regulation of a real foiler).
 
-Controls:  W/S throttle ahead/astern   A/D steer left/right
+Foils: a front V-pair (dihedral) on a strut under the CoM carries most
+of the lift; a rear split foil rides two `Joint` hinges as **elevons**
+— a pitch PID + a roll PID mix onto them, the only active loops. A
+large rear vertical stabilizer weathervanes yaw; yaw COMMANDS vector
+the stern thruster, which hangs on a yaw `Joint`.
+
+Controls:  X/Z throttle up/down   A/D vector thrust (yaw left/right)
 
 Run::
 
@@ -29,165 +34,293 @@ from __future__ import annotations
 import numpy as np
 
 from manta import PID, Craft, Sim, TargetNumpy, World
-from manta.fields import CollisionField, FluidField, GravityField
-from manta.parts import Collider, DragSurface, Joint, Mass, Naca00xx, Thruster
+from manta.parts import DragSurface, Joint, Mass, Naca00xx, PointBuoy, Thruster
+from manta.planets import Earth, SeaWaves
 
-from .._control import common_args, make_controller
+from .._control import Pacer, common_args, make_controller
 from .._viz import Viz
 
-RHO = 1025.0
-MASS = 50.0
-TARGET = np.array([18.0, 11.0, 1.5])    # the buoy the laser tracks
-GIMBAL_MOUNT = np.array([0.6, 0.0, 0.35])   # gimbal base on the foredeck
-LASER_LEN = 14.0
-FWD, STEER = 450.0, 160.0
+# --- sea state --------------------------------------------------------------
+WAVES   = SeaWaves(amplitude=0.12, wavelength=10.0)
+SMOOTH  = 0.25                       # water/air blend band (m)
+
+# --- hull (m, kg; x forward, y left, z up; origin at the waterline) ---------
+MASS    = 60.0
+STATIONS = (1.2, 0.0, -1.2)          # bow / midship / stern triangles
+DECK_Y, DECK_Z, KEEL_Z = 0.5, 0.05, -0.30
+BUOY_V  = 0.0093                     # m³ per element (deck edges sit awash)
+
+# --- foils ------------------------------------------------------------------
+FRONT_X, FRONT_Z = 0.0, -0.50        # V-foil: directly under the CoM
+FOIL_Y  = 0.40                       # V panels out on the rising arms
+ELEV_Y  = 0.35                       # elevon halves: wide roll lever
+DIHEDRAL = np.radians(20.0)
+FRONT_INC = np.radians(10.0)
+REAR_X, REAR_Z = -1.3, -0.95         # elevon foil: DEEPER than the front
+                                     # so it never ventilates first
+REAR_INC = np.radians(4.0)
+
+# --- control ----------------------------------------------------------------
+THRUST    = 350.0                    # N at full throttle
+THR_RATE  = 0.3                      # throttle slew per second (X/Z held)
+MAX_VEC   = np.radians(14.0)         # thrust-vector deflection
+BANK_GAIN = 1.9                      # coordinated-turn roll per vector rad
+VEC_RATE  = np.radians(20.0)         # vector slew, rad/s
+MAX_ELEV  = np.radians(22.0)         # elevon deflection clamp
+SERVO_KP  = 8.0                      # hinge servo torque per rad of error
+
+
+def _tilt(incidence: float, dihedral: float):
+    """(chord_axis, normal_axis) for a foil with `incidence` about y and
+    `dihedral` roll about x (positive = lift tilted toward −y)."""
+    ci, si = np.cos(incidence), np.sin(incidence)
+    chord = np.array([ci, 0.0, si])
+    normal = np.array([-si, 0.0, ci])
+    cd, sd = np.cos(dihedral), np.sin(dihedral)
+    R_x = np.array([[1, 0, 0], [0, cd, -sd], [0, sd, cd]])
+    return tuple(chord), tuple(R_x @ normal)
+
+
+def _hinge(name: str, pos: tuple, axis: tuple) -> Joint:
+    j = Joint(name, mode="saturating", stall_torque=40.0, damping=0.8,
+              axis=axis, transform=pos)
+    j.add(Mass(f"{name}_m", mass=0.15, moi=(0.004, 0.004, 0.004),
+               transform=(-0.03, 0.0, 0.0)))
+    return j
 
 
 def build_world():
     b = Craft("boat")
-    b.add(Mass("hull", mass=MASS, moi=(8.0, 20.0, 24.0)))
-    # Four hull contact points float the boat on the water plane and make
-    # it pitch/roll stable.
-    for i, (sx, sy) in enumerate([(1, 1), (1, -1), (-1, 1), (-1, -1)]):
-        b.add(Collider(f"hull{i}", stiffness=1500.0, damping=200.0,
-                       transform=(sx * 1.2, sy * 0.5, -0.25)))
-    # Hull drag (terminal speed) + a lift foil + yaw-damping tail fin.
-    b.add(DragSurface.isotropic_quadratic("drag", area=0.6,
-                                          drag_coefficient=0.6))
-    b.add(Naca00xx("foil", area=0.5, CL_max=1.1, CD_0=0.02, induced_k=0.1,
-                   chord_axis=(1.0, 0.0, 0.0), normal_axis=(0.0, 0.0, 1.0),
-                   transform=(0.0, 0.0, -0.4)))
-    b.add(DragSurface.isotropic_quadratic("fin", area=0.5,
-                                          drag_coefficient=1.0,
-                                          transform=(-1.6, 0.0, 0.0)))
-    b.add(Thruster("prop", force=(1.0, 0.0, 0.0), transform=(-1.6, 0, 0)))
-    b.add(Thruster("rudder", torque=(0.0, 0.0, 1.0), transform=(-1.6, 0, 0)))
+    b.add(Mass("hull", mass=MASS, moi=(15.0, 40.0, 45.0),
+               transform=(0.0, 0.0, -0.2)))
 
-    # Two-axis laser gimbal: pan (yaw, +z) hosting tilt (pitch, +y).
-    pan = Joint("pan", mode="saturating", stall_torque=8.0, damping=0.3,
-                axis=(0.0, 0.0, 1.0), transform=tuple(GIMBAL_MOUNT))
-    pan.add(Mass("pan_motor", mass=0.3, moi=(0.002, 0.002, 0.003)))
-    tilt = Joint("tilt", mode="saturating", stall_torque=6.0, damping=0.3,
-                 axis=(0.0, 1.0, 0.0), transform=(0.0, 0.0, 0.15))
-    tilt.add(Mass("laser", mass=0.2, moi=(0.001, 0.001, 0.001)))
-    pan.add(tilt)
-    b.add(pan)
+    # Hull: 9 buoy + 9 drag elements on the triangular-prism edges.
+    for x in STATIONS:
+        for tag, (y, z) in (("pl", (+DECK_Y, DECK_Z)),
+                            ("pr", (-DECK_Y, DECK_Z)),
+                            ("kl", (0.0, KEEL_Z))):
+            b.add(PointBuoy(f"b_{tag}{x:+.0f}", volume=BUOY_V,
+                            transform=(x, y, z)))
+            b.add(DragSurface.isotropic_quadratic(
+                f"d_{tag}{x:+.0f}", area=0.006, drag_coefficient=0.6,
+                transform=(x, y, z)))
 
-    w = (World()
-         .add_field(GravityField().add_uniform((0.0, 0.0, -9.81)))
-         .add_field(FluidField().add_uniform(density=RHO))
-         .add_field(CollisionField().add_half_space(origin=(0, 0, 0.0),
-                                                    normal=(0, 0, 1))))
-    w.add_craft(b, position=(0.0, 0.0, 0.18))
+    # Superstructure air drag — the speed-dependent term that gives the
+    # foiling regime a thrust/drag equilibrium (a submerged foil's drag
+    # is ~weight/(L/D), nearly speed-independent: faster just means it
+    # rides higher on a smaller wetted patch). Mounted above the splash
+    # band so it only ever sees air.
+    b.add(DragSurface.isotropic_quadratic("air", area=0.8,
+                                          drag_coefficient=0.9,
+                                          transform=(0.0, 0.0, 0.5)))
+
+    # Front V-foil: two panels with dihedral on a small vertical strut.
+    # Each panel's lift leans toward the centreline (a true V): sideslip
+    # then produces a restoring roll moment instead of a divergent one.
+    for tag, sy in (("l", +1.0), ("r", -1.0)):
+        chord, normal = _tilt(FRONT_INC, sy * DIHEDRAL)
+        b.add(Naca00xx(f"foil_{tag}", area=0.035, CL_max=1.1, CD_0=0.01,
+                       induced_k=0.1, chord_axis=chord, normal_axis=normal,
+                       transform=(FRONT_X, sy * FOIL_Y, FRONT_Z)))
+    # Strut sample points sit LOW so they stay wetted at foiling ride
+    # height — they are the only yaw stiffness once the hull is dry.
+    b.add(Naca00xx("strut_f", area=0.025, CL_max=1.1, CD_0=0.01,
+                   induced_k=0.1, chord_axis=(1, 0, 0), normal_axis=(0, 1, 0),
+                   transform=(FRONT_X, 0.0, -0.55)))
+
+    # Rear split foil: each half is an elevon on a spanwise hinge.
+    chord, normal = _tilt(REAR_INC, 0.0)
+    for tag, sy in (("l", +1.0), ("r", -1.0)):
+        h = _hinge(f"elev_{tag}", (REAR_X, sy * ELEV_Y, REAR_Z), (0, 1, 0))
+        h.add(Naca00xx(f"elev_{tag}_s", area=0.012, CL_max=1.1, CD_0=0.01,
+                       induced_k=0.1, chord_axis=chord, normal_axis=normal,
+                       transform=(-0.03, 0.0, 0.0)))
+        b.add(h)
+    # Rear vertical stabilizer: much bigger than the front strut.
+    b.add(Naca00xx("strut_r", area=0.08, CL_max=1.1, CD_0=0.01,
+                   induced_k=0.1, chord_axis=(1, 0, 0), normal_axis=(0, 1, 0),
+                   transform=(REAR_X, 0.0, -0.70)))
+
+    # Vectoring thruster: a yaw Joint at the stern carries the prop.
+    tv = _hinge("tvec", (-1.45, 0.0, -0.5), (0, 0, 1))
+    tv.add(Thruster("prop", force=(THRUST, 0.0, 0.0)))
+    b.add(tv)
+
+    earth = Earth(position=(0.0, 0.0, -Earth.R_EQ), waves=WAVES,
+                  surface_smoothing=SMOOTH)
+    w = World().add_planet(earth)
+    w.add_craft(b, position=(0.0, 0.0, 0.02))
     return w
 
 
-def _R(q_wxyz):
+def _quat(axis, angle):
+    h = 0.5 * angle
+    return (np.cos(h), *(np.sin(h) * np.asarray(axis, dtype=float)))
+
+
+def _euler(q_wxyz):
+    """ZYX yaw/pitch/roll (rad); pitch + = nose down (about +y = left)."""
     w, x, y, z = q_wxyz
-    return np.array([
-        [1 - 2*(y*y + z*z), 2*(x*y - w*z),     2*(x*z + w*y)],
-        [2*(x*y + w*z),     1 - 2*(x*x + z*z), 2*(y*z - w*x)],
-        [2*(x*z - w*y),     2*(y*z + w*x),     1 - 2*(x*x + y*y)]])
+    yaw = np.arctan2(2 * (w*z + x*y), 1 - 2 * (y*y + z*z))
+    pitch = np.arcsin(np.clip(2 * (w*y - z*x), -1.0, 1.0))
+    roll = np.arctan2(2 * (w*x + y*z), 1 - 2 * (x*x + y*y))
+    return yaw, pitch, roll
 
 
-def _wrap(a):
-    return (a + np.pi) % (2 * np.pi) - np.pi
+def _eta(x, y, t):
+    """Wave elevation at (x, y) — same planar sinusoid the Earth uses."""
+    k = 2 * np.pi / WAVES.wavelength
+    g0 = Earth.MU / Earth.R_EQ**2
+    omega = k * np.sqrt(g0 * WAVES.wavelength / (2 * np.pi))
+    return WAVES.amplitude * np.cos(k * x - omega * t)
 
 
 def main() -> None:
     args = common_args(__doc__).parse_args()
-    dt = 0.005
-    duration = args.duration or (1e9 if args.keyboard else 16.0)
+    dt = 0.002
+    duration = args.duration or (1e9 if args.keyboard else 32.0)
 
     sim = TargetNumpy(Sim(build_world()))
 
-    # Scripted: drive a curving path so the laser has to sweep to track.
-    script = [(1.0, 14.0, {"w"}), (3.0, 5.0, {"a"}), (7.0, 9.0, {"d"}),
-              (11.0, 13.0, {"a"})]
+    # Scripted: bob for a while, throttle up onto the foils, carve a
+    # right then a left turn at speed.
+    script = [(5.0, 9.0, {"x"}),       # ramp throttle → climb onto foils
+              (10.0, 12.0, {"z"}),     # settle to cruise power
+              (15.0, 18.0, {"d"}),     # carve right
+              (21.0, 24.0, {"a"}),     # carve left
+              (25.0, 26.5, {"x"})]     # power out of the carve
     ctrl = make_controller(args.keyboard, script)
     if args.keyboard:
-        print("Controls:  W/S ahead/astern   A/D steer   (Ctrl-C to quit)\n")
+        print("Controls:  X/Z throttle   A/D vector thrust   "
+              "(Ctrl-C to quit)")
 
+    FIXED, MOVING = (120, 150, 210), (240, 150, 60)
     viz = None if args.no_viz else Viz("manta/hydrofoil", addr=args.viz_addr)
     if viz is not None:
-        viz.plane("world/water", z=0.0, size=30.0, color=(40, 90, 150, 130))
-        viz.box("world/boat/hull", (1.4, 0.6, 0.2), color=(210, 190, 120))
-        viz.box("world/boat/pan/tilt/laser_body", (0.1, 0.05, 0.05),
-                color=(60, 60, 70))
-        viz.point("world/target", TARGET, color=(90, 230, 120), radius=0.4)
+        viz.plane("world/deep", z=-1.8, size=200.0, color=(15, 35, 60, 255))
+        # Hull: deck box over two slanted side panels meeting at the keel.
+        viz.box("world/boat/deck", (1.5, DECK_Y + 0.05, 0.07),
+                center=(0, 0, DECK_Z + 0.07), color=(200, 190, 160))
+        slant = np.arctan2(DECK_Y, DECK_Z - KEEL_Z)
+        for tag, sy in (("l", +1.0), ("r", -1.0)):
+            mid_y, mid_z = sy * DECK_Y / 2, (DECK_Z + KEEL_Z) / 2
+            half_w = 0.5 * np.hypot(DECK_Y, DECK_Z - KEEL_Z)
+            viz.pose(f"world/boat/side_{tag}", (0, mid_y, mid_z),
+                     _quat((1, 0, 0), sy * (np.pi / 2 - slant)))
+            viz.box(f"world/boat/side_{tag}/s", (1.5, half_w, 0.012),
+                    color=(200, 190, 160))
+        # Struts + front V panels (fixed), elevons + thruster (moving).
+        viz.box("world/boat/strut_f", (0.04, 0.005, 0.20),
+                center=(FRONT_X, 0, -0.45), color=FIXED)
+        viz.box("world/boat/strut_r", (0.06, 0.006, 0.23),
+                center=(REAR_X, 0, -0.52), color=FIXED)
+        for tag, sy in (("l", +1.0), ("r", -1.0)):
+            viz.pose(f"world/boat/foil_{tag}",
+                     (FRONT_X, sy * FOIL_Y, FRONT_Z),
+                     _quat((1, 0, 0), sy * DIHEDRAL))
+            viz.box(f"world/boat/foil_{tag}/s", (0.05, 0.16, 0.004),
+                    color=FIXED)
+            viz.box(f"world/boat/elev_{tag}/s", (0.04, 0.14, 0.003),
+                    center=(-0.03, 0, 0), color=MOVING)
 
-    # One `PID` block per gimbal axis, sized to the (small) gimbal-joint
-    # inertia: the integral trims the steady-state offset; the derivative
-    # (on the measured angle) damps the rate. Same block you'd lower to C++
-    # with TargetCpp(PID(...)) and run onboard.
-    pid = {axis: TargetNumpy(PID(kp=2.0, ki=5.0, kd=0.5, integral_limit=2.0))
-           for axis in ("pan", "tilt")}
-    n = int(duration / dt)
-    print(f"{'t (s)':>6} {'boat xy':>16} {'heading°':>9} {'pan°':>7} "
-          f"{'tilt°':>7} {'aim err°':>9}")
+    # One PID per stabilized axis; both mix onto the two elevons.
+    pid = {ax: TargetNumpy(PID(kp=kp, ki=ki, kd=kd, integral_limit=0.2))
+           for ax, (kp, ki, kd) in
+           {"pitch": (2.5, 0.5, 0.6), "roll": (2.2, 0.6, 0.35)}.items()}
+
+    throttle, vec = 0.0, 0.0
+    FRAME = 0.02
+    substeps = round(FRAME / dt)
+    pacer = Pacer() if (args.keyboard or viz is not None) else None
+    t = 0.0
+    print(f"{'t (s)':>6} {'x (m)':>7} {'v (m/s)':>8} {'ride (m)':>8} "
+          f"{'pitch°':>7} {'roll°':>7} {'head°':>7} {'thr':>5}")
     try:
-        for i in range(n):
-            t = i * dt
+        for f in range(int(duration / FRAME)):
+            if pacer is not None:
+                pacer.pace(t)
             ctrl.update(t)
-            sim.state["boat"]["prop.throttle"] = \
-                FWD * (ctrl.held("w") - ctrl.held("s"))
-            sim.state["boat"]["rudder.throttle"] = \
-                STEER * (ctrl.held("a") - ctrl.held("d"))
 
-            # --- laser-pointing PD on the gimbal joints --------------------
-            p = np.asarray(sim.state["boat"]["position"]).ravel()
-            q = np.asarray(sim.state["boat"]["orientation"]).ravel()
-            R = _R(q)
-            base_w = p + R @ GIMBAL_MOUNT             # gimbal base, world
-            v = R.T @ (TARGET - base_w)               # target in hull frame
-            des_pan = np.arctan2(v[1], v[0])
-            des_tilt = -np.arctan2(v[2], np.hypot(v[0], v[1]))
-            for joint, des in (("pan", des_pan), ("tilt", des_tilt)):
-                ang = float(sim.state["boat"][f"{joint}.angle"])
-                # Fold the shortest-arc wrap into the setpoint so the PID's
-                # error is _wrap(des − ang); its derivative-on-measurement
-                # then damps the joint rate.
-                sp = ang + _wrap(des - ang)
-                sim.state["boat"][f"{joint}.torque_cmd"] = \
-                    pid[joint].step(dt, setpoint=sp, measurement=ang)["command"]
+            throttle = float(np.clip(
+                throttle + (ctrl.held("x") - ctrl.held("z")) * THR_RATE
+                * FRAME, 0.0, 1.0))
+            # Slew the vector command (a step at speed kicks the bank
+            # loop too hard).
+            vec_cmd = MAX_VEC * (ctrl.held("d") - ctrl.held("a"))
+            vec = float(np.clip(vec_cmd, vec - VEC_RATE * FRAME,
+                                vec + VEC_RATE * FRAME))
 
-            sim.step(dt)
+            st = sim.state["boat"]
+            yaw, pitch, roll = _euler(np.asarray(st["orientation"]).ravel())
+            v_now = float(np.linalg.norm(np.asarray(st["velocity"]).ravel()))
+            # Elevon authority grows with q ∝ v²: schedule the PID
+            # output back down so the loops stay tuned at speed.
+            gain = min(1.5, max(0.45, (8.0 / max(v_now, 4.0)) ** 2))
+            # Elevon mixing: PIDs hold the boat level. +deflection = TE
+            # up = local lift down (= stern down = nose up).
+            cmd_p = gain * pid["pitch"].step(FRAME, setpoint=0.0,
+                                             measurement=pitch)["command"]
+            # Coordinated turn: a yaw command also banks the boat into
+            # the turn (a flat skid at speed trips the foils sideways).
+            cmd_r = gain * pid["roll"].step(FRAME,
+                                            setpoint=BANK_GAIN * vec,
+                                            measurement=roll)["command"]
+            targets = {
+                "elev_l": float(np.clip(-cmd_p - cmd_r,
+                                        -MAX_ELEV, MAX_ELEV)),
+                "elev_r": float(np.clip(-cmd_p + cmd_r,
+                                        -MAX_ELEV, MAX_ELEV)),
+                "tvec": vec,
+            }
 
-            if viz is not None:
-                p = np.asarray(sim.state["boat"]["position"]).ravel()
-                q = np.asarray(sim.state["boat"]["orientation"]).ravel()
-                pan = float(sim.state["boat"]["pan.angle"])
-                tilt = float(sim.state["boat"]["tilt.angle"])
+            for _ in range(substeps):
+                st = sim.state["boat"]    # re-fetch: step() swaps the dict
+                st["prop.throttle"] = throttle
+                for name, target in targets.items():
+                    st[f"{name}.torque_cmd"] = \
+                        SERVO_KP * (target - float(st[f"{name}.angle"]))
+                sim.step(dt)
+                t += dt
+
+            st = sim.state["boat"]
+            p = np.asarray(st["position"]).ravel()
+            if viz is not None and f % 2 == 0:
+                q = np.asarray(st["orientation"]).ravel()
                 viz.t(t)
                 viz.pose("world/boat", p, q)
-                viz.pose("world/boat/pan", GIMBAL_MOUNT,
-                         (np.cos(pan/2), 0, 0, np.sin(pan/2)))
-                viz.pose("world/boat/pan/tilt", (0, 0, 0.15),
-                         (np.cos(tilt/2), 0, np.sin(tilt/2), 0))
-                # Laser ray, drawn along +x of the tilt frame.
-                viz.arrow("world/boat/pan/tilt/laser", (0, 0, 0),
-                          (LASER_LEN, 0, 0), color=(255, 60, 60), radius=0.02)
-                viz.trail("world/trail", p)   # world coords: not under the posed boat
+                for name in ("elev_l", "elev_r"):
+                    sy = +1.0 if name.endswith("l") else -1.0
+                    viz.pose(f"world/boat/{name}",
+                             (REAR_X, sy * ELEV_Y, REAR_Z),
+                             _quat((0, 1, 0), float(st[f"{name}.angle"])))
+                viz.pose("world/boat/tvec", (-1.45, 0, -0.5),
+                         _quat((0, 0, 1), float(st["tvec.angle"])))
+                viz.arrow("world/boat/tvec/thrust", (0, 0, 0),
+                          (-0.8 * throttle, 0, 0), color=(235, 80, 80),
+                          radius=0.02)
+                yaw = _euler(q)[0]
+                eye = p + np.array(
+                    [-8.0 * np.cos(yaw), -8.0 * np.sin(yaw), 2.5])
+                viz.chase("world/chase", eye, p)
+                if f == 0:
+                    viz.track("world/chase")
+                viz.trail("world/trail", p, max_len=300, min_dist=2.0)
+                if f % 10 == 0:      # 5 Hz animated wave strips
+                    xs = p[0] + np.arange(-10.0, 14.0, 1.5)
+                    for j, y in enumerate(np.arange(-6.0, 6.5, 2.0)):
+                        pts = np.column_stack(
+                            [xs, np.full_like(xs, y), _eta(xs, y, t)])
+                        viz.line(f"world/waves/{j}", pts,
+                                 color=(90, 160, 220), radius=0.015)
 
-            if (i + 1) % 200 == 0:
-                p = np.asarray(sim.state["boat"]["position"]).ravel()
-                q = np.asarray(sim.state["boat"]["orientation"]).ravel()
-                R = _R(q)
-                pan = float(sim.state["boat"]["pan.angle"])
-                tilt = float(sim.state["boat"]["tilt.angle"])
-                # Actual laser direction (world) vs. direction to target.
-                d_hull = np.array([np.cos(pan)*np.cos(tilt),
-                                   np.sin(pan)*np.cos(tilt), -np.sin(tilt)])
-                d_world = R @ d_hull
-                to_tgt = TARGET - (p + R @ GIMBAL_MOUNT)
-                to_tgt /= np.linalg.norm(to_tgt)
-                aim_err = np.degrees(np.arccos(
-                    np.clip(d_world @ to_tgt, -1, 1)))
-                head = np.degrees(np.arctan2(
-                    2*(q[0]*q[3] + q[1]*q[2]), 1 - 2*(q[2]**2 + q[3]**2)))
-                print(f"{t:>6.2f} {f'({p[0]:.1f},{p[1]:.1f})':>16} "
-                      f"{head:>9.1f} {np.degrees(pan):>7.1f} "
-                      f"{np.degrees(tilt):>7.1f} {aim_err:>9.2f}")
+            if (f + 1) % round(1.0 / FRAME) == 0:
+                v = np.asarray(st["velocity"]).ravel()
+                yaw, pitch, roll = _euler(
+                    np.asarray(st["orientation"]).ravel())
+                print(f"{t:>6.2f} {p[0]:>7.1f} {np.linalg.norm(v):>8.2f} "
+                      f"{p[2]:>8.2f} {np.degrees(pitch):>+7.1f} "
+                      f"{np.degrees(roll):>+7.1f} {np.degrees(yaw):>+7.1f} "
+                      f"{throttle:>5.2f}")
     except KeyboardInterrupt:
         pass
     finally:
