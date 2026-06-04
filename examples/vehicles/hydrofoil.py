@@ -231,13 +231,10 @@ def main() -> None:
     if viz is not None:
         # Static geometry only here — local POSES are logged on the first
         # frame (after viz.t), or they never exist on the sim timeline.
-        # The sea follows the boat (posed per frame), so you can never
-        # drive off its edge: a deep-blue floor disc plus a translucent
-        # surface disc at z=0 that shows how the hull sits in the water.
+        # The sea floor follows the boat (posed per frame), so you can
+        # never drive off its edge; the wave mesh IS the water surface.
         viz.disc("world/sea/deep", 60.0, center=(0, 0, -1.8),
                  color=(15, 35, 60, 255))
-        viz.disc("world/sea/surface", 60.0, center=(0, 0, 0),
-                 color=(80, 150, 210, 90))
         # Hull: rectangular prism above the waterline, V-keel triangular
         # prism below (two slanted panels meeting at the keel line, base
         # flush with the box bottom). The buoy/drag points sit exactly on
@@ -383,8 +380,8 @@ def main() -> None:
                 # Boat-centred 10×10 wave-surface mesh, sampling the same
                 # η(x, y, t) the physics uses; re-logged every viz frame
                 # (25 Hz) to animate.
-                xs = p[0] + np.linspace(-14.0, 14.0, 10)
-                ys = p[1] + np.linspace(-14.0, 14.0, 10)
+                xs = p[0] + np.linspace(-8.4, 8.4, 10)
+                ys = p[1] + np.linspace(-8.4, 8.4, 10)
                 Xg, Yg = np.meshgrid(xs, ys)
                 viz.heightfield("world/waves", Xg, Yg, _eta(Xg, Yg, t),
                                 color=(50, 110, 170))
