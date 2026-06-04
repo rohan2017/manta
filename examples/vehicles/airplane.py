@@ -11,7 +11,10 @@ command a target deflection and a tiny P-servo (plus joint damping)
 drives each hinge there; the aerodynamic hinge moment, the servo
 reaction on the airframe, and the surface's lift all fall out of the
 physics. A nose `Thruster` plays propeller, with a touch of reaction
-counter-torque about the thrust axis.
+counter-torque about the thrust axis. Tricycle-gear `Collider`s rest the
+plane on a `CollisionField` runway — it starts parked, and the wing's
+built-in incidence floats it off the ground on its own once the takeoff
+roll passes flying speed.
 
 Controls:  S/W elevator (pitch up/down)   A/D rudder (yaw left/right)
            Q/E ailerons (roll left/right)  X/Z throttle up/down
@@ -28,8 +31,8 @@ from __future__ import annotations
 import numpy as np
 
 from manta import Craft, Sim, TargetNumpy, World
-from manta.fields import FluidField, GravityField
-from manta.parts import DragSurface, Joint, Mass, Naca00xx, Thruster
+from manta.fields import CollisionField, FluidField, GravityField
+from manta.parts import Collider, DragSurface, Joint, Mass, Naca00xx, Thruster
 
 from .._control import common_args, make_controller
 from .._viz import Viz
@@ -44,6 +47,9 @@ TAIL_X    = -1.2                       # horizontal tail quarter-chord
 ELEV_X    = -1.32                      # elevator hinge (tail TE)
 FIN_Z     = 0.12                       # vertical-stab mid-height
 SURF_OFF  = (-0.05, 0.0, 0.0)          # surface panel centre behind its hinge
+GEAR = {"nose":   (0.4, 0.0, -0.3),    # tricycle gear contact points
+        "main_l": (-0.1, +0.25, -0.3),
+        "main_r": (-0.1, -0.25, -0.3)}
 
 # --- control limits + servo --------------------------------------------------
 MAX_AIL   = np.radians(8.0)
@@ -106,13 +112,20 @@ def build_world():
     a.add(DragSurface.isotropic_quadratic("fuselage", area=0.02,
                                           drag_coefficient=0.4,
                                           transform=(0.0, 0.0, CG[2])))
-    a.add(Thruster("prop", force=(12.0, 0.0, 0.0), torque=(-0.04, 0.0, 0.0),
+    a.add(Thruster("prop", force=(9.0, 0.0, 0.0), torque=(-0.04, 0.0, 0.0),
                    transform=(0.45, 0.0, CG[2])))
+
+    # Tricycle landing gear: frictionless point contacts (free-rolling
+    # wheels) on the ground plane.
+    for name, pos in GEAR.items():
+        a.add(Collider(name, stiffness=2000.0, damping=60.0, transform=pos))
 
     w = (World()
          .add_field(GravityField().add_uniform((0.0, 0.0, -9.81)))
-         .add_field(FluidField().add_uniform(density=1.225)))
-    w.add_craft(a, position=(0.0, 0.0, 60.0), velocity=(13.0, 0.0, 0.0))
+         .add_field(FluidField().add_uniform(density=1.225))
+         .add_field(CollisionField().add_half_space(origin=(0.0, 0.0, 0.0),
+                                                    normal=(0.0, 0.0, 1.0))))
+    w.add_craft(a, position=(0.0, 0.0, 0.30))    # parked on the runway
     return w
 
 
@@ -135,17 +148,18 @@ def _euler(q_wxyz):
 def main() -> None:
     args = common_args(__doc__).parse_args()
     dt = 0.002
-    duration = args.duration or (1e9 if args.keyboard else 24.0)
+    duration = args.duration or (1e9 if args.keyboard else 36.0)
 
     sim = TargetNumpy(Sim(build_world()))
 
-    # Scripted flight: throttle up and climb, bank into a right turn,
-    # level the wings, then throttle off and glide.
-    script = [(1.0, 2.0, {"x"}),       # throttle up → climb
-              (5.0, 6.0, {"z"}),       # back to cruise power
-              (8.0, 8.4, {"e"}),       # roll right into a bank
-              (11.0, 11.3, {"q"}),     # roll back wings-level
-              (14.0, 17.0, {"z"})]     # throttle to zero → glide
+    # Scripted flight: full throttle down the runway (the wing incidence
+    # lifts it off by itself), climb, bank into a right turn, level the
+    # wings, then throttle off and glide back down to a landing.
+    script = [(0.5, 3.0, {"x"}),       # full throttle → takeoff roll + climb
+              (9.0, 10.6, {"z"}),      # back to cruise power
+              (12.5, 12.9, {"e"}),     # roll right into a bank
+              (15.5, 15.8, {"q"}),     # roll back wings-level
+              (18.0, 21.0, {"z"})]     # throttle to zero → glide in
     ctrl = make_controller(args.keyboard, script)
     if args.keyboard:
         print("Controls:  S/W pitch up/down   A/D yaw   Q/E roll   "
@@ -154,11 +168,16 @@ def main() -> None:
     FIXED, MOVING = (120, 150, 210), (240, 150, 60)
     viz = None if args.no_viz else Viz("manta/airplane")
     if viz is not None:
-        # Chase cam: park the eye just behind/left of the spawn point and
+        # Chase cam: park the eye just behind/left of the runway spawn and
         # keep it locked on the plane (otherwise the viewer frames the whole
         # world and a 2 m airframe is a speck).
-        viz.follow("world/plane", eye=(-6.0, -4.0, 62.0), target=(0.0, 0.0, 60.0))
+        viz.follow("world/plane", eye=(-6.0, -4.0, 2.5), target=(0.0, 0.0, 0.3))
         viz.plane("world/ground", z=0.0, size=300.0, color=(70, 110, 70, 160))
+        viz.box("world/runway", (60.0, 3.0, 0.002), center=(55.0, 0.0, 0.0),
+                color=(120, 120, 125))
+        for pos in GEAR.values():
+            viz.point(f"world/plane/gear/{pos[0]:.2f}_{pos[1]:.2f}", pos,
+                      color=(40, 40, 45), radius=0.05)
         viz.box("world/plane/fus", (0.95, 0.035, 0.035), center=(-0.45, 0, 0),
                 color=(150, 150, 158))
         viz.box("world/plane/wing/panel", (0.15, 1.2, 0.008),
@@ -184,7 +203,8 @@ def main() -> None:
               "elev":  ((ELEV_X, 0.0, 0.0), (0, 1, 0)),
               "rud":   ((ELEV_X, 0.0, FIN_Z), (0, 0, 1))}
 
-    throttle = 0.3
+    throttle = 0.0                     # parked, engine idle
+    airborne = False
     n = int(duration / dt)
     print(f"{'t (s)':>6} {'x (m)':>8} {'alt (m)':>8} {'|v| (m/s)':>9} "
           f"{'pitch°':>7} {'roll°':>7} {'head°':>7} {'thr':>5}")
@@ -229,10 +249,16 @@ def main() -> None:
                           radius=0.02)
                 viz.trail("world/plane/trail", p)
 
-            if p[2] < 0:
-                print(f"\nlanded at t = {t:.2f} s, range = "
-                      f"{np.hypot(p[0], p[1]):.1f} m")
-                break
+            # Wheels-off / touchdown reporting (gear sits at z≈0.30 at rest).
+            if not airborne and p[2] > 0.6:
+                airborne = True
+                print(f"      -- wheels off at t = {t:.2f} s, "
+                      f"ground roll {p[0]:.1f} m")
+            elif airborne and p[2] < 0.35:
+                airborne = False
+                v = np.asarray(st["velocity"]).ravel()
+                print(f"      -- touchdown at t = {t:.2f} s, "
+                      f"{np.linalg.norm(v):.1f} m/s, sink {-v[2]:.1f} m/s")
             if (i + 1) % int(1.0 / dt) == 0:
                 v = np.asarray(st["velocity"]).ravel()
                 yaw, pitch, roll = _euler(np.asarray(st["orientation"]).ravel())
