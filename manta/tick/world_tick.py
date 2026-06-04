@@ -504,6 +504,11 @@ def _trace_craft_pass1(craft,
     # Rotor gyroscopic couples accumulate at the body level (a pure
     # torque, not routed up the joint chain) — matches the legacy design.
     gyro_torques: list[Any] = []
+    # Per-rotor (axis_in_craft, I_axial) pairs for the coupled body/rotor
+    # solve: the body's α is computed with the rotors' axial inertia
+    # REMOVED (a freely-spinning rotor cannot react torques about its own
+    # axis), and each rotor's θ̈ carries the −â·α mount feedback.
+    rotor_axials: list[tuple[Any, float]] = []
 
     def _cascade(part) -> Wrench:
         accum = own_wrench.get(part, zero_w)
@@ -521,6 +526,29 @@ def _trace_craft_pass1(craft,
                 ir.Mat3[CraftFrame, PartFrame].from_mx(kin.R_craft_from_input),
                 ir.Vec3[CraftFrame].from_mx(kin.omega_input))
             gyro_torques.append(gyro)
+            # α_mount feedback: the rotor's RELATIVE rate counter-rotates
+            # when the mount angularly accelerates about the axis (its
+            # absolute axial momentum is its own DOF). `alpha_sym` is the
+            # body-α placeholder, substituted with the real Newton-Euler
+            # solve in `_emit_per_craft_dynamics`. Omitting this term
+            # (the old fixed-base approximation) pumps energy into fast
+            # rotors on precessing mounts.
+            I_ax = part.I_axial
+            if I_ax > 1e-18:
+                axis_np = np.asarray(part.axis, dtype=float)
+                axis_np = axis_np / np.linalg.norm(axis_np)
+                axis_c_mx = kin.R_craft_from_input @ ca.DM(
+                    axis_np.reshape(3, 1))
+                # τ_ax_tot = everything driving the DOF (external axial +
+                # actuator + friction + Coriolis) — resolve's θ̈ × I_ax.
+                # The momentum integrator needs it to reconstruct the pure
+                # external torque and to step the rotor's axial momentum.
+                tau_ax_tot_mx = float(I_ax) * theta_ddot
+                rate_mx = state_input_nodes[part]["rate"]._mx
+                rotor_axials.append((axis_c_mx, float(I_ax), rate_mx,
+                                     tau_ax_tot_mx,
+                                     prefix + f"{part.name}.rate"))
+                theta_ddot = theta_ddot - ca.dot(axis_c_mx, alpha_sym)
             sym = joint_accel_syms.get(part)
             if sym is not None:
                 joint_accel_reals.append((sym, theta_ddot))
@@ -540,8 +568,13 @@ def _trace_craft_pass1(craft,
         return accum
 
     net = _cascade(craft.root)
-    # Fold each rotor's gyroscopic couple into the body net torque.
+    # Fold each rotor's gyroscopic couple into the body net torque, and
+    # keep the sum separately — the momentum integrator must EXCLUDE it
+    # (it is the bookkeeping image of −ω×L, which the momentum rotation
+    # step handles exactly).
+    gyro_sum_mx = ca.MX.zeros(3, 1)
     for gyro in gyro_torques:
+        gyro_sum_mx = gyro_sum_mx + gyro._mx
         net = net + Wrench(force=ir.Vec3[CraftFrame].constant((0.0, 0.0, 0.0)),
                            torque=gyro)
 
@@ -576,6 +609,8 @@ def _trace_craft_pass1(craft,
         "sample_rates":      sample_rates,
         "rw_bias_updates":   rw_bias_updates,
         "joint_accel_reals": joint_accel_reals,
+        "rotor_axials":      rotor_axials,
+        "gyro_sum_mx":       gyro_sum_mx,
         "com_rel_motion":    (v_com_rel_mx, a_com_rel_mx),
         "a_world_sym":      a_world_sym,
         "alpha_sym":         alpha_sym,
@@ -611,8 +646,30 @@ def _emit_per_craft_dynamics(g_ctx, craft, pc, dt) -> None:
     I_com   = ir.Mat3[CraftFrame, CraftFrame].from_mx(I_com_mx)
     I_omega = I_com @ ang_vel
     tau_eff = tau_com - ang_vel.cross(I_omega)
+    # Coupled body/rotor solve: a freely-spinning rotor's axial inertia
+    # cannot react body torques (its axial angular momentum is its own
+    # DOF — the cascade already absorbs the axial torque there), so the
+    # body α is solved with each rotor's I_axial·ââᵀ removed from the
+    # aggregate. Solving with the FULL aggregate double-counts the rotor
+    # and, together with a missing −â·α rotor feedback (added in the
+    # cascade), pumped energy into fast rotors on precessing mounts.
+    # Note ω×(I·ω) above keeps the FULL aggregate — the rotors' ω-locked
+    # momentum is real; their RELATIVE-spin momentum enters via the gyro
+    # couple folded into `net` by the cascade.
+    rotor_axials = pc.get("rotor_axials", [])
+    I_eff_mx = I_com_mx
+    rotor_healthy = []      # per rotor: stator axial inertia margin (>0 OK)
+    for axis_c_mx, I_ax, _rate_mx, _tau_ax_mx, _rname in rotor_axials:
+        # Cap each subtraction just below the REMAINING axial value: a
+        # craft whose entire axial inertia is rotor(s) (a massless
+        # stator) has indeterminate α about that axis — the tiny residual
+        # keeps the solve finite (and exact zero torque → exact zero α).
+        axial_left = ca.dot(axis_c_mx, I_eff_mx @ axis_c_mx)
+        I_ax_eff = ca.fmin(I_ax, axial_left * (1.0 - 1e-6))
+        I_eff_mx = I_eff_mx - I_ax_eff * (axis_c_mx @ ca.transpose(axis_c_mx))
+        rotor_healthy.append(axial_left * 0.99 - I_ax)
     if np.linalg.det(I_com_at_zero_np) > 1e-18:
-        alpha_mx = ca.solve(I_com_mx, tau_eff._mx)
+        alpha_mx = ca.solve(I_eff_mx, tau_eff._mx)
         alpha = ir.Vec3[CraftFrame].from_mx(alpha_mx)
     else:
         alpha = ir.Vec3[CraftFrame].constant((0.0, 0.0, 0.0))
@@ -646,7 +703,11 @@ def _emit_per_craft_dynamics(g_ctx, craft, pc, dt) -> None:
     alpha_sym    = pc["alpha_sym"]
     joint_accel_reals = pc.get("joint_accel_reals", [])
     joint_syms  = [sym  for sym, _    in joint_accel_reals]
-    joint_reals = [real for _,   real in joint_accel_reals]
+    # Each joint θ̈ carries the body-α placeholder (the −â·α mount
+    # feedback) — resolve it with the real solve now, so the θ̈
+    # expressions substituted below are placeholder-free.
+    joint_reals = [ca.substitute(real, alpha_sym, alpha._mx)
+                   for _, real in joint_accel_reals]
     checks = [("acceleration_world", a_world_sym),
               ("acceleration_body", a_world_sym),
               ("angular_acceleration", alpha_sym)]
@@ -691,7 +752,73 @@ def _emit_per_craft_dynamics(g_ctx, craft, pc, dt) -> None:
 
     new_velocity = velocity + a_origin_world * dt
     new_position = position + velocity * dt + a_origin_world * (0.5 * dt * dt)
-    new_ang_vel  = ang_vel + alpha * dt
+
+    # --- Structure-preserving angular update ----------------------------
+    # Explicit Euler on ω (ω += α·dt) pumps energy into gyroscopic
+    # oscillations at λ ≈ Ω²·dt/2 (Ω = nutation rate) — fatal for fast
+    # rotors on precessing mounts, and a slow leak for any tumbling body.
+    # Instead, integrate the body-frame TOTAL angular momentum about the
+    # COM:  H⁺ = Exp(−ω·dt)·(H + T·dt), where T is the PURE external
+    # torque (net minus the rotor gyro couples, which are the bookkeeping
+    # image of −ω×L, plus the axial torques absorbed by the rotor DOFs —
+    # they still change total H). World-frame H is then exactly conserved
+    # under zero torque, at any dt. ω⁺ and the rotor rates are recovered
+    # through the same reduced-inertia relation as the α solve:
+    #   (I_com − Σ I_a ââᵀ)·ω⁺ = H⁺ − Σ h_a⁺·â,
+    #   h_a⁺ = I_a(â·ω + s) + τ_ax·dt  (each rotor's axial momentum).
+    # First-order identical to ω += α·dt, so flat-craft behaviour shifts
+    # only at O(dt²). (For NESTED rotors the gyro-couple cancellation is
+    # approximate — same tier as the rest of the nested-joint handling.)
+    om_mx = ang_vel._mx
+    dt_mx = dt._mx
+    H_mx = I_com_mx @ om_mx
+    T_mx = tau_com._mx - pc["gyro_sum_mx"]
+    h_a_new = []
+    for axis_c_mx, I_ax, rate_mx, tau_ax_mx, _rname in rotor_axials:
+        H_mx = H_mx + I_ax * rate_mx * axis_c_mx
+        T_mx = T_mx + tau_ax_mx * axis_c_mx
+        h_a_new.append(I_ax * (ca.dot(axis_c_mx, om_mx) + rate_mx)
+                       + tau_ax_mx * dt_mx)
+    # Counter-rotation Exp(−ω·dt) via Rodrigues (branch-free at ω→0).
+    # The MIDPOINT rate (ω + ½α·dt) sets the rotation: a first-order
+    # (old-ω) rotation leaves an O(dt) phase error that pumps kinetic
+    # energy into nutation at λ ≈ Ω²·dt/2; the midpoint drops the pump
+    # to O(dt²) — negligible at any practical rate.
+    rv = -(om_mx + 0.5 * alpha._mx * dt_mx) * dt_mx
+    th2 = ca.dot(rv, rv)
+    th = ca.sqrt(th2 + 1e-30)
+    K = ca.skew(rv)
+    R_neg = (ca.MX.eye(3) + (ca.sin(th) / th) * K
+             + ((1.0 - ca.cos(th)) / (th2 + 1e-30)) * (K @ K))
+    H_new_mx = R_neg @ (H_mx + T_mx * dt_mx)
+    rhs_mx = H_new_mx
+    for (axis_c_mx, _I, _r, _t, _n), h_mx in zip(rotor_axials, h_a_new):
+        rhs_mx = rhs_mx - h_mx * axis_c_mx
+    if np.linalg.det(I_com_at_zero_np) > 1e-18:
+        new_om_mx = ca.solve(I_eff_mx, rhs_mx)
+    else:
+        new_om_mx = om_mx + alpha._mx * dt_mx
+    # Rotor rates from the SAME momentum solve (s⁺ = h_a⁺/I_a − â·ω⁺) —
+    # an Euler rate update alongside the momentum ω update would break
+    # the axial-momentum bookkeeping. EXCEPT for a (near-)massless
+    # stator: there the axial channel is a gauge DOF whose momentum
+    # recovery divides an O(dt²) rotation term by the floored inertia —
+    # fall back to the plain Euler forms (axial ω and θ̈) per rotor.
+    rate_overrides = {}
+    for (axis_c_mx, I_ax, rate_mx, tau_ax_mx, rname), h_mx, healthy in zip(
+            rotor_axials, h_a_new, rotor_healthy):
+        theta_ddot_full = tau_ax_mx / I_ax - ca.dot(axis_c_mx, alpha._mx)
+        om_ax_eul = ca.dot(axis_c_mx, om_mx + alpha._mx * dt_mx)
+        om_ax_now = ca.dot(axis_c_mx, new_om_mx)
+        new_om_mx = new_om_mx + axis_c_mx * ca.if_else(
+            healthy > 0, 0.0, om_ax_eul - om_ax_now)
+        s_mom = h_mx / I_ax - ca.dot(axis_c_mx, new_om_mx)
+        s_eul = rate_mx + theta_ddot_full * dt_mx
+        rate_overrides[rname] = ir.Scalar(
+            ca.if_else(healthy > 0, s_mom, s_eul))
+    new_ang_vel = ir.Vec3[CraftFrame].from_mx(new_om_mx)
+    new_state_outputs = [(n, rate_overrides.get(n, v))
+                         for n, v in new_state_outputs]
     omega_dt_world = orientation.apply(ang_vel * dt)
     new_orientation = SO3Manifold().boxplus(orientation, omega_dt_world).normalize()
 

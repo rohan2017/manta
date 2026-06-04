@@ -140,8 +140,10 @@ def test_world_carries_inputs_through_step():
     for _ in range(500):
         cw.step(dt=0.001)
 
-    # α = 1.0 / 0.05 = 20 rad/s², t = 0.5s, ω = 10 rad/s.
-    assert np.isclose(cw.state["driven"]["motor.rate"], 10.0, atol=1e-4)
+    # Relative rate = τ/I_axial + τ/I_stator (the −â·α mount feedback):
+    # (20 + 0.001) rad/s² · 0.5 s = 10.0005 rad/s.
+    assert np.isclose(cw.state["driven"]["motor.rate"],
+                      (1.0 / 0.05 + 1.0 / 1000.0) * 0.5, atol=1e-4)
 
 
 # ---------------------------------------------------------------------------
@@ -160,8 +162,10 @@ def test_ekf_constructs_with_input_parts():
     _ekf_world.add_craft(c)
     ekf = TargetNumpy(EKF(_ekf_world))
     ekf.predict(dt=0.01)
-    # τ=0.3, I=0.05 → α = 6 rad/s² → rate after 0.01s = 0.06.
-    assert np.isclose(ekf.state_dict()["driven_ekf"]["motor.rate"], 0.06,
+    # τ=0.3: rotor 6 rad/s² + the stator counter-rotating at
+    # 0.3/(0.15−0.05) = 3 rad/s² (coupled solve) → relative rate after
+    # 0.01 s = (6 + 3)·0.01 = 0.09.
+    assert np.isclose(ekf.state_dict()["driven_ekf"]["motor.rate"], 0.09,
                       atol=1e-9)
 
 

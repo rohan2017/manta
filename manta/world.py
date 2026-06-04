@@ -159,10 +159,17 @@ class World:
         """Add a craft to the world.
 
         Args:
-            craft           — the Craft instance.
-            position, ...   — rigid-body initial state in WorldFrame.
-            **extra_state   — per-part state overrides
-                              (e.g., `**{"wheel.angle": 0.5}`).
+            craft            — the Craft instance.
+            position         — craft-origin position, WorldFrame (m).
+            orientation      — wxyz quaternion, world-from-craft.
+            velocity         — craft-origin velocity, WorldFrame (m/s).
+            angular_velocity — body rates in **CraftFrame** (rad/s) — the
+                               same convention as the integrated state
+                               (what a strapped-down gyro reads). For a
+                               non-identity `orientation`, world-frame
+                               rates must be rotated into the body first.
+            **extra_state    — per-part state overrides
+                               (e.g., `**{"wheel.angle": 0.5}`).
         """
         # Validate uniqueness.
         for entry in self._crafts:

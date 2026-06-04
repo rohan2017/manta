@@ -261,9 +261,13 @@ class Joint(CompositePart):
         tau_gyro = -ca.cross(omega_mount_mx, L_rotor)
 
         # Pass-up torque: perpendicular constraint reaction + Newton-3rd of
-        # the actuator and friction along the axis. The axial external
-        # torque is absorbed by the DOF, not transmitted.
-        passup_torque_mx = tau_perp + (-(tau_act + tau_damp)) * axis_c
+        # the actuator, friction, AND the Coriolis joint torque along the
+        # axis — each is an internal body↔rotor momentum exchange, so what
+        # drives the DOF must react on the mount (the coupled body solve
+        # in world_tick depends on this for axial-momentum consistency).
+        # The axial external torque is absorbed by the DOF, not transmitted.
+        passup_torque_mx = tau_perp \
+            + (-(tau_act + tau_damp + tau_corio)) * axis_c
         passup = Wrench(
             force=accum.force,
             torque=ir.Vec3[CraftFrame].from_mx(passup_torque_mx),

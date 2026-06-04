@@ -145,9 +145,11 @@ def test_gyro_tracks_motor_reaction_spin():
     assert abs(gyro_history[0][2]) < 1e-9
     # x and y stay zero for a pure-z torque.
     np.testing.assert_allclose(gyro_history[-1][:2], np.zeros(2), atol=1e-9)
-    # Body I_zz now includes the rotor's MOI (0.05 + 0.01 = 0.06).
-    # α_body = -0.1 / 0.06 ≈ -1.667 → ω(0.5s) ≈ -0.833.
-    assert np.isclose(gyro_history[-1][2], -0.1 / 0.06 * 0.5, atol=2e-3)
+    # Coupled body/rotor solve: the rotor's axial inertia can't react
+    # body torques, so the stator-only I_zz = 0.05 responds:
+    # α_body = -0.1 / 0.05 = -2 → ω(0.5s) ≈ -1.0 (gyro reads start-of-
+    # step ω, hence the one-step offset).
+    assert np.isclose(gyro_history[-1][2], -0.1 / 0.05 * 0.5, atol=5e-3)
 
 
 # ---------------------------------------------------------------------------

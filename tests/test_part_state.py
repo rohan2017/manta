@@ -83,9 +83,12 @@ def test_saturating_joint_below_stall_accelerates_rotor():
     for _ in range(1000):
         sim.step(0.001)
 
-    # I_axial = 0.05 (rotor's I_zz, axis defaults to +z).
-    # α = 0.5 / 0.05 = 10 rad/s² over 1 s → ω = 10.
-    assert np.isclose(sim.state["flywheel"]["wheel.rate"], 10.0, atol=1e-6)
+    # I_axial = 0.05 (rotor's I_zz, axis defaults to +z). The RELATIVE
+    # rate also picks up the mount's counter-rotation (−â·α feedback):
+    # the stator (I_zz = 1000) spins back at τ/1000, so
+    # rate = τ/I_axial + τ/I_stator = 10 + 0.0005 after 1 s.
+    assert np.isclose(sim.state["flywheel"]["wheel.rate"],
+                      0.5 / 0.05 + 0.5 / 1000.0, atol=1e-6)
 
 
 def test_saturating_joint_clamps_at_stall():
@@ -103,16 +106,19 @@ def test_saturating_joint_clamps_at_stall():
     for _ in range(1000):
         sim.step(0.001)
 
-    # Effective τ = 0.2; α = 0.2 / 0.05 = 4 rad/s² → ω after 1s = 4.
-    assert np.isclose(sim.state["clamped"]["wheel.rate"], 4.0, atol=1e-6)
+    # Effective τ = 0.2; relative rate = τ/I_axial + τ/I_stator (see the
+    # below-stall test) = 4 + 0.0002 after 1 s.
+    assert np.isclose(sim.state["clamped"]["wheel.rate"],
+                      0.2 / 0.05 + 0.2 / 1000.0, atol=1e-6)
 
 
 def test_saturating_joint_reaction_spins_body_counter():
     """Reaction torque on body: τ_react = -τ_clamped along axis. The
-    body's MOI aggregate INCLUDES the rotor child's MOI (via Joint's
-    `mass`/`moi` properties), so the effective inertia about the spin
-    axis is I_body + I_rotor = 0.1 + 0.05 = 0.15. With τ = 0.5 N·m:
-    α_body_z = -0.5/0.15 ≈ -3.33 rad/s²."""
+    freely-spinning rotor's axial inertia cannot react body torques
+    (coupled body/rotor solve), so the STATOR-only inertia responds:
+    I_eff = (0.1 + 0.05) − 0.05 = 0.1. With τ = 0.5 N·m:
+    α_body_z = −0.5/0.1 = −5 rad/s² — which is also what total
+    angular-momentum conservation demands."""
     c = Craft("conservation")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     j = Joint("wheel", mode="saturating", stall_torque=1.0)
@@ -125,10 +131,10 @@ def test_saturating_joint_reaction_spins_body_counter():
     for _ in range(1000):
         sim.step(0.001)
 
-    # ω after 1 s under constant α = -0.5/0.15. Loose tolerance because
+    # ω after 1 s under constant α = -0.5/0.1. Loose tolerance because
     # the gyroscopic coupling (rotor spin × body ω) feeds back as ω grows.
     assert np.isclose(sim.state["conservation"]["angular_velocity"][2],
-                      -0.5 / 0.15, atol=0.2)
+                      -0.5 / 0.1, atol=0.2)
 
 
 # ---------------------------------------------------------------------------
@@ -265,8 +271,10 @@ def test_nested_passive_joints_each_track_their_own_rate():
     for _ in range(1000):
         sim.step(0.001)
 
-    assert np.isclose(sim.state["gimbal_two_dof"]["pan.angle"],  2.0, atol=1e-6)
-    assert np.isclose(sim.state["gimbal_two_dof"]["tilt.angle"], 1.0, atol=1e-6)
+    # The α_mount feedback couples the rates to the (small) body wobble
+    # the spinning gimbal induces — exact rate·t only to ~1e-4.
+    assert np.isclose(sim.state["gimbal_two_dof"]["pan.angle"],  2.0, atol=1e-3)
+    assert np.isclose(sim.state["gimbal_two_dof"]["tilt.angle"], 1.0, atol=1e-3)
 
 
 def test_nested_joint_saturating_drives_inner_rotor():

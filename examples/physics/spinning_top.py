@@ -1,21 +1,21 @@
-"""Spinning top — gyroscopic stability on a real contact tip.
+"""Spinning top — a fast rotor `Joint` precessing on a real contact tip.
 
-A nearly massless pole carries a heavy disk at its TOP — an inverted
-pendulum, normally unstable. The pole tip stands on a ground plane
-through a `Collider` (a frictionless point contact, gravity on). Two
-runs, same rig:
+A nearly massless pole carries a heavy disk on a passive `Joint` at its
+TOP — an inverted pendulum, normally unstable. The pole tip stands on a
+ground plane through a `Collider` (a frictionless point contact,
+gravity on). Two runs, same rig:
 
-  1. no spin → it falls right over within a second (the frictionless
-     tip skates out sideways — a rod falling on ice; a crown `Collider`
-     lets it lie down instead of poking through the floor);
-  2. spinning fast → the contact normal's torque becomes **precession**:
-     released leaning 8°, the lean azimuth sweeps a cone while the tilt
-     holds — and the contact damping slowly *rights* the top, exactly
-     like a real top "going to sleep".
+  1. rotor stationary → it falls right over within a second (the
+     frictionless tip skates out sideways — a rod falling on ice; a
+     crown `Collider` lets it lie down instead of poking the floor);
+  2. rotor spinning fast → the contact normal's torque becomes
+     **precession**: released leaning 8°, the lean azimuth sweeps a
+     cone while the tilt holds — and the contact damping slowly
+     *rights* the top, exactly like a real top "going to sleep".
 
-The spin lives in the rigid body itself (like a real toy top — the
-whole thing spins), so the gyroscopics come from the exact rigid-body
-integrator. The disk is rendered as a two-colour split disc so you can
+The rotor DOF exercises the coupled body/rotor solve + the momentum-
+form angular integrator (a fast rotor on a precessing mount is its
+acid test). The disk is rendered as a two-colour split disc so you can
 see it spin (it strobes at the viewer frame rate, like a real top on
 camera).
 
@@ -33,7 +33,7 @@ import numpy as np
 
 from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import CollisionField, GravityField
-from manta.parts import Collider, Mass
+from manta.parts import Collider, Joint, Mass
 
 from .._viz import Viz
 
@@ -52,8 +52,10 @@ def _build_world(spin: float):
     # which is what makes the standing top an inverted pendulum.
     top.add(Mass("pole", mass=0.02, moi=(2e-4, 2e-4, 1e-5),
                  transform=(0.0, 0.0, H / 2)))
-    top.add(Mass("disk", mass=0.4, moi=(0.002, 0.002, 0.004),
-                 transform=(0.0, 0.0, H)))
+    rotor = Joint("rotor", mode="passive", axis=(0.0, 0.0, 1.0),
+                  transform=(0.0, 0.0, H))
+    rotor.add(Mass("disk", mass=0.4, moi=(0.002, 0.002, 0.004)))
+    top.add(rotor)
     # Contact: the tip it stands on + a crown point so a toppled top
     # lies down instead of poking through the floor.
     top.add(Collider("tip", stiffness=2000.0, damping=30.0))
@@ -64,18 +66,18 @@ def _build_world(spin: float):
          .add_field(GravityField().add_uniform((0.0, 0.0, -G)))
          .add_field(CollisionField().add_half_space()))
 
-    # Launch: leaning TILT0, spinning about its own (tilted) axis, and
-    # already carrying the slow-precession rate about vertical (without
-    # it the release just nutates in a deep dive). The initial-velocity
-    # term cancels the ω×r_com seeding so the top spins in place.
+    # Launch: leaning TILT0 with the spin in the rotor DOF, the BODY
+    # carrying only the slow-precession rate about vertical (without it
+    # the release just nutates in a deep dive). angular_velocity is
+    # CraftFrame (body rates); rotate the world-z precession into the
+    # tilted body.
     omega_p = (M_TOT * G * R_COM / (0.004 * spin)) if spin else 0.0
-    axis = np.array([0.0, -np.sin(TILT0), np.cos(TILT0)])
-    om0 = spin * axis + np.array([0.02, 0.0, omega_p])
-    v0 = -np.cross(om0, [0.0, 0.0, R_COM])
+    om0 = omega_p * np.array([0.0, np.sin(TILT0), np.cos(TILT0)]) \
+        + np.array([0.02, 0.0, 0.0])
     w.add_craft(top, position=(0.0, 0.0, 0.003),
                 orientation=(np.cos(TILT0 / 2), np.sin(TILT0 / 2), 0.0, 0.0),
-                velocity=tuple(v0),
-                angular_velocity=tuple(om0))
+                angular_velocity=tuple(om0),
+                **{"rotor.rate": spin})
     return w
 
 
@@ -92,7 +94,7 @@ def _run(label: str, spin: float, viz: Viz | None, dt: float, n: int):
     sim = TargetNumpy(Sim(_build_world(spin)))
 
     print(f"\n=== {label}  spin = {spin} rad/s ===")
-    print(f"{'t (s)':>5} {'tilt°':>8} {'lean az°':>9} {'|ω| (rad/s)':>12}")
+    print(f"{'t (s)':>5} {'tilt°':>8} {'lean az°':>9} {'rotor':>8}")
     marks = {round(s / dt) for s in (0.5, 1.0, 1.5, 2.0, 3.0, 4.0,
                                      5.0, 6.0, 7.0, 8.0)}
     for i in range(n):
@@ -103,19 +105,19 @@ def _run(label: str, spin: float, viz: Viz | None, dt: float, n: int):
             st = sim.state["top"]
             p = np.asarray(st["position"]).ravel()
             q = np.asarray(st["orientation"]).ravel()
+            ang = float(st["rotor.angle"])
             viz.t(t)
-            if i == 0:
-                # Disc offset pose: on the sim timeline, not at init.
-                viz.pose("world/top/disk", (0, 0, H + 0.006))
             viz.pose("world/top", p, q)
+            viz.pose("world/top/rotor", (0, 0, H + 0.006),
+                     (np.cos(ang / 2), 0, 0, np.sin(ang / 2)))
 
         if i in marks:
             st = sim.state["top"]
             q = np.asarray(st["orientation"]).ravel()
-            om = np.asarray(st["angular_velocity"]).ravel()
             tilt, az = _tilt_azimuth(q)
             print(f"{t:>5.2f} {np.degrees(tilt):>8.1f} "
-                  f"{np.degrees(az):>9.1f} {np.linalg.norm(om):>12.1f}")
+                  f"{np.degrees(az):>9.1f} "
+                  f"{float(st['rotor.rate']):>8.1f}")
 
 
 def main() -> None:
@@ -131,7 +133,7 @@ def main() -> None:
         viz.plane("world/ground", z=0.0, size=1.0, color=(70, 110, 70, 200))
         viz.box("world/top/pole", (0.008, 0.008, H / 2),
                 center=(0, 0, H / 2), color=(200, 200, 210))
-        viz.split_disc("world/top/disk", DISK_R)
+        viz.split_disc("world/top/rotor/disk", DISK_R)
 
     print("Spinning top standing on its tip — same rig, two runs.")
     print("No spin → inverted pendulum, falls right over;")
