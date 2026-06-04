@@ -34,7 +34,7 @@ from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import CollisionField, FluidField, GravityField
 from manta.parts import Collider, DragSurface, Joint, Mass, Naca00xx, Thruster
 
-from .._control import common_args, make_controller
+from .._control import Pacer, TerminalController, common_args, make_controller
 from .._viz import Viz
 
 # --- airframe geometry (m, kg; x forward, y left, z up) --------------------
@@ -163,7 +163,9 @@ def main() -> None:
     ctrl = make_controller(args.keyboard, script)
     if args.keyboard:
         print("Controls:  S/W pitch up/down   A/D yaw   Q/E roll   "
-              "X/Z throttle   (Ctrl-C to quit)\n")
+              "X/Z throttle   (Ctrl-C to quit)")
+        if isinstance(ctrl, TerminalController):
+            print("Type into THIS terminal; watch the viewer.\n")
 
     FIXED, MOVING = (120, 150, 210), (240, 150, 60)
     viz = None if args.no_viz else Viz("manta/airplane")
@@ -205,12 +207,18 @@ def main() -> None:
 
     throttle = 0.0                     # parked, engine idle
     airborne = False
+    # Live (keyboard or viewer attached) → hold the loop to real time;
+    # uncapped the sim runs ~3× wall clock, which is unflyable and floods
+    # the viewer's ingest channel. Headless runs stay full speed.
+    pacer = Pacer() if (args.keyboard or viz is not None) else None
     n = int(duration / dt)
     print(f"{'t (s)':>6} {'x (m)':>8} {'alt (m)':>8} {'|v| (m/s)':>9} "
           f"{'pitch°':>7} {'roll°':>7} {'head°':>7} {'thr':>5}")
     try:
         for i in range(n):
             t = i * dt
+            if pacer is not None:
+                pacer.pace(t)
             ctrl.update(t)
 
             # Direct key → deflection mapping (no inner loops). Hinge sign
@@ -247,7 +255,10 @@ def main() -> None:
                 viz.arrow("world/plane/thrust", (0.5, 0, CG[2]),
                           (0.6 * throttle, 0, 0), color=(235, 80, 80),
                           radius=0.02)
-                viz.trail("world/plane/trail", p)
+                # Trails re-send the whole polyline each log — keep them
+                # at 10 Hz or they saturate the viewer's ingest channel.
+                if i % 50 == 0:
+                    viz.trail("world/plane/trail", p)
 
             # Wheels-off / touchdown reporting (gear sits at z≈0.30 at rest).
             if not airborne and p[2] > 0.6:
