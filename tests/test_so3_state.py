@@ -193,7 +193,7 @@ def test_attitude_integrator_matches_closed_form_quaternion_product():
 # ---------------------------------------------------------------------------
 
 def test_state_spec_picks_up_so3_state_slot():
-    from manta.estimation.state_spec import StateSpec
+    from manta.ir.state_spec import StateSpec
     c = Craft("c"); c.add(Mass("body", mass=1.0))
     c.add(_SO3PassthroughPart("att"))
     w = World().add_field(GravityField(g=(0, 0, 0)))

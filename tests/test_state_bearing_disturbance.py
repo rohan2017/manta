@@ -82,7 +82,7 @@ def test_bias_advances_by_sqrt_dt_times_driver():
 
 
 def test_state_spec_picks_up_disturbance_bias():
-    from manta.estimation.state_spec import StateSpec
+    from manta.ir.state_spec import StateSpec
     w, _ = _build_world()
     spec = StateSpec.from_world(w)
     names = [s.name for s in spec.slots]

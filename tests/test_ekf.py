@@ -13,7 +13,7 @@ from manta.craft import Craft
 from manta.fields import GravityField
 from manta.estimation import EKF, measurement_component, measurement_slot
 from manta.parts import Mass
-from manta.estimation.state_spec import StateSpec
+from manta.ir.state_spec import StateSpec
 
 
 # ---------------------------------------------------------------------------

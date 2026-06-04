@@ -42,7 +42,7 @@ from typing import Any
 import casadi as ca
 import numpy as np
 
-from ..ir.manifold import Manifold, R3Manifold, SO3Manifold
+from .manifold import Manifold, R3Manifold, SO3Manifold
 
 
 class SlotSet(IntFlag):

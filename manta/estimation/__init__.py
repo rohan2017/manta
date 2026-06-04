@@ -5,11 +5,11 @@ Public surface:
   * `measurement_slot`  — h_sym builder for "observe a single state slot".
   * `measurement_component` — h_sym builder for "observe one component
                               of a slot" (e.g. z position only).
-  * `StateSpec`         — flat-vector layout of a World's state, with
-                           boxplus/boxminus dispatched per slot.
-
 Plus the recurrence attitude filters (`Madgwick`, `Mahony`,
 `IMUIntegrator`) and the analysis tools (`observability`, `nees`).
+
+The state-layout types (`StateSpec`, `StateSlot`, `SlotSet`, …) live in
+`manta.ir.state_spec` — they are IR, not estimation.
 """
 
 from .ekf import EKF, measurement_slot, measurement_component
@@ -20,15 +20,10 @@ from .observability import (
     ObservabilityReport, observability, observability_trajectory,
 )
 from .consistency import NEESReport, nees
-from .state_spec import (
-    ALL, POSE, TWIST, SlotSet, StateSlot, StateSpec, resolve_slotset,
-)
 
 __all__ = [
     "EKF", "measurement_slot", "measurement_component",
     "Madgwick", "Mahony", "IMUIntegrator",
     "observability", "observability_trajectory", "ObservabilityReport",
     "nees", "NEESReport",
-    "StateSlot", "StateSpec",
-    "SlotSet", "POSE", "TWIST", "ALL", "resolve_slotset",
 ]

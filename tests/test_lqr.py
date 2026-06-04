@@ -13,7 +13,7 @@ import casadi as ca
 from manta import World, Craft, Sim, LQR, TargetNumpy
 from manta.fields import GravityField
 from manta.parts import Mass, Thruster
-from manta.estimation.state_spec import StateSpec
+from manta.ir.state_spec import StateSpec
 from manta.linearized_system import LinearizedSystem
 
 M, G = 2.0, 9.81

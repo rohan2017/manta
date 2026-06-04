@@ -11,7 +11,8 @@ import numpy as np
 from manta import World, TargetNumpy
 from manta.craft import Craft
 from manta.fields import GravityField
-from manta.estimation import EKF, ALL, POSE, TWIST, SlotSet, resolve_slotset
+from manta.estimation import EKF
+from manta.ir.state_spec import ALL, POSE, TWIST, SlotSet, resolve_slotset
 from manta.parts.structure.mass import Mass
 from manta.parts.sensor.position_sensor import PositionSensor
 from manta.parts.sensor.imu import IMU

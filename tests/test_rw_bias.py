@@ -66,7 +66,7 @@ def _build_world():
 
 def test_state_spec_picks_up_rw_bias_as_state_slot():
     """RW Noise channels add R3 state slots to the spec."""
-    from manta.estimation.state_spec import StateSpec
+    from manta.ir.state_spec import StateSpec
     _, c = _build_world()
     spec = StateSpec.from_craft(c)
     names = [s.name for s in spec.slots]

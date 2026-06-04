@@ -45,6 +45,8 @@ from typing import Any
 import casadi as ca
 import numpy as np
 
+from .ir.state_spec import StateSpec, resolve_slotset
+
 
 # ---------------------------------------------------------------------------
 # Name / state-dict helpers
@@ -160,11 +162,6 @@ class LinearizedSystem:
                  close_track: bool = True,
                  control: bool = False,
                  ref: dict | None = None) -> None:
-        # Local import: estimation/__init__ pulls in ekf.py, which imports
-        # THIS module — a top-level import would cycle.
-        from .estimation.state_spec import StateSpec, resolve_slotset
-        self._resolve_slotset = resolve_slotset
-
         # --- world prep (idempotent) ------------------------------------
         if not world._planets_registered:
             for p in world._planets:
@@ -256,7 +253,7 @@ class LinearizedSystem:
             seed: set[str] = {sot[int(j)] for sm in d["sensors"].values()
                               for j in sm.observed_cols}
             for craft_name, slotset in track.items():
-                seed |= self._resolve_slotset(craft_name, slotset)
+                seed |= resolve_slotset(craft_name, slotset)
             kept = self._closure(d["F_pattern"], sot, seed)
             self.spec = StateSpec.subset(full_spec, kept)
             freeze_complement(full_spec, kept, ref_flat, into=frozen)

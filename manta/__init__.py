@@ -57,7 +57,7 @@ from .estimation.ekf import EKF
 from .estimation.imu_integrator import IMUIntegrator
 from .estimation.madgwick import Madgwick
 from .estimation.mahony import Mahony
-from .estimation.state_spec import ALL, POSE, TWIST, SlotSet
+from .ir.state_spec import ALL, POSE, TWIST, SlotSet
 from .control import LQR, PID
 from .recurrence import RecurrenceBlock
 from .codegen import NoiseDriver, TargetCpp, TargetNumpy

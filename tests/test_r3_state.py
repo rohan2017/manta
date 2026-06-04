@@ -107,7 +107,7 @@ def test_r3_state_appears_in_outputs():
 # ---------------------------------------------------------------------------
 
 def test_state_spec_picks_up_r3_state_slot():
-    from manta.estimation.state_spec import StateSpec
+    from manta.ir.state_spec import StateSpec
     c = Craft("c"); c.add(Mass("body", mass=1.0)); c.add(_R3StatePart("p"))
     w = World().add_field(GravityField(g=(0, 0, 0)))
     w.add_craft(c)

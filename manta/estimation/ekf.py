@@ -48,7 +48,7 @@ from ..ir.module import (
     StateLayout, StateRef,
 )
 from ..linearized_system import LinearizedSystem, flatten_nested, resolve_suffix
-from .state_spec import StateSpec
+from ..ir.state_spec import StateSpec
 
 
 class EKF:

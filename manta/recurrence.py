@@ -45,7 +45,7 @@ from dataclasses import dataclass
 
 import casadi as ca
 
-from .estimation.state_spec import StateSpec
+from .ir.state_spec import StateSpec
 
 
 @dataclass(frozen=True)
