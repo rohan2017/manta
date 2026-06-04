@@ -23,6 +23,9 @@ logging a local transform at each level — exactly manta's frame chain.
 
 from __future__ import annotations
 
+import os
+import sys
+
 import numpy as np
 
 
@@ -36,6 +39,15 @@ def require_rerun():
             "    .venv/bin/pip install rerun-sdk\n"
             "(or run the non-visual examples like quickstart)."
         ) from exc
+    # The repo convention is `.venv/bin/python -m examples...` without
+    # activating the venv, so the `rerun` viewer executable pip installed
+    # next to the interpreter may not be on PATH — and `rr.init(spawn=True)`
+    # finds the viewer via PATH. Prepend the interpreter's bin dir.
+    venv_bin = os.path.dirname(sys.executable)
+    path = os.environ.get("PATH", "")
+    if (os.path.exists(os.path.join(venv_bin, "rerun"))
+            and venv_bin not in path.split(os.pathsep)):
+        os.environ["PATH"] = venv_bin + os.pathsep + path
     return rr
 
 
