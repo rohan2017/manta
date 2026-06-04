@@ -18,14 +18,19 @@ from manta.fields import FluidField, FluidState
 from manta.ir.frames import WorldFrame
 from manta.ir.types import Vec3
 from manta.parts import Mass
-from manta.planets import Earth
+from manta.planets import Earth, SeaWaves
 from manta.planets.disturbances import PlanetFrameFluid
 
 
-def _sample_density(world: World, point: tuple[float, float, float]) -> float:
+def _sample(world: World, point: tuple[float, float, float],
+            t: float = 0.0) -> FluidState:
     p = Vec3[WorldFrame].constant(point)
-    s = world.get_field(FluidField).value_at_sym(p, ca.MX(0.0))
-    return float(ca.evalf(s.density))
+    return world.get_field(FluidField).value_at_sym(p, ca.MX(float(t)))
+
+
+def _sample_density(world: World, point: tuple[float, float, float],
+                    t: float = 0.0) -> float:
+    return float(ca.evalf(_sample(world, point, t).density))
 
 
 # ---------------------------------------------------------------------------
@@ -100,7 +105,7 @@ def test_custom_planet_frame_fluid_lambda():
     w.add_planet(moon)
     ff = FluidField()
     # A donut of "thick fluid" between radii 5 and 10 from moon center.
-    def density_fn(p_planet):
+    def density_fn(p_planet, t):
         r = ca.sqrt(ca.dot(p_planet, p_planet) + 1e-30)
         # CasADi MX uses `ca.logic_and` (no `&` overload).
         return ca.if_else(ca.logic_and(r > 5.0, r < 10.0), 1000.0, 0.0)
@@ -113,3 +118,76 @@ def test_custom_planet_frame_fluid_lambda():
     np.testing.assert_allclose(_sample_density(w, (3, 0, 0)),    0.0)
     np.testing.assert_allclose(_sample_density(w, (7, 0, 0)), 1000.0)
     np.testing.assert_allclose(_sample_density(w, (12, 0, 0)),   0.0)
+
+# ---------------------------------------------------------------------------
+# SeaWaves + surface smoothing
+# ---------------------------------------------------------------------------
+
+def _wave_world(**earth_kw):
+    """Earth centred at (0,0,-R_EQ): sea level ≈ world z=0 at the origin."""
+    earth = Earth(rotation_rate=0.0, position=(0, 0, -Earth.R_EQ), **earth_kw)
+    w = World(); w.add_planet(earth)
+    c = Craft("probe"); c.add(Mass("body", mass=1.0))
+    w.add_craft(c, position=(0, 0, 1.0))
+    Sim(w)
+    return earth, w
+
+
+def test_waves_move_the_boundary():
+    """η = A·cos(kx − ωt): a point at z=+A/2 is in air under a trough and
+    in water under a crest — both over position (x) and over time (t)."""
+    wv = SeaWaves(amplitude=1.0, wavelength=40.0)
+    earth, w = _wave_world(waves=wv)
+    k = 2 * np.pi / wv.wavelength
+    g0 = earth.gravity_mu / earth.planet_radius**2
+    omega = k * np.sqrt(g0 * wv.wavelength / (2 * np.pi))
+
+    # t=0: crest at x=0 (cos), trough half a wavelength away.
+    assert _sample_density(w, (0.0, 0.0, 0.5)) == earth.water_density
+    assert _sample_density(w, (20.0, 0.0, 0.5)) < 2.0
+    # Half a period later the crest and trough have swapped.
+    t_half = np.pi / omega
+    assert _sample_density(w, (0.0, 0.0, 0.5), t=t_half) < 2.0
+    assert _sample_density(w, (20.0, 0.0, 0.5), t=t_half) == \
+        earth.water_density
+
+
+def test_wave_orbital_velocity():
+    """Under a crest the water moves with the wave (+x) at A·ω, decaying
+    as e^{kz} with depth; in the air above it is still."""
+    wv = SeaWaves(amplitude=0.5, wavelength=30.0)
+    earth, w = _wave_world(waves=wv)
+    k = 2 * np.pi / wv.wavelength
+    g0 = earth.gravity_mu / earth.planet_radius**2
+    omega = k * np.sqrt(g0 * wv.wavelength / (2 * np.pi))
+
+    def vel(point, t=0.0):
+        return np.asarray(ca.evalf(_sample(w, point, t)._mx_of_velocity()
+                          if False else _sample(w, point, t).velocity._mx)
+                          ).ravel()
+
+    # Just under the crest at x=0: orbital speed ≈ A·ω along +x.
+    v = vel((0.0, 0.0, -0.5))
+    np.testing.assert_allclose(v[0], wv.amplitude * omega
+                               * np.exp(-k * 0.5), rtol=1e-6)
+    # Deep below: decayed by e^{k·z}.
+    v_deep = vel((0.0, 0.0, -10.0))
+    np.testing.assert_allclose(v_deep[0], wv.amplitude * omega
+                               * np.exp(-k * 10.0), rtol=1e-6)
+    # In the air above the trough: still.
+    v_air = vel((15.0, 0.0, 2.0))
+    np.testing.assert_allclose(v_air, 0.0, atol=1e-9)
+
+
+def test_surface_smoothing_blends_density():
+    """δ > 0: density ramps smoothly through the boundary — half-way
+    between water and air exactly at the surface — instead of stepping."""
+    earth, w = _wave_world(surface_smoothing=0.2)
+    rho_mid = _sample_density(w, (0.0, 0.0, 0.0))
+    mid = 0.5 * (earth.water_density + earth.air_density)
+    np.testing.assert_allclose(rho_mid, mid, rtol=1e-3)
+    # Compact support: exactly saturated beyond ±δ.
+    np.testing.assert_allclose(_sample_density(w, (0, 0, -0.3)),
+                               earth.water_density, rtol=1e-9)
+    np.testing.assert_allclose(_sample_density(w, (0, 0, 0.3)),
+                               earth.air_density, rtol=1e-4)

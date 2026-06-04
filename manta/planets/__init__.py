@@ -17,7 +17,7 @@ preset bundles (see `Earth`).
 """
 
 from .base import Planet
-from .earth import Earth
+from .earth import Earth, SeaWaves
 from .state import PlanetState
 
-__all__ = ["Planet", "Earth", "PlanetState"]
+__all__ = ["Planet", "Earth", "PlanetState", "SeaWaves"]

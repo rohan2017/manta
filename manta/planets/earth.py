@@ -22,7 +22,10 @@ effects (and a co-rotating ocean).
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import casadi as ca
+import numpy as np
 
 from ..fields import (
     DipoleMag, GravityField, FluidField, J2Gravity, MagField,
@@ -30,6 +33,40 @@ from ..fields import (
 )
 from .base import Planet
 from .disturbances import PlanetFrameFluid
+
+
+@dataclass(frozen=True)
+class SeaWaves:
+    """Planar deep-water sinusoid riding a planet's sea surface.
+
+    The surface elevation (above the sea-level sphere) is
+
+        η(p, t) = amplitude · cos(k·ξ − ω·t),   ξ = p_planet · direction
+
+    with k = 2π/wavelength and ω = k·c. The phase speed c defaults to
+    the deep-water dispersion relation c = √(g·λ / 2π). Underwater, the
+    fluid carries the matching first-order orbital velocity — particles
+    circle with radius `amplitude` at the surface, decaying as e^{k·z}
+    with depth — so drag surfaces and foils feel the moving water, not
+    just the moving boundary.
+
+    `direction` is a planet-frame vector (normalized; its radial
+    component at the point of interest should be ~0). The wave is a
+    PLANAR field in planet coordinates — valid for a local patch of
+    ocean, not a globe-wrapping solution.
+
+    Args:
+        amplitude   — m (crest height above mean sea level).
+        wavelength  — m (crest-to-crest).
+        direction   — planet-frame propagation direction. Default +x.
+        speed       — phase speed override, m/s. None → deep-water
+                      dispersion using the planet's surface gravity.
+    """
+
+    amplitude: float
+    wavelength: float
+    direction: tuple = (1.0, 0.0, 0.0)
+    speed: float | None = None
 
 
 class Earth(Planet):
@@ -52,6 +89,18 @@ class Earth(Planet):
                          alongside the point-mass term. Default False.
         dipole_moment  — magnetic dipole strength, A·m². 0 disables
                          magnetic. Default 0.
+        waves          — optional `SeaWaves`: a sinusoidal moving sea
+                         surface (boundary elevation + underwater
+                         orbital velocity). Default None (flat sea).
+        surface_smoothing — m. Blend the water/air density switch over
+                         this length (logistic in altitude) instead of
+                         a hard `if_else`. Physically: a finite-size
+                         volume element crosses the surface over its
+                         own diameter; numerically it turns point-
+                         sampled buoyancy from bang-bang into a smooth
+                         ramp (a floating hull finds a stable draft, a
+                         surface-piercing foil gets a smooth lift-vs-
+                         height slope). Default 0 (hard boundary).
     """
 
     # CODATA / WGS84 / IGRF leading-term constants.
@@ -76,7 +125,9 @@ class Earth(Planet):
                  atmosphere_scale_height: float | None = None,
                  gravity_mu: float = MU,
                  include_j2: bool = False,
-                 dipole_moment: float = 0.0) -> None:
+                 dipole_moment: float = 0.0,
+                 waves: SeaWaves | None = None,
+                 surface_smoothing: float = 0.0) -> None:
         super().__init__(name=name,
                          position=position,
                          rotation_axis=(0.0, 0.0, 1.0),
@@ -91,6 +142,8 @@ class Earth(Planet):
         self.gravity_mu    = float(gravity_mu)
         self.include_j2    = bool(include_j2)
         self.dipole_moment = float(dipole_moment)
+        self.waves         = waves
+        self.surface_smoothing = float(surface_smoothing)
 
     # ------------------------------------------------------------------
 
@@ -118,26 +171,85 @@ class Earth(Planet):
                     polar_axis=tuple(self.axis.tolist())))
 
         # Fluid: a single PlanetFrameFluid whose density function
-        # branches on altitude (water below sea level, exponential
-        # atmosphere above). The lambda uses `ca.if_else` — a hard
-        # boundary is fine; CasADi's autodiff handles it cleanly
-        # everywhere except the (measure-zero) interface itself.
+        # branches on altitude (water below the — possibly waving —
+        # sea surface, exponential atmosphere above), optionally
+        # blended over `surface_smoothing` metres. With waves, the
+        # underwater bulk velocity carries the first-order deep-water
+        # orbital motion.
         ff = world.get_or_create_field(FluidField)
         R_planet  = self.planet_radius
         rho_w     = self.water_density
         rho_air   = self.air_density
         scale_h   = self.atmosphere_scale_height
+        delta     = self.surface_smoothing
+        waves     = self.waves
 
-        def density_fn(p_planet):
-            # Radial altitude above the sea-level sphere.
+        if waves is not None:
+            wave_dir = np.asarray(waves.direction, dtype=float)
+            wave_dir = wave_dir / np.linalg.norm(wave_dir)
+            k_wave   = 2.0 * np.pi / float(waves.wavelength)
+            if waves.speed is not None:
+                c_wave = float(waves.speed)
+            else:
+                g0 = (self.gravity_mu / R_planet**2
+                      if self.gravity_mu > 0.0 else 9.80665)
+                c_wave = float(np.sqrt(g0 * waves.wavelength
+                                       / (2.0 * np.pi)))
+            omega_wave = k_wave * c_wave
+            dir_dm = ca.DM(wave_dir.reshape(3, 1))
+
+        def _altitude(p_planet, t):
+            """Signed height above the local (waving) sea surface, plus
+            the mean-sea-level altitude (for depth-decay terms)."""
             r = ca.sqrt(ca.dot(p_planet, p_planet) + 1e-30)
-            altitude = r - R_planet
-            return ca.if_else(altitude < 0.0,
-                              rho_w,
-                              rho_air * ca.exp(-altitude / scale_h))
+            alt_mean = r - R_planet
+            if waves is None:
+                return alt_mean, alt_mean
+            xi    = ca.dot(p_planet, dir_dm)
+            eta   = waves.amplitude * ca.cos(k_wave * xi - omega_wave * t)
+            return alt_mean - eta, alt_mean
+
+        def _wet(altitude):
+            """Water fraction: 1 below −δ, 0 above +δ, C¹ smoothstep
+            between. Compact support matters — with a ~1000:1 density
+            ratio, a logistic tail would leak water density metres into
+            the air."""
+            if delta <= 0.0:
+                return ca.if_else(altitude < 0.0, 1.0, 0.0)
+            s = ca.fmax(-1.0, ca.fmin(1.0, altitude / delta))
+            return 0.5 - 0.75 * s + 0.25 * s**3
+
+        def density_fn(p_planet, t):
+            altitude, _ = _altitude(p_planet, t)
+            # Air density continues its profile down to the surface;
+            # clamp the exponent so it doesn't grow below.
+            rho_air_at = rho_air * ca.exp(-ca.fmax(altitude, 0.0) / scale_h)
+            if delta <= 0.0:
+                return ca.if_else(altitude < 0.0, rho_w, rho_air_at)
+            wet = _wet(altitude)
+            return wet * rho_w + (1.0 - wet) * rho_air_at
+
+        if waves is None:
+            velocity_fn = None
+        else:
+            def velocity_fn(p_planet, t):
+                # First-order deep-water orbital velocity: circles of
+                # radius `amplitude·e^{k·z}`, in phase with the crest,
+                # gated to the wet side of the (waving) surface.
+                altitude, alt_mean = _altitude(p_planet, t)
+                r = ca.sqrt(ca.dot(p_planet, p_planet) + 1e-30)
+                up = p_planet / r
+                xi = ca.dot(p_planet, dir_dm)
+                phase = k_wave * xi - omega_wave * t
+                decay = ca.exp(k_wave * ca.fmin(alt_mean, 0.0))
+                speed = waves.amplitude * omega_wave * decay \
+                    * _wet(altitude)
+                return speed * (ca.cos(phase) * dir_dm
+                                + ca.sin(phase) * up)
 
         ff.add(PlanetFrameFluid(planet=self,
                                 density_fn=density_fn,
+                                velocity_fn=velocity_fn,
                                 name=f"{self.name}_fluid"))
 
         # Magnetic dipole along the spin axis (-axis for a planet whose

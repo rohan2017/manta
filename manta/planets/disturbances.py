@@ -34,11 +34,12 @@ class PlanetFrameFluid(Disturbance):
     Args:
         planet         — owning Planet. Provides the world↔planet
                          transform and the rotation axis / rate.
-        density_fn     — callable `(p_planet: ca.MX(3,1)) → ca.MX`
-                         scalar density at the queried point,
-                         expressed in PlanetFrame coordinates.
+        density_fn     — callable `(p_planet: ca.MX(3,1), t: ca.MX) →
+                         ca.MX` scalar density at the queried point,
+                         expressed in PlanetFrame coordinates at time t
+                         (time-dependence supports e.g. surface waves).
         velocity_fn    — optional callable
-                         `(p_planet: ca.MX(3,1)) → ca.MX(3,1)`
+                         `(p_planet: ca.MX(3,1), t: ca.MX) → ca.MX(3,1)`
                          returning the bulk fluid velocity *in
                          PlanetFrame coordinates* at the query
                          point. Defaults to zero (a fluid at rest
@@ -54,8 +55,8 @@ class PlanetFrameFluid(Disturbance):
 
     def __init__(self,
                  planet,
-                 density_fn: Callable[[ca.MX], ca.MX],
-                 velocity_fn: Callable[[ca.MX], ca.MX] | None = None,
+                 density_fn: Callable[[ca.MX, ca.MX], ca.MX],
+                 velocity_fn: Callable[[ca.MX, ca.MX], ca.MX] | None = None,
                  *,
                  name: str | None = None,
                  combining: str = "additive") -> None:
@@ -65,6 +66,9 @@ class PlanetFrameFluid(Disturbance):
         self.velocity_fn = velocity_fn
 
     def contribute_at_sym(self, point, t) -> FluidState:
+        # `t` arrives as a typed Scalar from a part's TickContext, or as
+        # a raw MX from direct field sampling — unwrap to MX either way.
+        t = t._mx if hasattr(t, "_mx") else t
         # World→Planet transform of the query point.
         r_world  = point._mx - self.planet.position_world_sym()
         R_pw     = ca.transpose(self.planet.R_world_from_planet_sym(t))
@@ -73,11 +77,11 @@ class PlanetFrameFluid(Disturbance):
         # Density (PlanetFrame → scalar). Branches via ca.if_else are
         # safe here — CasADi walks both branches and the EKF's Jacobian
         # is well-defined except at the (measure-zero) interface.
-        rho = self.density_fn(p_planet)
+        rho = self.density_fn(p_planet, t)
 
         # Velocity in PlanetFrame (defaults to zero) → WorldFrame.
         if self.velocity_fn is not None:
-            v_planet = self.velocity_fn(p_planet)
+            v_planet = self.velocity_fn(p_planet, t)
         else:
             v_planet = ca.MX.zeros(3, 1)
         R_wp     = self.planet.R_world_from_planet_sym(t)
