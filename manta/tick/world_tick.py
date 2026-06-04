@@ -255,6 +255,15 @@ def _plumb_field_disturbances(fields, dt, trace) -> list[tuple[str, Any]]:
 # Per-craft helpers
 # ---------------------------------------------------------------------------
 
+def _typed_views(fv_raw: dict) -> dict:
+    """Wrap the kinematic pass's raw-MX frame views in typed `Vec3[F]`
+    values — the single place the typed frame tags are applied. Each
+    entry X[F] is the quantity relative to frame F, in F's coords, so
+    the tag is exactly the view's frame."""
+    return {qty: {F: ir.Vec3[F].from_mx(mx) for F, mx in by_frame.items()}
+            for qty, by_frame in fv_raw.items()}
+
+
 def _trace_craft_pass1(craft,
                        gravity_field,
                        fluid_field,
@@ -280,10 +289,8 @@ def _trace_craft_pass1(craft,
     # (substituted with the real Newton-Euler outputs after the wrench
     # sum is known — see the TickContext docstring in craft.py for why
     # the a/α a part reads must be a compile-time placeholder).
-    a_world_sym = ca.MX.sym(f"{craft.name}_a_anchor", 3, 1)
+    a_world_sym = ca.MX.sym(f"{craft.name}_a_world", 3, 1)
     alpha_sym    = ca.MX.sym(f"{craft.name}_alpha", 3, 1)
-    a_world_placeholder = ir.Vec3[WorldFrame].from_mx(a_world_sym)
-    alpha_placeholder    = ir.Vec3[CraftFrame].from_mx(alpha_sym)
 
     if collision_field is None:
         from ..fields import CollisionField as _CF
@@ -342,11 +349,14 @@ def _trace_craft_pass1(craft,
             joint_accel_syms[part] = ca.MX.sym(
                 f"{craft.name}_{part.name}_jaccel", 1, 1)
 
-    # Symbolic kinematic + inertia passes over the part tree.
+    # Symbolic kinematic + inertia passes over the part tree. The
+    # kinematic pass is frame-blind raw MX (see kinematics.py); the typed
+    # frame tags are applied HERE, once, where each ctx is built.
     kin_states = kinematic_pass(
-        craft.root, position, orientation, velocity, ang_vel,
-        body_acceleration_world=a_world_placeholder,
-        body_angular_acceleration=alpha_placeholder,
+        craft.root, position._mx, orientation._mx, velocity._mx,
+        ang_vel._mx,
+        body_acceleration_world=a_world_sym,
+        body_angular_acceleration=alpha_sym,
         joint_angular_accels=joint_accel_syms)
     inertia = symbolic_inertia_rollup(craft.root)
 
@@ -356,7 +366,7 @@ def _trace_craft_pass1(craft,
     # own frame IS CraftFrame, so its frame-indexed views + body attitude
     # come straight from the root kinematic state.
     root_kin = kin_states[craft.root]
-    fv_root = root_kin.frame_views
+    fv_root = _typed_views(root_kin.frame_views)
     ctx = TickContext(
         t=t,
         dt=dt,
@@ -368,7 +378,8 @@ def _trace_craft_pass1(craft,
         acceleration=fv_root["acceleration"],
         angular_velocity=fv_root["angular_velocity"],
         angular_acceleration=fv_root["angular_acceleration"],
-        R_craft_from_input=root_kin.R_craft_from_input,
+        R_craft_from_input=ir.Mat3[CraftFrame, CraftFrame].from_mx(
+            root_kin.R_craft_from_input),
     )
 
     # Per-part external wrench, rotated to body coords about the part's
@@ -389,10 +400,10 @@ def _trace_craft_pass1(craft,
         # attitude, and the Craft←Part rotation. The wrench the part returns
         # is in PartFrame; `_wrench_rotate_to_craft` maps it to body coords.
         orientation_part = ir.Quat[WorldFrame, PartFrame].from_mx(
-            kin.orientation_anchor_from_input._mx)
+            kin.q_world_from_input)
         R_craft_from_part = ir.Mat3[CraftFrame, PartFrame].from_mx(
-            kin.R_craft_from_input._mx)
-        fv = kin.frame_views
+            kin.R_craft_from_input)
+        fv = _typed_views(kin.frame_views)
         ctx_part = TickContext(
             t=t,
             dt=dt,
@@ -500,12 +511,15 @@ def _trace_craft_pass1(craft,
         if isinstance(part, CompositePart):
             for child in part.children:
                 child_up = _cascade(child)
-                delta_r = kin_states[child].r_in_craft - r_part
+                delta_r = ir.Vec3[CraftFrame].from_mx(
+                    kin_states[child].r_in_craft - r_part)
                 accum = accum + _shift_wrench(child_up, delta_r)
         if isinstance(part, Joint):
             kin = kin_states[part]
             theta_ddot, passup, gyro = part.resolve(
-                accum, kin.R_craft_from_input, kin.angular_velocity_input)
+                accum,
+                ir.Mat3[CraftFrame, PartFrame].from_mx(kin.R_craft_from_input),
+                ir.Vec3[CraftFrame].from_mx(kin.omega_input))
             gyro_torques.append(gyro)
             sym = joint_accel_syms.get(part)
             if sym is not None:
@@ -544,8 +558,8 @@ def _trace_craft_pass1(craft,
         if m <= 0.0:
             continue
         kin = kin_states[part]
-        v_com_rel_mx = v_com_rel_mx + m * kin.velocity_rel_body._mx
-        a_com_rel_mx = a_com_rel_mx + m * kin.acceleration_rel_body._mx
+        v_com_rel_mx = v_com_rel_mx + m * kin.velocity_rel_body
+        a_com_rel_mx = a_com_rel_mx + m * kin.acceleration_rel_body
     v_com_rel_mx = v_com_rel_mx / m_total
     a_com_rel_mx = a_com_rel_mx / m_total
 
