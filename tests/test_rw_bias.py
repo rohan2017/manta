@@ -36,7 +36,7 @@ class BiasedGyro(Part):
     """A minimal gyro sensor with both white noise + RW bias."""
     gyro_noise = WhiteNoise(     "R3", frame=PartFrame, sigma=0.001)
     gyro_bias  = RandomWalkNoise("R3", frame=PartFrame, sigma=0.02)
-    gyro = Output(shape="R3")
+    gyro = Output()
 
     def update(self, ctx):
         zero = Vec3[PartFrame].constant((0.0, 0.0, 0.0))

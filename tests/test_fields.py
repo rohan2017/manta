@@ -3,7 +3,7 @@
 The locked design from [[project-field-redesign-0501]] (legacy C++):
   - One concrete class per physical kind. Per-source variation is
     expressed by attaching different Disturbance subclasses.
-  - field.state_at_sym(point) returns the symbolic sum of all
+  - field.value_at_sym(point) returns the symbolic sum of all
     disturbances' contributions at that point.
 
 This file pins the architecture by exercising:
@@ -34,7 +34,7 @@ def _eval_at(field, point_xyz):
     """Evaluate a Field's state_at at a concrete point, returning np array."""
     import casadi as ca
     p = Vec3[WorldFrame].constant(point_xyz)
-    val = field.state_at_sym(p, 0.0)
+    val = field.value_at_sym(p, 0.0)
     return np.asarray(ca.evalf(val._mx)).ravel()
 
 

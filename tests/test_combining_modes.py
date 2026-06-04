@@ -1,6 +1,6 @@
 """Disturbance combining modes — additive / averaged / projected.
 
-Three-stage fold inside `Field.state_at_sym`:
+Three-stage fold inside `Field.value_at_sym`:
 
   1. additive  — straight sum.
   2. averaged  — running-additive + every averaged contribution are
@@ -43,7 +43,7 @@ class _ConstVelocity(Disturbance):
 
 
 def _eval_velocity(ff: FluidField) -> np.ndarray:
-    s = ff.state_at_sym(_VEC3.constant((0.0, 0.0, 0.0)), ca.MX(0.0))
+    s = ff.value_at_sym(_VEC3.constant((0.0, 0.0, 0.0)), ca.MX(0.0))
     return np.asarray(ca.evalf(s.velocity._mx)).ravel()
 
 

@@ -32,7 +32,7 @@ class _SO3PassthroughPart(Part):
         init=(1.0, 0.0, 0.0, 0.0),
         manifold=SO3Manifold(from_frame=WorldFrame, to_frame=CraftFrame),
     )
-    quat_out = Output(shape="SO3")
+    quat_out = Output()
 
     def update(self, ctx) -> PartUpdate:
         zero = Vec3[PartFrame].constant((0.0, 0.0, 0.0))

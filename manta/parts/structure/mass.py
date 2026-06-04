@@ -43,7 +43,7 @@ class Mass(Part):
         # non-uniform fields (e.g. point-mass gravity) correctly for a part
         # mounted at a non-zero transform. Gravity in the part's own frame
         # via ctx.orientation; the framework rotates the wrench to body.
-        g_world = ctx.field(GravityField).state_at_sym(
+        g_world = ctx.field(GravityField).value_at_sym(
             ctx.position[WorldFrame], ctx.t)
         g_part  = ctx.orientation.conjugate().apply(g_world)
         return Wrench(

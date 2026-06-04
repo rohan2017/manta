@@ -1,6 +1,6 @@
 """CollisionField + obstacle disturbances.
 
-`CollisionField.state_at_sym(point)` returns a Vec3[WorldFrame]
+`CollisionField.value_at_sym(point)` returns a Vec3[WorldFrame]
 giving the **outward penetration vector** at the query point:
 
   * `(0, 0, 0)` when the point is NOT inside any registered obstacle.

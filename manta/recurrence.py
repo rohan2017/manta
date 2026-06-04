@@ -49,7 +49,7 @@ from .ir.state_spec import StateSpec
 
 
 @dataclass(frozen=True)
-class Port:
+class BlockPort:
     """One named exogenous input or readout of a recurrence block."""
     name: str
     dim: int
@@ -79,8 +79,8 @@ class RecurrenceBlock:
         spec = StateSpec.from_layout(state)
         self.name    = name
         self.spec    = spec
-        self.inputs  = [Port(n, int(d)) for n, d in inputs]
-        self.outputs = [Port(n, int(d)) for n, d in outputs]
+        self.inputs  = [BlockPort(n, int(d)) for n, d in inputs]
+        self.outputs = [BlockPort(n, int(d)) for n, d in outputs]
         if not self.inputs:
             raise ValueError(
                 f"{name}: a recurrence block needs at least one input port.")

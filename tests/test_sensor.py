@@ -18,8 +18,6 @@ def test_output_decl_introspection():
     imu = IMU("g")
     decls = imu.output_declarations()
     assert set(decls.keys()) == {"gyro", "accel"}
-    assert decls["gyro"].shape  == "R3"
-    assert decls["accel"].shape == "R3"
 
 
 def test_output_not_in_initial_state():
@@ -39,11 +37,6 @@ def test_output_not_in_initial_state():
     # The actual Outputs are NOT in initial_state.
     assert "g.gyro"  not in state
     assert "g.accel" not in state
-
-
-def test_output_decl_validation():
-    with pytest.raises(ValueError, match="shape"):
-        Output(shape="bogus")
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +175,7 @@ def test_imu_output_appears_in_world_step():
 
 def test_missing_output_write_raises():
     class BrokenSensor(Part):
-        reading = Output(shape="R3")
+        reading = Output()
 
         def update(self, ctx):
             zero = Vec3[PartFrame].constant((0.0, 0.0, 0.0))

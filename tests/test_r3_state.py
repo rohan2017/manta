@@ -24,7 +24,7 @@ class _R3StatePart(Part):
     """A no-op Part that carries a single R3 state and exposes it as
     an Output. Used to verify the R3-state plumbing end-to-end."""
     bias = State(init=(1.0, 2.0, 3.0), manifold="R3", frame=WorldFrame)
-    bias_out = Output(shape="R3")
+    bias_out = Output()
 
     def update(self, ctx) -> PartUpdate:
         zero = Vec3[PartFrame].constant((0.0, 0.0, 0.0))

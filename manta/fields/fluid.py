@@ -4,7 +4,7 @@ A FluidField returns `FluidState(density, velocity)` at a queried
 world-frame point. The value is compound — density (Scalar, kg/m³)
 plus bulk flow velocity (Vec3[WorldFrame], m/s) — so `FluidState`
 implements `__add__` for per-field-component summation, letting the
-generic `Field.state_at_sym` superposition machinery work unchanged.
+generic `Field.value_at_sym` superposition machinery work unchanged.
 
 Density and pressure/temperature gas modeling are deferred — v1 ships
 density (incompressible-fluid surrogate) + bulk velocity. Future work:
@@ -34,7 +34,7 @@ class FluidState:
                 state in tracing).
     velocity  — bulk fluid velocity at the point, Vec3[WorldFrame].
 
-    Disturbances and `FluidField.state_at_sym` return / consume this
+    Disturbances and `FluidField.value_at_sym` return / consume this
     type. Per-component addition is defined so the Field base class can
     sum disturbances without special-casing this field.
     """

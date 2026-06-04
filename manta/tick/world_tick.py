@@ -378,7 +378,7 @@ def _trace_craft_pass1(craft,
         acceleration=fv_root["acceleration"],
         angular_velocity=fv_root["angular_velocity"],
         angular_acceleration=fv_root["angular_acceleration"],
-        R_craft_from_input=ir.Mat3[CraftFrame, CraftFrame].from_mx(
+        R_craft_from_part=ir.Mat3[CraftFrame, CraftFrame].from_mx(
             root_kin.R_craft_from_input),
     )
 
@@ -415,7 +415,7 @@ def _trace_craft_pass1(craft,
             acceleration=fv["acceleration"],
             angular_velocity=fv["angular_velocity"],
             angular_acceleration=fv["angular_acceleration"],
-            R_craft_from_input=R_craft_from_part,
+            R_craft_from_part=R_craft_from_part,
         )
         result = part.update(ctx_part)
         if isinstance(result, Wrench):

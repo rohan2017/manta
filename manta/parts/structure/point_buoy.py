@@ -48,8 +48,8 @@ class PointBuoy(Part):
         # there capture the correct local value for spatially varying fields;
         # for uniform fields it's the same as the craft origin.
         p_world = ctx.position[WorldFrame]
-        fluid    = ctx.field(FluidField).state_at_sym(p_world, ctx.t)
-        g_world  = ctx.field(GravityField).state_at_sym(p_world, ctx.t)
+        fluid    = ctx.field(FluidField).value_at_sym(p_world, ctx.t)
+        g_world  = ctx.field(GravityField).value_at_sym(p_world, ctx.t)
 
         # F = -ρ·V·g  (opposes gravity, scaled by displaced mass), rotated
         # into the buoy's own frame for the wrench return (the framework

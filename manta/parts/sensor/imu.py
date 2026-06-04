@@ -51,8 +51,8 @@ class IMU(Part):
     gyro_bias   = RandomWalkNoise("R3", frame=PartFrame, sigma=0.0)
     accel_bias  = RandomWalkNoise("R3", frame=PartFrame, sigma=0.0)
 
-    gyro  = Output(shape="R3")
-    accel = Output(shape="R3")
+    gyro  = Output()
+    accel = Output()
 
     def update(self, ctx) -> PartUpdate:
         zero_v = Vec3[PartFrame].constant((0.0, 0.0, 0.0))
@@ -62,7 +62,7 @@ class IMU(Part):
         # that frame is the body frame; on a rotor it spins with the joint.
         # Gravity at the mount point folds to zero with no GravityField.
         # Bias/noise live in the sensor frame.
-        g_world = ctx.field(GravityField).state_at_sym(
+        g_world = ctx.field(GravityField).value_at_sym(
             ctx.position[WorldFrame], ctx.t)
         R_part_from_world = ctx.orientation.conjugate()
         omega_sensor = R_part_from_world.apply(ctx.angular_velocity[WorldFrame])

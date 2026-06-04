@@ -81,7 +81,7 @@ def test_dvl_rotated_craft_reads_rotated_velocity():
 
 def _eval_mag_at(field, point_xyz):
     p = Vec3[WorldFrame].constant(point_xyz)
-    v = field.state_at_sym(p, 0.0)
+    v = field.value_at_sym(p, 0.0)
     return np.asarray(ca.evalf(v._mx)).ravel()
 
 

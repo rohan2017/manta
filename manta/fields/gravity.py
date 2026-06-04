@@ -25,7 +25,7 @@ _VEC3_ANCHOR = Vec3[WorldFrame]
 class GravityField(Field):
     """Gravitational acceleration `g(point)` in the WorldFrame.
 
-    `state_at_sym(point)` returns Vec3[WorldFrame] giving the
+    `value_at_sym(point)` returns Vec3[WorldFrame] giving the
     acceleration a free-falling test mass would experience at `point`.
 
     Builder methods (`add_uniform`, `add_point_mass`) return self for

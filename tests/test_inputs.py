@@ -178,7 +178,7 @@ def test_multiple_inputs_on_one_part():
 
         def update(self, ctx):
             from manta.fields import GravityField
-            g_world = ctx.field(GravityField).state_at_sym(
+            g_world = ctx.field(GravityField).value_at_sym(
                 ctx.position[WorldFrame], ctx.t)
             g_part  = ctx.orientation.conjugate().apply(g_world)
             f = g_part * (self.scale_a + self.scale_b)

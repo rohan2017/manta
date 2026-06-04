@@ -78,7 +78,7 @@ class Naca00xx(Part):
         p_world          = ctx.position[WorldFrame]
         v_surface_anchor = ctx.velocity[WorldFrame]
 
-        fluid = ctx.field(FluidField).state_at_sym(p_world, ctx.t)
+        fluid = ctx.field(FluidField).value_at_sym(p_world, ctx.t)
         rho   = fluid.density
         v_rel = v_surface_anchor - fluid.velocity   # Vec3[WorldFrame]
 

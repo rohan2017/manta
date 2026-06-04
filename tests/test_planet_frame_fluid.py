@@ -24,7 +24,7 @@ from manta.planets.disturbances import PlanetFrameFluid
 
 def _sample_density(world: World, point: tuple[float, float, float]) -> float:
     p = Vec3[WorldFrame].constant(point)
-    s = world.get_field(FluidField).state_at_sym(p, ca.MX(0.0))
+    s = world.get_field(FluidField).value_at_sym(p, ca.MX(0.0))
     return float(ca.evalf(s.density))
 
 

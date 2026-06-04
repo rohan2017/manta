@@ -125,15 +125,15 @@ class TickContext:
                              A gyro reads `orientation.conjugate().apply(
                              angular_velocity[WorldFrame])`.
       angular_acceleration[F] : Vec3[F] — the part frame's angular accel.
-      R_craft_from_input   : Mat3[CraftFrame, PartFrame] — PartFrame→body
+      R_craft_from_part   : Mat3[CraftFrame, PartFrame] — PartFrame→body
                              rotation. Rarely needed (the framework rotates
                              wrenches/reads); exposed for advanced use.
 
     Field access:
       ctx.field(FieldCls) → registered field of that class, or an empty
       default instance if none is registered. The empty default's
-      `state_at_sym(p, t)` returns the zero contribution, so a part can
-      call `ctx.field(GravityField).state_at_sym(p, t)` regardless of
+      `value_at_sym(p, t)` returns the zero contribution, so a part can
+      call `ctx.field(GravityField).value_at_sym(p, t)` regardless of
       whether a GravityField is attached to the world.
       ctx.has_field(FieldCls) → True iff a matching field is registered.
 
@@ -150,7 +150,7 @@ class TickContext:
     __slots__ = ("t", "dt", "orientation",
                  "position", "velocity", "acceleration",
                  "angular_velocity", "angular_acceleration",
-                 "R_craft_from_input",
+                 "R_craft_from_part",
                  "_world", "_fields", "_sample_records")
 
     def __init__(self,
@@ -163,7 +163,7 @@ class TickContext:
                  acceleration: dict,
                  angular_velocity: dict,
                  angular_acceleration: dict,
-                 R_craft_from_input: Mat3,
+                 R_craft_from_part: Mat3,
                  fields=(),
                  world=None) -> None:
         self.t = t
@@ -185,7 +185,7 @@ class TickContext:
         # PartFrame]). Identity for a part on the craft root. The framework
         # uses it to map a part's emitted wrench to body coords; parts
         # rarely need it directly now.
-        self.R_craft_from_input = R_craft_from_input
+        self.R_craft_from_part = R_craft_from_part
         # Rate declarations collected during this part's update():
         # (id(value), rate_hz, kind) tuples from `sample()` / `hold()`.
         # The compiler matches the ids against the part's emitted outputs
@@ -214,9 +214,9 @@ class TickContext:
     def field(self, cls: type):
         """Return the registered field of type `cls` (or subclass), or
         an empty default instance `cls()` if none is registered. Calling
-        `state_at_sym` on the empty default returns the field's zero
+        `value_at_sym` on the empty default returns the field's zero
         value, so a part can write
-            `ctx.field(GravityField).state_at_sym(p, t)`
+            `ctx.field(GravityField).value_at_sym(p, t)`
         unconditionally — missing field ⇒ zero contribution."""
         for f in self._iter_fields():
             if isinstance(f, cls):
@@ -340,7 +340,7 @@ def _aggregate_inertials(parts: list[Part]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def _wrench_rotate_to_craft(wrench_part: Wrench,
-                            R_craft_from_input: Mat3) -> Wrench:
+                            R_craft_from_part: Mat3) -> Wrench:
     """Rotate a part-emitted wrench into body coords WITHOUT lifting it.
 
     Rotation-only step: `F_body = R · F_input`,
@@ -358,8 +358,8 @@ def _wrench_rotate_to_craft(wrench_part: Wrench,
             source=_capture_user_source(),
         )
     return Wrench(
-        force=R_craft_from_input @ wrench_part.force,
-        torque=R_craft_from_input @ wrench_part.torque,
+        force=R_craft_from_part @ wrench_part.force,
+        torque=R_craft_from_part @ wrench_part.torque,
     )
 
 

@@ -10,7 +10,7 @@ per the Field redesign:
     body-pulls) are different Disturbance subclasses added to the
     same Field instance.
   * `field.add(Disturbance)` — append a contribution.
-  * `field.state_at_sym(point)` — return the symbolic MX value of the
+  * `field.value_at_sym(point)` — return the symbolic MX value of the
     field at `point` (Vec3[WorldFrame]). Equals the sum of every
     registered disturbance's contribution.
 

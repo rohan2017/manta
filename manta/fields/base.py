@@ -6,7 +6,7 @@ is expressed by attaching different `Disturbance` subclasses to the
 same Field instance: a uniform-g background, a planet's inverse-square
 pull, a transient impulse — all GravityField disturbances.
 
-`Field.state_at_sym(point, t)` returns the symbolic MX value of the
+`Field.value_at_sym(point, t)` returns the symbolic MX value of the
 field at the queried world-frame point at world-clock time `t`.
 Implementation is a fixed-shape sum over every registered
 Disturbance's `contribute_at_sym(point, t)`.
@@ -43,7 +43,7 @@ class Disturbance(DeclarationHost, ABC):
     Subclass and implement `contribute_at_sym(point, t)`. The returned
     MX must have the Field's value shape (e.g. Vec3[WorldFrame] for
     GravityField). Multiple disturbances on the same field combine
-    according to their `combining` flag (see `Field.state_at_sym`).
+    according to their `combining` flag (see `Field.value_at_sym`).
 
     Disturbances may declare State / Noise channels at class scope.
     The framework picks them up at compile time exactly like it does
@@ -60,7 +60,7 @@ class Disturbance(DeclarationHost, ABC):
                     unique across the world's disturbances. Defaults
                     to `<ClassName>_<counter>`.
         combining — how this disturbance's contribution composes with
-                    others on the same field. See `Field.state_at_sym`
+                    others on the same field. See `Field.value_at_sym`
                     for the per-stage rule. One of:
                       "additive"  (default) — straight linear sum.
                       "averaged"  — arithmetic-mean stage; the running
@@ -110,13 +110,13 @@ class Field(ABC):
     """Base for a typed physical field.
 
     Subclasses fix:
-      * `value_shape` — the CasADi-MX type returned by `state_at_sym`
+      * `value_shape` — the CasADi-MX type returned by `value_at_sym`
         (e.g. Vec3[WorldFrame] for GravityField).
       * `_zero_value()` — the additive identity for the field at any
         point. Used as the seed of the disturbance sum and as the
         return value when no disturbances are registered.
 
-    Concrete fields don't need to override `state_at_sym` itself — the
+    Concrete fields don't need to override `value_at_sym` itself — the
     base sum-over-disturbances implementation suffices.
     """
 
@@ -152,7 +152,7 @@ class Field(ABC):
         GravityField.)"""
         raise NotImplementedError
 
-    def state_at_sym(self, point: "Vec3", t):
+    def value_at_sym(self, point: "Vec3", t):
         """Fold every registered disturbance's contribution at `point`
         at time `t` according to each disturbance's `combining` flag.
 

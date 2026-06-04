@@ -43,7 +43,7 @@ class Magnetometer(Part):
 
     B_noise = WhiteNoise("R3", frame=PartFrame, sigma=0.0)
 
-    B = Output(shape="R3")
+    B = Output()
 
     def update(self, ctx) -> PartUpdate:
         # ctx.position is already the sensor's world-frame mount point
@@ -52,7 +52,7 @@ class Magnetometer(Part):
         # attitude (the framework composed any joint rotation in), so its
         # conjugate maps world → sensor frame directly — for a root-mounted
         # magnetometer that's CraftFrame; on a rotor it spins with the joint.
-        B_world  = ctx.field(MagField).state_at_sym(
+        B_world  = ctx.field(MagField).value_at_sym(
             ctx.position[WorldFrame], ctx.t)
         B_sensor = ctx.orientation.conjugate().apply(B_world)
 

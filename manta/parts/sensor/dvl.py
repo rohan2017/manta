@@ -33,7 +33,7 @@ class DVL(Part):
 
     velocity_noise = WhiteNoise("R3", frame=PartFrame, sigma=0.0)
 
-    velocity = Output(shape="R3")
+    velocity = Output()
 
     def update(self, ctx) -> PartUpdate:
         zero_v = Vec3[PartFrame].constant((0.0, 0.0, 0.0))

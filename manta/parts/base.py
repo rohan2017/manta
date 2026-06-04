@@ -5,7 +5,7 @@ A Part is a Python class that:
   * Declares its parameters at class scope using `Parameter(default)`.
   * Declares mutable per-tick state via `State(init=..., manifold=...)`.
   * Receives any per-tick external inputs via `Input(default)`.
-  * Emits per-tick observables via `Output(shape=...)`.
+  * Emits per-tick observables via `Output()`.
   * Implements `update(ctx) -> Wrench | PartUpdate` to contribute a
     wrench, write new state, and/or emit Output values each tick.
 
@@ -113,25 +113,14 @@ class Output(_Declaration):
     `PartUpdate.outputs["<name>"] = <Vec3 | Scalar | …>`. The framework
     emits the value as a graph output named "<part_name>.<name>"; tick
     callers read it from the result dict (read-only, doesn't round-trip
-    back as next-tick state).
-
-    Args:
-        shape    — "R1" (scalar), "R3", or "SO3" (a 4-element quaternion
-                   output). Optional; the framework picks up the actual
-                   shape from what the part writes. Provided here so codegen
-                   / EKF plumbing can introspect output kinds without
-                   tracing. Same vocabulary as `State(manifold=)`.
+    back as next-tick state). The output's shape is whatever the part
+    writes — nothing downstream needs it declared.
     """
 
-    __slots__ = ("shape",)
+    __slots__ = ()
 
-    def __init__(self, shape: str = "R3") -> None:
+    def __init__(self) -> None:
         super().__init__(default=None)
-        if shape not in ("R1", "R3", "SO3"):
-            raise ValueError(
-                f"Output: shape must be one of 'R1', 'R3', 'SO3'; "
-                f"got {shape!r}")
-        self.shape = shape
 
 
 class Input(_Declaration):
