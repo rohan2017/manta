@@ -264,3 +264,24 @@ def test_earth_registers_surface_collision():
     np.testing.assert_allclose(r, earth.R_EQ - sag, atol=2e-4)
     # And it sits on the +x side of the planet (no sideways slide).
     assert p[0] > earth.R_EQ - 1.0
+
+
+def test_collider_friction_damps_tangential_slide():
+    """friction > 0 grips a sliding contact; the default stays
+    frictionless (no horizontal force from a normal-only contact)."""
+    def slide(friction):
+        c = Craft("box")
+        c.add(Mass("m", mass=1.0, moi=(0.01, 0.01, 0.01)))
+        c.add(Collider("foot", stiffness=2000.0, damping=30.0,
+                       friction=friction))
+        w = (World()
+             .add_field(GravityField().add_uniform((0.0, 0.0, -9.81)))
+             .add_field(CollisionField().add_half_space()))
+        w.add_craft(c, position=(0, 0, 0.0), velocity=(1.0, 0.0, 0.0))
+        sim = TargetNumpy(Sim(w))
+        for _ in range(1000):
+            sim.step(0.001)
+        return float(np.asarray(sim.state["box"]["velocity"]).ravel()[0])
+
+    assert slide(0.0) > 0.99            # frictionless: keeps sliding
+    assert abs(slide(5.0)) < 0.05       # viscous grip: ~stopped in 1 s

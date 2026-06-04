@@ -40,6 +40,7 @@ from .._viz import Viz
 G = 9.81
 H = 0.30          # pole height (disk sits on top)
 DISK_R = 0.14     # disk radius (viz; I_z = m·r²/2 below)
+DISK_H = 0.04     # disk thickness (viz)
 SPIN = 150.0      # spin rate, rad/s
 TILT0 = np.radians(8.0)              # released leaning 8°
 R_COM = 0.293     # craft COM height up the pole (pole + disk)
@@ -52,14 +53,20 @@ def _build_world(spin: float):
     # which is what makes the standing top an inverted pendulum.
     top.add(Mass("pole", mass=0.02, moi=(2e-4, 2e-4, 1e-5),
                  transform=(0.0, 0.0, H / 2)))
+    # A touch of bearing friction on the rotor: it locks the (nearly
+    # massless) pole into co-rotation with the disk within ~30 ms — a
+    # real toy top is rigid — after which the spin lives in the body
+    # and the relative joint rate sits near zero.
     rotor = Joint("rotor", mode="passive", axis=(0.0, 0.0, 1.0),
-                  transform=(0.0, 0.0, H))
+                  damping=3.0e-4, transform=(0.0, 0.0, H))
     rotor.add(Mass("disk", mass=0.4, moi=(0.002, 0.002, 0.004)))
     top.add(rotor)
-    # Contact: the tip it stands on + a crown point so a toppled top
-    # lies down instead of poking through the floor.
-    top.add(Collider("tip", stiffness=2000.0, damping=30.0))
-    top.add(Collider("crown", stiffness=2000.0, damping=30.0,
+    # Contact: the tip it stands on (tangential friction grips it
+    # against skating, and damps the precession sweep — the energy
+    # drain that makes the top sink lower and lower) + a crown point
+    # so a toppled top lies down instead of poking through the floor.
+    top.add(Collider("tip", stiffness=2000.0, damping=30.0, friction=3.0))
+    top.add(Collider("crown", stiffness=2000.0, damping=30.0, friction=3.0,
                      transform=(0.0, 0.0, H)))
 
     w = (World()
@@ -94,9 +101,9 @@ def _run(label: str, spin: float, viz: Viz | None, dt: float, n: int):
     sim = TargetNumpy(Sim(_build_world(spin)))
 
     print(f"\n=== {label}  spin = {spin} rad/s ===")
-    print(f"{'t (s)':>5} {'tilt°':>8} {'lean az°':>9} {'rotor':>8}")
-    marks = {round(s / dt) for s in (0.5, 1.0, 1.5, 2.0, 3.0, 4.0,
-                                     5.0, 6.0, 7.0, 8.0)}
+    print(f"{'t (s)':>5} {'tilt°':>8} {'lean az°':>9} {'spin':>8}")
+    marks = {round(s / dt) for s in
+             [0.5, 1.0, 1.5] + list(range(2, 60, 2))}
     for i in range(n):
         t = i * dt
         sim.step(dt)
@@ -108,22 +115,23 @@ def _run(label: str, spin: float, viz: Viz | None, dt: float, n: int):
             ang = float(st["rotor.angle"])
             viz.t(t)
             viz.pose("world/top", p, q)
-            viz.pose("world/top/rotor", (0, 0, H + 0.006),
+            viz.pose("world/top/rotor", (0, 0, H + 0.004 + DISK_H / 2),
                      (np.cos(ang / 2), 0, 0, np.sin(ang / 2)))
 
         if i in marks:
             st = sim.state["top"]
             q = np.asarray(st["orientation"]).ravel()
+            om = np.asarray(st["angular_velocity"]).ravel()   # body rates
             tilt, az = _tilt_azimuth(q)
+            spin_now = float(st["rotor.rate"]) + om[2]   # disk total spin
             print(f"{t:>5.2f} {np.degrees(tilt):>8.1f} "
-                  f"{np.degrees(az):>9.1f} "
-                  f"{float(st['rotor.rate']):>8.1f}")
+                  f"{np.degrees(az):>9.1f} {spin_now:>8.1f}")
 
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--no-viz", action="store_true", help="run headless")
-    p.add_argument("--duration", type=float, default=8.0)
+    p.add_argument("--duration", type=float, default=45.0)
     args = p.parse_args()
 
     dt = 2.5e-4
@@ -133,14 +141,14 @@ def main() -> None:
         viz.plane("world/ground", z=0.0, size=1.0, color=(70, 110, 70, 200))
         viz.box("world/top/pole", (0.008, 0.008, H / 2),
                 center=(0, 0, H / 2), color=(200, 200, 210))
-        viz.split_disc("world/top/rotor/disk", DISK_R)
+        viz.split_cylinder("world/top/rotor/disk", DISK_R, DISK_H)
 
     print("Spinning top standing on its tip — same rig, two runs.")
     print("No spin → inverted pendulum, falls right over;")
-    print("spinning → precesses on its lean cone and slowly rights")
-    print("itself as the contact damping bleeds the wobble.")
-    _run("SPINNING", SPIN, viz, dt, n)        # visualized
-    _run("STATIONARY", 0.0, None, dt, n)      # terminal only
+    print("spinning → precesses on its lean cone, then sinks lower and")
+    print("lower as the bearing friction bleeds the spin — a dying top.")
+    _run("SPINNING", SPIN, viz, dt, n)               # visualized
+    _run("STATIONARY", 0.0, None, dt, int(6.0 / dt))  # topples in ~2 s
 
     print(f"\n(precession estimate Ω ≈ m·g·h/L = "
           f"{M_TOT * G * R_COM / (0.004 * SPIN):.1f} rad/s)")

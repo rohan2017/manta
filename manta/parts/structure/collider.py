@@ -37,10 +37,17 @@ class Collider(Part):
         damping   — N·s/m. Damper coefficient for the relative velocity
                     along the outward normal direction. Bigger = more
                     energy dissipation per bounce. Default 50.0.
+        friction  — N·s/m. Viscous TANGENTIAL friction: opposes the
+                    contact point's velocity perpendicular to the
+                    outward normal, gated smoothly by penetration (a
+                    smooth, EKF-friendly stand-in for Coulomb friction —
+                    grips a resting contact against sliding). Default 0
+                    (frictionless contact, the prior behaviour).
     """
 
     stiffness: float = Parameter(5e3)
     damping:   float = Parameter(50.0)
+    friction:  float = Parameter(0.0)
 
     def update(self, ctx) -> PartUpdate:
         # ctx.position / ctx.velocity are already the collider point's
@@ -64,6 +71,14 @@ class Collider(Part):
         F_damp_mx = pen_mx * (-self.damping * v_dot_pen / pen_sq)
 
         F_anchor_mx = F_spring_mx + F_damp_mx
+        if self.friction != 0.0:
+            # Tangential viscous friction: −c·v_⊥, gated by penetration so
+            # it vanishes smoothly out of contact (pen_sq carries a +1e-12
+            # regulariser, so gate → 0 at zero penetration).
+            n_mx   = pen_mx / ca.sqrt(pen_sq)
+            v_tan  = v_mx - ca.dot(v_mx, n_mx) * n_mx
+            gate   = (pen_sq - 1e-12) / pen_sq
+            F_anchor_mx = F_anchor_mx - self.friction * gate * v_tan
         F_anchor    = Vec3[WorldFrame].from_mx(F_anchor_mx)
         # Rotate into the collider's own frame; framework rotates back to
         # body and lifts force-at-offset → torque.

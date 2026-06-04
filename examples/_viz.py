@@ -241,24 +241,36 @@ class Viz:
             vertex_normals=normals,
             albedo_factor=color))
 
-    def split_disc(self, path, radius: float, *,
-                   colors=((230, 80, 80), (235, 220, 100)),
-                   static: bool = True) -> None:
-        """A flat disc split into two coloured halves (the ±x sides of
-        the entity frame) — pose the entity about its z to make a spin
-        visible (two fan meshes, logged once)."""
+    def split_cylinder(self, path, radius: float, height: float, *,
+                       colors=((230, 80, 80), (235, 220, 100)),
+                       static: bool = True) -> None:
+        """A solid cylinder (z-axis, centred) split into two coloured
+        half-cylinders (the ±x sides of the entity frame) — pose the
+        entity about its z to make a spin visible (two closed meshes,
+        logged once)."""
         n = 24
+        hz = height / 2.0
         for half, (a0, color) in enumerate(zip((-np.pi / 2, np.pi / 2),
                                                colors)):
             ang = np.linspace(a0, a0 + np.pi, n)
+            xs, ys = radius * np.cos(ang), radius * np.sin(ang)
             verts = np.vstack([
-                [0.0, 0.0, 0.0],
-                np.column_stack([radius * np.cos(ang),
-                                 radius * np.sin(ang), np.zeros(n)])])
-            tris = np.column_stack([np.zeros(n - 1, int),
-                                    np.arange(1, n), np.arange(2, n + 1)])
+                [0.0, 0.0, +hz], [0.0, 0.0, -hz],
+                np.column_stack([xs, ys, np.full(n, +hz)]),   # top arc
+                np.column_stack([xs, ys, np.full(n, -hz)])])  # bottom arc
+            T = lambda i: 2 + i           # noqa: E731 - tiny index helpers
+            B = lambda i: 2 + n + i       # noqa: E731
+            tris = []
+            for i in range(n - 1):
+                tris.append([0, T(i), T(i + 1)])          # top face fan
+                tris.append([1, B(i + 1), B(i)])          # bottom face fan
+                tris.append([T(i), B(i), T(i + 1)])       # side wall
+                tris.append([T(i + 1), B(i), B(i + 1)])
+            # Diametral cut face closing the half cylinder.
+            tris.append([T(0), B(0), T(n - 1)])
+            tris.append([T(n - 1), B(0), B(n - 1)])
             self.rr.log(f"{path}/{half}", self.rr.Mesh3D(
-                vertex_positions=verts, triangle_indices=tris,
+                vertex_positions=verts, triangle_indices=np.asarray(tris),
                 albedo_factor=color), static=static)
 
     def disc(self, path, radius: float, *, center=(0.0, 0.0, 0.0),
