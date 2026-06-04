@@ -64,6 +64,13 @@ class CollisionField(Field):
         Returns self."""
         return self.add(HalfSpace(origin=origin, normal=normal))
 
+    def add_sphere(self,
+                   center: tuple[float, float, float],
+                   radius: float) -> "CollisionField":
+        """Attach a solid-sphere obstacle (e.g. a planet surface).
+        Returns self."""
+        return self.add(Sphere(center=center, radius=radius))
+
 
 class HalfSpace(Disturbance):
     """Infinite half-space below a plane.
@@ -109,3 +116,46 @@ class HalfSpace(Disturbance):
 
     def __repr__(self) -> str:
         return f"<HalfSpace origin={self.origin} normal={self.normal}>"
+
+
+class Sphere(Disturbance):
+    """Solid sphere obstacle — e.g. a whole planet's surface.
+
+    Points with `|p − center| < radius` are inside; the outward
+    direction is the local radial, so a craft standing anywhere on the
+    sphere gets an up-is-outward contact normal — no per-site ground
+    plane needed.
+
+    Args:
+        center — sphere centre (world frame), m.
+        radius — sphere radius, m.
+    """
+
+    field_value_shape = _VEC3_ANCHOR
+
+    def __init__(self,
+                 center: tuple[float, float, float],
+                 radius: float,
+                 *, name: str | None = None) -> None:
+        super().__init__(name=name)
+        self.center = tuple(float(x) for x in center)
+        self.radius = float(radius)
+        if len(self.center) != 3:
+            raise ValueError(
+                f"Sphere: center must be length-3; got {center!r}")
+        if self.radius <= 0.0:
+            raise ValueError(f"Sphere: radius must be > 0; got {radius!r}")
+
+    def contribute_at_sym(self, point, t):
+        center_v = _VEC3_ANCHOR.constant(self.center)
+        diff_mx  = (point - center_v)._mx
+        r = ca.sqrt(ca.dot(diff_mx, diff_mx) + 1e-30)
+        # Signed distance from the surface (positive = outside).
+        signed_d = r - self.radius
+        neg = -signed_d
+        depth = 0.5 * (neg + ca.sqrt(neg * neg + _SMOOTH_EPS_SQ))
+        out_mx = (diff_mx / r) * depth
+        return _VEC3_ANCHOR.from_mx(out_mx)
+
+    def __repr__(self) -> str:
+        return f"<Sphere center={self.center} radius={self.radius}>"

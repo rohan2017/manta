@@ -241,6 +241,26 @@ class Viz:
             vertex_normals=normals,
             albedo_factor=color))
 
+    def split_disc(self, path, radius: float, *,
+                   colors=((230, 80, 80), (235, 220, 100)),
+                   static: bool = True) -> None:
+        """A flat disc split into two coloured halves (the ±x sides of
+        the entity frame) — pose the entity about its z to make a spin
+        visible (two fan meshes, logged once)."""
+        n = 24
+        for half, (a0, color) in enumerate(zip((-np.pi / 2, np.pi / 2),
+                                               colors)):
+            ang = np.linspace(a0, a0 + np.pi, n)
+            verts = np.vstack([
+                [0.0, 0.0, 0.0],
+                np.column_stack([radius * np.cos(ang),
+                                 radius * np.sin(ang), np.zeros(n)])])
+            tris = np.column_stack([np.zeros(n - 1, int),
+                                    np.arange(1, n), np.arange(2, n + 1)])
+            self.rr.log(f"{path}/{half}", self.rr.Mesh3D(
+                vertex_positions=verts, triangle_indices=tris,
+                albedo_factor=color), static=static)
+
     def disc(self, path, radius: float, *, center=(0.0, 0.0, 0.0),
              color=(70, 110, 70, 160), thickness: float = 1e-3,
              static: bool = True) -> None:

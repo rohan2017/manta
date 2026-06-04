@@ -217,3 +217,50 @@ def test_collision_field_reaches_world_tick():
     assert np.isclose(z_a, expected, atol=2e-4), (
         f"a.z={z_a}, expected≈{expected}; the world_tick path is "
         f"probably dropping the CollisionField again.")
+
+
+# ---------------------------------------------------------------------------
+# Sphere (planet-surface) obstacle
+# ---------------------------------------------------------------------------
+
+def test_sphere_outside_returns_zero():
+    from manta.fields import Sphere
+    cf = CollisionField()
+    cf.add(Sphere(center=(0, 0, 0), radius=10.0))
+    np.testing.assert_allclose(_eval_pen_at(cf, (0, 0, 12.0)), np.zeros(3),
+                               atol=1e-5)
+
+
+def test_sphere_inside_outward_radial():
+    from manta.fields import Sphere
+    cf = CollisionField()
+    cf.add(Sphere(center=(1, 0, 0), radius=10.0))
+    # 0.5 m below the surface along +z from the centre: outward = +z.
+    pen = _eval_pen_at(cf, (1, 0, 9.5))
+    np.testing.assert_allclose(pen, (0.0, 0.0, 0.5), atol=1e-6)
+    # And along an arbitrary radial the outward direction follows it.
+    d = np.array([0.0, 3.0, 4.0]) / 5.0
+    pen = _eval_pen_at(cf, tuple(np.array([1, 0, 0]) + 9.0 * d))
+    np.testing.assert_allclose(pen, d * 1.0, atol=1e-6)
+
+
+def test_earth_registers_surface_collision():
+    """Earth(surface_collision=True) lets a Collider craft rest anywhere
+    on the sphere — here the equator, with no per-site half-space."""
+    from manta.planets import Earth
+    earth = Earth(rotation_rate=0.0)
+    w = World(); w.add_planet(earth)
+    c = Craft("lander")
+    c.add(Mass("body", mass=1.0, moi=(0.01, 0.01, 0.01)))
+    c.add(Collider("foot", stiffness=1e4, damping=100.0))
+    w.add_craft(c, position=(earth.R_EQ + 0.001, 0.0, 0.0))
+    sim = TargetNumpy(Sim(w))
+    for _ in range(3000):
+        sim.step(0.001)
+    p = np.asarray(sim.state["lander"]["position"]).ravel()
+    # Settled onto the surface: radius ≈ R_EQ minus the static sag.
+    r = np.linalg.norm(p)
+    sag = 1.0 * 9.81 / 1e4
+    np.testing.assert_allclose(r, earth.R_EQ - sag, atol=2e-4)
+    # And it sits on the +x side of the planet (no sideways slide).
+    assert p[0] > earth.R_EQ - 1.0

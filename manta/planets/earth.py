@@ -28,8 +28,8 @@ import casadi as ca
 import numpy as np
 
 from ..fields import (
-    DipoleMag, GravityField, FluidField, J2Gravity, MagField,
-    PointMassGravity,
+    CollisionField, DipoleMag, GravityField, FluidField, J2Gravity,
+    MagField, PointMassGravity,
 )
 from .base import Planet
 from .disturbances import PlanetFrameFluid
@@ -92,6 +92,11 @@ class Earth(Planet):
         waves          — optional `SeaWaves`: a sinusoidal moving sea
                          surface (boundary elevation + underwater
                          orbital velocity). Default None (flat sea).
+        surface_collision — register the sea-level sphere as a solid
+                         `CollisionField` obstacle (a rough model of
+                         the surface), so `Collider`-footed craft can
+                         stand anywhere on the planet without a
+                         per-site ground plane. Default True.
         surface_smoothing — m. Blend the water/air density switch over
                          this length (logistic in altitude) instead of
                          a hard `if_else`. Physically: a finite-size
@@ -127,6 +132,7 @@ class Earth(Planet):
                  include_j2: bool = False,
                  dipole_moment: float = 0.0,
                  waves: SeaWaves | None = None,
+                 surface_collision: bool = True,
                  surface_smoothing: float = 0.0) -> None:
         super().__init__(name=name,
                          position=position,
@@ -143,6 +149,7 @@ class Earth(Planet):
         self.include_j2    = bool(include_j2)
         self.dipole_moment = float(dipole_moment)
         self.waves         = waves
+        self.surface_collision = bool(surface_collision)
         self.surface_smoothing = float(surface_smoothing)
 
     # ------------------------------------------------------------------
@@ -251,6 +258,14 @@ class Earth(Planet):
                                 density_fn=density_fn,
                                 velocity_fn=velocity_fn,
                                 name=f"{self.name}_fluid"))
+
+        # Solid surface: the sea-level sphere as a collision obstacle —
+        # locally indistinguishable from a ground plane (the outward
+        # normal is the local radial), valid anywhere on the planet.
+        if self.surface_collision:
+            cf = world.get_or_create_field(CollisionField)
+            cf.add_sphere(center=tuple(self.center.tolist()),
+                          radius=R_planet)
 
         # Magnetic dipole along the spin axis (-axis for a planet whose
         # spin axis points away from the geographic-north magnetic dip).

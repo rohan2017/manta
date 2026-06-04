@@ -1,8 +1,10 @@
 """Bouncing ball — `Collider` + `CollisionField` contact, visualized.
 
-A unit-mass ball is dropped onto a ground plane. The `Collider` is a
-spring + damper: each bounce loses energy until the ball settles at the
-static-compression depth ``m·g/k``. Watch the bounces decay in the rerun
+A unit-mass ball is tossed with some horizontal velocity onto a ground
+plane. The `Collider` is a spring + damper: each bounce loses energy
+until the ball settles at the static-compression depth ``m·g/k`` —
+while the (frictionless) horizontal motion carries on, tracing a chain
+of shrinking parabolic arcs. Watch the bounces decay in the rerun
 viewer; the terminal prints the apex heights and the settling depth.
 
 Run::
@@ -35,7 +37,7 @@ def build_world(g: float, k: float, c_damp: float):
     ball = Craft("ball")
     ball.add(Mass("body", mass=1.0, moi=(0.01, 0.01, 0.01)))
     ball.add(Collider("contact", stiffness=k, damping=c_damp))
-    w.add_craft(ball, position=(0, 0, 2.0))
+    w.add_craft(ball, position=(0, 0, 2.0), velocity=(1.5, 0.0, 0.0))
     return w
 
 
@@ -50,12 +52,12 @@ def main() -> None:
 
     viz = None if args.no_viz else Viz("manta/bouncing_ball")
     if viz is not None:
-        viz.plane("world/ground", z=0.0, size=3.0, color=(70, 110, 70, 200))
+        viz.plane("world/ground", z=0.0, size=8.0, color=(70, 110, 70, 200))
 
     dt = 0.001
     n = int(args.duration / dt)
 
-    print(f"{'t (s)':>6} {'z (m)':>10} {'vz (m/s)':>10} {'KE+PE (J)':>10}")
+    print(f"{'t (s)':>6} {'z (m)':>10} {'vz (m/s)':>10} {'Ez (J)':>10}")
     z_peaks, last_vz = [], 0.0
     for i in range(n):
         sim.step(dt)

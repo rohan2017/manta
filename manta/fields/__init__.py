@@ -31,7 +31,7 @@ from .fluid   import (
     CurrentFlow, FluidField, FluidState, UniformFluid,
 )
 from .mag     import DipoleMag, MagField, UniformMag
-from .collision import CollisionField, HalfSpace
+from .collision import CollisionField, HalfSpace, Sphere
 from .wind_bubble import CraftWindBubble
 
 __all__ = [
@@ -40,5 +40,5 @@ __all__ = [
     "FluidField", "FluidState", "UniformFluid", "CurrentFlow",
     "CraftWindBubble",
     "MagField", "UniformMag", "DipoleMag",
-    "CollisionField", "HalfSpace",
+    "CollisionField", "HalfSpace", "Sphere",
 ]

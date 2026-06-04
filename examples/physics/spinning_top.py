@@ -1,15 +1,23 @@
-"""Spinning top — gyroscopic precession via a passive `Joint`, visualized.
+"""Spinning top — gyroscopic stability on a real contact tip.
 
-A rotor (`Mass` on a passive `Joint`) sits on a body. The Joint carries
-the gyroscopic-torque-on-body reaction ``-ω_body × L_rotor``, so when a
-brief lateral impulse hits the body it **precesses** about the spin axis
-instead of toppling — the classic top. Two runs, same rig:
+A nearly massless pole carries a heavy disk at its TOP — an inverted
+pendulum, normally unstable. The pole tip stands on a ground plane
+through a `Collider` (a frictionless point contact, gravity on). Two
+runs, same rig:
 
-  1. rotor spinning at 100 rad/s → the spin axis sweeps a precession cone;
-  2. rotor stationary           → no angular momentum, the body tumbles.
+  1. no spin → it falls right over within a second (the frictionless
+     tip skates out sideways — a rod falling on ice; a crown `Collider`
+     lets it lie down instead of poking through the floor);
+  2. spinning fast → the contact normal's torque becomes **precession**:
+     released leaning 8°, the lean azimuth sweeps a cone while the tilt
+     holds — and the contact damping slowly *rights* the top, exactly
+     like a real top "going to sleep".
 
-The viewer shows run (1): the body box, the spin axis, and the trail its
-tip sweeps. The terminal prints angular-velocity history for both.
+The spin lives in the rigid body itself (like a real toy top — the
+whole thing spins), so the gyroscopics come from the exact rigid-body
+integrator. The disk is rendered as a two-colour split disc so you can
+see it spin (it strobes at the viewer frame rate, like a real top on
+camera).
 
 Run::
 
@@ -24,76 +32,116 @@ import argparse
 import numpy as np
 
 from manta import Craft, Sim, TargetNumpy, World
-from manta.fields import GravityField
-from manta.parts import Joint, Mass, Thruster
+from manta.fields import CollisionField, GravityField
+from manta.parts import Collider, Mass
 
 from .._viz import Viz
 
-
-def _build_top() -> Craft:
-    """Body MOI ~ rotor MOI·rate so the precession period spans many ticks
-    (keeps the symplectic integrator comfortable)."""
-    c = Craft("top")
-    c.add(Mass("body", mass=0.2, moi=(0.005, 0.005, 0.001)))
-    rotor = Joint("rotor", mode="passive", axis=(0.0, 0.0, 1.0))
-    rotor.add(Mass("rotor_disk", mass=0.05, moi=(0.0001, 0.0001, 0.001)))
-    c.add(rotor)
-    # Off-axis thruster, pulsed briefly for a lateral body-frame torque.
-    c.add(Thruster("kick", force=(0.0, 0.0, 1.0), transform=(0.0, 0.1, 0.0)))
-    return c
+G = 9.81
+H = 0.30          # pole height (disk sits on top)
+DISK_R = 0.14     # disk radius (viz; I_z = m·r²/2 below)
+SPIN = 150.0      # spin rate, rad/s
+TILT0 = np.radians(8.0)              # released leaning 8°
+R_COM = 0.293     # craft COM height up the pole (pole + disk)
+M_TOT = 0.42
 
 
-def _run(label: str, rotor_rate: float, viz: Viz | None, dt: float, n: int):
-    w = World().add_field(GravityField().add_uniform((0.0, 0.0, 0.0)))  # g off
-    w.add_craft(_build_top())
-    sim = TargetNumpy(Sim(w))
-    sim.state["top"]["rotor.rate"] = rotor_rate
+def _build_world(spin: float):
+    top = Craft("top")
+    # The pole is nearly massless — all the inertia is the disk on top,
+    # which is what makes the standing top an inverted pendulum.
+    top.add(Mass("pole", mass=0.02, moi=(2e-4, 2e-4, 1e-5),
+                 transform=(0.0, 0.0, H / 2)))
+    top.add(Mass("disk", mass=0.4, moi=(0.002, 0.002, 0.004),
+                 transform=(0.0, 0.0, H)))
+    # Contact: the tip it stands on + a crown point so a toppled top
+    # lies down instead of poking through the floor.
+    top.add(Collider("tip", stiffness=2000.0, damping=30.0))
+    top.add(Collider("crown", stiffness=2000.0, damping=30.0,
+                     transform=(0.0, 0.0, H)))
 
-    if viz is not None:
-        viz.box("world/top/body", (0.06, 0.06, 0.012), color=(200, 200, 210))
-        viz.box("world/top/rotor", (0.04, 0.04, 0.006), color=(230, 150, 60))
+    w = (World()
+         .add_field(GravityField().add_uniform((0.0, 0.0, -G)))
+         .add_field(CollisionField().add_half_space()))
 
-    print(f"\n=== {label}  rotor_rate = {rotor_rate} rad/s ===")
-    print(f"{'t (s)':>5} {'ω_x':>10} {'ω_y':>10} {'ω_z':>10} {'rotor':>9}")
+    # Launch: leaning TILT0, spinning about its own (tilted) axis, and
+    # already carrying the slow-precession rate about vertical (without
+    # it the release just nutates in a deep dive). The initial-velocity
+    # term cancels the ω×r_com seeding so the top spins in place.
+    omega_p = (M_TOT * G * R_COM / (0.004 * spin)) if spin else 0.0
+    axis = np.array([0.0, -np.sin(TILT0), np.cos(TILT0)])
+    om0 = spin * axis + np.array([0.02, 0.0, omega_p])
+    v0 = -np.cross(om0, [0.0, 0.0, R_COM])
+    w.add_craft(top, position=(0.0, 0.0, 0.003),
+                orientation=(np.cos(TILT0 / 2), np.sin(TILT0 / 2), 0.0, 0.0),
+                velocity=tuple(v0),
+                angular_velocity=tuple(om0))
+    return w
+
+
+def _tilt_azimuth(q_wxyz):
+    """(tilt from vertical, lean azimuth) of the body z-axis, rad."""
+    w, x, y, z = q_wxyz
+    zax = np.array([2 * (x*z + w*y), 2 * (y*z - w*x),
+                    1 - 2 * (x*x + y*y)])
+    return (float(np.arccos(np.clip(zax[2], -1.0, 1.0))),
+            float(np.arctan2(zax[1], zax[0])))
+
+
+def _run(label: str, spin: float, viz: Viz | None, dt: float, n: int):
+    sim = TargetNumpy(Sim(_build_world(spin)))
+
+    print(f"\n=== {label}  spin = {spin} rad/s ===")
+    print(f"{'t (s)':>5} {'tilt°':>8} {'lean az°':>9} {'|ω| (rad/s)':>12}")
+    marks = {round(s / dt) for s in (0.5, 1.0, 1.5, 2.0, 3.0, 4.0,
+                                     5.0, 6.0, 7.0, 8.0)}
     for i in range(n):
         t = i * dt
-        sim.state["top"]["kick.throttle"] = 0.5 if 0.1 <= t < 0.2 else 0.0
         sim.step(dt)
 
-        if viz is not None:
-            q = np.asarray(sim.state["top"]["orientation"]).ravel()
+        if viz is not None and i % 40 == 0:
+            st = sim.state["top"]
+            p = np.asarray(st["position"]).ravel()
+            q = np.asarray(st["orientation"]).ravel()
             viz.t(t)
-            viz.pose("world/top", (0, 0, 0), q)
-            # Spin axis (body z) drawn in the body frame; its world tip
-            # traces the precession cone.
-            viz.arrow("world/top/axis", (0, 0, 0), (0, 0, 0.25),
-                      color=(90, 170, 255), radius=0.004)
-            w_, x_, y_, z_ = q
-            zaxis = np.array([2*(x_*z_ + w_*y_), 2*(y_*z_ - w_*x_),
-                              1 - 2*(x_*x_ + y_*y_)]) * 0.25
-            viz.trail("world/tip", zaxis, color=(90, 170, 255))
+            if i == 0:
+                # Disc offset pose: on the sim timeline, not at init.
+                viz.pose("world/top/disk", (0, 0, H + 0.006))
+            viz.pose("world/top", p, q)
 
-        if i in (99, 199, 499, 999, 1999, 2999):
-            omega = np.asarray(sim.state["top"]["angular_velocity"]).ravel()
-            print(f"{t:>5.2f} {omega[0]:>10.4f} {omega[1]:>10.4f} "
-                  f"{omega[2]:>10.4f} {float(sim.state['top']['rotor.rate']):>9.1f}")
+        if i in marks:
+            st = sim.state["top"]
+            q = np.asarray(st["orientation"]).ravel()
+            om = np.asarray(st["angular_velocity"]).ravel()
+            tilt, az = _tilt_azimuth(q)
+            print(f"{t:>5.2f} {np.degrees(tilt):>8.1f} "
+                  f"{np.degrees(az):>9.1f} {np.linalg.norm(om):>12.1f}")
 
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--no-viz", action="store_true", help="run headless")
-    p.add_argument("--duration", type=float, default=3.0)
+    p.add_argument("--duration", type=float, default=8.0)
     args = p.parse_args()
 
-    dt = 0.001
+    dt = 2.5e-4
     n = int(args.duration / dt)
     viz = None if args.no_viz else Viz("manta/spinning_top")
+    if viz is not None:
+        viz.plane("world/ground", z=0.0, size=1.0, color=(70, 110, 70, 200))
+        viz.box("world/top/pole", (0.008, 0.008, H / 2),
+                center=(0, 0, H / 2), color=(200, 200, 210))
+        viz.split_disc("world/top/disk", DISK_R)
 
-    print("Spinning top — lateral impulse during t ∈ [0.1, 0.2] s.")
-    print("Spinning rotor → precession (ω_x, ω_y oscillate in quadrature);")
-    print("stationary rotor → toppling (ω_x runs away).")
-    _run("SPINNING", 100.0, viz, dt, n)        # visualized
-    _run("STATIONARY", 0.0, None, dt, n)       # terminal only
+    print("Spinning top standing on its tip — same rig, two runs.")
+    print("No spin → inverted pendulum, falls right over;")
+    print("spinning → precesses on its lean cone and slowly rights")
+    print("itself as the contact damping bleeds the wobble.")
+    _run("SPINNING", SPIN, viz, dt, n)        # visualized
+    _run("STATIONARY", 0.0, None, dt, n)      # terminal only
+
+    print(f"\n(precession estimate Ω ≈ m·g·h/L = "
+          f"{M_TOT * G * R_COM / (0.004 * SPIN):.1f} rad/s)")
 
 
 if __name__ == "__main__":

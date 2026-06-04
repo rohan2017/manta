@@ -2,11 +2,14 @@
 
 A bob hangs from an apex on a stiff `Tether` (a wire/ball pivot, as real
 Foucault pendulums are suspended). The rig sits at the **north pole** on a
-four-`Collider` base that co-rotates with Earth (a `Planet`). Released at
-rest in the *inertial* frame, the bob swings in an inertially-fixed plane;
-viewed in the rotating planet frame that plane precesses at −Ω — Foucault's
-effect. Earth's true Ω (7.29e-5 rad/s, a 24 h precession) is too slow to
-watch, so we exaggerate it; the *measured* precession rate still equals Ω.
+four-`Collider` base standing on the `Earth`'s own surface — the planet
+registers its sea-level sphere as a `CollisionField` obstacle, so the rig
+could stand anywhere on the globe with no per-site ground plane. Released
+at rest in the *inertial* frame, the bob swings in an inertially-fixed
+plane; viewed in the rotating planet frame that plane precesses at −Ω —
+Foucault's effect. Earth's true Ω (7.29e-5 rad/s, a 24 h precession) is
+too slow to watch, so we exaggerate it; the *measured* precession rate
+still equals Ω.
 
 The viewer shows the scene in the **co-rotating planet frame**, where the
 base is fixed and the swing plane visibly rotates — the rosette trail is
@@ -31,7 +34,6 @@ import numpy as np
 
 from manta import Craft, Sim, TargetNumpy, World
 from manta.couplings import Tether
-from manta.fields import CollisionField
 from manta.parts import Collider, Mass, TetherEndpoint
 from manta.planets import Earth
 
@@ -59,10 +61,10 @@ def _build_world():
     bob.add(Mass("bob", mass=1.0, moi=(1e-6, 1e-6, 1e-6)))
     bob.add(TetherEndpoint("hook"))
 
+    # No per-site ground plane: Earth registers its sea-level sphere as
+    # the collision surface, so the base's feet land on the planet itself.
     w = World()
     w.add_planet(earth)
-    w.add_field(CollisionField().add_half_space(
-        origin=(0.0, 0.0, R), normal=(0.0, 0.0, 1.0)))
     w.add_craft(base, position=earth.position(0.0, 0.0, R),
                 velocity=earth.at_rest(), angular_velocity=(0.0, 0.0, OMEGA))
     w.add_craft(bob, position=(DEFL, 0.0, R + APEX - LEN),
