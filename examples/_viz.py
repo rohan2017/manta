@@ -117,11 +117,13 @@ class Viz:
             mat3x3=np.column_stack([right, down, fwd])))
 
     def track(self, path: str) -> None:
-        """Lock the 3-D view's eye to the camera entity at ``path``.
+        """Track the entity at ``path`` with the 3-D view's eye.
 
-        Send this once, AFTER the first :meth:`chase` log (the viewer
-        resolves the tracked entity against existing data). The user can
-        click another entity in the viewer to detach.
+        For a camera entity (see :meth:`chase`) the view takes the camera
+        pose verbatim; for a plain entity the orbit CENTRE follows it and
+        the user orbits/zooms around it normally. Send once, AFTER the
+        entity has data on the timeline (the viewer resolves the tracked
+        entity against existing data). Click another entity to detach.
         """
         import rerun.blueprint as rrb  # local: rerun is lazily imported
         self.rr.send_blueprint(rrb.Spatial3DView(

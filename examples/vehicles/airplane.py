@@ -180,7 +180,6 @@ def main() -> None:
                 color=(150, 150, 158))
         viz.box("world/plane/wing/panel", (0.15, 1.2, 0.008),
                 center=(-0.075, 0, 0), color=FIXED)
-        viz.pose("world/plane/wing", (0, 0, 0), _quat((0, 1, 0), -WING_INC))
         viz.box("world/plane/tail", (0.075, 0.3, 0.006),
                 center=(TAIL_X - 0.0375, 0, 0), color=FIXED)
         viz.box("world/plane/fin", (0.075, 0.005, 0.12),
@@ -281,6 +280,10 @@ def main() -> None:
                 viz.chase("world/chase", eye, p)
                 if f == 0:
                     viz.track("world/chase")   # after the camera exists
+                    # Wing incidence pose: logged here (not at init) so
+                    # it exists on the sim timeline.
+                    viz.pose("world/plane/wing", (0, 0, 0),
+                             _quat((0, 1, 0), -WING_INC))
                 # Sparse + capped: most calls are no-ops (min_dist), and
                 # the re-sent polyline stays small. World-frame points, so
                 # NOT a child of the posed plane.

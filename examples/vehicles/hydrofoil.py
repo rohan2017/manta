@@ -16,9 +16,11 @@ the floating draft and gives the foils a lift-vs-ride-height slope
 
 Foils: a front V-pair (dihedral) on a strut under the CoM carries most
 of the lift; a rear split foil rides two `Joint` hinges as **elevons**
-— a pitch PID + a roll PID mix onto them, the only active loops. A
-large rear vertical stabilizer weathervanes yaw; yaw COMMANDS vector
-the stern thruster, which hangs on a yaw `Joint`.
+— a pitch PID + a roll PID mix onto them. A large rear vertical
+stabilizer weathervanes yaw; yaw COMMANDS vector the stern thruster,
+which hangs on a yaw `Joint`. A two-axis laser gimbal (nested pan/tilt
+`Joint`s, one PID each) rides the foredeck, keeping its laser locked on
+a fixed buoy through the whole run — takeoff, waves, and carves.
 
 Controls:  X/Z throttle up/down   A/D vector thrust (yaw left/right)
 
@@ -68,6 +70,11 @@ BANK_GAIN = 1.9                      # coordinated-turn roll per vector rad
 VEC_RATE  = np.radians(20.0)         # vector slew, rad/s
 MAX_ELEV  = np.radians(22.0)         # elevon deflection clamp
 SERVO_KP  = 8.0                      # hinge servo torque per rad of error
+
+# --- laser gimbal -------------------------------------------------------------
+GIMBAL    = np.array([0.8, 0.0, 0.45])   # base on the foredeck
+TARGET    = np.array([130.0, 20.0, 4.0]) # the buoy the laser tracks
+LASER_LEN = 25.0
 
 
 def _tilt(incidence: float, dihedral: float):
@@ -146,6 +153,18 @@ def build_world():
     tv.add(Thruster("prop", force=(THRUST, 0.0, 0.0)))
     b.add(tv)
 
+    # Two-axis laser gimbal on the foredeck: a pan Joint (yaw) hosting a
+    # tilt Joint (pitch); a PID per axis keeps the laser on the buoy no
+    # matter what the boat does.
+    pan = Joint("pan", mode="saturating", stall_torque=8.0, damping=0.3,
+                axis=(0.0, 0.0, 1.0), transform=tuple(GIMBAL))
+    pan.add(Mass("pan_motor", mass=0.3, moi=(0.002, 0.002, 0.003)))
+    tilt = Joint("tilt", mode="saturating", stall_torque=6.0, damping=0.3,
+                 axis=(0.0, 1.0, 0.0), transform=(0.0, 0.0, 0.12))
+    tilt.add(Mass("laser", mass=0.2, moi=(0.001, 0.001, 0.001)))
+    pan.add(tilt)
+    b.add(pan)
+
     earth = Earth(position=(0.0, 0.0, -Earth.R_EQ), waves=WAVES,
                   surface_smoothing=SMOOTH)
     w = World().add_planet(earth)
@@ -156,6 +175,18 @@ def build_world():
 def _quat(axis, angle):
     h = 0.5 * angle
     return (np.cos(h), *(np.sin(h) * np.asarray(axis, dtype=float)))
+
+
+def _R(q_wxyz):
+    w, x, y, z = q_wxyz
+    return np.array([
+        [1 - 2*(y*y + z*z), 2*(x*y - w*z),     2*(x*z + w*y)],
+        [2*(x*y + w*z),     1 - 2*(x*x + z*z), 2*(y*z - w*x)],
+        [2*(x*z - w*y),     2*(y*z + w*x),     1 - 2*(x*x + y*y)]])
+
+
+def _wrap(a):
+    return (a + np.pi) % (2 * np.pi) - np.pi
 
 
 def _euler(q_wxyz):
@@ -194,39 +225,41 @@ def main() -> None:
         print("Controls:  X/Z throttle   A/D vector thrust   "
               "(Ctrl-C to quit)")
 
-    FIXED, MOVING = (120, 150, 210), (240, 150, 60)
+    FIXED, MOVING, HULL = (120, 150, 210), (240, 150, 60), (200, 190, 160)
     viz = None if args.no_viz else Viz("manta/hydrofoil", addr=args.viz_addr)
     if viz is not None:
+        # Static geometry only here — local POSES are logged on the first
+        # frame (after viz.t), or they never exist on the sim timeline.
         viz.plane("world/deep", z=-1.8, size=200.0, color=(15, 35, 60, 255))
-        # Hull: deck box over two slanted side panels meeting at the keel.
-        viz.box("world/boat/deck", (1.5, DECK_Y + 0.05, 0.07),
-                center=(0, 0, DECK_Z + 0.07), color=(200, 190, 160))
-        slant = np.arctan2(DECK_Y, DECK_Z - KEEL_Z)
-        for tag, sy in (("l", +1.0), ("r", -1.0)):
-            mid_y, mid_z = sy * DECK_Y / 2, (DECK_Z + KEEL_Z) / 2
-            half_w = 0.5 * np.hypot(DECK_Y, DECK_Z - KEEL_Z)
-            viz.pose(f"world/boat/side_{tag}", (0, mid_y, mid_z),
-                     _quat((1, 0, 0), sy * (np.pi / 2 - slant)))
-            viz.box(f"world/boat/side_{tag}/s", (1.5, half_w, 0.012),
-                    color=(200, 190, 160))
+        # Hull: rectangular prism above the waterline, V-keel triangular
+        # prism below (two slanted panels meeting at the keel line, base
+        # flush with the box bottom). The buoy/drag points sit exactly on
+        # the prism's corner + midpoint edges.
+        viz.box("world/boat/deck", (1.5, DECK_Y, 0.15),
+                center=(0, 0, DECK_Z + 0.15), color=HULL)
+        half_w = 0.5 * np.hypot(DECK_Y, DECK_Z - KEEL_Z)
+        viz.box("world/boat/side_l/s", (1.5, half_w, 0.015), color=HULL)
+        viz.box("world/boat/side_r/s", (1.5, half_w, 0.015), color=HULL)
         # Struts + front V panels (fixed), elevons + thruster (moving).
         viz.box("world/boat/strut_f", (0.04, 0.005, 0.20),
                 center=(FRONT_X, 0, -0.45), color=FIXED)
         viz.box("world/boat/strut_r", (0.06, 0.006, 0.23),
                 center=(REAR_X, 0, -0.52), color=FIXED)
-        for tag, sy in (("l", +1.0), ("r", -1.0)):
-            viz.pose(f"world/boat/foil_{tag}",
-                     (FRONT_X, sy * FOIL_Y, FRONT_Z),
-                     _quat((1, 0, 0), sy * DIHEDRAL))
+        for tag in ("l", "r"):
             viz.box(f"world/boat/foil_{tag}/s", (0.05, 0.16, 0.004),
                     color=FIXED)
             viz.box(f"world/boat/elev_{tag}/s", (0.04, 0.14, 0.003),
                     center=(-0.03, 0, 0), color=MOVING)
+        viz.box("world/boat/pan/tilt/laser_body", (0.10, 0.04, 0.04),
+                color=(60, 60, 70))
 
-    # One PID per stabilized axis; both mix onto the two elevons.
-    pid = {ax: TargetNumpy(PID(kp=kp, ki=ki, kd=kd, integral_limit=0.2))
-           for ax, (kp, ki, kd) in
-           {"pitch": (2.5, 0.5, 0.6), "roll": (2.2, 0.6, 0.35)}.items()}
+    # One PID per stabilized axis (mixed onto the elevons) + one per
+    # gimbal joint (commanding joint torque directly).
+    pid = {ax: TargetNumpy(PID(kp=kp, ki=ki, kd=kd, integral_limit=lim))
+           for ax, (kp, ki, kd, lim) in
+           {"pitch": (2.5, 0.5, 0.6, 0.2), "roll": (2.2, 0.6, 0.35, 0.2),
+            "pan": (6.0, 8.0, 0.5, 2.0), "tilt": (6.0, 8.0, 0.5, 2.0)
+            }.items()}
 
     throttle, vec = 0.0, 0.0
     FRAME = 0.02
@@ -234,7 +267,7 @@ def main() -> None:
     pacer = Pacer() if (args.keyboard or viz is not None) else None
     t = 0.0
     print(f"{'t (s)':>6} {'x (m)':>7} {'v (m/s)':>8} {'ride (m)':>8} "
-          f"{'pitch°':>7} {'roll°':>7} {'head°':>7} {'thr':>5}")
+          f"{'pitch°':>7} {'roll°':>7} {'head°':>7} {'thr':>5} {'aim°':>6}")
     try:
         for f in range(int(duration / FRAME)):
             if pacer is not None:
@@ -273,12 +306,28 @@ def main() -> None:
                 "tvec": vec,
             }
 
+            # Laser gimbal: desired pan/tilt from the buoy bearing in the
+            # hull frame; each PID outputs a joint torque directly.
+            p = np.asarray(st["position"]).ravel()
+            q = np.asarray(st["orientation"]).ravel()
+            R = _R(q)
+            to_tgt = R.T @ (TARGET - (p + R @ GIMBAL))
+            des = {"pan": np.arctan2(to_tgt[1], to_tgt[0]),
+                   "tilt": -np.arctan2(to_tgt[2], np.hypot(*to_tgt[:2]))}
+
             for _ in range(substeps):
                 st = sim.state["boat"]    # re-fetch: step() swaps the dict
                 st["prop.throttle"] = throttle
                 for name, target in targets.items():
                     st[f"{name}.torque_cmd"] = \
                         SERVO_KP * (target - float(st[f"{name}.angle"]))
+                # Gimbal PIDs run at the physics rate: the bearing slews
+                # ~1 rad/s at speed, too fast for frame-rate stepping.
+                for j, d in des.items():
+                    ang = float(st[f"{j}.angle"])
+                    st[f"{j}.torque_cmd"] = pid[j].step(
+                        dt, setpoint=ang + _wrap(d - ang),
+                        measurement=ang)["command"]
                 sim.step(dt)
                 t += dt
 
@@ -287,6 +336,22 @@ def main() -> None:
             if viz is not None and f % 2 == 0:
                 q = np.asarray(st["orientation"]).ravel()
                 viz.t(t)
+                if f == 0:
+                    # Static local poses, logged once ON the sim timeline.
+                    slant = np.arctan2(DECK_Y, DECK_Z - KEEL_Z)
+                    for tag, sy in (("l", +1.0), ("r", -1.0)):
+                        viz.pose(f"world/boat/side_{tag}",
+                                 (0, sy * DECK_Y / 2, (DECK_Z + KEEL_Z) / 2),
+                                 _quat((1, 0, 0), sy * (np.pi / 2 - slant)))
+                        viz.pose(f"world/boat/foil_{tag}",
+                                 (FRONT_X, sy * FOIL_Y, FRONT_Z),
+                                 _quat((1, 0, 0), sy * DIHEDRAL))
+                    viz.point("world/target", TARGET,
+                              color=(90, 230, 120), radius=0.5)
+                    # Laser ray along +x of the tilt frame.
+                    viz.arrow("world/boat/pan/tilt/laser", (0, 0, 0),
+                              (LASER_LEN, 0, 0), color=(255, 60, 60),
+                              radius=0.02)
                 viz.pose("world/boat", p, q)
                 for name in ("elev_l", "elev_r"):
                     sy = +1.0 if name.endswith("l") else -1.0
@@ -298,12 +363,14 @@ def main() -> None:
                 viz.arrow("world/boat/tvec/thrust", (0, 0, 0),
                           (-0.8 * throttle, 0, 0), color=(235, 80, 80),
                           radius=0.02)
-                yaw = _euler(q)[0]
-                eye = p + np.array(
-                    [-8.0 * np.cos(yaw), -8.0 * np.sin(yaw), 2.5])
-                viz.chase("world/chase", eye, p)
+                viz.pose("world/boat/pan", tuple(GIMBAL),
+                         _quat((0, 0, 1), float(st["pan.angle"])))
+                viz.pose("world/boat/pan/tilt", (0, 0, 0.12),
+                         _quat((0, 1, 0), float(st["tilt.angle"])))
                 if f == 0:
-                    viz.track("world/chase")
+                    # Eye-track the boat: the orbit centre follows it and
+                    # the user orbits/zooms normally.
+                    viz.track("world/boat")
                 viz.trail("world/trail", p, max_len=300, min_dist=2.0)
                 if f % 10 == 0:      # 5 Hz animated wave strips
                     xs = p[0] + np.arange(-10.0, 14.0, 1.5)
@@ -315,12 +382,23 @@ def main() -> None:
 
             if (f + 1) % round(1.0 / FRAME) == 0:
                 v = np.asarray(st["velocity"]).ravel()
-                yaw, pitch, roll = _euler(
-                    np.asarray(st["orientation"]).ravel())
+                q = np.asarray(st["orientation"]).ravel()
+                yaw, pitch, roll = _euler(q)
+                # Laser pointing error: actual ray direction vs. bearing.
+                R = _R(q)
+                pan_a, tilt_a = (float(st["pan.angle"]),
+                                 float(st["tilt.angle"]))
+                d_world = R @ np.array(
+                    [np.cos(pan_a) * np.cos(tilt_a),
+                     np.sin(pan_a) * np.cos(tilt_a), -np.sin(tilt_a)])
+                bearing = TARGET - (p + R @ GIMBAL)
+                bearing = bearing / np.linalg.norm(bearing)
+                aim = np.degrees(np.arccos(np.clip(d_world @ bearing,
+                                                   -1.0, 1.0)))
                 print(f"{t:>6.2f} {p[0]:>7.1f} {np.linalg.norm(v):>8.2f} "
                       f"{p[2]:>8.2f} {np.degrees(pitch):>+7.1f} "
                       f"{np.degrees(roll):>+7.1f} {np.degrees(yaw):>+7.1f} "
-                      f"{throttle:>5.2f}")
+                      f"{throttle:>5.2f} {aim:>6.2f}")
     except KeyboardInterrupt:
         pass
     finally:
