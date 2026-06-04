@@ -1,12 +1,12 @@
 """Signal — a typed value channel with freshness + wiring.
 
-A `Signal` is a small mailbox: a named slot holding a value, a freshness
-flag, a timestamp, and a monotonic version counter. `wire(producer,
-consumer)` connects two Signals so the consumer pulls the producer's
-value on read. The version counter is how a consumer tells that the
-producer has emitted something *new* (multi-rate freshness) without the
-producer having to clear a flag that other consumers might still need —
-so one producer can fan out to many consumers cleanly.
+A `Signal` is a small mailbox: a named slot holding a value, a
+timestamp, and a monotonic version counter. `wire(producer, consumer)`
+connects two Signals so the consumer pulls the producer's value on
+read. The version counter is the ONE freshness mechanism: a consumer
+tells that the producer has emitted something *new* by comparing
+versions, so one producer can fan out to many consumers cleanly (no
+flag for one consumer to clear out from under another).
 
 Two disciplines share the one struct:
 
@@ -17,8 +17,8 @@ Two disciplines share the one struct:
   * **command** — latched / zero-order-hold. The value persists and is
     read every tick regardless of freshness.
 
-The shape is deliberately codegen-trivial — `{value buffer, bool fresh,
-double t, int version, Signal* source}`. Pull-through is a pointer chase
+The shape is deliberately codegen-trivial — `{value buffer, double t,
+int version, Signal* source}`. Pull-through is a pointer chase
 (or a static copy pass in pointer-free targets); it never touches the
 compiled-kernel ABIs. The runtimes expose Signals as named *ports*
 (`sim.out(...)`, `ekf.meas(...)`, `lqr.command(...)`, `ekf.estimate`),
@@ -31,7 +31,7 @@ from typing import Any
 
 
 class Signal:
-    """A named value channel: value + freshness + version + optional wire.
+    """A named value channel: value + version + optional wire.
 
     A Signal with `source is None` is its own producer — writes via
     `set()` bump its version. A wired Signal (`source` set by `wire()`)
@@ -41,7 +41,7 @@ class Signal:
     compatibility checks.
     """
 
-    __slots__ = ("name", "dim", "value", "fresh", "t", "version",
+    __slots__ = ("name", "dim", "value", "t", "version",
                  "source", "latched", "rate", "_last_fire_t", "_held",
                  "layout")
 
@@ -50,7 +50,6 @@ class Signal:
         self.name    = name
         self.dim     = dim
         self.value:   Any = None
-        self.fresh   = False
         self.t:       float | None = None
         self.version = 0          # bumps on every set()
         self.source:  "Signal | None" = None
@@ -75,7 +74,6 @@ class Signal:
         producing end (or on an unwired port the user feeds directly)."""
         self.value   = value
         self.t       = t
-        self.fresh   = True
         self.version += 1
 
     # ---- Consumer side (pull through the wire) ------------------------

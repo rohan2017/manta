@@ -70,10 +70,11 @@ def test_step_consumes_measurement_once():
     rt = _est_ekf()
     rt.reset(state={"drone": {"position": [10.0, 0.0, 100.0]}}, P=np.eye(12))
     rt.feed("gps.position", np.array([0.0, 0.0, 100.0]))
-    assert rt._bus._meas["drone.gps.position"]["fresh"] is True
+    sig = rt._bus._meas["drone.gps.position"]
+    assert sig.version > rt._bus._seen_meas.get(sig.name, 0)   # pending
 
     rt.step(0.02)                                   # applies the fix
-    assert rt._bus._meas["drone.gps.position"]["fresh"] is False
+    assert rt._bus._seen_meas[sig.name] == sig.version          # consumed
     P_after_update = np.trace(rt.P)
 
     rt.step(0.02)                                   # no feed → predict only
@@ -99,7 +100,8 @@ def test_step_drops_stale_measurement():
     rt.step(0.02, t=1.0)
     # Position must not have jumped toward the bogus reading.
     assert np.linalg.norm(rt.x[:2] - pos_before[:2]) < 1.0
-    assert rt._bus._meas["drone.gps.position"]["fresh"] is False
+    sig = rt._bus._meas["drone.gps.position"]
+    assert rt._bus._seen_meas[sig.name] == sig.version          # consumed
 
 
 # ---------------------------------------------------------------------------

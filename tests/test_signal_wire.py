@@ -20,11 +20,11 @@ from manta.parts import Mass, PositionSensor, Thruster
 # Signal primitive
 # ---------------------------------------------------------------------------
 
-def test_signal_set_bumps_version_and_freshness():
+def test_signal_set_bumps_version():
     s = Signal("x", dim=3)
     assert s.version == 0 and s.value is None
     s.set(np.array([1.0, 2.0, 3.0]), t=0.5)
-    assert s.version == 1 and s.fresh and s.t == 0.5
+    assert s.version == 1 and s.t == 0.5
     np.testing.assert_array_equal(s.read(), [1.0, 2.0, 3.0])
 
 

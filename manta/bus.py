@@ -114,12 +114,17 @@ class MeasurementBus:
         self._estimate_dim = estimate_dim
         self._estimate_layout = estimate_layout
 
-        # One mailbox per registered sensor, in registration order (= the
-        # order step() folds them). feed() drops a reading; step() drains it.
-        self._meas: dict[str, dict[str, Any]] = {}
+        # ONE Signal per registered sensor, in registration order (= the
+        # order step() folds them). It is both the mailbox (`feed()` sets
+        # it) and the wireable port (`meas()` returns it); the Signal's
+        # version counter is the single freshness mechanism — step() folds
+        # once per version advance. `_keys` routes a fold to the runtime.
+        self._meas: dict[str, Signal] = {}
+        self._keys: dict[str, Any] = {}
         for full, s in sensors.items():
-            self._meas[full] = {"value": None, "fresh": False, "t": None,
-                                "dim": s["dim"], "key": s["key"]}
+            self._meas[full] = Signal(full, dim=s["dim"])
+            self._keys[full] = s["key"]
+        self._seen_meas: dict[str, int] = {}
 
         # Latched (zero-order-hold) control commands, read by step()'s predict.
         self.inputs: dict[str, Any] = {}
@@ -127,24 +132,18 @@ class MeasurementBus:
         self.Q: np.ndarray | None = None
         # Filter clock — advances by dt each step (or to the supplied t).
         self._t = 0.0
-        # Signal ports (lazy). `_seen_meas` tracks the last upstream version
-        # folded in, so a wired measurement is consumed once per fresh sample.
-        self._meas_ports: dict[str, Signal] = {}
         self._cmd_ports: dict[str, Signal] = {}
-        self._seen_meas: dict[str, int] = {}
         self._est_port: Signal | None = None
 
     # ---- Ports ---------------------------------------------------------
 
     def meas(self, name: str) -> Signal:
-        """Consumer port for a sensor measurement (`"craft.part.output"` or
-        an unambiguous suffix). Wire a sim output into it, or `set()` it
-        yourself; `step()` folds it in once per fresh sample."""
+        """The sensor's measurement Signal (`"craft.part.output"` or an
+        unambiguous suffix). Wire a sim output into it, or `set()` it
+        yourself; `step()` folds it once per fresh sample (version)."""
         full = resolve_suffix(name, self._meas, label="sensor",
-                              who="MeasurementBus.feed")
-        if full not in self._meas_ports:
-            self._meas_ports[full] = Signal(full, dim=self._meas[full]["dim"])
-        return self._meas_ports[full]
+                              who="MeasurementBus.meas")
+        return self._meas[full]
 
     def command(self, name: str) -> Signal:
         """Consumer port for a known control input (drives the predict).
@@ -176,20 +175,20 @@ class MeasurementBus:
     # ---- Feed + step ---------------------------------------------------
 
     def feed(self, name: str, z, *, t: float | None = None) -> None:
-        """Drop a measurement into the mailbox and mark it fresh.
+        """Drop a measurement onto the sensor's Signal.
 
         `name` is a registered sensor's full name or an unambiguous suffix;
         `t` is an optional sample timestamp used for staleness rejection in
         `step()`. The reading is consumed by the next `step()`."""
         full = resolve_suffix(name, self._meas, label="sensor",
                               who="MeasurementBus.feed")
-        m = self._meas[full]
+        sig = self._meas[full]
         z_arr = np.atleast_1d(np.asarray(z, dtype=float)).reshape(-1)
-        if z_arr.size != m["dim"]:
+        if z_arr.size != sig.dim:
             raise ValueError(
-                f"MeasurementBus.feed: {name}: expected z of size {m['dim']}, "
+                f"MeasurementBus.feed: {name}: expected z of size {sig.dim}, "
                 f"got {z_arr.size}.")
-        m["value"], m["fresh"], m["t"] = z_arr, True, t
+        sig.set(z_arr, t=t)
 
     def step(self, dt: float, *, t: float | None = None,
              Q: np.ndarray | None = None) -> None:
@@ -207,23 +206,21 @@ class MeasurementBus:
             v = port.latched_value(t_start)
             if v is not None:
                 self.inputs[full] = float(v) if np.ndim(v) == 0 else v
-        # Pull wired measurement ports: fold once per fresh sample.
-        for full, port in self._meas_ports.items():
-            ver = port.cur_version
-            if ver > self._seen_meas.get(full, 0):
-                self._seen_meas[full] = ver
-                self.feed(full, port.read(), t=port.cur_t)
 
         u_dict = self.inputs if self.inputs else None
         u_vec = self._rt.build_u(u_dict)
-        # Update first: fold interval-start readings at the pre-predict state.
-        for full, m in self._meas.items():
-            if not m["fresh"]:
+        # Update first: fold interval-start readings at the pre-predict
+        # state — once per version advance (fed directly or via a wire).
+        for full, sig in self._meas.items():
+            ver = sig.cur_version
+            if ver <= self._seen_meas.get(full, 0):
                 continue
-            m["fresh"] = False
-            if m["t"] is not None and m["t"] < t_start - 1e-9:
+            self._seen_meas[full] = ver
+            zt = sig.cur_t
+            if zt is not None and zt < t_start - 1e-9:
                 continue                       # stale: predates current state
-            self._rt.fold(m["key"], m["value"], u_vec)
+            z = np.atleast_1d(np.asarray(sig.read(), dtype=float)).reshape(-1)
+            self._rt.fold(self._keys[full], z, u_vec)
         # Then predict over [t_start, t_start + dt].
         self._rt.predict(dt, t=t_start, u=u_dict,
                          Q=Q if Q is not None else self.Q)
