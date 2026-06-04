@@ -124,7 +124,7 @@ def test_ekf_estimates_r3_state_from_output_observation():
     c = Craft("c"); c.add(Mass("body", mass=1.0)); c.add(_R3StatePart("p"))
     w = World().add_field(GravityField(g=(0, 0, 0)))
     w.add_craft(c)
-    ekf = TargetNumpy(EKF(w))
+    ekf = TargetNumpy(EKF(w, sensors=[]))
 
     # Broad prior on the bias slot.
     n = ekf.spec.tangent_dim

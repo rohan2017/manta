@@ -162,6 +162,29 @@ class LinearizedSystem:
         if not self.crafts:
             raise ValueError("LinearizedSystem: world has no crafts.")
 
+        # --- model validation (every transform passes through here) -----
+        # Verify per-part `requires_fields` / `requires_planet` against the
+        # world's registry, and stamp the craft back-pointers parts use to
+        # introspect fields/planets via TickContext.
+        for craft in self.crafts:
+            craft._world = world
+            for part in craft.parts:
+                for req_cls in getattr(type(part), "requires_fields", []):
+                    if not any(isinstance(f, req_cls) for f in world.fields):
+                        raise ValueError(
+                            f"World '{world.name}': part "
+                            f"{type(part).__name__}('{part.name}') requires "
+                            f"a registered {req_cls.__name__} but none is "
+                            f"attached to this world.")
+                req_planet = getattr(type(part), "requires_planet", None)
+                if req_planet is not None and not any(
+                        isinstance(p, req_planet) for p in world._planets):
+                    raise ValueError(
+                        f"World '{world.name}': part "
+                        f"{type(part).__name__}('{part.name}') requires a "
+                        f"{req_planet.__name__} planet but none is "
+                        f"registered with this world.")
+
         full_spec = StateSpec.from_world(world)
         self.full_spec = full_spec
 

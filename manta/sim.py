@@ -52,41 +52,9 @@ class Sim:
     emitting oracle/deploy Modules."""
 
     def __init__(self, world: "World") -> None:
-        # Planet prep first (idempotent): planets may register the very
-        # fields parts require below.
-        if not world._planets_registered:
-            for p in world._planets:
-                p.register_disturbances(world)
-            world._planets_registered = True
-        world._resolve_planet_state_overrides()
-
-        # Verify per-part `requires_fields` / `requires_planet` against the
-        # world's registry, and stamp the craft back-pointers parts use to
-        # introspect fields/planets via TickContext.
-        for entry in world._crafts:
-            craft = entry["craft"]
-            craft._world = world
-            for part in craft.parts:
-                for req_cls in getattr(type(part), "requires_fields", []):
-                    if world.get_field(req_cls) is None and not any(
-                            isinstance(f, req_cls) for f in world.fields):
-                        raise ValueError(
-                            f"World '{world.name}': part "
-                            f"{type(part).__name__}('{part.name}') requires "
-                            f"a registered {req_cls.__name__} but none is "
-                            f"attached to this world.")
-                req_planet = getattr(type(part), "requires_planet", None)
-                if req_planet is not None and not any(
-                        isinstance(p, req_planet) for p in world._planets):
-                    raise ValueError(
-                        f"World '{world.name}': part "
-                        f"{type(part).__name__}('{part.name}') requires a "
-                        f"{req_planet.__name__} planet but none is "
-                        f"registered with this world.")
-        if not world._crafts:
-            raise ValueError(
-                f"World '{world.name}': no crafts added; nothing to compile.")
-
+        # Model validation (planet prep, requires_fields/requires_planet,
+        # craft back-pointers) happens inside LinearizedSystem — the one
+        # choke point every transform passes through.
         self._sys = LinearizedSystem(world)     # full state, all sensors
         self.world = world
         self.crafts = self._sys.crafts

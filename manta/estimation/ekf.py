@@ -108,6 +108,8 @@ class EKF:
         # per-sensor Joseph update. A measurement is dt-independent, so
         # dt is eliminated here (substituted to 0) — the kernel honestly
         # takes only (x, P, z, u, t).
+        init_flat = flatten_nested(world._initial_state_dict())
+        x0 = spec.pack_any(init_flat)
         zero_dt = ca.MX.zeros(1, 1)
         eye = ca.MX.eye(n_tan)
         updates: dict[str, ca.Function] = {}
@@ -120,6 +122,17 @@ class EKF:
                 R = L_h @ ca.DM(sys.Sigma) @ L_h.T
             else:
                 R = ca.MX.zeros(s.dim, s.dim)
+            # A σ=0 sensor bakes R = 0: the first update collapses its
+            # covariance block to exactly zero, the second meets a singular
+            # S and NaNs silently. Refuse at construction.
+            R0 = np.asarray(ca.Function("R0", [x, u, t], [R])(
+                x0, sys.u_defaults, 0.0))
+            if not np.any(np.abs(R0) > 0.0):
+                raise ValueError(
+                    f"EKF: sensor {full!r} has no active noise channel — its "
+                    f"baked R is zero and the update is singular (the second "
+                    f"fold NaNs). Declare a nonzero noise σ on the sensor, or "
+                    f"exclude it via sensors=[...].")
             S = H @ P @ H.T + R
             K = ca.solve(S, (P @ H.T).T, "ldl").T      # P Hᵀ S⁻¹ (S SPD)
             x_upd = spec.boxplus_sym(x, K @ (z - h))
@@ -131,8 +144,6 @@ class EKF:
                 ["x", "P", "z", "u", "t"], ["x_new", "P_new"])
 
         # ---- the typed Module -------------------------------------------
-        init_flat = flatten_nested(world._initial_state_dict())
-        x0 = spec.pack_any(init_flat)
         fields = (
             StateField("x", "manifold", (spec.ambient_dim,),
                        init=x0, manifold=spec),
