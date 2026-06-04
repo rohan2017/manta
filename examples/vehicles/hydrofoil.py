@@ -167,7 +167,7 @@ def main() -> None:
                 # Laser ray, drawn along +x of the tilt frame.
                 viz.arrow("world/boat/pan/tilt/laser", (0, 0, 0),
                           (LASER_LEN, 0, 0), color=(255, 60, 60), radius=0.02)
-                viz.trail("world/boat/trail", p)
+                viz.trail("world/trail", p)   # world coords: not under the posed boat
 
             if (i + 1) % 200 == 0:
                 p = np.asarray(sim.state["boat"]["position"]).ravel()

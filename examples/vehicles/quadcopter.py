@@ -169,7 +169,7 @@ def main() -> None:
                 viz.t(t)
                 viz.pose("world/quad", tp, tq)
                 viz.pose("world/quad_est", ep, eq)
-                viz.trail("world/quad/trail", tp)
+                viz.trail("world/trail", tp)   # world coords: not under the posed quad
                 viz.point("world/setpoint", setpoint, color=(90, 230, 120),
                           radius=0.08)
                 for r in ROTORS:                       # thrust arrows (body)

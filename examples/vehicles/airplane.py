@@ -170,10 +170,6 @@ def main() -> None:
     FIXED, MOVING = (120, 150, 210), (240, 150, 60)
     viz = None if args.no_viz else Viz("manta/airplane")
     if viz is not None:
-        # Chase cam: park the eye just behind/left of the runway spawn and
-        # keep it locked on the plane (otherwise the viewer frames the whole
-        # world and a 2 m airframe is a speck).
-        viz.follow("world/plane", eye=(-6.0, -4.0, 2.5), target=(0.0, 0.0, 0.3))
         viz.plane("world/ground", z=0.0, size=300.0, color=(70, 110, 70, 160))
         viz.box("world/runway", (60.0, 3.0, 0.002), center=(55.0, 0.0, 0.0),
                 color=(120, 120, 125))
@@ -255,10 +251,19 @@ def main() -> None:
                 viz.arrow("world/plane/thrust", (0.5, 0, CG[2]),
                           (0.6 * throttle, 0, 0), color=(235, 80, 80),
                           radius=0.02)
+                # Chase cam: 7 m behind the plane along its heading (yaw
+                # only — no roll/pitch, so the horizon stays level), 2 m up.
+                yaw = _euler(q)[0]
+                eye = p + np.array(
+                    [-7.0 * np.cos(yaw), -7.0 * np.sin(yaw), 2.0])
+                viz.chase("world/chase", eye, p)
+                if i == 0:
+                    viz.track("world/chase")   # after the camera exists
                 # Trails re-send the whole polyline each log — keep them
                 # at 10 Hz or they saturate the viewer's ingest channel.
+                # World-frame points, so NOT a child of the posed plane.
                 if i % 50 == 0:
-                    viz.trail("world/plane/trail", p)
+                    viz.trail("world/trail", p)
 
             # Wheels-off / touchdown reporting (gear sits at z≈0.30 at rest).
             if not airborne and p[2] > 0.6:

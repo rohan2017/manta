@@ -68,6 +68,7 @@ class Viz:
         rr.init(app_id, spawn=True)
         rr.log("/", rr.ViewCoordinates.RIGHT_HAND_Z_UP, static=True)
         self._trails: dict[str, list[np.ndarray]] = {}
+        self._cams: set[str] = set()
 
     # ---- timeline ------------------------------------------------------
 
@@ -75,25 +76,46 @@ class Viz:
         """Stamp subsequent logs at sim-time ``seconds`` on the timeline."""
         self.rr.set_time("sim_time", duration=float(seconds))
 
-    # ---- camera --------------------------------------------------------
+    # ---- chase camera ----------------------------------------------------
 
-    def follow(self, path: str, *, eye, target) -> None:
-        """Chase-cam: orbit camera tracking the entity at ``path``.
+    def chase(self, path: str, eye, target) -> None:
+        """Pose a chase-camera entity at ``eye`` looking at ``target``
+        (world coords, z-up). Log it every frame to fly the camera; pair
+        with :meth:`track` to lock the 3-D view onto it.
 
-        Without this the viewer auto-frames the whole scene, and a
-        metre-scale vehicle crossing hundreds of metres of world is a
-        sub-pixel speck. ``eye``/``target`` set the initial camera pose
-        in world coords (so pick them around the vehicle's spawn point);
-        the viewer then keeps the camera locked on the entity as it
-        moves. The user can still orbit/zoom by hand.
+        The first call also logs the camera intrinsics. Orientation uses
+        rerun's RDF convention (x=right, y=down, z=forward).
+        """
+        rr = self.rr
+        if path not in self._cams:
+            self._cams.add(path)
+            rr.log(path, rr.Pinhole(fov_y=0.9, aspect_ratio=16 / 9,
+                                    camera_xyz=rr.ViewCoordinates.RDF,
+                                    image_plane_distance=0.5), static=True)
+        fwd = _vec3(target) - _vec3(eye)
+        fwd = fwd / max(float(np.linalg.norm(fwd)), 1e-9)
+        right = np.cross(fwd, np.array([0.0, 0.0, 1.0]))
+        n = float(np.linalg.norm(right))
+        if n < 1e-6:                      # looking straight up/down
+            right = np.array([1.0, 0.0, 0.0])
+            n = 1.0
+        right = right / n
+        down = np.cross(fwd, right)
+        rr.log(path, rr.Transform3D(
+            translation=_vec3(eye),
+            mat3x3=np.column_stack([right, down, fwd])))
+
+    def track(self, path: str) -> None:
+        """Lock the 3-D view's eye to the camera entity at ``path``.
+
+        Send this once, AFTER the first :meth:`chase` log (the viewer
+        resolves the tracked entity against existing data). The user can
+        click another entity in the viewer to detach.
         """
         import rerun.blueprint as rrb  # local: rerun is lazily imported
         self.rr.send_blueprint(rrb.Spatial3DView(
             origin="/",
-            eye_controls=rrb.archetypes.EyeControls3D(
-                tracking_entity=path,
-                position=_vec3(eye),
-                look_target=_vec3(target)),
+            eye_controls=rrb.archetypes.EyeControls3D(tracking_entity=path),
         ))
 
     # ---- transforms + geometry ----------------------------------------
@@ -147,7 +169,12 @@ class Viz:
 
     def trail(self, path, position, *, color=(80, 160, 255),
               max_len: int = 4000) -> None:
-        """Append ``position`` to a growing world-frame trail polyline."""
+        """Append ``position`` to a growing world-frame trail polyline.
+
+        ``position`` is in WORLD coords, so ``path`` must NOT sit under an
+        entity that gets :meth:`pose`\\ d (children inherit the parent
+        transform — the whole trail would ride the moving body).
+        """
         buf = self._trails.setdefault(path, [])
         buf.append(_vec3(position).copy())
         if len(buf) > max_len:
