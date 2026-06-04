@@ -241,14 +241,16 @@ class Viz:
             vertex_normals=normals,
             albedo_factor=color))
 
-    def disc(self, path, radius: float, *, color=(70, 110, 70, 160),
-             thickness: float = 1e-3, static: bool = True) -> None:
-        """A flat solid disc of ``radius`` in the entity's xy-plane —
-        e.g. a water surface that follows a vehicle (log once, then
-        :meth:`pose` the entity each frame)."""
+    def disc(self, path, radius: float, *, center=(0.0, 0.0, 0.0),
+             color=(70, 110, 70, 160), thickness: float = 1e-3,
+             static: bool = True) -> None:
+        """A flat solid disc of ``radius`` in the entity's xy-plane at
+        ``center`` — e.g. a water surface that follows a vehicle (log
+        once, then :meth:`pose` the entity each frame)."""
         self.rr.log(
             path,
-            self.rr.Ellipsoids3D(half_sizes=[[radius, radius, thickness]],
+            self.rr.Ellipsoids3D(centers=[_vec3(center)],
+                                 half_sizes=[[radius, radius, thickness]],
                                  colors=[color], fill_mode="solid"),
             static=static)
 
