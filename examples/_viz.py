@@ -46,15 +46,14 @@ def _vec3(v) -> np.ndarray:
 class Viz:
     """A small stateful wrapper around one rerun recording.
 
-    ``spawn=True`` opens the rerun viewer. Pass ``spawn=False`` for a
-    headless run (CI / smoke tests): the log calls still validate but no
-    window opens and nothing is retained.
+    Constructing one opens the rerun viewer; headless runs (``--no-viz``)
+    skip creating a ``Viz`` entirely.
     """
 
-    def __init__(self, app_id: str, *, spawn: bool = True) -> None:
+    def __init__(self, app_id: str) -> None:
         rr = require_rerun()
         self.rr = rr
-        rr.init(app_id, spawn=spawn)
+        rr.init(app_id, spawn=True)
         rr.log("/", rr.ViewCoordinates.RIGHT_HAND_Z_UP, static=True)
         self._trails: dict[str, list[np.ndarray]] = {}
 
@@ -78,12 +77,13 @@ class Viz:
             kw["quaternion"] = self.rr.Quaternion(xyzw=[x, y, z, w])
         self.rr.log(path, self.rr.Transform3D(**kw))
 
-    def box(self, path, half_sizes, *, color=(150, 150, 150),
-            static: bool = True) -> None:
-        """A solid box, centred at the entity origin (logged in its frame)."""
+    def box(self, path, half_sizes, *, center=(0.0, 0.0, 0.0),
+            color=(150, 150, 150), static: bool = True) -> None:
+        """A solid box at ``center`` in the entity's frame (default origin)."""
         self.rr.log(
             path,
-            self.rr.Boxes3D(half_sizes=[_vec3(half_sizes)], colors=[color],
+            self.rr.Boxes3D(centers=[_vec3(center)],
+                            half_sizes=[_vec3(half_sizes)], colors=[color],
                             fill_mode="solid"),
             static=static)
 

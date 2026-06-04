@@ -180,8 +180,8 @@ def main() -> None:
             if (i + 1) % 100 == 0:
                 tp = np.asarray(sim.state["quad"]["position"]).ravel()
                 ep = np.asarray(ekf.state_dict()["quad"]["position"]).ravel()
-                print(f"{t:>6.2f}  {np.array2string(tp, precision=2):>22}  "
-                      f"{np.array2string(setpoint, precision=2):>18}  "
+                print(f"{t:>6.2f}  {np.round(tp, 2) + 0.0!s:>22}  "
+                      f"{np.round(setpoint, 2) + 0.0!s:>18}  "
                       f"{np.linalg.norm(tp - ep):>8.4f}")
     except KeyboardInterrupt:
         pass
@@ -189,7 +189,8 @@ def main() -> None:
         ctrl.stop()
 
     final = np.asarray(sim.state["quad"]["position"]).ravel()
-    print(f"\nfinal pos {np.round(final, 2)}  setpoint {np.round(setpoint, 2)}"
+    print(f"\nfinal pos {np.round(final, 2) + 0.0}"
+          f"  setpoint {np.round(setpoint, 2) + 0.0}"
           f"  (err {np.linalg.norm(final - setpoint):.3f} m)")
 
 

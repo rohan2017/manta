@@ -10,7 +10,7 @@ If this prints "manta is working" you have a working install. From here:
 
   * ``examples/physics/``  — bouncing ball, spinning top, Foucault pendulum
                              (with rerun visualization)
-  * ``examples/vehicles/`` — quadcopter (EKF + LQR), glider, submarine,
+  * ``examples/vehicles/`` — quadcopter (EKF + LQR), airplane, submarine,
                              hydrofoil (visualization + keyboard control)
 
 Run::

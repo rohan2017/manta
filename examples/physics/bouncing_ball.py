@@ -48,8 +48,9 @@ def main() -> None:
     g, k, c_damp = 9.81, 5.0e3, 30.0
     sim = TargetNumpy(Sim(build_world(g, k, c_damp)))
 
-    viz = Viz("manta/bouncing_ball", spawn=not args.no_viz)
-    viz.plane("world/ground", z=0.0, size=3.0, color=(70, 110, 70, 200))
+    viz = None if args.no_viz else Viz("manta/bouncing_ball")
+    if viz is not None:
+        viz.plane("world/ground", z=0.0, size=3.0, color=(70, 110, 70, 200))
 
     dt = 0.001
     n = int(args.duration / dt)
@@ -65,10 +66,11 @@ def main() -> None:
         last_vz = vz
 
         t = (i + 1) * dt
-        viz.t(t)
-        viz.point("world/ball", sim.state["ball"]["position"],
-                  color=(240, 180, 60), radius=RADIUS)
-        viz.trail("world/ball/trail", sim.state["ball"]["position"])
+        if viz is not None:
+            viz.t(t)
+            viz.point("world/ball", sim.state["ball"]["position"],
+                      color=(240, 180, 60), radius=RADIUS)
+            viz.trail("world/ball/trail", sim.state["ball"]["position"])
 
         if (i + 1) % 250 == 0:
             ke, pe = 0.5 * vz ** 2, max(0.0, z) * g

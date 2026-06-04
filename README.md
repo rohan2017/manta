@@ -238,7 +238,7 @@ examples/                  quickstart + physics/ + vehicles/
     _control.py            keyboard (pynput) + scripted-fallback control
     quickstart.py          install sanity check (numpy Sim, apex height)
     physics/               bouncing_ball / spinning_top / foucault_pendulum
-    vehicles/              quadcopter / glider / submarine / hydrofoil
+    vehicles/              quadcopter / airplane / submarine / hydrofoil
 ```
 
 ## Demos
@@ -262,7 +262,7 @@ a self-running scripted fallback so they work unattended):
 
 # vehicles/ — visualized + keyboard (add --keyboard for live control)
 .venv/bin/python -m examples.vehicles.quadcopter         # Sim + EKF + LQR closed loop
-.venv/bin/python -m examples.vehicles.glider             # NACA wing, fly-by-wire
+.venv/bin/python -m examples.vehicles.airplane           # control surfaces on Joint hinges
 .venv/bin/python -m examples.vehicles.submarine          # PointBuoy + DVL + EKF
 .venv/bin/python -m examples.vehicles.hydrofoil          # nested-Joint laser gimbal (PID)
 ```
