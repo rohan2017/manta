@@ -25,9 +25,10 @@ Example::
                           torque=Vec3[CraftFrame].constant((0, 0, 0)))
 
 Inside `update`, declared State / Input attributes read the *current*
-tick's symbolic node — the tracer rebinds the attribute before calling
-update() and restores the Python default after the tick is compiled.
-State omitted from `PartUpdate.new_state` passes through unchanged.
+tick's symbolic node — the compiler binds them in a thread-local
+`TraceBindings` context that attribute reads consult while a trace is
+active; the instance itself is never mutated. State omitted from
+`PartUpdate.new_state` passes through unchanged.
 
 `_declarations()` walks the MRO so subclasses inherit Parameter/State/
 Input/Output entries from their parents. Construction-time overrides
@@ -36,7 +37,47 @@ Input/Output entries from their parents. Construction-time overrides
 
 from __future__ import annotations
 
+import threading
 from typing import Any, ClassVar
+
+
+# ---------------------------------------------------------------------------
+# Trace bindings — how `self.<state/input/noise>` reads the current tick's
+# symbol inside update() WITHOUT the compiler ever mutating the instance.
+# ---------------------------------------------------------------------------
+
+_trace_local = threading.local()
+
+
+class TraceBindings:
+    """Per-compile attribute bindings (a thread-local context manager).
+
+    While active, a `DeclarationHost` attribute read resolves through these
+    bindings instead of the instance: `self.throttle` inside `update()`
+    returns the current tick's symbolic node, and the part/disturbance
+    instance is NEVER mutated. Exception-safe by construction — the
+    bindings live here, not on the objects, so there is nothing to restore
+    when a trace unwinds (normally or via an exception).
+    """
+
+    __slots__ = ("_by_owner",)
+
+    def __init__(self) -> None:
+        self._by_owner: dict[int, dict[str, Any]] = {}
+
+    def bind(self, owner, name: str, symbol) -> None:
+        """Bind `owner.<name>` to `symbol` for the duration of the trace."""
+        self._by_owner.setdefault(id(owner), {})[name] = symbol
+
+    def __enter__(self) -> "TraceBindings":
+        if getattr(_trace_local, "by_owner", None) is not None:
+            raise RuntimeError(
+                "TraceBindings: a trace is already active on this thread.")
+        _trace_local.by_owner = self._by_owner
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        _trace_local.by_owner = None
 
 
 # ---------------------------------------------------------------------------
@@ -447,6 +488,19 @@ class DeclarationHost:
 
     The host must set `self.name` before calling `_apply_declarations`.
     """
+
+    def __getattribute__(self, name):
+        # Inside an active trace, declared attributes resolve through the
+        # trace's bindings (the current tick's symbols); everything else —
+        # and everything outside a trace — reads the instance as normal.
+        by_owner = getattr(_trace_local, "by_owner", None)
+        if by_owner is not None:
+            bound = by_owner.get(id(self))
+            if bound is not None:
+                sym = bound.get(name)
+                if sym is not None:
+                    return sym
+        return object.__getattribute__(self, name)
 
     @classmethod
     def _declarations(cls) -> dict[str, "_Declaration"]:

@@ -39,7 +39,7 @@ from .inertia import symbolic_inertia_rollup
 from .kinematics import kinematic_pass
 from ..ir.frames import WorldFrame, CraftFrame, PartFrame
 from ..ir.manifold import SO3Manifold
-from ..parts.base import CompositePart, Part, PartUpdate
+from ..parts.base import CompositePart, Part, PartUpdate, TraceBindings
 from ..ir.wrench import Wrench
 
 
@@ -113,70 +113,67 @@ def compile_world_tick(crafts: list,
                 f"{ai['m_total']}; need m > 0.")
 
     name = "_".join(c.name for c in crafts) + "_world_tick"
-    with ir.Graph(name=name) as g:
-        dt = ir.Scalar.input("dt")
-        t  = ir.Scalar.input("t")
+    try:
+        # All State/Input/Noise attribute reads inside the trace resolve
+        # through `trace` (thread-local TraceBindings) — the part and
+        # disturbance instances are never mutated, so there is nothing to
+        # restore, even when a part's update() raises mid-trace.
+        with ir.Graph(name=name) as g, TraceBindings() as trace:
+            dt = ir.Scalar.input("dt")
+            t  = ir.Scalar.input("t")
 
-        # Pass 0a: rigid-body state inputs for every craft, stashed on
-        # the craft so disturbances (and the per-craft trace below) can
-        # reference any craft's symbolic state. This must precede
-        # disturbance plumbing because a disturbance might close over a
-        # craft's position (e.g. CraftWindBubble).
+            # Pass 0a: rigid-body state inputs for every craft, stashed on
+            # the craft so disturbances (and the per-craft trace below) can
+            # reference any craft's symbolic state. This must precede
+            # disturbance plumbing because a disturbance might close over a
+            # craft's position (e.g. CraftWindBubble).
+            for craft in crafts:
+                prefix = f"{craft.name}."
+                craft._sym_state = {
+                    "position":         ir.Vec3[WorldFrame].input(prefix + "position"),
+                    "orientation":      ir.Quat[WorldFrame, CraftFrame].input(prefix + "orientation"),
+                    "velocity":         ir.Vec3[WorldFrame].input(prefix + "velocity"),
+                    "angular_velocity": ir.Vec3[CraftFrame].input(prefix + "angular_velocity"),
+                }
+
+            # Pass 0b: plumb State/Noise declarations on field disturbances.
+            # These bindings need to be in scope BEFORE any part's update()
+            # queries a field.
+            all_fields = [gravity_field, fluid_field, mag_field,
+                          collision_field]
+            dist_state_outputs = _plumb_field_disturbances(
+                all_fields, dt, trace)
+
+            # Pass 1: per-craft trace. The rigid-body state symbols are
+            # already created (Pass 0a); the per-craft helper picks them up
+            # from craft._sym_state.
+            per_craft: dict[int, dict[str, Any]] = {}
+            for craft in crafts:
+                per_craft[id(craft)] = _trace_craft_pass1(
+                    craft, gravity_field, fluid_field, mag_field, dt, t,
+                    trace, collision_field=collision_field)
+
+            # Pass 2: coupling wrench injection.
+            for cp in couplings:
+                pc_a = per_craft[id(cp.craft_a)]
+                pc_b = per_craft[id(cp.craft_b)]
+                w_a, w_b = cp.compute_wrenches_sym(pc_a["ctx"], pc_b["ctx"])
+                pc_a["net"] = pc_a["net"] + w_a
+                pc_b["net"] = pc_b["net"] + w_b
+
+            # Pass 3: finalize per-craft dynamics.
+            for craft in crafts:
+                _emit_per_craft_dynamics(g, craft, per_craft[id(craft)], dt)
+
+            # Disturbance state outputs (deterministic passthrough for plain
+            # State; bias_next = bias + sqrt(dt)·driver for RW Noise).
+            for out_name, out_val in dist_state_outputs:
+                g.output(out_val, out_name)
+    finally:
+        # Clear the per-craft symbolic-state stash; the compiled function
+        # carries the references internally now.
         for craft in crafts:
-            prefix = f"{craft.name}."
-            craft._sym_state = {
-                "position":         ir.Vec3[WorldFrame].input(prefix + "position"),
-                "orientation":      ir.Quat[WorldFrame, CraftFrame].input(prefix + "orientation"),
-                "velocity":         ir.Vec3[WorldFrame].input(prefix + "velocity"),
-                "angular_velocity": ir.Vec3[CraftFrame].input(prefix + "angular_velocity"),
-            }
-
-        # Pass 0b: plumb State/Noise declarations on field disturbances.
-        # These rebinds need to be in scope BEFORE any part's update()
-        # queries a field.
-        all_fields = [gravity_field, fluid_field, mag_field, collision_field]
-        dist_saved_attrs, dist_state_outputs = _plumb_field_disturbances(
-            all_fields, dt)
-
-        # Pass 1: per-craft trace. The rigid-body state symbols are
-        # already created (Pass 0a); the per-craft helper picks them up
-        # from craft._sym_state.
-        per_craft: dict[int, dict[str, Any]] = {}
-        for craft in crafts:
-            per_craft[id(craft)] = _trace_craft_pass1(
-                craft, gravity_field, fluid_field, mag_field, dt, t,
-                collision_field=collision_field)
-
-        # Pass 2: coupling wrench injection.
-        for cp in couplings:
-            pc_a = per_craft[id(cp.craft_a)]
-            pc_b = per_craft[id(cp.craft_b)]
-            w_a, w_b = cp.compute_wrenches_sym(pc_a["ctx"], pc_b["ctx"])
-            pc_a["net"] = pc_a["net"] + w_a
-            pc_b["net"] = pc_b["net"] + w_b
-
-        # Pass 3: restore part attrs (so each Craft instance stays
-        # reusable across compiles) + finalize per-craft dynamics.
-        for craft in crafts:
-            pc = per_craft[id(craft)]
-            _restore_part_attrs(craft, pc)
-            _emit_per_craft_dynamics(g, craft, pc, dt)
-
-        # Disturbance state outputs (deterministic passthrough for plain
-        # State; bias_next = bias + sqrt(dt)·driver for RW Noise).
-        for out_name, out_val in dist_state_outputs:
-            g.output(out_val, out_name)
-
-        # Restore disturbance attributes (so the disturbance instance
-        # stays reusable across compiles).
-        for dist, saved in dist_saved_attrs:
-            for attr_name, attr_val in saved.items():
-                object.__setattr__(dist, attr_name, attr_val)
-
-    # Clear the per-craft symbolic-state stash; the compiled function
-    # carries the references internally now.
-    for craft in crafts:
-        craft._sym_state = None
+            craft._sym_state = None
 
     cg = g.compile(defaults={"t": 0.0})
     # Aggregate per-part rate declarations (ctx.sample / ctx.hold) onto
@@ -193,18 +190,14 @@ def compile_world_tick(crafts: list,
 # Field-disturbance state plumbing
 # ---------------------------------------------------------------------------
 
-def _plumb_field_disturbances(fields, dt) -> tuple[list, list[tuple[str, Any]]]:
-    """Walk every disturbance on each field, rebinding its declared
-    State / Noise attributes to symbolic graph inputs. Returns:
-
-      * `saved_attrs` — list of `(disturbance, {attr_name: prev_value})`
-        for the restoration step.
-      * `state_outputs` — list of `(output_name, output_value)` that the
-        caller emits as graph outputs after the part-loop completes.
-    """
+def _plumb_field_disturbances(fields, dt, trace) -> list[tuple[str, Any]]:
+    """Walk every disturbance on each field, binding its declared
+    State / Noise attributes to symbolic graph inputs (via `trace`; the
+    disturbance instance is never mutated). Returns `state_outputs` —
+    `(output_name, output_value)` pairs the caller emits as graph outputs
+    after the part-loop completes."""
     from ..fields.base import Disturbance
 
-    saved_attrs: list = []
     state_outputs: list[tuple[str, Any]] = []
     seen_names: set[str] = set()
 
@@ -225,8 +218,7 @@ def _plumb_field_disturbances(fields, dt) -> tuple[list, list[tuple[str, Any]]]:
                     f"within a world.")
             seen_names.add(dist.name)
 
-            prefix  = f"{dist.name}."
-            saved: dict[str, Any] = {}
+            prefix = f"{dist.name}."
 
             # User-declared State slots: input → identity passthrough.
             # (Disturbance state advances only via paired RW Noise.)
@@ -238,8 +230,7 @@ def _plumb_field_disturbances(fields, dt) -> tuple[list, list[tuple[str, Any]]]:
                         f"supported on disturbance-declared state.")
                 sym = sdecl.manifold.ir_input(
                     prefix + sname, default_frame=WorldFrame)
-                saved[sname] = getattr(dist, sname)
-                object.__setattr__(dist, sname, sym)
+                trace.bind(dist, sname, sym)
                 state_outputs.append((prefix + sname, sym))
 
             # Noise channels — synthesis is polymorphic on the Noise
@@ -253,14 +244,11 @@ def _plumb_field_disturbances(fields, dt) -> tuple[list, list[tuple[str, Any]]]:
                     default_frame=WorldFrame,
                     owner=dist,
                 )
-                saved[nname] = getattr(dist, nname)
-                object.__setattr__(dist, nname, synth.signal_sym)
+                trace.bind(dist, nname, synth.signal_sym)
                 if synth.state_update is not None:
                     state_outputs.append(synth.state_update)
 
-            saved_attrs.append((dist, saved))
-
-    return saved_attrs, state_outputs
+    return state_outputs
 
 
 # ---------------------------------------------------------------------------
@@ -273,11 +261,12 @@ def _trace_craft_pass1(craft,
                        mag_field,
                        dt,
                        t,
+                       trace,
                        collision_field=None) -> dict[str, Any]:
-    """Set up one craft's state inputs, part rebinds, TickContext, run
-    all parts' update(), and collect their wrench contributions + state
-    outputs + sensor outputs. Returns a dict carrying everything the
-    later passes need."""
+    """Set up one craft's state inputs, part bindings (via `trace`),
+    TickContext, run all parts' update(), and collect their wrench
+    contributions + state outputs + sensor outputs. Returns a dict
+    carrying everything the later passes need."""
     prefix = f"{craft.name}."
 
     # Rigid-body state symbols were created in `compile_world_tick`'s
@@ -300,48 +289,33 @@ def _trace_craft_pass1(craft,
         from ..fields import CollisionField as _CF
         collision_field = _CF()
 
-    # State + Input rebinds on each part — must happen BEFORE the
+    # State + Input bindings on each part — must happen BEFORE the
     # kinematic pass, so it sees the joint angle/rate symbols when
     # building per-part kinematic states.
     state_input_nodes: dict[Part, dict[str, Any]] = {}
-    saved_state_attrs: dict[Part, dict[str, Any]] = {}
-    saved_input_attrs: dict[Part, dict[str, Any]] = {}
     for part in craft.parts:
         decls = part.state_declarations()
         if decls:
             part_states: dict[str, Any] = {}
-            saved: dict[str, Any] = {}
             for sname, sdecl in decls.items():
                 input_name = prefix + f"{part.name}.{sname}"
                 sym = sdecl.manifold.ir_input(
                     input_name, default_frame=CraftFrame)
                 part_states[sname] = sym
-                saved[sname] = getattr(part, sname)
-                object.__setattr__(part, sname, sym)
+                trace.bind(part, sname, sym)
             state_input_nodes[part] = part_states
-            saved_state_attrs[part] = saved
 
-        idecls = part.input_declarations()
-        if idecls:
-            saved_i: dict[str, Any] = {}
-            for iname in idecls:
-                sym = ir.Scalar.input(prefix + f"{part.name}.{iname}")
-                saved_i[iname] = getattr(part, iname)
-                object.__setattr__(part, iname, sym)
-            saved_input_attrs[part] = saved_i
+        for iname in part.input_declarations():
+            trace.bind(part, iname,
+                       ir.Scalar.input(prefix + f"{part.name}.{iname}"))
 
     # Per-part Noise plumbing — synthesis is polymorphic on the Noise
     # subclass (see manta/parts/base.py). The compiler binds the
-    # returned symbol onto the part attribute and records any
-    # synthesized state update.
-    saved_noise_attrs: dict[Part, dict[str, Any]] = {}
+    # returned symbol (via `trace`) and records any synthesized state
+    # update.
     rw_bias_updates: list[tuple[str, Any]] = []   # (state_name, bias_next)
     for part in craft.parts:
-        ndecls = part.noise_declarations()
-        if not ndecls:
-            continue
-        saved_n: dict[str, Any] = {}
-        for nname, ndecl in ndecls.items():
+        for nname, ndecl in part.noise_declarations().items():
             input_name = prefix + f"{part.name}.{nname}"
             synth = ndecl.synthesize(
                 base_name=input_name,
@@ -350,11 +324,9 @@ def _trace_craft_pass1(craft,
                 default_frame=CraftFrame,
                 owner=part,
             )
-            saved_n[nname] = getattr(part, nname)
-            object.__setattr__(part, nname, synth.signal_sym)
+            trace.bind(part, nname, synth.signal_sym)
             if synth.state_update is not None:
                 rw_bias_updates.append(synth.state_update)
-        saved_noise_attrs[part] = saved_n
 
     # Per-joint angular-acceleration placeholders. A Joint's θ̈ is not a
     # state slot — it's computed inside Joint.update() (a pure function of
@@ -591,24 +563,9 @@ def _trace_craft_pass1(craft,
         "rw_bias_updates":   rw_bias_updates,
         "joint_accel_reals": joint_accel_reals,
         "com_rel_motion":    (v_com_rel_mx, a_com_rel_mx),
-        "saved_state_attrs": saved_state_attrs,
-        "saved_input_attrs": saved_input_attrs,
-        "saved_noise_attrs": saved_noise_attrs,
         "a_world_sym":      a_world_sym,
         "alpha_sym":         alpha_sym,
     }
-
-
-def _restore_part_attrs(craft, pc) -> None:
-    for part, saved in pc["saved_state_attrs"].items():
-        for sname, sval in saved.items():
-            object.__setattr__(part, sname, sval)
-    for part, saved in pc["saved_input_attrs"].items():
-        for iname, ival in saved.items():
-            object.__setattr__(part, iname, ival)
-    for part, saved in pc["saved_noise_attrs"].items():
-        for nname, nval in saved.items():
-            object.__setattr__(part, nname, nval)
 
 
 def _emit_per_craft_dynamics(g_ctx, craft, pc, dt) -> None:
