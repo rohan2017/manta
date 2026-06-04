@@ -207,12 +207,19 @@ def main() -> None:
     # uncapped the sim runs ~3× wall clock, which is unflyable and floods
     # the viewer's ingest channel. Headless runs stay full speed.
     pacer = Pacer() if (args.keyboard or viz is not None) else None
-    n = int(duration / dt)
+    # Fixed-timestep accumulator: physics always integrates at `dt` (the
+    # gear contact and hinge servos are stiff — varying dt would
+    # destabilize them), while input + viz run once per FRAME and the
+    # pacer holds frame boundaries to the wall clock. If the machine
+    # can't keep up, the sim slows down gracefully instead of exploding.
+    FRAME = 0.02                       # input/viz frame (50 Hz)
+    substeps = round(FRAME / dt)
+    n_frames = int(duration / FRAME)
+    t = 0.0
     print(f"{'t (s)':>6} {'x (m)':>8} {'alt (m)':>8} {'|v| (m/s)':>9} "
           f"{'pitch°':>7} {'roll°':>7} {'head°':>7} {'thr':>5}")
     try:
-        for i in range(n):
-            t = i * dt
+        for f in range(n_frames):
             if pacer is not None:
                 pacer.pace(t)
             ctrl.update(t)
@@ -222,8 +229,8 @@ def main() -> None:
             # +axis×chord, so +elev = TE up = nose up, +rud = nose right,
             # +ail = that wing down.
             throttle = float(np.clip(
-                throttle + (ctrl.held("x") - ctrl.held("z")) * THR_RATE * dt,
-                0.0, THR_MAX))
+                throttle + (ctrl.held("x") - ctrl.held("z")) * THR_RATE
+                * FRAME, 0.0, THR_MAX))
             # A whisker of aileron trim cancels the propeller's torque roll
             # (exactly what a real plane's trim tab is set for).
             ail = MAX_AIL * (ctrl.held("q") - ctrl.held("e")) \
@@ -232,16 +239,20 @@ def main() -> None:
                        "rud": MAX_RUD * (ctrl.held("d") - ctrl.held("a")),
                        "ail_l": +ail, "ail_r": -ail}
 
-            st = sim.state["plane"]    # re-fetch: step() swaps the dict
-            st["prop.throttle"] = throttle
-            for name, target in targets.items():
-                st[f"{name}.torque_cmd"] = \
-                    SERVO_KP * (target - float(st[f"{name}.angle"]))
-            sim.step(dt)
+            # Physics substeps: targets are held over the frame, but the
+            # hinge servos re-read their joint angle every substep.
+            for _ in range(substeps):
+                st = sim.state["plane"]    # re-fetch: step() swaps the dict
+                st["prop.throttle"] = throttle
+                for name, target in targets.items():
+                    st[f"{name}.torque_cmd"] = \
+                        SERVO_KP * (target - float(st[f"{name}.angle"]))
+                sim.step(dt)
+                t += dt
 
             st = sim.state["plane"]
             p = np.asarray(st["position"]).ravel()
-            if viz is not None and i % 5 == 0:
+            if viz is not None:
                 q = np.asarray(st["orientation"]).ravel()
                 viz.t(t)
                 viz.pose("world/plane", p, q)
@@ -257,13 +268,12 @@ def main() -> None:
                 eye = p + np.array(
                     [-7.0 * np.cos(yaw), -7.0 * np.sin(yaw), 2.0])
                 viz.chase("world/chase", eye, p)
-                if i == 0:
+                if f == 0:
                     viz.track("world/chase")   # after the camera exists
-                # Trails re-send the whole polyline each log — keep them
-                # at 10 Hz or they saturate the viewer's ingest channel.
-                # World-frame points, so NOT a child of the posed plane.
-                if i % 50 == 0:
-                    viz.trail("world/trail", p)
+                # Sparse + capped: most calls are no-ops (min_dist), and
+                # the re-sent polyline stays small. World-frame points, so
+                # NOT a child of the posed plane.
+                viz.trail("world/trail", p, max_len=300, min_dist=2.0)
 
             # Wheels-off / touchdown reporting (gear sits at z≈0.30 at rest).
             if not airborne and p[2] > 0.6:
@@ -275,7 +285,7 @@ def main() -> None:
                 v = np.asarray(st["velocity"]).ravel()
                 print(f"      -- touchdown at t = {t:.2f} s, "
                       f"{np.linalg.norm(v):.1f} m/s, sink {-v[2]:.1f} m/s")
-            if (i + 1) % int(1.0 / dt) == 0:
+            if (f + 1) % round(1.0 / FRAME) == 0:
                 v = np.asarray(st["velocity"]).ravel()
                 yaw, pitch, roll = _euler(np.asarray(st["orientation"]).ravel())
                 print(f"{t:>6.2f} {p[0]:>8.1f} {p[2]:>8.1f} "

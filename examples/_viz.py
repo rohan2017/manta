@@ -168,15 +168,24 @@ class Viz:
             self.rr.Points3D([_vec3(position)], colors=[color], radii=[radius]))
 
     def trail(self, path, position, *, color=(80, 160, 255),
-              max_len: int = 4000) -> None:
+              max_len: int = 4000, min_dist: float = 0.0) -> None:
         """Append ``position`` to a growing world-frame trail polyline.
 
         ``position`` is in WORLD coords, so ``path`` must NOT sit under an
         entity that gets :meth:`pose`\\ d (children inherit the parent
         transform — the whole trail would ride the moving body).
+
+        Every log re-sends the whole polyline, so for live demos keep it
+        cheap: ``min_dist`` skips points closer than that to the last kept
+        one (call as often as you like — most calls become no-ops), and
+        ``max_len`` caps the strip length.
         """
         buf = self._trails.setdefault(path, [])
-        buf.append(_vec3(position).copy())
+        pos = _vec3(position).copy()
+        if buf and min_dist > 0.0 \
+                and float(np.linalg.norm(pos - buf[-1])) < min_dist:
+            return
+        buf.append(pos)
         if len(buf) > max_len:
             del buf[0]
         if len(buf) >= 2:

@@ -142,14 +142,19 @@ class TerminalController(Controller):
     """Reads keys from the terminal the demo was launched from.
 
     A terminal only reports presses (refreshed by OS auto-repeat), never
-    releases — so ``held`` treats a key as down until no byte arrives for
-    ``HOLD_S``, sized to bridge the auto-repeat initial delay. The feel:
-    a tap gives ~``HOLD_S`` of deflection, holding sustains it. The
-    terminal only auto-repeats the most recent key, so chords don't
-    register — fly one control at a time. ``shift`` can't be seen at all.
+    releases — so ``held`` treats a key as down until its bytes stop
+    arriving. The hold window adapts: a fresh press holds ``HOLD_TAP``
+    (long enough to bridge the auto-repeat initial delay), but once
+    repeats are streaming the window tightens to ``HOLD_REPEAT`` so a
+    release registers fast. The feel: a tap gives ~``HOLD_TAP`` of
+    deflection; holding sustains it and lets go ~``HOLD_REPEAT`` after
+    release. The terminal only auto-repeats the most recent key, so
+    chords don't register — fly one control at a time. ``shift`` can't
+    be seen at all.
     """
 
-    HOLD_S = 0.65
+    HOLD_TAP = 0.65         # press → first auto-repeat can take ~0.5 s
+    HOLD_REPEAT = 0.22      # repeats stream every ~30 ms once started
     _ESC = {"[A": "up", "[B": "down", "[C": "right", "[D": "left"}
 
     def __init__(self) -> None:
@@ -164,6 +169,7 @@ class TerminalController(Controller):
         self._saved = termios.tcgetattr(self._fd)
         tty.setcbreak(self._fd)
         self._last: dict[str, float] = {}
+        self._repeating: dict[str, bool] = {}
         self._edge = {}
 
     def update(self, t: float) -> None:
@@ -179,10 +185,14 @@ class TerminalController(Controller):
                 key, i = self._ESC[s[i + 1:i + 3]], i + 3
             else:
                 key, i = ("space" if ch == " " else ch.lower()), i + 1
+            # Bytes arriving in quick succession = auto-repeat streaming.
+            self._repeating[key] = (now - self._last.get(key, -1e9)) < 0.3
             self._last[key] = now
 
     def held(self, key: str) -> bool:
-        return time.monotonic() - self._last.get(key, -1e9) < self.HOLD_S
+        window = (self.HOLD_REPEAT if self._repeating.get(key, False)
+                  else self.HOLD_TAP)
+        return time.monotonic() - self._last.get(key, -1e9) < window
 
     def stop(self) -> None:
         self._termios.tcsetattr(self._fd, self._termios.TCSADRAIN,
