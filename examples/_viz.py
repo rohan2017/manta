@@ -75,6 +75,27 @@ class Viz:
         """Stamp subsequent logs at sim-time ``seconds`` on the timeline."""
         self.rr.set_time("sim_time", duration=float(seconds))
 
+    # ---- camera --------------------------------------------------------
+
+    def follow(self, path: str, *, eye, target) -> None:
+        """Chase-cam: orbit camera tracking the entity at ``path``.
+
+        Without this the viewer auto-frames the whole scene, and a
+        metre-scale vehicle crossing hundreds of metres of world is a
+        sub-pixel speck. ``eye``/``target`` set the initial camera pose
+        in world coords (so pick them around the vehicle's spawn point);
+        the viewer then keeps the camera locked on the entity as it
+        moves. The user can still orbit/zoom by hand.
+        """
+        import rerun.blueprint as rrb  # local: rerun is lazily imported
+        self.rr.send_blueprint(rrb.Spatial3DView(
+            origin="/",
+            eye_controls=rrb.archetypes.EyeControls3D(
+                tracking_entity=path,
+                position=_vec3(eye),
+                look_target=_vec3(target)),
+        ))
+
     # ---- transforms + geometry ----------------------------------------
 
     def pose(self, path: str, position, quat_wxyz=None) -> None:

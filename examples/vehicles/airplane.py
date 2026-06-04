@@ -154,6 +154,10 @@ def main() -> None:
     FIXED, MOVING = (120, 150, 210), (240, 150, 60)
     viz = None if args.no_viz else Viz("manta/airplane")
     if viz is not None:
+        # Chase cam: park the eye just behind/left of the spawn point and
+        # keep it locked on the plane (otherwise the viewer frames the whole
+        # world and a 2 m airframe is a speck).
+        viz.follow("world/plane", eye=(-6.0, -4.0, 62.0), target=(0.0, 0.0, 60.0))
         viz.plane("world/ground", z=0.0, size=300.0, color=(70, 110, 70, 160))
         viz.box("world/plane/fus", (0.95, 0.035, 0.035), center=(-0.45, 0, 0),
                 color=(150, 150, 158))
