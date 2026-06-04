@@ -205,6 +205,17 @@ class Viz:
             self.rr.log(path, self.rr.LineStrips3D(
                 [np.asarray(buf)], colors=[color]))
 
+    def disc(self, path, radius: float, *, color=(70, 110, 70, 160),
+             thickness: float = 1e-3, static: bool = True) -> None:
+        """A flat solid disc of ``radius`` in the entity's xy-plane —
+        e.g. a water surface that follows a vehicle (log once, then
+        :meth:`pose` the entity each frame)."""
+        self.rr.log(
+            path,
+            self.rr.Ellipsoids3D(half_sizes=[[radius, radius, thickness]],
+                                 colors=[color], fill_mode="solid"),
+            static=static)
+
     def plane(self, path, *, z: float = 0.0, size: float = 20.0,
               color=(70, 110, 70, 160)) -> None:
         """A flat (thin-box) reference plane at height ``z`` — ground/water.

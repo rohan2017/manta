@@ -230,7 +230,9 @@ def main() -> None:
     if viz is not None:
         # Static geometry only here — local POSES are logged on the first
         # frame (after viz.t), or they never exist on the sim timeline.
-        viz.plane("world/deep", z=-1.8, size=200.0, color=(15, 35, 60, 255))
+        # The sea is a disc that follows the boat (posed per frame), so
+        # you can never drive off its edge.
+        viz.disc("world/sea/disc", 60.0, color=(15, 35, 60, 255))
         # Hull: rectangular prism above the waterline, V-keel triangular
         # prism below (two slanted panels meeting at the keel line, base
         # flush with the box bottom). The buoy/drag points sit exactly on
@@ -372,9 +374,11 @@ def main() -> None:
                     # the user orbits/zooms normally.
                     viz.track("world/boat")
                 viz.trail("world/trail", p, max_len=300, min_dist=2.0)
-                if f % 10 == 0:      # 5 Hz animated wave strips
-                    xs = p[0] + np.arange(-10.0, 14.0, 1.5)
-                    for j, y in enumerate(np.arange(-6.0, 6.5, 2.0)):
+                viz.pose("world/sea", (p[0], p[1], -1.8))
+                if f % 10 == 0:      # 5 Hz animated wave strips, boat-centred
+                    xs = p[0] + np.arange(-12.0, 12.5, 1.5)
+                    for j, dy in enumerate(np.arange(-8.0, 8.5, 2.0)):
+                        y = p[1] + dy
                         pts = np.column_stack(
                             [xs, np.full_like(xs, y), _eta(xs, y, t)])
                         viz.line(f"world/waves/{j}", pts,
