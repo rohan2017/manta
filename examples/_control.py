@@ -143,18 +143,19 @@ class TerminalController(Controller):
 
     A terminal only reports presses (refreshed by OS auto-repeat), never
     releases — so ``held`` treats a key as down until its bytes stop
-    arriving. The hold window adapts: a fresh press holds ``HOLD_TAP``
-    (long enough to bridge the auto-repeat initial delay), but once
-    repeats are streaming the window tightens to ``HOLD_REPEAT`` so a
-    release registers fast. The feel: a tap gives ~``HOLD_TAP`` of
-    deflection; holding sustains it and lets go ~``HOLD_REPEAT`` after
-    release. The terminal only auto-repeats the most recent key, so
-    chords don't register — fly one control at a time. ``shift`` can't
-    be seen at all.
+    arriving. The windows are deliberately snappy: releases register
+    within ``HOLD_REPEAT`` while a key streams repeats, and a tap is a
+    short ``_tap``-long pulse. The cost: if the OS auto-repeat *initial
+    delay* exceeds ``_tap``, the very first hold of a session flickers
+    once in the press→first-repeat gap — the controller measures that
+    gap and raises ``_tap`` to cover it, so it never flickers again.
+    (Setting the OS key-repeat delay to "short" avoids even that.)
+    The terminal only auto-repeats the most recent key, so chords don't
+    register — fly one control at a time. ``shift`` can't be seen at all.
     """
 
-    HOLD_TAP = 0.65         # press → first auto-repeat can take ~0.5 s
-    HOLD_REPEAT = 0.22      # repeats stream every ~30 ms once started
+    HOLD_TAP = 0.35         # initial tap window; self-calibrates upward
+    HOLD_REPEAT = 0.15      # repeats stream every ~30 ms once started
     _ESC = {"[A": "up", "[B": "down", "[C": "right", "[D": "left"}
 
     def __init__(self) -> None:
@@ -170,6 +171,7 @@ class TerminalController(Controller):
         tty.setcbreak(self._fd)
         self._last: dict[str, float] = {}
         self._repeating: dict[str, bool] = {}
+        self._tap = self.HOLD_TAP
         self._edge = {}
 
     def update(self, t: float) -> None:
@@ -185,13 +187,22 @@ class TerminalController(Controller):
                 key, i = self._ESC[s[i + 1:i + 3]], i + 3
             else:
                 key, i = ("space" if ch == " " else ch.lower()), i + 1
-            # Bytes arriving in quick succession = auto-repeat streaming.
-            self._repeating[key] = (now - self._last.get(key, -1e9)) < 0.3
+            since = now - self._last.get(key, -1e9)
+            was_rep = self._repeating.get(key, False)
+            was_held = since < (self.HOLD_REPEAT if was_rep else self._tap)
+            # A gap that looks like press→first-auto-repeat (too long for
+            # streaming repeats, too short for a deliberate re-tap):
+            # learn this machine's repeat delay so holds don't flicker.
+            if not was_rep and 0.3 <= since < 0.8:
+                self._tap = max(self._tap, min(since + 0.05, 0.85))
+            # Auto-repeat = bytes in quick succession CONTINUING a held
+            # key; a quick re-press after release is a fresh press.
+            self._repeating[key] = since < 0.3 and was_held
             self._last[key] = now
 
     def held(self, key: str) -> bool:
         window = (self.HOLD_REPEAT if self._repeating.get(key, False)
-                  else self.HOLD_TAP)
+                  else self._tap)
         return time.monotonic() - self._last.get(key, -1e9) < window
 
     def stop(self) -> None:
@@ -265,6 +276,10 @@ def common_args(description: str) -> argparse.ArgumentParser:
                         "'global' uses a pynput listener, default auto")
     p.add_argument("--no-viz", action="store_true",
                    help="run headless: no rerun viewer")
+    p.add_argument("--viz-addr", default=None, metavar="HOST[:PORT]",
+                   help="stream to an already-running rerun viewer instead "
+                        "of spawning one (e.g. a GPU-rendered Windows-native "
+                        "viewer, from WSL)")
     p.add_argument("--duration", type=float, default=None,
                    help="override the run length in seconds")
     return p

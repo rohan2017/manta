@@ -108,7 +108,7 @@ def main() -> None:
     if args.keyboard:
         print("Controls:  W/S ahead/astern   A/D steer   (Ctrl-C to quit)\n")
 
-    viz = None if args.no_viz else Viz("manta/hydrofoil")
+    viz = None if args.no_viz else Viz("manta/hydrofoil", addr=args.viz_addr)
     if viz is not None:
         viz.plane("world/water", z=0.0, size=30.0, color=(40, 90, 150, 130))
         viz.box("world/boat/hull", (1.4, 0.6, 0.2), color=(210, 190, 120))

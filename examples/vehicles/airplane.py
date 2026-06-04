@@ -168,7 +168,7 @@ def main() -> None:
             print("Type into THIS terminal; watch the viewer.\n")
 
     FIXED, MOVING = (120, 150, 210), (240, 150, 60)
-    viz = None if args.no_viz else Viz("manta/airplane")
+    viz = None if args.no_viz else Viz("manta/airplane", addr=args.viz_addr)
     if viz is not None:
         viz.plane("world/ground", z=0.0, size=300.0, color=(70, 110, 70, 160))
         viz.box("world/runway", (60.0, 3.0, 0.002), center=(55.0, 0.0, 0.0),
@@ -203,6 +203,8 @@ def main() -> None:
 
     throttle = 0.0                     # parked, engine idle
     airborne = False
+    hinge_logged: dict[str, float] = {}    # last viz-logged hinge angles
+    thr_logged = -1.0                      # last viz-logged throttle
     # Live (keyboard or viewer attached) → hold the loop to real time;
     # uncapped the sim runs ~3× wall clock, which is unflyable and floods
     # the viewer's ingest channel. Headless runs stay full speed.
@@ -252,16 +254,25 @@ def main() -> None:
 
             st = sim.state["plane"]
             p = np.asarray(st["position"]).ravel()
-            if viz is not None:
+            if viz is not None and f % 2 == 0:    # 25 Hz: half the rows
                 q = np.asarray(st["orientation"]).ravel()
                 viz.t(t)
                 viz.pose("world/plane", p, q)
+                # The software-rendered WSLg viewer ingests slowly and the
+                # SDK queue *blocks* rather than drops, so latency compounds
+                # — only log what actually changed. Surfaces and throttle
+                # sit still most of the flight.
                 for name, (pos, axis) in hinges.items():
-                    viz.pose(f"world/plane/{name}", pos,
-                             _quat(axis, float(st[f"{name}.angle"])))
-                viz.arrow("world/plane/thrust", (0.5, 0, CG[2]),
-                          (0.6 * throttle, 0, 0), color=(235, 80, 80),
-                          radius=0.02)
+                    ang = float(st[f"{name}.angle"])
+                    if abs(ang - hinge_logged.get(name, 1e9)) > 0.002:
+                        hinge_logged[name] = ang
+                        viz.pose(f"world/plane/{name}", pos,
+                                 _quat(axis, ang))
+                if abs(throttle - thr_logged) > 0.005:
+                    thr_logged = throttle
+                    viz.arrow("world/plane/thrust", (0.5, 0, CG[2]),
+                              (0.6 * throttle, 0, 0), color=(235, 80, 80),
+                              radius=0.02)
                 # Chase cam: 7 m behind the plane along its heading (yaw
                 # only — no roll/pitch, so the horizon stays level), 2 m up.
                 yaw = _euler(q)[0]

@@ -115,7 +115,7 @@ def main() -> None:
         print("Controls:  W/S ahead/astern   A/D yaw   space/shift rise/dive"
               "   (Ctrl-C to quit)\n")
 
-    viz = None if args.no_viz else Viz("manta/submarine")
+    viz = None if args.no_viz else Viz("manta/submarine", addr=args.viz_addr)
     if viz is not None:
         viz.plane("world/surface", z=0.0, size=40.0, color=(40, 90, 160, 120))
         viz.box("world/sub/hull", (1.0, 0.18, 0.18), color=(230, 210, 80))

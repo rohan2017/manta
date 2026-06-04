@@ -269,7 +269,10 @@ a self-running scripted fallback so they work unattended):
 
 Visualized demos need the rerun SDK (`.venv/bin/pip install rerun-sdk`); pass
 `--no-viz` to run any of them headless. Vehicle demos take `--keyboard`
-(live `pynput` control), `--no-viz`, and `--duration`. Shared helpers live in
+(live control: reads the launching terminal on WSL/headless boxes, a global
+`pynput` listener on native desktops), `--no-viz`, `--duration`, and
+`--viz-addr HOST[:PORT]` to stream to an already-running viewer (e.g. a
+GPU-rendered Windows-native viewer from WSL). Shared helpers live in
 `examples/_viz.py` (rerun) and `examples/_control.py` (keyboard / scripted).
 
 ## Running tests

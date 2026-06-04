@@ -59,13 +59,24 @@ class Viz:
     """A small stateful wrapper around one rerun recording.
 
     Constructing one opens the rerun viewer; headless runs (``--no-viz``)
-    skip creating a ``Viz`` entirely.
+    skip creating a ``Viz`` entirely. Pass ``addr`` (``host[:port]`` or a
+    full ``rerun+http://…/proxy`` URL) to stream to an already-running
+    viewer instead of spawning one — e.g. from WSL to a GPU-rendered
+    Windows-native viewer, instead of the software-rasterized WSLg one.
     """
 
-    def __init__(self, app_id: str) -> None:
+    def __init__(self, app_id: str, addr: str | None = None) -> None:
         rr = require_rerun()
         self.rr = rr
-        rr.init(app_id, spawn=True)
+        if addr:
+            if "://" not in addr:
+                if ":" not in addr:
+                    addr += ":9876"
+                addr = f"rerun+http://{addr}/proxy"
+            rr.init(app_id)
+            rr.connect_grpc(addr)
+        else:
+            rr.init(app_id, spawn=True)
         rr.log("/", rr.ViewCoordinates.RIGHT_HAND_Z_UP, static=True)
         self._trails: dict[str, list[np.ndarray]] = {}
         self._cams: set[str] = set()

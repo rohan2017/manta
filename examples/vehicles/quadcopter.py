@@ -124,7 +124,7 @@ def main() -> None:
         print("\nControls:  W/S forward/back   A/D left/right   "
               "space/shift up/down   (Ctrl-C to quit)\n")
 
-    viz = None if args.no_viz else Viz("manta/quadcopter")
+    viz = None if args.no_viz else Viz("manta/quadcopter", addr=args.viz_addr)
     if viz is not None:
         viz.plane("world/ground", z=0.0, size=12.0, color=(60, 70, 80, 160))
         viz.box("world/quad/body", (L, L, 0.03), color=(80, 140, 220))
