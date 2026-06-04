@@ -57,7 +57,8 @@ FRONT_X, FRONT_Z = 0.0, -0.50        # V-foil: directly under the CoM
 FOIL_Y  = 0.40                       # V panels out on the rising arms
 ELEV_Y  = 0.35                       # elevon halves: wide roll lever
 DIHEDRAL = np.radians(20.0)
-FRONT_INC = np.radians(10.0)
+FRONT_INC = np.radians(5.0)
+FRONT_AREA = 0.08                    # per panel; sized to fly at ~6.5 m/s
 REAR_X, REAR_Z = -1.3, -0.95         # elevon foil: DEEPER than the front
                                      # so it never ventilates first
 REAR_INC = np.radians(4.0)
@@ -126,7 +127,7 @@ def build_world():
     # then produces a restoring roll moment instead of a divergent one.
     for tag, sy in (("l", +1.0), ("r", -1.0)):
         chord, normal = _tilt(FRONT_INC, sy * DIHEDRAL)
-        b.add(Naca00xx(f"foil_{tag}", area=0.035, CL_max=1.1, CD_0=0.01,
+        b.add(Naca00xx(f"foil_{tag}", area=FRONT_AREA, CL_max=1.1, CD_0=0.01,
                        induced_k=0.1, chord_axis=chord, normal_axis=normal,
                        transform=(FRONT_X, sy * FOIL_Y, FRONT_Z)))
     # Strut sample points sit LOW so they stay wetted at foiling ride
@@ -216,7 +217,7 @@ def main() -> None:
     # Scripted: bob for a while, throttle up onto the foils, carve a
     # right then a left turn at speed.
     script = [(5.0, 9.0, {"x"}),       # ramp throttle → climb onto foils
-              (10.0, 12.0, {"z"}),     # settle to cruise power
+              (10.0, 11.6, {"z"}),     # settle to cruise power
               (15.0, 18.0, {"d"}),     # carve right
               (21.0, 24.0, {"a"}),     # carve left
               (25.0, 26.5, {"x"})]     # power out of the carve
@@ -248,7 +249,7 @@ def main() -> None:
         viz.box("world/boat/strut_r", (0.06, 0.006, 0.23),
                 center=(REAR_X, 0, -0.52), color=FIXED)
         for tag in ("l", "r"):
-            viz.box(f"world/boat/foil_{tag}/s", (0.05, 0.16, 0.004),
+            viz.box(f"world/boat/foil_{tag}/s", (0.07, 0.28, 0.004),
                     color=FIXED)
             viz.box(f"world/boat/elev_{tag}/s", (0.04, 0.14, 0.003),
                     center=(-0.03, 0, 0), color=MOVING)
@@ -375,14 +376,14 @@ def main() -> None:
                     viz.track("world/boat")
                 viz.trail("world/trail", p, max_len=300, min_dist=2.0)
                 viz.pose("world/sea", (p[0], p[1], -1.8))
-                if f % 10 == 0:      # 5 Hz animated wave strips, boat-centred
-                    xs = p[0] + np.arange(-12.0, 12.5, 1.5)
-                    for j, dy in enumerate(np.arange(-8.0, 8.5, 2.0)):
-                        y = p[1] + dy
-                        pts = np.column_stack(
-                            [xs, np.full_like(xs, y), _eta(xs, y, t)])
-                        viz.line(f"world/waves/{j}", pts,
-                                 color=(90, 160, 220), radius=0.015)
+                # Boat-centred 20×20 wave-surface mesh, sampling the same
+                # η(x, y, t) the physics uses; re-logged every viz frame
+                # (25 Hz) to animate.
+                xs = p[0] + np.linspace(-14.0, 14.0, 20)
+                ys = p[1] + np.linspace(-14.0, 14.0, 20)
+                Xg, Yg = np.meshgrid(xs, ys)
+                viz.heightfield("world/waves", Xg, Yg, _eta(Xg, Yg, t),
+                                color=(50, 110, 170))
 
             if (f + 1) % round(1.0 / FRAME) == 0:
                 v = np.asarray(st["velocity"]).ravel()

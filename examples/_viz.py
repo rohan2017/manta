@@ -80,6 +80,7 @@ class Viz:
         rr.log("/", rr.ViewCoordinates.RIGHT_HAND_Z_UP, static=True)
         self._trails: dict[str, list[np.ndarray]] = {}
         self._cams: set[str] = set()
+        self._grid_idx: dict[tuple, np.ndarray] = {}
 
     # ---- timeline ------------------------------------------------------
 
@@ -204,6 +205,41 @@ class Viz:
         if len(buf) >= 2:
             self.rr.log(path, self.rr.LineStrips3D(
                 [np.asarray(buf)], colors=[color]))
+
+    def heightfield(self, path, X, Y, Z, *, color=(60, 120, 180)) -> None:
+        """A triangle-mesh surface ``z = f(x, y)`` from grid arrays.
+
+        ``X``/``Y``/``Z`` are equal-shape 2-D arrays (``np.meshgrid``
+        style). Re-log every frame to animate (e.g. a water surface);
+        the triangle indices are cached per grid shape. Normals come
+        from the height gradient so the surface shades properly.
+        """
+        X = np.asarray(X, float); Y = np.asarray(Y, float)
+        Z = np.asarray(Z, float)
+        n_r, n_c = Z.shape
+        key = (path, n_r, n_c)
+        if key not in self._grid_idx:
+            r, c = np.meshgrid(np.arange(n_r - 1), np.arange(n_c - 1),
+                               indexing="ij")
+            v00 = (r * n_c + c).ravel()
+            v01, v10 = v00 + 1, v00 + n_c
+            v11 = v10 + 1
+            self._grid_idx[key] = np.concatenate([
+                np.column_stack([v00, v01, v11]),
+                np.column_stack([v00, v11, v10])])
+        verts = np.column_stack([X.ravel(), Y.ravel(), Z.ravel()])
+        dzdr, dzdc = np.gradient(Z)
+        dx = np.gradient(X, axis=1); dy = np.gradient(Y, axis=0)
+        normals = np.column_stack([
+            (-dzdc / np.where(dx == 0, 1, dx)).ravel(),
+            (-dzdr / np.where(dy == 0, 1, dy)).ravel(),
+            np.ones(Z.size)])
+        normals /= np.linalg.norm(normals, axis=1, keepdims=True)
+        self.rr.log(path, self.rr.Mesh3D(
+            vertex_positions=verts,
+            triangle_indices=self._grid_idx[key],
+            vertex_normals=normals,
+            albedo_factor=color))
 
     def disc(self, path, radius: float, *, color=(70, 110, 70, 160),
              thickness: float = 1e-3, static: bool = True) -> None:
