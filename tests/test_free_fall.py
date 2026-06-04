@@ -29,24 +29,23 @@ def test_single_mass_free_fall_numerics():
     w.add_craft(c, position=(0.0, 0.0, 100.0))
     sim = TargetNumpy(Sim(w))
 
-    state = sim.initial_state()
     dt = 0.001
     n_steps = 1000   # 1 second
 
     for _ in range(n_steps):
-        state = sim.step(state, dt=dt)
+        sim.step(dt=dt)
 
     expected_z  = 100.0 - 0.5 * 9.81 * 1.0      # 95.095
     expected_vz = -9.81
 
-    assert np.isclose(state["free_fall"]["position"][2], expected_z,  atol=1e-5)
-    assert np.isclose(state["free_fall"]["velocity"][2], expected_vz, atol=1e-5)
-    assert np.allclose(state["free_fall"]["position"][:2],         [0.0, 0.0], atol=1e-9)
-    assert np.allclose(state["free_fall"]["velocity"][:2],         [0.0, 0.0], atol=1e-9)
+    assert np.isclose(sim.state["free_fall"]["position"][2], expected_z,  atol=1e-5)
+    assert np.isclose(sim.state["free_fall"]["velocity"][2], expected_vz, atol=1e-5)
+    assert np.allclose(sim.state["free_fall"]["position"][:2],         [0.0, 0.0], atol=1e-9)
+    assert np.allclose(sim.state["free_fall"]["velocity"][:2],         [0.0, 0.0], atol=1e-9)
     # No external torques, no initial angular velocity, identity initial q —
     # the body should not rotate.
-    assert np.allclose(state["free_fall"]["orientation"],          [1.0, 0.0, 0.0, 0.0], atol=1e-9)
-    assert np.allclose(state["free_fall"]["angular_velocity"],     [0.0, 0.0, 0.0],      atol=1e-9)
+    assert np.allclose(sim.state["free_fall"]["orientation"],          [1.0, 0.0, 0.0, 0.0], atol=1e-9)
+    assert np.allclose(sim.state["free_fall"]["angular_velocity"],     [0.0, 0.0, 0.0],      atol=1e-9)
 
 
 def test_multi_mass_aggregates_correctly():
@@ -61,18 +60,17 @@ def test_multi_mass_aggregates_correctly():
     w = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
     w.add_craft(c, position=(0.0, 0.0, 0.0))
     sim = TargetNumpy(Sim(w))
-    state = sim.initial_state()
     for _ in range(100):
-        state = sim.step(state, dt=0.01)
+        sim.step(dt=0.01)
 
     # After 1 s: vz = -9.81, body origin z depends on offsets — but the
     # COM falls by exactly 0.5·g·t² regardless of COM location.
     inertials = c.aggregate_inertials()
     com_init = np.array([0.0, 0.0, 0.0]) + inertials["com"]
-    com_after = state["multi_mass"]["position"] + inertials["com"]
+    com_after = sim.state["multi_mass"]["position"] + inertials["com"]
     expected_com_z = com_init[2] - 0.5 * 9.81 * 1.0   # -4.905
     assert np.isclose(com_after[2], expected_com_z, atol=1e-5)
-    assert np.isclose(state["multi_mass"]["velocity"][2], -9.81,    atol=1e-5)
+    assert np.isclose(sim.state["multi_mass"]["velocity"][2], -9.81,    atol=1e-5)
 
 
 def test_horizontal_gravity():
@@ -83,12 +81,11 @@ def test_horizontal_gravity():
     w.add_craft(c, position=(0.0, 0.0, 0.0))
     sim = TargetNumpy(Sim(w))
 
-    state = sim.initial_state()
     for _ in range(100):
-        state = sim.step(state, dt=0.01)
+        sim.step(dt=0.01)
 
-    assert np.isclose(state["sideways"]["velocity"][0], 2.0, atol=1e-5)
-    assert np.isclose(state["sideways"]["position"][0], 1.0, atol=1e-5)
+    assert np.isclose(sim.state["sideways"]["velocity"][0], 2.0, atol=1e-5)
+    assert np.isclose(sim.state["sideways"]["position"][0], 1.0, atol=1e-5)
 
 
 # ---------------------------------------------------------------------------

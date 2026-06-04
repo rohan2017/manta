@@ -39,7 +39,6 @@ def test_moving_com_keeps_free_floating_system_com_fixed():
     w = World().add_field(GravityField().add_uniform((0.0, 0.0, 0.0)))  # free
     w.add_craft(c, **{"wheel.rate": 10.0})                              # spin it
     sim = TargetNumpy(Sim(w))
-    state = sim.initial_state()
 
     def system_com(st) -> np.ndarray:
         theta = float(np.asarray(st["sat"]["wheel.angle"]).ravel()[0])
@@ -53,13 +52,13 @@ def test_moving_com_keeps_free_floating_system_com_fixed():
     # spinning at θ̇₀) carries p = m·(θ̇₀·ẑ)×(d,0,0) = (0, m·d·θ̇₀, 0), so the
     # system COM drifts at v_com = p / (M + m) along +y.
     theta_dot0 = 10.0
-    com0  = system_com(state)
+    com0  = system_com(sim.state)
     v_com = np.array([0.0, m * d * theta_dot0 / (M + m), 0.0])
 
     dt = 0.001
     drift = 0.0
     for step in range(1, 501):
-        state = sim.step(state, dt=dt)
+        state = sim.step(dt=dt)
         predicted = com0 + v_com * (step * dt)        # straight line, const v
         drift = max(drift, float(np.linalg.norm(system_com(state) - predicted)))
 

@@ -59,7 +59,7 @@ def build_world():
     sub.add(Thruster("vert", force=(0.0, 0.0, 1.0)))
     sub.add(Thruster("yaw", torque=(0.0, 0.0, 1.0)))
     sub.add(IMU("imu", gyro_noise_sigma=0.01))
-    sub.add(DVL("dvl"))
+    sub.add(DVL("dvl", velocity_noise_sigma=0.02))
     sub.add(PositionSensor("gps", position_noise_sigma=0.1))
     sub.add(Magnetometer("mag", B_noise_sigma=1.0e-6))     # compass (heading)
     w = (World()

@@ -63,7 +63,7 @@ def test_partframe_views_are_zero_and_craft_zero_when_rigid():
     c.add(Mass("body", mass=1.0, moi=(1.0, 1.0, 1.0)))
     c.add(_FrameProbe("p", transform=(0.3, 0.0, 0.0)))
     sim = _free(c, velocity=(5.0, 0.0, 0.0), angular_velocity=(0.0, 0.0, 2.0))
-    sim.step(sim.initial_state(), dt=1e-4)
+    sim.step(dt=1e-4)
     st = sim.outputs()
 
     np.testing.assert_allclose(_o(st, "rig", "p.vel_part"), 0.0, atol=1e-12)
@@ -90,7 +90,7 @@ def test_world_craft_part_frames_are_distinct_on_a_rotor():
     wheel.add(_FrameProbe("p", transform=(d, 0.0, 0.0)))
     c.add(wheel)
     sim = _free(c, velocity=(V, 0.0, 0.0), **{"wheel.rate": omega0})
-    sim.step(sim.initial_state(), dt=1e-5)
+    sim.step(dt=1e-5)
     st = sim.outputs()
 
     np.testing.assert_allclose(_o(st, "rotorcraft", "p.vel_part"),
@@ -126,7 +126,7 @@ def test_nested_gimbal_parentframe_isolates_inner_joint():
     c.add(pan)
 
     sim = _free(c, **{"pan.rate": omega_pan, "tilt.rate": omega_tilt})
-    sim.step(sim.initial_state(), dt=1e-5)
+    sim.step(dt=1e-5)
     st = sim.outputs()
 
     np.testing.assert_allclose(_o(st, "gimbal", "p.omega_craft"),

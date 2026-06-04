@@ -128,15 +128,14 @@ def test_bias_advances_by_sqrt_dt_times_driver_in_sim():
     w, c = _build_world()
     cw = TargetNumpy(Sim(w))
     dt = 0.01
-    state = cw.initial_state()
     # Inject a constant driver each tick.
     drv = np.array([0.5, -0.25, 0.1])
     expected = np.zeros(3)
     for k in range(50):
-        state["drone"]["g.gyro_bias_driver"] = drv.copy()
-        state = cw.step(state, dt=dt)
+        cw.state["drone"]["g.gyro_bias_driver"] = drv.copy()
+        cw.step(dt)
         expected = expected + np.sqrt(dt) * drv
-    np.testing.assert_allclose(state["drone"]["g.gyro_bias"], expected,
+    np.testing.assert_allclose(cw.state["drone"]["g.gyro_bias"], expected,
                                atol=1e-10)
 
 
@@ -157,8 +156,7 @@ def test_ekf_estimates_rw_bias_from_gyro_readings():
 
     # Truth: a fixed initial bias, no further drift (zero driver).
     initial_bias = np.array([0.05, -0.03, 0.02])
-    state = cw.initial_state()
-    state["drone"]["g.gyro_bias"] = initial_bias.copy()
+    cw.state["drone"]["g.gyro_bias"] = initial_bias.copy()
 
     # Give the EKF a broad prior on the bias slot so it's free to
     # learn it from measurements.
@@ -173,14 +171,14 @@ def test_ekf_estimates_rw_bias_from_gyro_readings():
     for _ in range(500):  # 5 s
         # Sim noise samples — sim's bias gets driven by its own driver.
         noise = sim_c.sample_noise(rng)
-        state["drone"].update(noise)
-        state = cw.step(state, t=t, dt=dt)
+        cw.state["drone"].update(noise)
+        cw.step(dt, t=t)
         gyro_z = np.array(cw.outputs()["drone"]["g.gyro"]).ravel()
         ekf.predict(dt=dt, t=t)
         ekf.update("g.gyro", gyro_z)
         t += dt
 
-    truth_bias = np.array(state["drone"]["g.gyro_bias"])
+    truth_bias = np.array(cw.state["drone"]["g.gyro_bias"])
     est_bias   = np.array(ekf.state_dict()["drone"]["g.gyro_bias"])
     err        = np.linalg.norm(est_bias - truth_bias)
     # The truth drifts a small amount due to σ=0.02 driver over 5s;

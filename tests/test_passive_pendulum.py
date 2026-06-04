@@ -33,10 +33,9 @@ def _sim(craft, **init):
     w = World().add_field(GravityField(g=(0.0, 0.0, -G)))
     w.add_craft(craft)
     rt = TargetNumpy(Sim(w))
-    st = rt.initial_state()
     for k, v in init.items():
-        st["pend"][k] = v
-    return rt, st
+        rt.state["pend"][k] = v
+    return rt
 
 
 # ---------------------------------------------------------------------------
@@ -46,11 +45,11 @@ def _sim(craft, **init):
 def test_initial_acceleration_matches_g_over_L_sin_theta():
     L = 0.8
     theta0 = 0.4
-    rt, st = _sim(_pendulum(L), **{"hinge.angle": theta0, "hinge.rate": 0.0})
+    rt = _sim(_pendulum(L), **{"hinge.angle": theta0, "hinge.rate": 0.0})
     dt = 1e-5
-    st = rt.step(st, dt=dt)
+    rt.step(dt)
     # rate started at 0, so θ̈ ≈ rate_after / dt.
-    theta_ddot = st["pend"]["hinge.rate"] / dt
+    theta_ddot = rt.state["pend"]["hinge.rate"] / dt
     expected = -(G / L) * np.sin(theta0)
     assert np.isclose(theta_ddot, expected, rtol=1e-3), (
         f"θ̈={theta_ddot:.5f}, expected {expected:.5f}")
@@ -62,13 +61,13 @@ def test_initial_acceleration_matches_g_over_L_sin_theta():
 
 def test_small_angle_period():
     L = 0.8
-    rt, st = _sim(_pendulum(L), **{"hinge.angle": 0.05})
+    rt = _sim(_pendulum(L), **{"hinge.angle": 0.05})
     dt = 1e-3
     angles, ts = [], []
     t = 0.0
     for _ in range(6000):          # 6 s, several periods
-        st = rt.step(st, dt=dt); t += dt
-        angles.append(st["pend"]["hinge.angle"]); ts.append(t)
+        rt.step(dt); t += dt
+        angles.append(rt.state["pend"]["hinge.angle"]); ts.append(t)
     angles = np.array(angles)
     # Period from successive upward zero-crossings.
     sign = np.sign(angles)
@@ -96,10 +95,10 @@ def test_frictionless_energy_converges_with_dt():
     E0 = m * G * L * (1.0 - np.cos(theta0))
 
     def drift(dt: float, T: float = 10.0) -> float:
-        rt, st = _sim(_pendulum(L, m), **{"hinge.angle": theta0})
+        rt = _sim(_pendulum(L, m), **{"hinge.angle": theta0})
         for _ in range(int(T / dt)):
-            st = rt.step(st, dt=dt)
-        th = st["pend"]["hinge.angle"]; rate = st["pend"]["hinge.rate"]
+            rt.step(dt)
+        th = rt.state["pend"]["hinge.angle"]; rate = rt.state["pend"]["hinge.rate"]
         E = 0.5 * I_ax * rate * rate + m * G * L * (1.0 - np.cos(th))
         return abs(E - E0) / E0
 
@@ -117,12 +116,12 @@ def test_frictionless_energy_converges_with_dt():
 
 def test_damping_decays_amplitude():
     L = 0.8; m = 1.0
-    rt, st = _sim(_pendulum(L, m, damping=0.5), **{"hinge.angle": 0.5})
+    rt = _sim(_pendulum(L, m, damping=0.5), **{"hinge.angle": 0.5})
     dt = 1e-3
     amp_early, amp_late = 0.0, 0.0
     for i in range(8000):          # 8 s
-        st = rt.step(st, dt=dt)
-        a = abs(st["pend"]["hinge.angle"])
+        rt.step(dt)
+        a = abs(rt.state["pend"]["hinge.angle"])
         if i < 2000:
             amp_early = max(amp_early, a)
         if i > 6000:

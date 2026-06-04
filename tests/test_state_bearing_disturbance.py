@@ -69,15 +69,14 @@ def test_bias_advances_by_sqrt_dt_times_driver():
     exactly as the documented model `next = bias + sqrt(dt)·driver`."""
     w, _ = _build_world()
     cw = TargetNumpy(Sim(w))
-    state = cw.initial_state()
     drv = np.array([0.5, -0.25, 0.1])
     dt = 0.01
     expected = np.zeros(3)
     for _ in range(20):
-        state["wind"]["velocity_driver"] = drv.copy()
-        state = cw.step(state, dt=dt)
+        cw.state["wind"]["velocity_driver"] = drv.copy()
+        cw.step(dt)
         expected = expected + np.sqrt(dt) * drv
-    np.testing.assert_allclose(state["wind"]["velocity"], expected,
+    np.testing.assert_allclose(cw.state["wind"]["velocity"], expected,
                                atol=1e-10)
 
 

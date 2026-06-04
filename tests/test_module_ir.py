@@ -105,21 +105,12 @@ def test_sim_predict_equals_noiseless_step():
     sim = Sim(w)
     oracle, deploy = sim.module(noise=True), sim.module(noise=False)
     a, b = TargetNumpy(oracle), TargetNumpy(deploy)
-    sa, sb = a.initial_state(), b.initial_state()
     for _ in range(20):
-        sa = a.step(sa, dt=0.01)
-        sb_flat = deploy.spec.pack(
-            {f"c.{k}": v for k, v in sb["c"].items()
-             if f"c.{k}" in deploy.spec})
-        u = b.build_u(None)
-        b.call("predict", {"u": u, "dt": 0.01, "t": 0.0})
-        sb = {"c": {k.split(".", 1)[1]: v for k, v in
-                    deploy.spec.unpack(b._state["x"]).items()}}
-        b._state["x"] = deploy.spec.pack(
-            {k: v for k, v in deploy.spec.unpack(b._state["x"]).items()})
+        a.step(0.01)                                   # oracle, zero noise
+        b.call("predict", {"u": b.build_u(None),       # deploy, held x
+                           "dt": 0.01, "t": 0.0})
     np.testing.assert_allclose(
-        oracle.spec.pack({f"c.{k}": v for k, v in sa["c"].items()
-                          if f"c.{k}" in oracle.spec}),
+        oracle.spec.pack_any(a.state),
         b._state["x"], rtol=1e-12, atol=1e-12)
 
 

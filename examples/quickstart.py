@@ -37,18 +37,18 @@ def main() -> None:
     world = World().add_field(GravityField(g=(0.0, 0.0, -g)))
     world.add_craft(ball, position=(0.0, 0.0, z0), velocity=v0)
 
-    # Lower to the native-Python backend and integrate.
+    # Lower to the native-Python backend and integrate. The runtime holds
+    # the state: `sim.state` is the nested dict, `sim.step(dt)` advances it.
     sim = TargetNumpy(Sim(world))
-    state = sim.initial_state()
 
     dt = 0.001
     apex = z0
     t_apex = 0.0
     t = 0.0
     while True:
-        state = sim.step(state, dt=dt)
+        sim.step(dt)
         t += dt
-        z = float(state["ball"]["position"][2])
+        z = float(sim.state["ball"]["position"][2])
         if z > apex:
             apex, t_apex = z, t
         # Stop once the ball has fallen back to (or below) the launch height.

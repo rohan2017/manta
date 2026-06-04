@@ -137,20 +137,19 @@ def test_python_cpp_roundtrip(tmp_path: Path):
 
     # ---- 5: run the equivalent Python loop ----
     sim = TargetNumpy(cw)
-    state = sim.initial_state()
-    state["drone"]["position"]   = np.array([0.0, 0.0, 5.0])
-    state["drone"]["velocity"]   = np.array([0.5, 0.0, 0.0])
-    state["drone"]["t.throttle"] = 1.5 * 9.81
+    sim.state["drone"]["position"]   = np.array([0.0, 0.0, 5.0])
+    sim.state["drone"]["velocity"]   = np.array([0.5, 0.0, 0.0])
+    sim.state["drone"]["t.throttle"] = 1.5 * 9.81
     for _ in range(200):
-        state = sim.step(state, dt=0.005)
+        sim.step(0.005)
 
     # ---- 6: Jacobian sanity checks via the same Module kernels ----
     m = cw.module(noise=False)
     spec = m.spec
-    flat = {f"drone.{k}": v for k, v in state["drone"].items()
+    flat = {f"drone.{k}": v for k, v in sim.state["drone"].items()
             if f"drone.{k}" in spec}
     x_flat = spec.pack(flat)
-    u_flat = np.array([state["drone"]["t.throttle"]])
+    u_flat = np.array([sim.state["drone"]["t.throttle"]])
     F_py = np.asarray(
         m.functions["predict_jacobian"](x_flat, u_flat, 0.005, 0.0))
     # honest measure kernels take (x, u, t) — no dt
@@ -164,16 +163,16 @@ def test_python_cpp_roundtrip(tmp_path: Path):
     # ---- 7: compare ----
     ATOL = 1e-10
     np.testing.assert_allclose(cpp_lines["pos"],
-                                np.array(state["drone"]["position"]).ravel(),
+                                np.array(sim.state["drone"]["position"]).ravel(),
                                 atol=ATOL)
     np.testing.assert_allclose(cpp_lines["ori"],
-                                np.array(state["drone"]["orientation"]).ravel(),
+                                np.array(sim.state["drone"]["orientation"]).ravel(),
                                 atol=ATOL)
     np.testing.assert_allclose(cpp_lines["vel"],
-                                np.array(state["drone"]["velocity"]).ravel(),
+                                np.array(sim.state["drone"]["velocity"]).ravel(),
                                 atol=ATOL)
     np.testing.assert_allclose(cpp_lines["omg"],
-                                np.array(state["drone"]["angular_velocity"]).ravel(),
+                                np.array(sim.state["drone"]["angular_velocity"]).ravel(),
                                 atol=ATOL)
     np.testing.assert_allclose(cpp_lines["gps"], gps_py_new, atol=ATOL)
     np.testing.assert_allclose(cpp_lines["gyr"], gyro_py_new, atol=ATOL)

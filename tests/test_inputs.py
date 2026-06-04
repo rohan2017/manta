@@ -62,12 +62,11 @@ def test_zero_torque_default_keeps_flywheel_at_rest():
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c)
     sim = TargetNumpy(Sim(w))
-    state = sim.initial_state()
     for _ in range(1000):
-        state = sim.step(state, dt=0.001)
+        sim.step(dt=0.001)
 
-    assert np.isclose(state["idle"]["motor.rate"],  0.0, atol=1e-12)
-    assert np.isclose(state["idle"]["motor.angle"], 0.0, atol=1e-12)
+    assert np.isclose(sim.state["idle"]["motor.rate"],  0.0, atol=1e-12)
+    assert np.isclose(sim.state["idle"]["motor.angle"], 0.0, atol=1e-12)
 
 
 def test_per_tick_torque_drives_flywheel():
@@ -78,25 +77,24 @@ def test_per_tick_torque_drives_flywheel():
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c)
     sim = TargetNumpy(Sim(w))
-    state = sim.initial_state()
 
     # First second: idle (default 0 torque).
     for _ in range(1000):
-        state = sim.step(state, dt=0.001)
-    assert np.isclose(state["driven"]["motor.rate"], 0.0, atol=1e-9)
+        sim.step(dt=0.001)
+    assert np.isclose(sim.state["driven"]["motor.rate"], 0.0, atol=1e-9)
 
     # Switch torque on — input persists between steps because of the merge.
-    state["driven"]["motor.torque_cmd"] = 1.0
+    sim.state["driven"]["motor.torque_cmd"] = 1.0
     for _ in range(1000):
-        state = sim.step(state, dt=0.001)
+        sim.step(dt=0.001)
     # α = 1.0 / 0.01 = 100 rad/s² for 1 s ⇒ ω = 100.
-    assert np.isclose(state["driven"]["motor.rate"], 100.0, atol=1e-6)
+    assert np.isclose(sim.state["driven"]["motor.rate"], 100.0, atol=1e-6)
 
     # Switch torque off — rate stays at 100 (no friction).
-    state["driven"]["motor.torque_cmd"] = 0.0
+    sim.state["driven"]["motor.torque_cmd"] = 0.0
     for _ in range(1000):
-        state = sim.step(state, dt=0.001)
-    assert np.isclose(state["driven"]["motor.rate"], 100.0, atol=1e-6)
+        sim.step(dt=0.001)
+    assert np.isclose(sim.state["driven"]["motor.rate"], 100.0, atol=1e-6)
 
 
 def test_input_value_can_change_each_tick():
@@ -108,21 +106,20 @@ def test_input_value_can_change_each_tick():
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c)
     sim = TargetNumpy(Sim(w))
-    state = sim.initial_state()
 
     # Apply a sinusoidal torque over 2 seconds.
     dt = 0.001
     integral = 0.0
     for i in range(2000):
         tau = np.sin(2 * np.pi * i * dt / 2.0)   # 0.5 Hz sine
-        state["ramping"]["motor.torque_cmd"] = float(tau)
+        sim.state["ramping"]["motor.torque_cmd"] = float(tau)
         integral += tau * dt
-        state = sim.step(state, dt=dt)
+        sim.step(dt=dt)
 
     # The integral of a full sine cycle over its period is ~0, so the
     # flywheel rate ends near zero.
     expected_rate = integral / 0.01   # ω = ∫τ/I dt
-    assert np.isclose(state["ramping"]["motor.rate"], expected_rate, atol=1e-3)
+    assert np.isclose(sim.state["ramping"]["motor.rate"], expected_rate, atol=1e-3)
 
 
 # ---------------------------------------------------------------------------
@@ -138,14 +135,13 @@ def test_world_carries_inputs_through_step():
     w.add_craft(c)
 
     cw = TargetNumpy(Sim(w))
-    state = cw.initial_state()
-    state["driven"]["motor.torque_cmd"] = 1.0
+    cw.state["driven"]["motor.torque_cmd"] = 1.0
 
     for _ in range(500):
-        state = cw.step(state, dt=0.001)
+        cw.step(dt=0.001)
 
     # α = 1.0 / 0.05 = 20 rad/s², t = 0.5s, ω = 10 rad/s.
-    assert np.isclose(state["driven"]["motor.rate"], 10.0, atol=1e-4)
+    assert np.isclose(cw.state["driven"]["motor.rate"], 10.0, atol=1e-4)
 
 
 # ---------------------------------------------------------------------------
@@ -199,7 +195,7 @@ def test_multiple_inputs_on_one_part():
     w = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
     w.add_craft(c)
     sim = TargetNumpy(Sim(w))
-    state = sim.step(sim.initial_state(), dt=0.001)
+    state = sim.step(dt=0.001)
     assert "position" in state["two_in"]
 
 

@@ -57,7 +57,7 @@ def test_stationary_craft_reads_zero_gyro():
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c)
     sim = TargetNumpy(Sim(w))
-    state = sim.step(sim.initial_state(), dt=0.001)
+    sim.step(0.001)
     np.testing.assert_allclose(np.array(sim.outputs()["stat"]["g.gyro"]).ravel(),
                                np.zeros(3), atol=1e-12)
 
@@ -76,7 +76,7 @@ def test_spinning_craft_reads_omega():
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c, angular_velocity=(0.7, -0.2, 1.3))
     sim = TargetNumpy(Sim(w))
-    state = sim.step(sim.initial_state(), dt=0.001)
+    sim.step(0.001)
     np.testing.assert_allclose(np.array(sim.outputs()["spin"]["g.gyro"]).ravel(),
                                np.array([0.7, -0.2, 1.3]), atol=1e-12)
 
@@ -90,7 +90,7 @@ def test_gyro_unaffected_by_linear_velocity():
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c, velocity=(5.0, 3.0, -2.0))
     sim = TargetNumpy(Sim(w))
-    state = sim.step(sim.initial_state(), dt=0.001)
+    sim.step(0.001)
     np.testing.assert_allclose(np.array(sim.outputs()["translating"]["g.gyro"]).ravel(),
                                np.zeros(3), atol=1e-12)
 
@@ -113,16 +113,15 @@ def test_imu_adds_no_wrench():
 
     sim1 = sim_for("plain", False)
     sim2 = sim_for("withimu", True)
-    st1, st2 = sim1.initial_state(), sim2.initial_state()
     for _ in range(200):
-        st1 = sim1.step(st1, dt=0.005)
-        st2 = sim2.step(st2, dt=0.005)
+        sim1.step(0.005)
+        sim2.step(0.005)
 
-    np.testing.assert_allclose(np.array(st1["plain"]["position"]).ravel(),
-                               np.array(st2["withimu"]["position"]).ravel(),
+    np.testing.assert_allclose(np.array(sim1.state["plain"]["position"]).ravel(),
+                               np.array(sim2.state["withimu"]["position"]).ravel(),
                                atol=1e-12)
-    np.testing.assert_allclose(np.array(st1["plain"]["velocity"]).ravel(),
-                               np.array(st2["withimu"]["velocity"]).ravel(),
+    np.testing.assert_allclose(np.array(sim1.state["plain"]["velocity"]).ravel(),
+                               np.array(sim2.state["withimu"]["velocity"]).ravel(),
                                atol=1e-12)
 
 
@@ -143,11 +142,10 @@ def test_gyro_tracks_motor_reaction_spin():
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c, **{"m.torque_cmd": 0.1})   # τ = 0.1 N·m about body z
     sim = TargetNumpy(Sim(w))
-    state = sim.initial_state()
 
     gyro_history = []
     for _ in range(500):
-        state = sim.step(state, dt=0.001)
+        sim.step(0.001)
         gyro_history.append(np.array(sim.outputs()["reactive"]["g.gyro"]).ravel().copy())
 
     # First sample is near zero (ω was 0 at t=0, gyro reads ω at start).
@@ -171,10 +169,9 @@ def test_imu_output_appears_in_world_step():
     w.add_craft(c)
 
     cw = TargetNumpy(Sim(w))
-    state = cw.initial_state()
-    state["imu_craft"]["angular_velocity"] = np.array([0.0, 0.0, 2.5])
+    cw.state["imu_craft"]["angular_velocity"] = np.array([0.0, 0.0, 2.5])
 
-    state = cw.step(state, dt=0.001)
+    cw.step(0.001)
     np.testing.assert_allclose(np.array(cw.outputs()["imu_craft"]["g.gyro"]).ravel(),
                                np.array([0.0, 0.0, 2.5]), atol=1e-9)
 
@@ -233,7 +230,7 @@ def test_accel_in_free_fall_reads_zero():
     w = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
     w.add_craft(c)
     sim = TargetNumpy(Sim(w))
-    state = sim.step(sim.initial_state(), dt=0.001)
+    sim.step(0.001)
     accel = np.array(sim.outputs()["falling"]["g.accel"]).ravel()
     np.testing.assert_allclose(accel, np.zeros(3), atol=1e-6)
 
@@ -246,7 +243,7 @@ def test_accel_zero_gravity_zero_acceleration_reads_zero():
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c, velocity=(5.0, 0.0, 0.0))   # constant velocity
     sim = TargetNumpy(Sim(w))
-    state = sim.step(sim.initial_state(), dt=0.001)
+    sim.step(0.001)
     np.testing.assert_allclose(np.array(sim.outputs()["drift"]["g.accel"]).ravel(),
                                np.zeros(3), atol=1e-9)
 
@@ -262,7 +259,7 @@ def test_accel_picks_up_thruster_acceleration():
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c, **{"t.throttle": 1.0})
     sim = TargetNumpy(Sim(w))
-    state = sim.step(sim.initial_state(), dt=0.001)
+    sim.step(0.001)
     # F = 10 N, m = 2 kg → a = 5 m/s² along +x in body frame.
     accel = np.array(sim.outputs()["powered"]["g.accel"]).ravel()
     np.testing.assert_allclose(accel, (5.0, 0.0, 0.0), atol=1e-6)
@@ -281,7 +278,7 @@ def test_accel_offset_imu_reads_centripetal_under_rotation():
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c, angular_velocity=(0.0, 0.0, omega_z))
     sim = TargetNumpy(Sim(w))
-    state = sim.step(sim.initial_state(), dt=0.001)
+    sim.step(0.001)
     # Centripetal acceleration: ω × (ω × r) with r=(1,0,0), ω=(0,0,2):
     #   ω × r = (0,0,2) × (1,0,0) = (0, 2, 0)
     #   ω × (ω × r) = (0,0,2) × (0,2,0) = (-4, 0, 0)

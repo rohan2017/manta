@@ -100,7 +100,6 @@ def main() -> None:
     duration = args.duration or (1e9 if args.keyboard else 16.0)
 
     sim = TargetNumpy(Sim(build_world()))
-    state = sim.initial_state()
 
     # Scripted: drive a curving path so the laser has to sweep to track.
     script = [(1.0, 14.0, {"w"}), (3.0, 5.0, {"a"}), (7.0, 9.0, {"d"}),
@@ -130,35 +129,35 @@ def main() -> None:
         for i in range(n):
             t = i * dt
             ctrl.update(t)
-            state["boat"]["prop.throttle"] = \
+            sim.state["boat"]["prop.throttle"] = \
                 FWD * (ctrl.held("w") - ctrl.held("s"))
-            state["boat"]["rudder.throttle"] = \
+            sim.state["boat"]["rudder.throttle"] = \
                 STEER * (ctrl.held("a") - ctrl.held("d"))
 
             # --- laser-pointing PD on the gimbal joints --------------------
-            p = np.asarray(state["boat"]["position"]).ravel()
-            q = np.asarray(state["boat"]["orientation"]).ravel()
+            p = np.asarray(sim.state["boat"]["position"]).ravel()
+            q = np.asarray(sim.state["boat"]["orientation"]).ravel()
             R = _R(q)
             base_w = p + R @ GIMBAL_MOUNT             # gimbal base, world
             v = R.T @ (TARGET - base_w)               # target in hull frame
             des_pan = np.arctan2(v[1], v[0])
             des_tilt = -np.arctan2(v[2], np.hypot(v[0], v[1]))
             for joint, des in (("pan", des_pan), ("tilt", des_tilt)):
-                ang = float(state["boat"][f"{joint}.angle"])
+                ang = float(sim.state["boat"][f"{joint}.angle"])
                 # Fold the shortest-arc wrap into the setpoint so the PID's
                 # error is _wrap(des − ang); its derivative-on-measurement
                 # then damps the joint rate.
                 sp = ang + _wrap(des - ang)
-                state["boat"][f"{joint}.torque_cmd"] = \
+                sim.state["boat"][f"{joint}.torque_cmd"] = \
                     pid[joint].step(dt, setpoint=sp, measurement=ang)["command"]
 
-            state = sim.step(state, dt=dt)
+            sim.step(dt)
 
             if viz is not None:
-                p = np.asarray(state["boat"]["position"]).ravel()
-                q = np.asarray(state["boat"]["orientation"]).ravel()
-                pan = float(state["boat"]["pan.angle"])
-                tilt = float(state["boat"]["tilt.angle"])
+                p = np.asarray(sim.state["boat"]["position"]).ravel()
+                q = np.asarray(sim.state["boat"]["orientation"]).ravel()
+                pan = float(sim.state["boat"]["pan.angle"])
+                tilt = float(sim.state["boat"]["tilt.angle"])
                 viz.t(t)
                 viz.pose("world/boat", p, q)
                 viz.pose("world/boat/pan", GIMBAL_MOUNT,
@@ -171,11 +170,11 @@ def main() -> None:
                 viz.trail("world/boat/trail", p)
 
             if (i + 1) % 200 == 0:
-                p = np.asarray(state["boat"]["position"]).ravel()
-                q = np.asarray(state["boat"]["orientation"]).ravel()
+                p = np.asarray(sim.state["boat"]["position"]).ravel()
+                q = np.asarray(sim.state["boat"]["orientation"]).ravel()
                 R = _R(q)
-                pan = float(state["boat"]["pan.angle"])
-                tilt = float(state["boat"]["tilt.angle"])
+                pan = float(sim.state["boat"]["pan.angle"])
+                tilt = float(sim.state["boat"]["tilt.angle"])
                 # Actual laser direction (world) vs. direction to target.
                 d_hull = np.array([np.cos(pan)*np.cos(tilt),
                                    np.sin(pan)*np.cos(tilt), -np.sin(tilt)])

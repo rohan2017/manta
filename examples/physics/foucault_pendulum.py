@@ -88,7 +88,6 @@ def main() -> None:
 
     w, earth = _build_world()
     sim = TargetNumpy(Sim(w))
-    state = sim.initial_state()
 
     T_prec = 2.0 * np.pi / OMEGA
     duration = T_prec if args.duration is None else args.duration
@@ -109,11 +108,11 @@ def main() -> None:
     bob_planet, times = [], []
     t = 0.0
     for i in range(n_steps):
-        state = sim.step(state, dt=DT, t=t)
+        sim.step(DT, t=t)
         t += DT
         if i % sample_every == 0:
             p_planet, _ = earth.world_to_planet(
-                state["bob"]["position"], state["bob"]["velocity"], t)
+                sim.state["bob"]["position"], sim.state["bob"]["velocity"], t)
             bob_planet.append((p_planet[0], p_planet[1]))
             times.append(t)
             if viz is not None:

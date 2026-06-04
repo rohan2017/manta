@@ -1,25 +1,33 @@
-"""TargetNumpy — the native-Python backend: ONE runtime for every Module.
+"""TargetNumpy — the native-Python backend.
 
-`TargetNumpy(x)` lowers a typed `Module` (or any transform exposing
-`.module()` — `Sim`, `EKF`, `LQR`, a recurrence block) to a single
-`NumpyRuntime`. There are no per-transform runtime classes: the runtime's
-surface is *derived from the Module's structure* —
+ONE kernel engine + four thin typed views. `NumpyRuntime` is the engine:
+the generic typed-arg gather → `ca.Function` call → scatter over a
+Module's entry points (`call(method, values)`), plus the shared port
+metadata helpers. Each view subclasses it and exposes exactly the surface
+its Module shape implies — nothing else:
 
-  * THREADED + an oracle ``step`` entry (a Sim)   → dict-state functional
-    `step(state, dt)` / bus `step(dt)`, `outputs()`, `out`/`command` ports,
-    `attach_driver` (feeds the NOISE port).
-  * HELD + MEASUREMENT ports (a filter)           → `predict`/`update`
-    (by sensor *name*), `feed`/`step` (the measurement bus), `x`/`P`,
-    `reset`, `state_dict`, `meas`/`command`/`estimate` ports.
-  * HELD + an OUTPUT port (a recurrence)          → `step(dt, **inputs)`,
-    `outputs()`, `reset`, `input`/`output` ports, `compute`.
-  * THREADED + a ``control`` entry (a regulator)  → `u(x)`,
-    `control(state_dict)`, `estimate`/`command` ports, `compute`.
+  * `NumpySim`        — THREADED + an oracle ``step`` entry. Held state:
+                        `sim.state` (nested dict), `step(dt)`,
+                        `outputs()`, `out`/`command` ports,
+                        `attach_driver` (feeds the NOISE port).
+  * `NumpyFilter`     — HELD + a ``predict`` entry. `predict`/`update`
+                        (by sensor *name*), `feed`+`step` (the
+                        measurement bus), `x`/`P`, `reset`, `state_dict`,
+                        `meas`/`command`/`estimate` ports.
+  * `NumpyRecurrence` — HELD + an OUTPUT port. `step(dt, **inputs)`,
+                        `readouts()`, `reset`, `input`/`output` ports,
+                        `compute`.
+  * `NumpyRegulator`  — THREADED + a ``control`` entry. `u(x)`,
+                        `control(state_dict)`, `estimate`/`command`
+                        ports, `compute`.
+
+`TargetNumpy(x)` inspects the Module once and returns the matching view;
+a Module that matches no view (e.g. the Sim's noiseless deploy bundle)
+comes back as the bare engine — `call()` works on any entry point.
 
 Everything is driven by the IR's types: slot names come from the manifold
 spec, input/sensor/noise names + defaults/σ/rates from the Ports. The
-backend never mentions a transform. `call(method, values)` is the generic
-escape hatch onto any entry point.
+backend never mentions a transform.
 """
 
 from __future__ import annotations
@@ -40,8 +48,13 @@ def _split(full: str) -> tuple[str, str]:
     return owner, rest
 
 
+# ---------------------------------------------------------------------------
+# The kernel engine
+# ---------------------------------------------------------------------------
+
 class NumpyRuntime:
-    """The one native-Python runtime over a typed `Module`."""
+    """The generic engine over a typed `Module`: state storage + the
+    typed-arg gather → kernel call → scatter. Views subclass it."""
 
     def __init__(self, module: Module) -> None:
         self.module = module
@@ -64,33 +77,9 @@ class NumpyRuntime:
         self._methods = {e.method for e in module.entry_points}
 
         self._t = 0.0
-        self._driver: "NoiseDriver | None" = None
-        self._outputs: dict[str, dict[str, Any]] = {}
-        self._bus_state: dict | None = None
         self._ports = PortSet()
-        self._y = (np.zeros(self._y_port.size) if self._y_port is not None
-                   else None)
 
-        # Filter surface: the measurement bus (mailboxes per MEASUREMENT
-        # port — possibly none — + ZOH commands + the estimate port). A
-        # held module with a `predict` entry IS a filter; a held module
-        # with an OUTPUT port is a recurrence.
-        self._bus: MeasurementBus | None = None
-        if module.hosting is Hosting.HELD and "predict" in self._methods:
-            self._bus = MeasurementBus(
-                self,
-                sensors={p.name: {"dim": p.size, "key": p.name}
-                         for p in self._meas_ports_ir},
-                input_names=self._input_names(),
-                sample_rates={f.name: f.rate for f in self._u_fields()
-                              if f.rate is not None},
-                estimate_dim=self._spec.ambient_dim,
-                estimate_layout={s.name: (s.ambient_offset, s.ambient_dim)
-                                 for s in self._spec.slots})
-
-    # ------------------------------------------------------------------
-    # The kernel engine (typed-arg gather → call → scatter)
-    # ------------------------------------------------------------------
+    # ---- kernel engine (typed-arg gather → call → scatter) -----------
 
     def call(self, method: str, values: dict[str, Any] | None = None,
              **kw) -> dict[str, np.ndarray]:
@@ -133,9 +122,7 @@ class NumpyRuntime:
                          else a.reshape(-1))
         return ret
 
-    # ------------------------------------------------------------------
-    # Shared metadata helpers (all from the Module)
-    # ------------------------------------------------------------------
+    # ---- shared metadata helpers (all from the Module) ----------------
 
     def _u_fields(self):
         return self._u_port.fields if self._u_port is not None else ()
@@ -167,9 +154,32 @@ class NumpyRuntime:
         """The Module's declared control-input names, in order."""
         return self._input_names()
 
-    # ==================================================================
-    # Sim surface (THREADED oracle: a `step` entry consuming NOISE)
-    # ==================================================================
+    def observability(self, **kwargs):       # pragma: no cover - thin
+        raise AttributeError(
+            "observability is an IR-level analysis — call it on the EKF "
+            "transform: EKF(world, ...).observability(...)")
+
+    def __repr__(self) -> str:
+        return f"<{type(self).__name__} over {self.module!r}>"
+
+
+# ---------------------------------------------------------------------------
+# Sim view — THREADED oracle, held by the runtime (bus-driven)
+# ---------------------------------------------------------------------------
+
+class NumpySim(NumpyRuntime):
+    """The simulation oracle. The runtime holds the nested state dict
+    (`sim.state`); `step(dt)` advances it and realizes that step's sensor
+    readings (`outputs()`), pulling wired command ports first and
+    publishing readings to wired output ports after."""
+
+    def __init__(self, module: Module) -> None:
+        super().__init__(module)
+        self._driver: "NoiseDriver | None" = None
+        self._outputs: dict[str, dict[str, Any]] = {}
+        self._sim_state: dict | None = None
+
+    # ---- held state ----------------------------------------------------
 
     def initial_state(self) -> dict[str, dict[str, Any]]:
         """Fresh nested initial state: the manifold slots' defaults plus
@@ -186,31 +196,42 @@ class NumpyRuntime:
                     rest, np.zeros(f.dim) if f.dim > 1 else 0.0)
         return nested
 
-    def step(self, state=None, dt=None, t: float | None = None, **inputs):
-        """Polymorphic step, by Module shape:
+    @property
+    def state(self) -> dict[str, dict[str, Any]]:
+        """The held nested state (lazy-seeded; mutate in place to set
+        commands or override slots)."""
+        if self._sim_state is None:
+            self._sim_state = self.initial_state()
+        return self._sim_state
 
-        * Sim (threaded oracle) — functional `step(state, dt, t=0)` → next
-          state dict (readings via `outputs()`), or bus `step(dt[, t=…])`
-          advancing the held `self.state`.
-        * Filter (held + measurements) — `step(dt[, t=…[, Q=…]])`: fold
-          fresh measurements, then predict (the measurement bus).
-        * Recurrence (held + readouts) — `step(dt, **inputs)` → readouts.
-        """
-        if self._bus is not None:                      # filter
-            return self._bus.step(dt if dt is not None else state,
-                                  t=t, **inputs)
-        if self.module.hosting is Hosting.HELD:        # recurrence
-            return self._recurrence_step(state, t=t, **inputs)
-        if isinstance(state, dict):                    # sim, functional
-            return self._functional_step(state, dt,
-                                         0.0 if t is None else t)
-        bus_dt = dt if state is None else state        # sim, bus form
-        if bus_dt is None:
-            raise TypeError(f"{type(self).__name__}.step: provide dt")
-        return self._sim_bus_step(float(bus_dt), t)
+    @state.setter
+    def state(self, value: dict) -> None:
+        self._sim_state = value
 
-    def _functional_step(self, state: dict, dt: float,
-                         t: float = 0.0) -> dict[str, dict[str, Any]]:
+    # ---- step ----------------------------------------------------------
+
+    def step(self, dt: float, *, t: float | None = None
+             ) -> dict[str, dict[str, Any]]:
+        """Advance the held state by `dt`: pull wired command ports (ZOH),
+        run the oracle kernel (one noise draw), publish this step's
+        readings to wired output ports. Returns the new state dict."""
+        if isinstance(dt, dict):
+            raise TypeError(
+                "NumpySim.step: the functional step(state, dt) form was "
+                "removed — mutate `sim.state` and call step(dt).")
+        t0 = self._t if t is None else t
+        st = self.state
+        for full, v in self._ports.pull(t0).items():
+            owner, rest = _split(full)
+            st.setdefault(owner, {})[rest] = v
+        self._sim_state = self._advance(st, float(dt), t0)
+        self._t = t0 + float(dt)
+        readings = {f"{o}.{s}": v for o, slots in self._outputs.items()
+                    for s, v in slots.items()}
+        self._ports.publish(readings, t0)
+        return self._sim_state
+
+    def _advance(self, state: dict, dt: float, t: float) -> dict:
         spec = self._spec
         flat = flatten_nested(state)
         self._state["x"] = spec.pack_any(flat)
@@ -256,35 +277,7 @@ class NumpyRuntime:
         with that step's noise draw)."""
         return self._outputs
 
-    @property
-    def state(self):
-        """Held state. Sim bus mode: the nested dict (lazy-seeded, mutate
-        in place). Recurrence: `{slot: value}` by name."""
-        if self.module.hosting is Hosting.HELD:
-            return self._spec.unpack(self._state["x"])
-        if self._bus_state is None:
-            self._bus_state = self.initial_state()
-        return self._bus_state
-
-    @state.setter
-    def state(self, value: dict) -> None:
-        if self.module.hosting is Hosting.HELD:
-            raise AttributeError("held state: use reset()")
-        self._bus_state = value
-
-    def _sim_bus_step(self, dt: float, t: float | None):
-        t0 = self._t if t is None else t
-        st = self.state
-        for full, v in self._ports.pull(t0).items():
-            owner, rest = _split(full)
-            st.setdefault(owner, {})[rest] = v
-        new = self._functional_step(st, dt, t0)
-        self._bus_state = new
-        self._t = t0 + dt
-        readings = {f"{o}.{s}": v for o, slots in self._outputs.items()
-                    for s, v in slots.items()}
-        self._ports.publish(readings, t0)
-        return new
+    # ---- noise ----------------------------------------------------------
 
     def attach_driver(self, driver: "NoiseDriver") -> "NoiseDriver":
         """Attach a stochastic `NoiseDriver`: every active (σ>0) channel of
@@ -302,30 +295,52 @@ class NumpyRuntime:
     def driver(self) -> "NoiseDriver | None":
         return self._driver
 
+    # ---- ports -----------------------------------------------------------
+
     def out(self, name: str):
         """Producer port for a sensor reading (rate-gated sample-and-hold;
-        published each bus step)."""
+        published each step)."""
         full = resolve_suffix(name, [p.name for p in self._meas_ports_ir],
                               label="output", who=type(self).__name__)
         port = self.module.port(full)
         return self._ports.producer(full, dim=port.size, rate=port.rate)
 
     def command(self, name: str):
-        """Port for a control input. On a sim/filter: a latched (ZOH)
-        consumer pulled before each step. On a regulator: the producer
-        `compute()` publishes to."""
-        if self._bus is not None:
-            return self._bus.command(name)
+        """Latched (ZOH) consumer port for a control input, pulled before
+        each step."""
         full = resolve_suffix(name, self._input_names(), label="input",
                               who=type(self).__name__)
-        if "control" in self._methods:                 # regulator: producer
-            return self._ports.producer(full, dim=1)
         f = next(f for f in self._u_fields() if f.name == full)
         return self._ports.consumer(full, dim=f.dim, rate=f.rate)
 
-    # ==================================================================
-    # Filter surface (HELD + MEASUREMENT ports)
-    # ==================================================================
+    def __repr__(self) -> str:
+        drv = "" if self._driver is None else f" +{self._driver!r}"
+        return f"<NumpySim over {self.module!r}{drv}>"
+
+
+# ---------------------------------------------------------------------------
+# Filter view — HELD + a predict entry
+# ---------------------------------------------------------------------------
+
+class NumpyFilter(NumpyRuntime):
+    """A predict/update filter. Held `x`/`P`; baked per-sensor updates by
+    NAME; the measurement bus (`feed` + `step`, wired `meas`/`command`/
+    `estimate` ports) on top."""
+
+    def __init__(self, module: Module) -> None:
+        super().__init__(module)
+        self._bus = MeasurementBus(
+            self,
+            sensors={p.name: {"dim": p.size, "key": p.name}
+                     for p in self._meas_ports_ir},
+            input_names=self._input_names(),
+            sample_rates={f.name: f.rate for f in self._u_fields()
+                          if f.rate is not None},
+            estimate_dim=self._spec.ambient_dim,
+            estimate_layout={s.name: (s.ambient_offset, s.ambient_dim)
+                             for s in self._spec.slots})
+
+    # ---- estimate access -------------------------------------------------
 
     @property
     def x(self) -> np.ndarray:
@@ -334,6 +349,10 @@ class NumpyRuntime:
     @property
     def P(self) -> np.ndarray:
         return self._state["P"].copy()
+
+    @property
+    def estimate_vector(self) -> np.ndarray:
+        return self._state["x"]
 
     def state_dict(self) -> dict[str, dict[str, Any]]:
         """Current estimate nested by owner."""
@@ -350,12 +369,9 @@ class NumpyRuntime:
         elif P is None:
             self._state["x"] = np.asarray(
                 x_field.init, dtype=float).reshape(-1).copy()
-            if "P" in self.module.state:
-                pf = self.module.state.field("P")
-                self._state["P"] = np.asarray(
-                    pf.init, dtype=float).reshape(pf.shape).copy()
-            if self._y is not None:
-                self._y = np.zeros(self._y_port.size)
+            pf = self.module.state.field("P")
+            self._state["P"] = np.asarray(
+                pf.init, dtype=float).reshape(pf.shape).copy()
         if P is not None:
             P = np.asarray(P, dtype=float)
             expected = (self._spec.tangent_dim, self._spec.tangent_dim)
@@ -364,8 +380,9 @@ class NumpyRuntime:
                     f"reset: P shape {P.shape} doesn't match tangent dim "
                     f"{expected}")
             self._state["P"] = P.copy()
-        if self._bus is not None:
-            self._bus.publish_estimate()
+        self._bus.publish_estimate()
+
+    # ---- predict / update ------------------------------------------------
 
     def predict(self, dt: float, *, t: float = 0.0,
                 u: dict[str, Any] | None = None,
@@ -415,10 +432,6 @@ class NumpyRuntime:
         self._run(self.module.entry(f"update_{full.replace('.', '_')}"),
                   {full: z_arr, "u": u_vec, "t": t})
 
-    @property
-    def estimate_vector(self) -> np.ndarray:
-        return self._state["x"]
-
     def _update_low_level(self, h_sym: Callable, z, R) -> None:
         """Joseph update for a caller-supplied `h(x)` — built on the spec's
         manifold ops; the one genuinely runtime-defined measurement."""
@@ -450,10 +463,30 @@ class NumpyRuntime:
         P = IKH @ P @ IKH.T + K @ R @ K.T
         self._state["P"] = 0.5 * (P + P.T)
 
-    # bus passthroughs (filter only)
+    # ---- the measurement bus ----------------------------------------------
+
+    def step(self, dt: float, *, t: float | None = None,
+             Q: np.ndarray | None = None) -> None:
+        """Fold fresh measurements (interval start), then predict by `dt`."""
+        return self._bus.step(dt, t=t, Q=Q)
+
+    def feed(self, name: str, z, *, t: float | None = None) -> None:
+        self._bus.feed(name, z, t=t)
+
+    def meas(self, name: str):
+        return self._bus.meas(name)
+
+    def command(self, name: str):
+        return self._bus.command(name)
+
+    @property
+    def estimate(self):
+        """Producer port: the estimate as a flat ambient vector."""
+        return self._bus.estimate
+
     @property
     def inputs(self) -> dict:
-        return self._bus.inputs if self._bus is not None else {}
+        return self._bus.inputs
 
     @inputs.setter
     def inputs(self, value: dict) -> None:
@@ -467,28 +500,33 @@ class NumpyRuntime:
     def Q(self, value) -> None:
         self._bus.Q = value
 
-    def feed(self, name: str, z, *, t: float | None = None) -> None:
-        self._bus.feed(name, z, t=t)
 
-    def meas(self, name: str):
-        return self._bus.meas(name)
+# ---------------------------------------------------------------------------
+# Recurrence view — HELD + an OUTPUT port
+# ---------------------------------------------------------------------------
+
+class NumpyRecurrence(NumpyRuntime):
+    """A stateful dataflow block (PID, Madgwick, …): `step(dt, **inputs)`
+    advances the held state and computes the readouts."""
+
+    def __init__(self, module: Module) -> None:
+        super().__init__(module)
+        self._y = np.zeros(self._y_port.size)
 
     @property
-    def estimate(self):
-        """Producer port: the estimate as a flat ambient vector (filter),
-        or the consumer port a regulator reads."""
-        if self._bus is not None:
-            return self._bus.estimate
-        from ...signal import Signal
-        if getattr(self, "_est_in", None) is None:
-            self._est_in = Signal("estimate", dim=None)
-        return self._est_in
+    def state(self) -> dict[str, Any]:
+        """Held state, `{slot: value}` by name."""
+        return self._spec.unpack(self._state["x"])
 
-    # ==================================================================
-    # Recurrence surface (HELD + an OUTPUT port)
-    # ==================================================================
+    def reset(self) -> None:
+        """Reset the held state to the Module's declared initial values."""
+        x_field = self.module.state.field("x")
+        self._state["x"] = np.asarray(
+            x_field.init, dtype=float).reshape(-1).copy()
+        self._y = np.zeros(self._y_port.size)
 
-    def _recurrence_step(self, dt, *, t=None, **inputs):
+    def step(self, dt: float, *, t: float | None = None,
+             **inputs) -> dict[str, Any]:
         tt = self._t if t is None else t
         u = np.zeros(self._u_port.size)
         off = 0
@@ -521,6 +559,8 @@ class NumpyRuntime:
             off += f.dim
         return out
 
+    # ---- ports -----------------------------------------------------------
+
     def input(self, name: str):
         """Consumer port for a recurrence input (latched / ZOH)."""
         names = self._input_names()
@@ -531,15 +571,32 @@ class NumpyRuntime:
 
     def output(self, name: str):
         """Producer port for a recurrence readout."""
-        names = [f.name for f in (self._y_port.fields if self._y_port else ())]
+        names = [f.name for f in self._y_port.fields]
         if name not in names:
             raise KeyError(f"unknown output port {name!r}. Available: {names}")
         f = next(f for f in self._y_port.fields if f.name == name)
         return self._ports.producer(name, dim=f.dim)
 
-    # ==================================================================
-    # Regulator surface (THREADED + a `control` entry)
-    # ==================================================================
+    def compute(self, dt: float, *, t: float | None = None) -> dict[str, Any]:
+        """Pull wired input ports, `step(dt)`, publish readouts (stamped
+        at start-of-step)."""
+        tt = self._t if t is None else t
+        out = self.step(dt, t=tt, **self._ports.pull(tt))
+        self._ports.publish(out, t=tt)
+        return out
+
+
+# ---------------------------------------------------------------------------
+# Regulator view — THREADED + a control entry
+# ---------------------------------------------------------------------------
+
+class NumpyRegulator(NumpyRuntime):
+    """A stateless control law: map a state estimate to commands."""
+
+    def __init__(self, module: Module) -> None:
+        super().__init__(module)
+        self._est_in = None
+        self._gather = None
 
     def u(self, x_flat) -> np.ndarray:
         """Control vector for a flat ambient state (full-spec layout)."""
@@ -554,40 +611,48 @@ class NumpyRuntime:
         return {n: float(u_vec[i])
                 for i, n in enumerate(self._input_names())}
 
-    def compute(self, dt: float | None = None, *,
-                t: float | None = None) -> dict[str, Any]:
-        """Pull wired inputs, evaluate, publish to output ports.
+    # ---- ports -----------------------------------------------------------
 
-        Regulator: read the wired `estimate`, apply the control law,
-        publish each command. Recurrence: pull input ports, `step(dt)`,
-        publish readouts (stamped at start-of-step)."""
-        if "control" in self._methods:
-            est = self.estimate.read()
-            if est is None:
-                raise RuntimeError(
-                    "compute: estimate input is empty — wire a producer "
-                    "into `.estimate` (or set it) first.")
-            if isinstance(est, dict):
-                u = self.control(est)
-            else:
-                self._ensure_gather()
-                x_full = np.asarray(self._x_port.init, dtype=float).copy()
-                x_src = np.asarray(est, dtype=float).reshape(-1)
-                for foff, dim, soff in self._gather:
-                    x_full[foff:foff + dim] = x_src[soff:soff + dim]
-                u_vec = self.u(x_full)
-                u = {n: float(u_vec[i])
-                     for i, n in enumerate(self._input_names())}
-            for full, v in u.items():
-                self.command(full).set(v)
-            return u
-        tt = self._t if t is None else t
-        out = self._recurrence_step(dt, t=tt, **self._ports.pull(tt))
-        self._ports.publish(out, t=tt)        # start-of-step stamp
-        return out
+    def command(self, name: str):
+        """Producer port `compute()` publishes this command to."""
+        full = resolve_suffix(name, self._input_names(), label="input",
+                              who=type(self).__name__)
+        return self._ports.producer(full, dim=1)
+
+    @property
+    def estimate(self):
+        """Consumer port: wire a filter's `estimate` (flat vector +
+        layout) into it, or `set()` a state dict directly."""
+        from ...signal import Signal
+        if self._est_in is None:
+            self._est_in = Signal("estimate", dim=None)
+        return self._est_in
+
+    def compute(self) -> dict[str, Any]:
+        """Read the wired `estimate`, apply the control law, publish each
+        command to its port. Returns `{input: value}`."""
+        est = self.estimate.read()
+        if est is None:
+            raise RuntimeError(
+                "compute: estimate input is empty — wire a producer "
+                "into `.estimate` (or set it) first.")
+        if isinstance(est, dict):
+            u = self.control(est)
+        else:
+            self._ensure_gather()
+            x_full = np.asarray(self._x_port.init, dtype=float).copy()
+            x_src = np.asarray(est, dtype=float).reshape(-1)
+            for foff, dim, soff in self._gather:
+                x_full[foff:foff + dim] = x_src[soff:soff + dim]
+            u_vec = self.u(x_full)
+            u = {n: float(u_vec[i])
+                 for i, n in enumerate(self._input_names())}
+        for full, v in u.items():
+            self.command(full).set(v)
+        return u
 
     def _ensure_gather(self) -> None:
-        if getattr(self, "_gather", None) is not None:
+        if self._gather is not None:
             return
         spec = self._x_port.manifold
         src = self.estimate.source
@@ -599,17 +664,6 @@ class NumpyRuntime:
         self._gather = [
             (spec.slot(name).ambient_offset, sdim, soff)
             for name, (soff, sdim) in layout.items() if name in spec]
-
-    # ------------------------------------------------------------------
-
-    def observability(self, **kwargs):       # pragma: no cover - thin
-        raise AttributeError(
-            "observability is an IR-level analysis — call it on the EKF "
-            "transform: EKF(world, ...).observability(...)")
-
-    def __repr__(self) -> str:
-        drv = "" if self._driver is None else f" +{self._driver!r}"
-        return f"<NumpyRuntime over {self.module!r}{drv}>"
 
 
 # ---------------------------------------------------------------------------
@@ -652,7 +706,20 @@ class NoiseDriver:
 
 def TargetNumpy(x) -> NumpyRuntime:
     """Lower a typed `Module` — or any transform exposing `.module()`
-    (`Sim`, `EKF`, `LQR`, a recurrence block) — to the one native-Python
-    `NumpyRuntime`."""
+    (`Sim`, `EKF`, `LQR`, a recurrence block) — to the matching
+    native-Python view (sim / filter / recurrence / regulator), or the
+    bare kernel engine when no view matches."""
     from ..target import as_module
-    return NumpyRuntime(as_module(x, "TargetNumpy"))
+    m = as_module(x, "TargetNumpy")
+    methods = {e.method for e in m.entry_points}
+    if m.hosting is Hosting.HELD:
+        if "predict" in methods:
+            return NumpyFilter(m)
+        if m.ports_by_role(Role.OUTPUT):
+            return NumpyRecurrence(m)
+    else:
+        if "control" in methods:
+            return NumpyRegulator(m)
+        if "step" in methods:
+            return NumpySim(m)
+    return NumpyRuntime(m)

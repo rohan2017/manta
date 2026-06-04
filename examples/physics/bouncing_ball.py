@@ -47,7 +47,6 @@ def main() -> None:
 
     g, k, c_damp = 9.81, 5.0e3, 30.0
     sim = TargetNumpy(Sim(build_world(g, k, c_damp)))
-    state = sim.initial_state()
 
     viz = Viz("manta/bouncing_ball", spawn=not args.no_viz)
     viz.plane("world/ground", z=0.0, size=3.0, color=(70, 110, 70, 200))
@@ -58,18 +57,18 @@ def main() -> None:
     print(f"{'t (s)':>6} {'z (m)':>10} {'vz (m/s)':>10} {'KE+PE (J)':>10}")
     z_peaks, last_vz = [], 0.0
     for i in range(n):
-        state = sim.step(state, dt=dt)
-        z = float(state["ball"]["position"][2])
-        vz = float(state["ball"]["velocity"][2])
+        sim.step(dt)
+        z = float(sim.state["ball"]["position"][2])
+        vz = float(sim.state["ball"]["velocity"][2])
         if last_vz > 0 and vz <= 0:          # apex of a bounce
             z_peaks.append(z)
         last_vz = vz
 
         t = (i + 1) * dt
         viz.t(t)
-        viz.point("world/ball", state["ball"]["position"],
+        viz.point("world/ball", sim.state["ball"]["position"],
                   color=(240, 180, 60), radius=RADIUS)
-        viz.trail("world/ball/trail", state["ball"]["position"])
+        viz.trail("world/ball/trail", sim.state["ball"]["position"])
 
         if (i + 1) % 250 == 0:
             ke, pe = 0.5 * vz ** 2, max(0.0, z) * g

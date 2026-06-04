@@ -47,8 +47,7 @@ def _run(label: str, rotor_rate: float, viz: Viz | None, dt: float, n: int):
     w = World().add_field(GravityField().add_uniform((0.0, 0.0, 0.0)))  # g off
     w.add_craft(_build_top())
     sim = TargetNumpy(Sim(w))
-    state = sim.initial_state()
-    state["top"]["rotor.rate"] = rotor_rate
+    sim.state["top"]["rotor.rate"] = rotor_rate
 
     if viz is not None:
         viz.box("world/top/body", (0.06, 0.06, 0.012), color=(200, 200, 210))
@@ -58,11 +57,11 @@ def _run(label: str, rotor_rate: float, viz: Viz | None, dt: float, n: int):
     print(f"{'t (s)':>5} {'ω_x':>10} {'ω_y':>10} {'ω_z':>10} {'rotor':>9}")
     for i in range(n):
         t = i * dt
-        state["top"]["kick.throttle"] = 0.5 if 0.1 <= t < 0.2 else 0.0
-        state = sim.step(state, dt=dt)
+        sim.state["top"]["kick.throttle"] = 0.5 if 0.1 <= t < 0.2 else 0.0
+        sim.step(dt)
 
         if viz is not None:
-            q = np.asarray(state["top"]["orientation"]).ravel()
+            q = np.asarray(sim.state["top"]["orientation"]).ravel()
             viz.t(t)
             viz.pose("world/top", (0, 0, 0), q)
             # Spin axis (body z) drawn in the body frame; its world tip
@@ -75,9 +74,9 @@ def _run(label: str, rotor_rate: float, viz: Viz | None, dt: float, n: int):
             viz.trail("world/tip", zaxis, color=(90, 170, 255))
 
         if i in (99, 199, 499, 999, 1999, 2999):
-            omega = np.asarray(state["top"]["angular_velocity"]).ravel()
+            omega = np.asarray(sim.state["top"]["angular_velocity"]).ravel()
             print(f"{t:>5.2f} {omega[0]:>10.4f} {omega[1]:>10.4f} "
-                  f"{omega[2]:>10.4f} {float(state['top']['rotor.rate']):>9.1f}")
+                  f"{omega[2]:>10.4f} {float(sim.state['top']['rotor.rate']):>9.1f}")
 
 
 def main() -> None:

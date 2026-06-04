@@ -20,14 +20,14 @@ model, a sibling of `EKF(world)` — then lower it to a backend::
     drone = Craft("drone"); drone.add(Mass("body", mass=1.0))
     w.add_craft(drone, position=(0, 0, 100))
 
-    sim   = TargetNumpy(Sim(w))      # native-Python runtime
-    state = sim.initial_state()
+    sim = TargetNumpy(Sim(w))        # native-Python runtime
     for _ in range(N):
-        state = sim.step(state, dt=0.01, t=t)
+        sim.step(0.01, t=t)
 
-State is nested by owner: `state["drone"]["position"]`, plus one
-top-level key per state-bearing disturbance (e.g. a CraftWindBubble's
-estimated wind appears at `state["drone_wind"]["wind"]`).
+The held state is nested by owner: `sim.state["drone"]["position"]`,
+plus one top-level key per state-bearing disturbance (e.g. a
+CraftWindBubble's estimated wind appears at
+`sim.state["drone_wind"]["wind"]`).
 """
 
 from __future__ import annotations

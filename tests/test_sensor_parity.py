@@ -27,8 +27,7 @@ def test_dvl_stationary_craft_reads_zero():
     w = World().add_field(GravityField(g=(0, 0, 0)))
     w.add_craft(c)
     sim = TargetNumpy(Sim(w))
-    state = sim.initial_state()
-    state = sim.step(state, dt=0.001)
+    sim.step(0.001)
     np.testing.assert_allclose(np.array(sim.outputs()["dvl_test"]["d.velocity"]).ravel(),
                                np.zeros(3), atol=1e-12)
 
@@ -41,8 +40,7 @@ def test_dvl_moving_craft_reads_anchor_velocity_when_unrotated():
     w = World().add_field(GravityField(g=(0, 0, 0)))
     w.add_craft(c, velocity=np.array([1.5, -0.3, 2.0]))
     sim = TargetNumpy(Sim(w))
-    state = sim.initial_state()
-    state = sim.step(state, dt=0.001)
+    sim.step(0.001)
     np.testing.assert_allclose(np.array(sim.outputs()["dvl_move"]["d.velocity"]).ravel(),
                                (1.5, -0.3, 2.0), atol=1e-12)
 
@@ -69,8 +67,7 @@ def test_dvl_rotated_craft_reads_rotated_velocity():
                 orientation=np.array([np.cos(np.pi/4), 0, 0, np.sin(np.pi/4)]),
                 velocity=np.array([1.0, 0.0, 0.0]))
     sim = TargetNumpy(Sim(w))
-    state = sim.initial_state()
-    state = sim.step(state, dt=0.001)
+    sim.step(0.001)
     # body velocity = R^T · anchor velocity.
     # R^T · (1,0,0) for +90° about z: R = [[0,-1,0],[1,0,0],[0,0,1]]
     # so R^T = [[0,1,0],[-1,0,0],[0,0,1]] and R^T·(1,0,0) = (0, -1, 0).
@@ -135,8 +132,7 @@ def test_magnetometer_reads_uniform_field_when_unrotated():
     w = World().add_field(MagField().add_uniform((1.0, 2.0, 3.0)))
     w.add_craft(c)
     cw = TargetNumpy(Sim(w))
-    state = cw.initial_state()
-    state = cw.step(state, dt=0.001)
+    cw.step(0.001)
     np.testing.assert_allclose(
         np.array(cw.outputs()["mag_craft"]["m.B"]).ravel(),
         (1.0, 2.0, 3.0), atol=1e-12)
@@ -151,8 +147,7 @@ def test_magnetometer_reads_rotated_field_under_craft_rotation():
     w = World().add_field(MagField().add_uniform((1.0, 0.0, 0.0)))
     w.add_craft(c, orientation=(np.cos(np.pi/4), 0, 0, np.sin(np.pi/4)))
     cw = TargetNumpy(Sim(w))
-    state = cw.initial_state()
-    out = cw.step(state, dt=0.001)
+    cw.step(0.001)
     # R^T · (1,0,0) with R = +90° about z → (0, -1, 0) in body frame.
     np.testing.assert_allclose(
         np.array(cw.outputs()["mag_rot"]["m.B"]).ravel(),
@@ -166,8 +161,7 @@ def test_magnetometer_with_no_field_reads_zero():
     w = World().add_field(GravityField(g=(0, 0, 0)))
     w.add_craft(c)
     sim = TargetNumpy(Sim(w))
-    state = sim.initial_state()
-    state = sim.step(state, dt=0.001)
+    sim.step(0.001)
     np.testing.assert_allclose(np.array(sim.outputs()["nomag"]["m.B"]).ravel(),
                                np.zeros(3), atol=1e-12)
 
@@ -186,8 +180,7 @@ def test_magnetometer_picks_up_dipole_at_local_position():
     c.add(Magnetometer("m"))
     w.add_craft(c, position=(0, 0, 1e7))
     cw = TargetNumpy(Sim(w))
-    state = cw.initial_state()
-    out   = cw.step(state, dt=0.001)
+    cw.step(0.001)
     expected_z = 1e-7 * 2 * m / (1e7) ** 3
     np.testing.assert_allclose(
         np.array(cw.outputs()["orbiter"]["m.B"]).ravel(),
@@ -210,7 +203,7 @@ def test_magnetometer_samples_at_single_mount_offset():
         w = World().add_field(mf)
         w.add_craft(c, position=(0, 0, craft_z))
         sim = TargetNumpy(Sim(w))
-        out = sim.step(sim.initial_state(), dt=1e-3)
+        sim.step(1e-3)
         return np.array(sim.outputs()["c"]["mag.B"]).ravel()
 
     offset_sensor = reading(Z, h)         # mounts at Z, offset h → samples Z+h

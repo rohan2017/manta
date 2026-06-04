@@ -80,11 +80,10 @@ def test_r3_state_passthrough_through_world_tick():
     w = World().add_field(GravityField(g=(0, 0, 0)))
     w.add_craft(c)
     sim = TargetNumpy(Sim(w))
-    state = sim.initial_state()
-    state["c"]["p.bias"] = np.array([0.5, -0.5, 1.5])
+    sim.state["c"]["p.bias"] = np.array([0.5, -0.5, 1.5])
     for _ in range(20):
-        state = sim.step(state, dt=0.01)
-    np.testing.assert_allclose(state["c"]["p.bias"],
+        sim.step(0.01)
+    np.testing.assert_allclose(sim.state["c"]["p.bias"],
                                 (0.5, -0.5, 1.5), atol=1e-12)
 
 
@@ -95,9 +94,8 @@ def test_r3_state_appears_in_outputs():
     w = World().add_field(GravityField(g=(0, 0, 0)))
     w.add_craft(c)
     sim = TargetNumpy(Sim(w))
-    state = sim.initial_state()
-    state["c"]["p.bias"] = np.array([4.0, 5.0, 6.0])
-    state = sim.step(state, dt=0.01)
+    sim.state["c"]["p.bias"] = np.array([4.0, 5.0, 6.0])
+    sim.step(0.01)
     np.testing.assert_allclose(sim.outputs()["c"]["p.bias_out"],
                                 (4.0, 5.0, 6.0), atol=1e-12)
 

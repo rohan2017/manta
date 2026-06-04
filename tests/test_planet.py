@@ -83,16 +83,15 @@ def test_inertial_straight_line_curves_in_planet_frame():
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c, position=tuple(p_w0), velocity=tuple(v_w0))
     sim = TargetNumpy(Sim(w))
-    state = sim.initial_state()
 
     dt = 0.001
     n_steps = 1000  # 1 s
     for _ in range(n_steps):
-        state = sim.step(state, dt=dt)
+        sim.step(dt)
 
     t = n_steps * dt
     p_planet, _ = planet.world_to_planet(
-        state["ball"]["position"], state["ball"]["velocity"], t)
+        sim.state["ball"]["position"], sim.state["ball"]["velocity"], t)
 
     # Closed form: p_world(t) = (v0·t, 0, 0); rotate back by -ω·t:
     expected_x = v0 * t * np.cos(omega * t)

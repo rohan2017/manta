@@ -19,11 +19,13 @@ construction — the two are different Modules and lowering just lowers:
       predict(x; u, dt, t) -> x'           predict_jacobian -> F
       measure_<s>(x; u, t) -> reading      measure_<s>_jacobian -> H
 
-State is THREADED (the caller owns it; nothing is held). Run it::
+The Module's state is THREADED (a kernel maps state in → state out; a
+C++ caller owns its `State` struct). The numpy view (`NumpySim`) holds
+the nested state dict for you::
 
-    sim   = TargetNumpy(Sim(w))               # lowers module(noise=True)
-    state = sim.initial_state()
-    state = sim.step(state, dt=0.01)           # next state (truth)
+    sim = TargetNumpy(Sim(w))                  # lowers module(noise=True)
+    sim.state["drone"]["t.throttle"] = 14.7    # mutate the held state
+    sim.step(0.01)                             # advance truth
     sim.outputs()                              # this step's readings
 
     TargetCpp(Sim(w).module(noise=False), out, class_name="Drone")

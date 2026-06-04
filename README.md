@@ -54,7 +54,8 @@ from manta.parts import IMU, Mass, PositionSensor, Thruster
 drone = Craft("drone")
 drone.add(Mass("body", mass=1.5, moi=(0.05, 0.05, 0.08)))
 drone.add(Thruster("t", force=(0, 0, 1)))
-drone.add(IMU("imu", gyro_noise_sigma=0.005, gyro_bias_sigma=1e-4))
+drone.add(IMU("imu", gyro_noise_sigma=0.005, accel_noise_sigma=0.05,
+              gyro_bias_sigma=1e-4))
 drone.add(PositionSensor("gps", position_noise_sigma=0.02))
 
 w = World().add_field(GravityField(g=(0, 0, -9.81)))
@@ -64,11 +65,10 @@ w.add_craft(drone, position=(0, 0, 5))
 sim = TargetNumpy(Sim(w))
 ekf = TargetNumpy(EKF(w))
 
-# Run.
-state = sim.initial_state()
-state["drone"]["t.throttle"] = 1.5 * 9.81           # hover
+# Run. The sim runtime holds the state: mutate `sim.state`, step by dt.
+sim.state["drone"]["t.throttle"] = 1.5 * 9.81       # hover
 for t in np.arange(0, 3, 0.005):
-    state = sim.step(state, dt=0.005, t=t)          # next state (truth)
+    sim.step(0.005, t=t)                            # advance truth
     reading = sim.outputs()                         # sensor readings, this step
     ekf.predict(dt=0.005, t=t, u={"t.throttle": 1.5 * 9.81})
     ekf.update("imu.gyro", reading["drone"]["imu.gyro"])

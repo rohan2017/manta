@@ -21,8 +21,7 @@ def test_zero_aoa_no_lift_only_drag():
                    normal_axis=(0.0, 0.0, 1.0)))
     w.add_craft(c, velocity=(10.0, 0.0, 0.0))   # wind from front along chord
     cw = TargetNumpy(Sim(w))
-    state = cw.initial_state()
-    state = cw.step(state, dt=0.001)
+    state = cw.step(dt=0.001)
 
     v = np.array(state["foil"]["velocity"]).ravel()
     # Drag decelerates +x. Lift component (along z) should be ZERO at α=0.
@@ -58,8 +57,7 @@ def test_positive_aoa_produces_upward_lift():
     # (negative AoA) and v_rel · chord = -10.
     w.add_craft(c, velocity=(10.0, 0.0, 1.0))
     cw = TargetNumpy(Sim(w))
-    state = cw.initial_state()
-    state = cw.step(state, dt=0.001)
+    state = cw.step(dt=0.001)
 
     v = np.array(state["foil"]["velocity"]).ravel()
     # The wing should produce a force perpendicular to v_rel. Whether it's
@@ -81,9 +79,8 @@ def test_no_fluid_field_means_no_aero():
     c.add(Naca00xx("wing", area=100.0, CL_max=10.0))   # huge wing
     w.add_craft(c, velocity=(10.0, 0.0, 0.0))
     cw = TargetNumpy(Sim(w))
-    state = cw.initial_state()
     for _ in range(100):
-        state = cw.step(state, dt=0.001)
+        state = cw.step(dt=0.001)
     v = np.array(state["foil"]["velocity"]).ravel()
     np.testing.assert_allclose(v, (10.0, 0.0, 0.0), atol=1e-9)
 
@@ -105,8 +102,7 @@ def test_drag_dominates_at_high_angle():
     v_mag = 10.0
     w.add_craft(c, velocity=(v_mag, 0.0, v_mag))
     cw = TargetNumpy(Sim(w))
-    state = cw.initial_state()
-    state = cw.step(state, dt=0.0001)   # short tick
+    state = cw.step(dt=0.0001)   # short tick
 
     # At 45° AoA the wing produces substantial force in both x and z.
     # Lift is perpendicular to RELATIVE WIND (not to body velocity), so at
@@ -133,8 +129,7 @@ def test_lift_zero_at_alpha_zero_and_90():
     # Velocity purely along normal (z). v_chord = 0 → sin(2α) = 0.
     w.add_craft(c, velocity=(0.0, 0.0, 10.0))
     cw = TargetNumpy(Sim(w))
-    state = cw.initial_state()
-    state = cw.step(state, dt=0.001)
+    state = cw.step(dt=0.001)
 
     v = np.array(state["foil"]["velocity"]).ravel()
     # Drag opposes velocity → reduces v_z; no lift force in the perpendicular
@@ -164,8 +159,7 @@ def test_offset_airfoil_produces_torque():
     # Forward + upward velocity → positive AoA → lift along +z at wing.
     w.add_craft(c, velocity=(10.0, 0.0, 1.0))
     cw = TargetNumpy(Sim(w))
-    state = cw.initial_state()
-    state = cw.step(state, dt=0.001)
+    state = cw.step(dt=0.001)
 
     omega = np.array(state["plane"]["angular_velocity"]).ravel()
     # Lift at +x offset → pitch torque about body y.

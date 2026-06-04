@@ -50,15 +50,14 @@ def test_compiled_world_exposes_per_craft_wind_state():
 def test_wind_state_evolves_via_rw():
     w, _ = _build_world(n_crafts=1)
     cw = TargetNumpy(Sim(w))
-    state = cw.initial_state()
     drv = np.array([0.5, -0.25, 0.1])
     dt = 0.01
     expected = np.zeros(3)
     for _ in range(20):
-        state["c0_wind"]["wind_driver"] = drv.copy()
-        state = cw.step(state, dt=dt)
+        cw.state["c0_wind"]["wind_driver"] = drv.copy()
+        cw.step(dt)
         expected = expected + np.sqrt(dt) * drv
-    np.testing.assert_allclose(state["c0_wind"]["wind"], expected,
+    np.testing.assert_allclose(cw.state["c0_wind"]["wind"], expected,
                                atol=1e-10)
 
 

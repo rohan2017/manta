@@ -29,19 +29,18 @@ def test_two_crafts_fall_independently():
     assert {c.name for c in sim.crafts} == {"alice", "bob"}
     cw = TargetNumpy(sim)
 
-    state = cw.initial_state()
-    assert state["alice"]["position"][2] == 50.0
-    assert state["bob"]["position"][2]   == 100.0
+    assert cw.state["alice"]["position"][2] == 50.0
+    assert cw.state["bob"]["position"][2]   == 100.0
 
     for _ in range(100):
-        state = cw.step(state, dt=0.01)
+        cw.step(0.01)
 
     # Both fall by 4.905 m in 1 s.
-    assert np.isclose(state["alice"]["position"][2], 50.0  - 4.905, atol=1e-6)
-    assert np.isclose(state["bob"]["position"][2],   100.0 - 4.905, atol=1e-6)
+    assert np.isclose(cw.state["alice"]["position"][2], 50.0  - 4.905, atol=1e-6)
+    assert np.isclose(cw.state["bob"]["position"][2],   100.0 - 4.905, atol=1e-6)
     # Alice's x stays at 0; Bob's at 10.
-    assert np.allclose(state["alice"]["position"][:2], [0.0, 0.0])
-    assert np.allclose(state["bob"]["position"][:2],   [10.0, 0.0])
+    assert np.allclose(cw.state["alice"]["position"][:2], [0.0, 0.0])
+    assert np.allclose(cw.state["bob"]["position"][:2],   [10.0, 0.0])
 
 
 # ---------------------------------------------------------------------------
@@ -60,17 +59,16 @@ def test_world_carries_part_state_through_step():
     w.add_craft(c, **{"wheel.angle": 0.5, "wheel.rate": 2.0})
 
     cw = TargetNumpy(Sim(w))
-    state = cw.initial_state()
-    assert state["with_rotor"]["wheel.angle"] == 0.5
-    assert state["with_rotor"]["wheel.rate"]  == 2.0
+    assert cw.state["with_rotor"]["wheel.angle"] == 0.5
+    assert cw.state["with_rotor"]["wheel.rate"]  == 2.0
 
     for _ in range(500):
-        state = cw.step(state, dt=0.001)
+        cw.step(0.001)
 
     # Free-spinning passive joint: angle = 0.5 + 2.0 · 0.5 s = 1.5; rate
     # stays at 2.0 (no friction in v1).
-    assert np.isclose(state["with_rotor"]["wheel.angle"], 1.5, atol=1e-9)
-    assert np.isclose(state["with_rotor"]["wheel.rate"],  2.0, atol=1e-9)
+    assert np.isclose(cw.state["with_rotor"]["wheel.angle"], 1.5, atol=1e-9)
+    assert np.isclose(cw.state["with_rotor"]["wheel.rate"],  2.0, atol=1e-9)
 
 
 # ---------------------------------------------------------------------------

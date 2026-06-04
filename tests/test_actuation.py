@@ -22,13 +22,12 @@ def test_hover_thrust_cancels_gravity():
     w.add_craft(c, **{"t.throttle": m * 9.81})   # exactly counters gravity
     sim = TargetNumpy(Sim(w))
 
-    state = sim.initial_state()
     for _ in range(1000):
-        state = sim.step(state, dt=0.001)
+        sim.step(0.001)
 
-    np.testing.assert_allclose(np.array(state["hover"]["position"]).ravel(),
+    np.testing.assert_allclose(np.array(sim.state["hover"]["position"]).ravel(),
                                np.zeros(3), atol=1e-6)
-    np.testing.assert_allclose(np.array(state["hover"]["velocity"]).ravel(),
+    np.testing.assert_allclose(np.array(sim.state["hover"]["velocity"]).ravel(),
                                np.zeros(3), atol=1e-6)
 
 
@@ -47,14 +46,13 @@ def test_excess_thrust_accelerates_up():
     w.add_craft(c, **{"t.throttle": m * 9.81 + 1.0})   # net = +1 N up → a = 1 m/s²
     sim = TargetNumpy(Sim(w))
 
-    state = sim.initial_state()
     for _ in range(1000):
-        state = sim.step(state, dt=0.001)
+        sim.step(0.001)
 
     # v(1s) = 1 m/s; z(1s) = ½·1·1² = 0.5 m. Symplectic-Euler has tiny
     # bias but well within tolerance.
-    assert np.isclose(np.array(state["ascent"]["velocity"]).ravel()[2], 1.0, atol=1e-3)
-    assert np.isclose(np.array(state["ascent"]["position"]).ravel()[2], 0.5, atol=1e-3)
+    assert np.isclose(np.array(sim.state["ascent"]["velocity"]).ravel()[2], 1.0, atol=1e-3)
+    assert np.isclose(np.array(sim.state["ascent"]["position"]).ravel()[2], 0.5, atol=1e-3)
 
 
 # ---------------------------------------------------------------------------
@@ -72,11 +70,10 @@ def test_offset_thruster_produces_torque():
     w.add_craft(c, **{"t.throttle": 1.0})     # 1 N at 1 m → τ = +1 N·m about body y.
     sim = TargetNumpy(Sim(w))
 
-    state = sim.initial_state()
     for _ in range(100):
-        state = sim.step(state, dt=0.001)
+        sim.step(0.001)
 
     # α_y = τ / I_y = 1 / 0.1 = 10 rad/s². After 0.1 s → ω_y ≈ -1.0
     # (cross product (1,0,0)×(0,0,1) = (0, -1, 0) → torque is -y direction).
-    assert np.isclose(np.array(state["rolling"]["angular_velocity"]).ravel()[1],
+    assert np.isclose(np.array(sim.state["rolling"]["angular_velocity"]).ravel()[1],
                       -1.0, atol=1e-3)

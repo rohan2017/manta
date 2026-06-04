@@ -45,7 +45,6 @@ def test_ekf_predict_with_per_tick_input():
     w = World().add_field(GravityField(g=g))
     w.add_craft(c)
     sim = TargetNumpy(Sim(w))
-    sim_state = sim.initial_state()
     # EKF
     _ekf_world = World().add_field(GravityField(g=g))
     _ekf_world.add_craft(c)
@@ -64,8 +63,8 @@ def test_ekf_predict_with_per_tick_input():
             thrust = 2.0 * m * 9.81
 
         # Sim step.
-        sim_state["hover_ekf"]["t.throttle"] = thrust
-        sim_state = sim.step(sim_state, dt=dt)
+        sim.state["hover_ekf"]["t.throttle"] = thrust
+        sim.step(dt)
 
         # EKF predict step.
         ekf.predict(dt=dt, u={"t.throttle": thrust})
@@ -73,10 +72,10 @@ def test_ekf_predict_with_per_tick_input():
     # No measurements, no noise — should agree to round-off.
     est = ekf.state_dict()["hover_ekf"]
     np.testing.assert_allclose(est["position"].ravel(),
-                               np.array(sim_state["hover_ekf"]["position"]).ravel(),
+                               np.array(sim.state["hover_ekf"]["position"]).ravel(),
                                atol=1e-9)
     np.testing.assert_allclose(est["velocity"].ravel(),
-                               np.array(sim_state["hover_ekf"]["velocity"]).ravel(),
+                               np.array(sim.state["hover_ekf"]["velocity"]).ravel(),
                                atol=1e-9)
 
 
@@ -135,8 +134,7 @@ def test_hover_with_eskf_tracks_ground_truth():
     w = World().add_field(GravityField().add_uniform(g_world))
     w.add_craft(c, position=(0.0, 0.0, 5.0))
     cw = TargetNumpy(Sim(w))
-    sim = cw.initial_state()
-    sim["drone"]["t.throttle"] = m * 9.81   # hover
+    cw.state["drone"]["t.throttle"] = m * 9.81   # hover
 
     # EKF path. Initial estimate offset from truth so we can watch it pull
     # in via measurement updates.
@@ -173,8 +171,8 @@ def test_hover_with_eskf_tracks_ground_truth():
 
     for i in range(n_steps):
         # Sim step.
-        sim["drone"]["t.throttle"] = thrust
-        sim = cw.step(sim, dt=dt)
+        cw.state["drone"]["t.throttle"] = thrust
+        cw.step(dt)
 
         # Read noisy sensor outputs from the sim tick result.
         gyro_clean = np.array(cw.outputs()["drone"]["g.gyro"]).ravel()
@@ -191,7 +189,7 @@ def test_hover_with_eskf_tracks_ground_truth():
         if i % 4 == 0:
             ekf.update(h_pos, pos_meas, R_pos)
 
-    truth = sim["drone"]
+    truth = cw.state["drone"]
     est   = ekf.state_dict()["drone"]
     final_pos_err = np.linalg.norm(
         np.array(truth["position"]).ravel() - est["position"].ravel())
@@ -256,7 +254,6 @@ def test_eskf_nees_consistency_over_seeds():
         w = World().add_field(GravityField().add_uniform(g_world))
         w.add_craft(c, position=(0, 0, 5))
         cw = TargetNumpy(Sim(w))
-        sim = cw.initial_state()
 
         _ekf_world = World().add_field(GravityField(g=g_world))
 
@@ -276,8 +273,8 @@ def test_eskf_nees_consistency_over_seeds():
                                  [ekf.spec.boxminus_sym(xa, xb)])
 
         for i in range(n):
-            sim["drone"]["t.throttle"] = thrust
-            sim = cw.step(sim, dt=dt)
+            cw.state["drone"]["t.throttle"] = thrust
+            cw.step(dt)
             gyro_meas = (np.array(cw.outputs()["drone"]["g.gyro"]).ravel()
                          + rng.normal(0.0, sigma_gyro, 3))
             pos_meas  = (np.array(cw.outputs()["drone"]["gps.position"]).ravel()
@@ -291,7 +288,7 @@ def test_eskf_nees_consistency_over_seeds():
             if i > 100 and i % 50 == 0:
                 # World-tick spec uses `<craft>.<slot>` keys.
                 truth_dict = {}
-                for k, v in sim["drone"].items():
+                for k, v in cw.state["drone"].items():
                     full = f"drone.{k}"
                     if full in ekf.spec:
                         truth_dict[full] = np.atleast_1d(

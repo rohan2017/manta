@@ -30,7 +30,7 @@ def test_no_driver_is_noiseless_oracle():
     w, _ = _gps_world(0.05)
     sim = TargetNumpy(Sim(w))
     assert sim.driver is None
-    out = sim.step(sim.initial_state(), dt=0.02)
+    out = sim.step(dt=0.02)
     np.testing.assert_allclose(
         np.asarray(sim.outputs()["c"]["gps.position"]).ravel(),
         [0.0, 0.0, 10.0], atol=1e-12)
@@ -42,7 +42,7 @@ def test_driver_with_zero_sigma_stays_oracle():
     w, _ = _gps_world(0.0)
     sim = TargetNumpy(Sim(w))
     sim.attach_driver(NoiseDriver(seed=1))
-    out = sim.step(sim.initial_state(), dt=0.02)
+    out = sim.step(dt=0.02)
     np.testing.assert_allclose(
         np.asarray(sim.outputs()["c"]["gps.position"]).ravel(),
         [0.0, 0.0, 10.0], atol=1e-12)
@@ -56,9 +56,8 @@ def test_white_noise_residual_matches_sigma():
     sim = TargetNumpy(Sim(w))
     sim.attach_driver(NoiseDriver(seed=7))
     res = []
-    state = sim.initial_state()
     for _ in range(20000):
-        state = sim.step(state, dt=0.02)
+        state = sim.step(dt=0.02)
         gps = np.asarray(sim.outputs()["c"]["gps.position"]).ravel()
         truth = np.asarray(state["c"]["position"]).ravel()
         res.append(gps - truth)
@@ -73,9 +72,8 @@ def test_white_noise_never_leaks_into_state():
     w, _ = _gps_world(0.05)
     sim = TargetNumpy(Sim(w))
     sim.attach_driver(NoiseDriver(seed=2))
-    state = sim.initial_state()
     for _ in range(10):
-        state = sim.step(state, dt=0.02)
+        state = sim.step(dt=0.02)
         np.testing.assert_allclose(
             np.asarray(state["c"]["gps.position_noise"]).ravel(),
             0.0, atol=1e-12)
@@ -87,7 +85,8 @@ def test_seed_is_reproducible():
 
     def first_reading(seed):
         sim.attach_driver(NoiseDriver(seed=seed))
-        out = sim.step(sim.initial_state(), dt=0.02)
+        sim.state = sim.initial_state()
+        sim.step(dt=0.02)
         return np.asarray(sim.outputs()["c"]["gps.position"]).ravel()
 
     np.testing.assert_array_equal(first_reading(11), first_reading(11))
@@ -99,10 +98,11 @@ def test_driver_reset_replays_stream():
     sim = TargetNumpy(Sim(w))
     drv = NoiseDriver(seed=5)
     sim.attach_driver(drv)
-    sim.step(sim.initial_state(), dt=0.02)
+    sim.step(dt=0.02)
     a = np.asarray(sim.outputs()["c"]["gps.position"])
     drv.reset()
-    sim.step(sim.initial_state(), dt=0.02)
+    sim.state = sim.initial_state()
+    sim.step(dt=0.02)
     b = np.asarray(sim.outputs()["c"]["gps.position"])
     np.testing.assert_array_equal(a.ravel(), b.ravel())
 
@@ -119,19 +119,18 @@ def test_random_walk_bias_walks_with_driver():
 
     # No driver: bias stays put.
     sim = TargetNumpy(Sim(w))
-    state = sim.initial_state()
     for _ in range(N):
-        state = sim.step(state, dt=dt)
+        sim.step(dt=dt)
     np.testing.assert_allclose(
-        np.asarray(state["c"]["imu.gyro_bias"]).ravel(), 0.0, atol=1e-12)
+        np.asarray(sim.state["c"]["imu.gyro_bias"]).ravel(), 0.0, atol=1e-12)
 
     # With driver: ensemble std of the terminal bias matches √(N·dt)·σ.
     ends = []
     for trial in range(400):
         sim.attach_driver(NoiseDriver(seed=trial))
-        state = sim.initial_state()
+        sim.state = sim.initial_state()
         for _ in range(N):
-            state = sim.step(state, dt=dt)
+            state = sim.step(dt=dt)
         ends.append(np.asarray(state["c"]["imu.gyro_bias"]).ravel())
     expected = np.sqrt(N * dt) * sigma
     np.testing.assert_allclose(

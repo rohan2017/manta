@@ -96,15 +96,14 @@ def test_so3_state_passthrough_through_world_tick():
     w = World().add_field(GravityField(g=(0, 0, 0)))
     w.add_craft(c)
     sim = TargetNumpy(Sim(w))
-    state = sim.initial_state()
     # Seed at a non-identity quaternion (90° about z).
     q0 = np.array([np.cos(np.pi / 4), 0.0, 0.0, np.sin(np.pi / 4)])
-    state["c"]["att.orientation_est"] = q0
+    sim.state["c"]["att.orientation_est"] = q0
     for _ in range(20):
-        state = sim.step(state, dt=0.01)
+        sim.step(0.01)
     # Normalization is defensive — passthrough preserves the quaternion
     # to within roundoff of the renormalize step.
-    np.testing.assert_allclose(state["c"]["att.orientation_est"], q0,
+    np.testing.assert_allclose(sim.state["c"]["att.orientation_est"], q0,
                                 atol=1e-12)
 
 
@@ -114,10 +113,9 @@ def test_so3_state_output_round_trips_the_quaternion():
     w = World().add_field(GravityField(g=(0, 0, 0)))
     w.add_craft(c)
     sim = TargetNumpy(Sim(w))
-    state = sim.initial_state()
     q = np.array([0.5, 0.5, 0.5, 0.5])   # already unit
-    state["c"]["att.orientation_est"] = q
-    state = sim.step(state, dt=0.01)
+    sim.state["c"]["att.orientation_est"] = q
+    sim.step(0.01)
     np.testing.assert_allclose(sim.outputs()["c"]["att.quat_out"], q, atol=1e-12)
 
 
@@ -168,20 +166,19 @@ def test_attitude_integrator_matches_closed_form_quaternion_product():
     w = World().add_field(GravityField(g=(0, 0, 0)))
     w.add_craft(c)
     sim = TargetNumpy(Sim(w))
-    state = sim.initial_state()
     omega_z = 0.3   # rad/s
-    state["c"]["att.omega_cmd"] = np.array([0.0, 0.0, omega_z])
+    sim.state["c"]["att.omega_cmd"] = np.array([0.0, 0.0, omega_z])
     dt = 0.005
     N = 400        # → final angle = 0.6 rad (~34°)
     for _ in range(N):
-        state = sim.step(state, dt=dt)
+        sim.step(dt)
     # Closed-form: q = (cos(θ/2), 0, 0, sin(θ/2)) where θ = N · ω · dt.
     theta = N * omega_z * dt
     q_expected = np.array([np.cos(theta / 2), 0.0, 0.0, np.sin(theta / 2)])
     # Allow some looseness — the integrator is exp(ω·dt) per step in
     # the boxplus convention; for a constant ω, exp(ω·dt)^N = exp(N·ω·dt),
     # exact in the manifold sense up to renormalize roundoff.
-    q_got = state["c"]["att.orientation_est"]
+    q_got = sim.state["c"]["att.orientation_est"]
     # Quaternion equality up to global sign.
     assert (np.allclose(q_got,  q_expected, atol=1e-9) or
             np.allclose(q_got, -q_expected, atol=1e-9)), (

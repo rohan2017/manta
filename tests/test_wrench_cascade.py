@@ -27,11 +27,10 @@ def test_flat_craft_offset_thruster_torque():
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c)
     rt = TargetNumpy(Sim(w))
-    st = rt.initial_state()
-    st["flat"]["t.throttle"] = 10.0           # 10 N at x=0.5 → τ_y = −5 N·m
+    rt.state["flat"]["t.throttle"] = 10.0           # 10 N at x=0.5 → τ_y = −5 N·m
     dt = 1e-4
-    st = rt.step(st, dt=dt)
-    omega = np.asarray(st["flat"]["angular_velocity"])
+    rt.step(dt)
+    omega = np.asarray(rt.state["flat"]["angular_velocity"])
     # I_yy = 1 → α_y = τ_y/I = −5 rad/s²; ω_y after dt ≈ −5·dt.
     assert np.isclose(omega[1], -5.0 * dt, rtol=1e-3)
     assert abs(omega[0]) < 1e-9 and abs(omega[2]) < 1e-9
@@ -54,13 +53,12 @@ def test_no_spurious_wrench_on_deflected_passive_joint():
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))   # NO gravity
     w.add_craft(c)
     rt = TargetNumpy(Sim(w))
-    st = rt.initial_state()
-    st["pend"]["hinge.angle"] = 0.6
+    rt.state["pend"]["hinge.angle"] = 0.6
     for _ in range(2000):
-        st = rt.step(st, dt=1e-3)
-    assert np.isclose(st["pend"]["hinge.angle"], 0.6, atol=1e-9)
-    assert np.isclose(st["pend"]["hinge.rate"], 0.0, atol=1e-9)
-    assert np.allclose(np.asarray(st["pend"]["angular_velocity"]), 0.0,
+        rt.step(1e-3)
+    assert np.isclose(rt.state["pend"]["hinge.angle"], 0.6, atol=1e-9)
+    assert np.isclose(rt.state["pend"]["hinge.rate"], 0.0, atol=1e-9)
+    assert np.allclose(np.asarray(rt.state["pend"]["angular_velocity"]), 0.0,
                        atol=1e-9)
 
 
@@ -79,13 +77,12 @@ def test_free_body_recoils_from_swinging_bob():
     w = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
     w.add_craft(c)
     rt = TargetNumpy(Sim(w))
-    st = rt.initial_state()
-    st["pend"]["hinge.angle"] = 0.6
+    rt.state["pend"]["hinge.angle"] = 0.6
     swung = body_recoil = 0.0
     for _ in range(1000):
-        st = rt.step(st, dt=1e-3)
-        swung = max(swung, abs(st["pend"]["hinge.angle"] - 0.6))
+        rt.step(1e-3)
+        swung = max(swung, abs(rt.state["pend"]["hinge.angle"] - 0.6))
         body_recoil = max(body_recoil,
-                          abs(np.asarray(st["pend"]["angular_velocity"])[1]))
+                          abs(np.asarray(rt.state["pend"]["angular_velocity"])[1]))
     assert swung > 0.3            # the DOF swings
     assert body_recoil > 1e-3     # the free body recoils about the joint axis

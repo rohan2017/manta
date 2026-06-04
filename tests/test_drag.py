@@ -26,9 +26,9 @@ def test_offset_drag_uses_mount_velocity_not_double_lever_arm():
     craft.add(DragSurface("fin", force=(-c, -c, -c), transform=(d, 0.0, 0.0)))
     w.add_craft(craft, angular_velocity=(0.0, 0.0, omega))
     sim = TargetNumpy(Sim(w))
-    state = sim.step(sim.initial_state(), dt=dt)
+    sim.step(dt)
 
-    vy = float(np.asarray(state["spinner"]["velocity"]).ravel()[1])
+    vy = float(np.asarray(sim.state["spinner"]["velocity"]).ravel()[1])
     expected = -rho * c * omega * d / M * dt          # single lever arm
     np.testing.assert_allclose(vy, expected, rtol=1e-3)
     assert abs(vy - 2.0 * expected) > 0.4 * abs(expected)   # not the 2× bug
@@ -54,12 +54,11 @@ def test_terminal_velocity_from_drag_balances_gravity():
     w.add_craft(c, position=(0, 0, 0))
     cw = TargetNumpy(Sim(w))
 
-    state = cw.initial_state()
     # Run long enough to settle (well past terminal).
     for _ in range(20000):
-        state = cw.step(state, dt=0.005)
+        cw.step(0.005)
 
-    vz = float(np.array(state["sphere"]["velocity"]).ravel()[2])
+    vz = float(np.array(cw.state["sphere"]["velocity"]).ravel()[2])
     # vz approaches -v_terminal from above. Compare magnitude.
     assert np.isclose(abs(vz), v_terminal, rtol=1e-3), (
         f"vz={vz:.4f}, expected ≈ {-v_terminal:.4f}")
@@ -75,12 +74,11 @@ def test_drag_opposes_motion_through_still_fluid():
     c.add(DragSurface.isotropic_quadratic("hull", area=0.01, drag_coefficient=1.0))
     w.add_craft(c, velocity=(2.0, 0.0, 0.0))
     cw = TargetNumpy(Sim(w))
-    state = cw.initial_state()
 
     for _ in range(1000):
-        state = cw.step(state, dt=0.001)
+        cw.step(0.001)
 
-    vx = float(np.array(state["slug"]["velocity"]).ravel()[0])
+    vx = float(np.array(cw.state["slug"]["velocity"]).ravel()[0])
     # vx should have decreased monotonically from 2.0 and stayed positive.
     assert 0.0 < vx < 2.0
 
@@ -105,14 +103,14 @@ def test_drag_with_following_current_reduces_force():
     c_curr.add(DragSurface.isotropic_quadratic("hull", area=0.01, drag_coefficient=1.0))
     w_curr.add_craft(c_curr, velocity=(2.0, 0.0, 0.0))
 
-    cw_s = TargetNumpy(Sim(w_still)); s = cw_s.initial_state()
-    cw_c = TargetNumpy(Sim(w_curr));  c = cw_c.initial_state()
+    cw_s = TargetNumpy(Sim(w_still))
+    cw_c = TargetNumpy(Sim(w_curr))
     for _ in range(500):
-        s = cw_s.step(s, dt=0.001)
-        c = cw_c.step(c, dt=0.001)
+        cw_s.step(0.001)
+        cw_c.step(0.001)
 
-    vx_still = float(np.array(s["still"]["velocity"]).ravel()[0])
-    vx_curr  = float(np.array(c["curr"]["velocity"]).ravel()[0])
+    vx_still = float(np.array(cw_s.state["still"]["velocity"]).ravel()[0])
+    vx_curr  = float(np.array(cw_c.state["curr"]["velocity"]).ravel()[0])
     # Same starting velocity, opposing drag, but the still-fluid case sees
     # full v_rel = 2 and the current case sees v_rel = 1. The current
     # case decelerates LESS, so vx_curr > vx_still.
@@ -133,10 +131,9 @@ def test_offset_drag_surface_produces_torque():
     # Craft moving in +y → drag at +x offset → moment about +z (yaw).
     w.add_craft(c, velocity=(0.0, 1.0, 0.0))
     cw = TargetNumpy(Sim(w))
-    state = cw.initial_state()
-    state = cw.step(state, dt=0.001)
+    cw.step(0.001)
 
-    omega = np.array(state["offset"]["angular_velocity"]).ravel()
+    omega = np.array(cw.state["offset"]["angular_velocity"]).ravel()
     # x and y angular velocity should stay zero; z develops.
     assert abs(omega[2]) > 1e-6
     assert abs(omega[0]) < 1e-9
@@ -152,10 +149,9 @@ def test_no_fluid_field_means_no_drag():
     c.add(DragSurface.isotropic_quadratic("hull", area=1.0, drag_coefficient=10.0))   # massive A·Cd
     w.add_craft(c, velocity=(1.0, 0.0, 0.0))
     cw = TargetNumpy(Sim(w))
-    state = cw.initial_state()
     for _ in range(1000):
-        state = cw.step(state, dt=0.001)
-    vx = float(np.array(state["cruise"]["velocity"]).ravel()[0])
+        cw.step(0.001)
+    vx = float(np.array(cw.state["cruise"]["velocity"]).ravel()[0])
     assert np.isclose(vx, 1.0, atol=1e-9)
 
 
@@ -177,7 +173,6 @@ def test_polynomial_drag_quadratic_per_axis_matches_isotropic_helper():
     c1.add(DragSurface.isotropic_quadratic("d", area=A, drag_coefficient=Cd))
     w1.add_craft(c1, velocity=(3.0, 0.0, 0.0))
     cw1 = TargetNumpy(Sim(w1))
-    s1 = cw1.initial_state()
 
     # Setup B: hand-built diagonal A_2.
     w2 = World().add_field(GravityField().add_uniform(g)).add_field(FluidField().add_uniform(density=rho))
@@ -187,14 +182,13 @@ def test_polynomial_drag_quadratic_per_axis_matches_isotropic_helper():
     c2.add(DragSurface("d", force_tensors=[np.zeros((3, 3)), A_2]))
     w2.add_craft(c2, velocity=(3.0, 0.0, 0.0))
     cw2 = TargetNumpy(Sim(w2))
-    s2 = cw2.initial_state()
 
     for _ in range(200):
-        s1 = cw1.step(s1, dt=0.001)
-        s2 = cw2.step(s2, dt=0.001)
+        cw1.step(0.001)
+        cw2.step(0.001)
 
-    np.testing.assert_allclose(s1["helper"]["velocity"],
-                               s2["hand"]["velocity"], atol=1e-9)
+    np.testing.assert_allclose(cw1.state["helper"]["velocity"],
+                               cw2.state["hand"]["velocity"], atol=1e-9)
 
 
 def test_anisotropic_drag_via_diagonal_A1_decelerates_only_x():
@@ -207,10 +201,9 @@ def test_anisotropic_drag_via_diagonal_A1_decelerates_only_x():
     c.add(DragSurface("d", force=(-0.5, 0.0, 0.0)))   # A_1 = diag(-0.5, 0, 0)
     w.add_craft(c, velocity=(2.0, 1.0, 0.5))
     cw = TargetNumpy(Sim(w))
-    state = cw.initial_state()
     for _ in range(200):
-        state = cw.step(state, dt=0.001)
-    v = np.array(state["strip"]["velocity"]).ravel()
+        cw.step(0.001)
+    v = np.array(cw.state["strip"]["velocity"]).ravel()
     # x has decayed, y and z untouched.
     assert v[0] < 2.0
     assert np.isclose(v[1], 1.0, atol=1e-9)

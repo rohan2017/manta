@@ -87,11 +87,10 @@ def test_no_collision_field_means_no_contact_force():
     c.add(Collider("contact", stiffness=1e5, damping=10.0))
     w.add_craft(c, position=(0, 0, 5))
     cw = TargetNumpy(Sim(w))
-    state = cw.initial_state()
     for _ in range(500):
-        state = cw.step(state, dt=0.001)
+        cw.step(0.001)
     # Free-fall from z=5 for 0.5s: z = 5 - 0.5·g·t² = 5 - 1.22625 = 3.774.
-    assert np.isclose(state["ball"]["position"][2], 3.774, atol=1e-3)
+    assert np.isclose(cw.state["ball"]["position"][2], 3.774, atol=1e-3)
 
 
 def test_ball_rests_on_ground_at_compression_equilibrium():
@@ -110,17 +109,16 @@ def test_ball_rests_on_ground_at_compression_equilibrium():
     cr.add(Collider("contact", stiffness=k, damping=c_damp))
     w.add_craft(cr, position=(0, 0, 1.0))     # start above ground
     cw = TargetNumpy(Sim(w))
-    state = cw.initial_state()
 
     for _ in range(5000):
-        state = cw.step(state, dt=0.001)
+        cw.step(0.001)
 
-    z_final = float(state["ball"]["position"][2])
+    z_final = float(cw.state["ball"]["position"][2])
     expected_depth = m * g / k       # equilibrium compression
     assert np.isclose(z_final, -expected_depth, atol=2e-4), (
         f"z_final={z_final} expected≈{-expected_depth}")
     # Velocity should have decayed to ~0.
-    assert abs(state["ball"]["velocity"][2]) < 1e-3
+    assert abs(cw.state["ball"]["velocity"][2]) < 1e-3
 
 
 def test_dropped_ball_bounces():
@@ -134,13 +132,12 @@ def test_dropped_ball_bounces():
     cr.add(Collider("contact", stiffness=2e4, damping=20.0))
     w.add_craft(cr, position=(0, 0, 1.0))
     cw = TargetNumpy(Sim(w))
-    state = cw.initial_state()
 
     # Track the maximum +z height attained AFTER the first bounce.
     z_history = []
     for _ in range(5000):
-        state = cw.step(state, dt=0.001)
-        z_history.append(float(state["ball"]["position"][2]))
+        cw.step(0.001)
+        z_history.append(float(cw.state["ball"]["position"][2]))
 
     z = np.array(z_history)
     # After the first bounce (~ t=0.45s) the ball should reach a positive
@@ -166,11 +163,10 @@ def test_offset_collider_produces_tip_over_torque():
     # immediately.
     w.add_craft(cr, position=(0, 0, 0.01))
     cw = TargetNumpy(Sim(w))
-    state = cw.initial_state()
     # Long enough to develop body-frame torque about y as body tilts.
     for _ in range(500):
-        state = cw.step(state, dt=0.001)
-    omega = np.array(state["tower"]["angular_velocity"]).ravel()
+        cw.step(0.001)
+    omega = np.array(cw.state["tower"]["angular_velocity"]).ravel()
     # x and z stay zero; y develops as body tips.
     assert abs(omega[1]) > 1e-6
     assert abs(omega[0]) < 1e-9
@@ -211,13 +207,12 @@ def test_collision_field_reaches_world_tick():
                           stiffness=10.0, damping=0.5, rest_length=2.0))
 
     cw = TargetNumpy(Sim(w))
-    state = cw.initial_state()
 
     for _ in range(3000):
-        state = cw.step(state, dt=0.001)
+        cw.step(0.001)
 
     # Craft `a` rests at the ground-compression equilibrium z = -m·g/k.
-    z_a = float(state["a"]["position"][2])
+    z_a = float(cw.state["a"]["position"][2])
     expected = -1.0 * g / 1e5
     assert np.isclose(z_a, expected, atol=2e-4), (
         f"a.z={z_a}, expected≈{expected}; the world_tick path is "

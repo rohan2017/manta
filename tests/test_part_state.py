@@ -35,15 +35,14 @@ def test_passive_joint_spins_at_initial_rate():
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c, **{"wheel.rate": 1.0})
     sim = TargetNumpy(Sim(w))
-    state = sim.initial_state()
-    assert state["passive_demo"]["wheel.angle"] == 0.0
-    assert state["passive_demo"]["wheel.rate"]  == 1.0
+    assert sim.state["passive_demo"]["wheel.angle"] == 0.0
+    assert sim.state["passive_demo"]["wheel.rate"]  == 1.0
 
     for _ in range(1000):
-        state = sim.step(state, dt=0.001)
+        sim.step(0.001)
 
-    assert np.isclose(state["passive_demo"]["wheel.angle"], 1.0, atol=1e-9)
-    assert np.isclose(state["passive_demo"]["wheel.rate"],  1.0, atol=1e-9)
+    assert np.isclose(sim.state["passive_demo"]["wheel.angle"], 1.0, atol=1e-9)
+    assert np.isclose(sim.state["passive_demo"]["wheel.rate"],  1.0, atol=1e-9)
 
 
 def test_multiple_joints_have_independent_state():
@@ -59,12 +58,11 @@ def test_multiple_joints_have_independent_state():
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c, **{"fast.rate": 5.0, "slow.rate": 1.0})
     sim = TargetNumpy(Sim(w))
-    state = sim.initial_state()
     for _ in range(1000):
-        state = sim.step(state, dt=0.001)
+        sim.step(0.001)
 
-    assert np.isclose(state["twin"]["fast.angle"], 5.0, atol=1e-9)
-    assert np.isclose(state["twin"]["slow.angle"], 1.0, atol=1e-9)
+    assert np.isclose(sim.state["twin"]["fast.angle"], 5.0, atol=1e-9)
+    assert np.isclose(sim.state["twin"]["slow.angle"], 1.0, atol=1e-9)
 
 
 # ---------------------------------------------------------------------------
@@ -82,13 +80,12 @@ def test_saturating_joint_below_stall_accelerates_rotor():
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c, **{"wheel.torque_cmd": 0.5})
     sim = TargetNumpy(Sim(w))
-    state = sim.initial_state()
     for _ in range(1000):
-        state = sim.step(state, dt=0.001)
+        sim.step(0.001)
 
     # I_axial = 0.05 (rotor's I_zz, axis defaults to +z).
     # α = 0.5 / 0.05 = 10 rad/s² over 1 s → ω = 10.
-    assert np.isclose(state["flywheel"]["wheel.rate"], 10.0, atol=1e-6)
+    assert np.isclose(sim.state["flywheel"]["wheel.rate"], 10.0, atol=1e-6)
 
 
 def test_saturating_joint_clamps_at_stall():
@@ -103,12 +100,11 @@ def test_saturating_joint_clamps_at_stall():
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c, **{"wheel.torque_cmd": 5.0})   # way above stall=0.2
     sim = TargetNumpy(Sim(w))
-    state = sim.initial_state()
     for _ in range(1000):
-        state = sim.step(state, dt=0.001)
+        sim.step(0.001)
 
     # Effective τ = 0.2; α = 0.2 / 0.05 = 4 rad/s² → ω after 1s = 4.
-    assert np.isclose(state["clamped"]["wheel.rate"], 4.0, atol=1e-6)
+    assert np.isclose(sim.state["clamped"]["wheel.rate"], 4.0, atol=1e-6)
 
 
 def test_saturating_joint_reaction_spins_body_counter():
@@ -126,13 +122,12 @@ def test_saturating_joint_reaction_spins_body_counter():
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c, **{"wheel.torque_cmd": 0.5})
     sim = TargetNumpy(Sim(w))
-    state = sim.initial_state()
     for _ in range(1000):
-        state = sim.step(state, dt=0.001)
+        sim.step(0.001)
 
     # ω after 1 s under constant α = -0.5/0.15. Loose tolerance because
     # the gyroscopic coupling (rotor spin × body ω) feeds back as ω grows.
-    assert np.isclose(state["conservation"]["angular_velocity"][2],
+    assert np.isclose(sim.state["conservation"]["angular_velocity"][2],
                       -0.5 / 0.15, atol=0.2)
 
 
@@ -194,14 +189,13 @@ def test_joint_doesnt_break_free_fall():
     w = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
     w.add_craft(c, position=(0.0, 0.0, 100.0), **{"wheel.rate": 10.0})
     sim = TargetNumpy(Sim(w))
-    state = sim.initial_state()
     for _ in range(1000):
-        state = sim.step(state, dt=0.001)
+        sim.step(0.001)
 
     # ½·g·t² = 4.905; z = 100 - 4.905 = 95.095.
-    assert np.isclose(state["fall_with_joint"]["position"][2],   95.095, atol=1e-5)
-    assert np.isclose(state["fall_with_joint"]["velocity"][2],   -9.81,  atol=1e-5)
-    assert np.isclose(state["fall_with_joint"]["wheel.angle"],   10.0,   atol=1e-9)
+    assert np.isclose(sim.state["fall_with_joint"]["position"][2],   95.095, atol=1e-5)
+    assert np.isclose(sim.state["fall_with_joint"]["velocity"][2],   -9.81,  atol=1e-5)
+    assert np.isclose(sim.state["fall_with_joint"]["wheel.angle"],   10.0,   atol=1e-9)
 
 
 # ---------------------------------------------------------------------------
@@ -268,12 +262,11 @@ def test_nested_passive_joints_each_track_their_own_rate():
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c, **{"pan.rate": 2.0, "tilt.rate": 1.0})
     sim = TargetNumpy(Sim(w))
-    state = sim.initial_state()
     for _ in range(1000):
-        state = sim.step(state, dt=0.001)
+        sim.step(0.001)
 
-    assert np.isclose(state["gimbal_two_dof"]["pan.angle"],  2.0, atol=1e-6)
-    assert np.isclose(state["gimbal_two_dof"]["tilt.angle"], 1.0, atol=1e-6)
+    assert np.isclose(sim.state["gimbal_two_dof"]["pan.angle"],  2.0, atol=1e-6)
+    assert np.isclose(sim.state["gimbal_two_dof"]["tilt.angle"], 1.0, atol=1e-6)
 
 
 def test_nested_joint_saturating_drives_inner_rotor():
@@ -293,16 +286,15 @@ def test_nested_joint_saturating_drives_inner_rotor():
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c, **{"tilt.torque_cmd": 0.5})
     sim = TargetNumpy(Sim(w))
-    state = sim.initial_state()
     for _ in range(1000):
-        state = sim.step(state, dt=0.001)
+        sim.step(0.001)
 
     # Tilt rotor MOI about y-axis = 0.005 from the tilt_disk only;
     # α = 0.5 / 0.005 = 100 rad/s² → ω after 1s ≈ 100 rad/s.
     # Some tolerance for the heavy body's small angular response feeding
     # back into the gyroscopic correction.
-    assert np.isclose(state["gimbal_drive"]["tilt.rate"], 100.0, atol=0.5)
-    assert np.isclose(state["gimbal_drive"]["pan.rate"], 0.0, atol=0.5)
+    assert np.isclose(sim.state["gimbal_drive"]["tilt.rate"], 100.0, atol=0.5)
+    assert np.isclose(sim.state["gimbal_drive"]["pan.rate"], 0.0, atol=0.5)
 
 
 def test_offset_rotor_at_pi_over_2_shows_com_in_y():
@@ -323,12 +315,12 @@ def test_offset_rotor_at_pi_over_2_shows_com_in_y():
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c, **{"arm.angle": float(np.pi / 2)})
     sim = TargetNumpy(Sim(w))
-    state = sim.step(sim.initial_state(), dt=0.001)
+    sim.step(0.001)
     # Body should still be at rest after one tick (no external wrench,
     # rotor at rest); just verify the compile produced a valid graph
     # for the at-angle case.
-    assert np.allclose(state["arm_swept"]["angular_velocity"], 0.0, atol=1e-9)
-    assert np.isclose(state["arm_swept"]["arm.angle"], float(np.pi / 2), atol=1e-12)
+    assert np.allclose(sim.state["arm_swept"]["angular_velocity"], 0.0, atol=1e-9)
+    assert np.isclose(sim.state["arm_swept"]["arm.angle"], float(np.pi / 2), atol=1e-12)
 
 
 def test_offset_rotor_changes_body_com():

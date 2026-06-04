@@ -101,17 +101,16 @@ def test_closed_loop_regulates_to_setpoint():
     lqr, w = _lqr()
     ctrl = TargetNumpy(lqr)
     sim = TargetNumpy(Sim(w))
-    state = sim.initial_state()
-    state["c"]["position"] = np.array([2.0, -1.0, 8.0])
+    sim.state["c"]["position"] = np.array([2.0, -1.0, 8.0])
     for _ in range(600):
-        for full, v in ctrl.control(state).items():
+        for full, v in ctrl.control(sim.state).items():
             owner, rest = full.split(".", 1)      # "c.tx.throttle" → c / tx.throttle
-            state[owner][rest] = v
-        state = sim.step(state, dt=0.02)
-    np.testing.assert_allclose(np.asarray(state["c"]["position"]).ravel(),
-                               [0, 0, 10], atol=1e-2)
-    np.testing.assert_allclose(np.asarray(state["c"]["velocity"]).ravel(),
-                               [0, 0, 0], atol=1e-2)
+            sim.state[owner][rest] = v
+        sim.step(0.02)
+    np.testing.assert_allclose(
+        np.asarray(sim.state["c"]["position"]).ravel(), [0, 0, 10], atol=1e-2)
+    np.testing.assert_allclose(
+        np.asarray(sim.state["c"]["velocity"]).ravel(), [0, 0, 0], atol=1e-2)
 
 
 def test_control_maps_to_named_inputs():

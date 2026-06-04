@@ -23,7 +23,7 @@ def _single_step_rate(moi, omega0, *, dt=0.01) -> float:
     w = World().add_field(GravityField().add_uniform((0.0, 0.0, 0.0)))
     w.add_craft(c, angular_velocity=omega0)
     sim = TargetNumpy(Sim(w))
-    state = sim.step(sim.initial_state(), dt=dt)
+    state = sim.step(dt=dt)
     return float(np.asarray(state["tumbler"]["rotor.rate"]).ravel()[0])
 
 

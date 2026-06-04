@@ -66,9 +66,9 @@ def test_driver_jitters_truth_from_thruster_noise():
     ends = []
     for trial in range(400):
         sim.attach_driver(NoiseDriver(seed=trial))
-        s = sim.initial_state()
-        s = sim.step(s, dt=dt)
-        ends.append(np.asarray(s["c"]["velocity"]).ravel())
+        sim.state = sim.initial_state()         # fresh start per trial
+        sim.step(dt)
+        ends.append(np.asarray(sim.state["c"]["velocity"]).ravel())
     np.testing.assert_allclose(
         np.asarray(ends).std(axis=0), dt / m * sigma, rtol=0.12)
 

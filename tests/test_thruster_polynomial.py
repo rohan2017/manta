@@ -15,10 +15,9 @@ def test_linear_in_throttle():
     w = World().add_field(GravityField(g=(0, 0, 0)))
     w.add_craft(c, **{"t.throttle": 0.5})    # half throttle ⇒ 5 N
     sim = TargetNumpy(Sim(w))
-    state = sim.initial_state()
     for _ in range(100):
-        state = sim.step(state, dt=0.001)
-    assert np.isclose(state["c"]["velocity"][2], 0.5, atol=1e-3)
+        sim.step(0.001)
+    assert np.isclose(sim.state["c"]["velocity"][2], 0.5, atol=1e-3)
 
 
 def test_quadratic_in_throttle():
@@ -30,10 +29,9 @@ def test_quadratic_in_throttle():
     w = World().add_field(GravityField(g=(0, 0, 0)))
     w.add_craft(c, **{"t.throttle": 0.5})
     sim = TargetNumpy(Sim(w))
-    state = sim.initial_state()
     for _ in range(100):
-        state = sim.step(state, dt=0.001)
-    assert np.isclose(state["c"]["velocity"][2], 0.1, atol=1e-3)
+        sim.step(0.001)
+    assert np.isclose(sim.state["c"]["velocity"][2], 0.1, atol=1e-3)
 
 
 def test_linear_plus_quadratic_combine():
@@ -46,9 +44,8 @@ def test_linear_plus_quadratic_combine():
     w = World().add_field(GravityField(g=(0, 0, 0)))
     w.add_craft(c, **{"t.throttle": 2.0})
     sim = TargetNumpy(Sim(w))
-    state = sim.initial_state()
-    state = sim.step(state, dt=0.001)
-    assert np.isclose(state["c"]["velocity"][2], 0.01, atol=1e-6)
+    sim.step(0.001)
+    assert np.isclose(sim.state["c"]["velocity"][2], 0.01, atol=1e-6)
 
 
 def test_linear_reaction_torque():
@@ -61,10 +58,9 @@ def test_linear_reaction_torque():
     w = World().add_field(GravityField(g=(0, 0, 0)))
     w.add_craft(c, **{"prop.throttle": 1.0})
     sim = TargetNumpy(Sim(w))
-    state = sim.initial_state()
-    state = sim.step(state, dt=0.001)
+    sim.step(0.001)
     # 0.1 N·m / 0.1 kg·m² → α = 1 rad/s². After 1 ms ω_z ≈ 0.001 rad/s.
-    assert np.isclose(state["c"]["angular_velocity"][2], 0.001, atol=1e-6)
+    assert np.isclose(sim.state["c"]["angular_velocity"][2], 0.001, atol=1e-6)
 
 
 def test_quadratic_reaction_torque():
@@ -78,6 +74,5 @@ def test_quadratic_reaction_torque():
     w = World().add_field(GravityField(g=(0, 0, 0)))
     w.add_craft(c, **{"rotor.throttle": 0.5})      # τ = 0.4 · 0.25 = 0.1 N·m
     sim = TargetNumpy(Sim(w))
-    state = sim.initial_state()
-    state = sim.step(state, dt=0.001)
-    assert np.isclose(state["c"]["angular_velocity"][2], 0.001, atol=1e-6)
+    sim.step(0.001)
+    assert np.isclose(sim.state["c"]["angular_velocity"][2], 0.001, atol=1e-6)

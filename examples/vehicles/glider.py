@@ -70,7 +70,6 @@ def main() -> None:
     duration = args.duration or (1e9 if args.keyboard else 14.0)
 
     sim = TargetNumpy(Sim(build_world()))
-    state = sim.initial_state()
 
     script = [(2.0, 3.5, {"w"}), (5.0, 8.0, {"d"}), (9.0, 10.0, {"a"})]
     ctrl = make_controller(args.keyboard, script)
@@ -88,25 +87,25 @@ def main() -> None:
         for i in range(n):
             t = i * dt
             ctrl.update(t)
-            q = np.asarray(state["glider"]["orientation"]).ravel()
-            omega_b = _body_rates(q, state["glider"]["angular_velocity"])
+            q = np.asarray(sim.state["glider"]["orientation"]).ravel()
+            omega_b = _body_rates(q, sim.state["glider"]["angular_velocity"])
             # Commanded body rates from the keys, then a P rate-tracker.
             cmd = RATE_CMD * np.array([
                 ctrl.held("d") - ctrl.held("a"),      # roll  (body x)
                 ctrl.held("w") - ctrl.held("s"),      # pitch (body y)
                 ctrl.held("e") - ctrl.held("q")])     # yaw   (body z)
             defl = np.clip(KP * (cmd - omega_b) / TORQUE, -1.0, 1.0)
-            state["glider"]["aileron.throttle"] = float(defl[0])
-            state["glider"]["elevator.throttle"] = float(defl[1])
-            state["glider"]["rudder.throttle"] = float(defl[2])
-            state = sim.step(state, dt=dt)
+            sim.state["glider"]["aileron.throttle"] = float(defl[0])
+            sim.state["glider"]["elevator.throttle"] = float(defl[1])
+            sim.state["glider"]["rudder.throttle"] = float(defl[2])
+            sim.step(dt)
 
-            p = np.asarray(state["glider"]["position"]).ravel()
-            v = np.asarray(state["glider"]["velocity"]).ravel()
+            p = np.asarray(sim.state["glider"]["position"]).ravel()
+            v = np.asarray(sim.state["glider"]["velocity"]).ravel()
             if viz is not None:
                 viz.t(t)
                 viz.pose("world/glider", p, np.asarray(
-                    state["glider"]["orientation"]).ravel())
+                    sim.state["glider"]["orientation"]).ravel())
                 viz.trail("world/glider/trail", p)
                 viz.arrow("world/glider/vel", p, v * 0.3, color=(90, 200, 120),
                           radius=0.1)
@@ -116,7 +115,7 @@ def main() -> None:
                       f"{np.hypot(p[0], p[1]):.1f} m")
                 break
             if (i + 1) % 100 == 0:
-                q = np.asarray(state["glider"]["orientation"]).ravel()
+                q = np.asarray(sim.state["glider"]["orientation"]).ravel()
                 gamma = np.degrees(np.arctan2(v[2], np.hypot(v[0], v[1])))
                 roll = np.degrees(np.arctan2(
                     2 * (q[0]*q[1] + q[2]*q[3]), 1 - 2 * (q[1]**2 + q[2]**2)))

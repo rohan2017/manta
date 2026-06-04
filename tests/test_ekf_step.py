@@ -25,8 +25,7 @@ def _gps_craft(name="drone", sigma=0.1):
 def _truth_sim(z0=100.0):
     tw = World().add_field(GravityField(g=(0, 0, -9.81)))
     tw.add_craft(_gps_craft(), position=(0, 0, z0))
-    sim = TargetNumpy(Sim(tw))
-    return sim, sim.initial_state()
+    return TargetNumpy(Sim(tw))
 
 
 def _est_ekf():
@@ -40,7 +39,7 @@ def _est_ekf():
 # ---------------------------------------------------------------------------
 
 def test_step_multi_rate_tracks_truth():
-    sim, st = _truth_sim()
+    sim = _truth_sim()
     rt = _est_ekf()
     rt.reset(state={"drone": {"position": [5.0, 0.0, 105.0]}}, P=np.eye(12))
 
@@ -50,15 +49,15 @@ def test_step_multi_rate_tracks_truth():
         # A measurement sampled at i·dt is the truth at the *start* of the
         # interval; step() folds it (update-then-predict) before propagating
         # over [i·dt, (i+1)·dt], so feed it before advancing the truth.
-        truth = np.asarray(st["drone"]["position"])
+        truth = np.asarray(sim.state["drone"]["position"])
         # GPS arrives at 1/4 the filter rate.
         if i % 4 == 0:
             rt.feed("gps.position", truth + rng.normal(0, 0.1, 3), t=i * dt)
         rt.step(dt, t=i * dt)
-        st = sim.step(st, dt=dt, t=i * dt)
+        sim.step(dt, t=i * dt)
 
     est = np.asarray(rt.state_dict()["drone"]["position"])
-    truth = np.asarray(st["drone"]["position"])
+    truth = np.asarray(sim.state["drone"]["position"])
     assert np.linalg.norm(est - truth) < 0.5
 
 

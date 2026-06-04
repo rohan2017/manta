@@ -14,7 +14,7 @@ Three layers:
      points). None is directly callable.
 
   3. **Target** — lower a Module to a backend. `TargetNumpy(x)` returns
-     the one `NumpyRuntime` (its surface derives from the Module: sim
+     the matching native-Python view over the one kernel engine (sim
      `.step()`/`.outputs()`, filter `.predict()`/`.update()`/`.feed()`,
      …); `TargetCpp(x, …)` emits a typed C++ library for embedded use.
 
@@ -35,9 +35,8 @@ Standard usage::
     sim = TargetNumpy(Sim(w))
     ekf = TargetNumpy(EKF(w))
 
-    state = sim.initial_state()
     for _ in range(N):
-        state = sim.step(state, dt=dt, t=t)
+        sim.step(dt, t=t)                    # sim holds `sim.state`
         ekf.predict(dt=dt, t=t)
         ekf.update("imu.gyro", sim.outputs()["drone"]["imu.gyro"])
         t += dt

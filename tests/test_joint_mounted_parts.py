@@ -38,7 +38,7 @@ def _accel_dir_for_angle(angle: float) -> np.ndarray:
     c.add(g)
 
     sim = _free_world(c, **{"gimbal.angle": angle, "jet.throttle": 1.0})
-    state = sim.step(sim.initial_state(), dt=1e-3)
+    state = sim.step(dt=1e-3)
     v = np.asarray(state["gimbal_craft"]["velocity"]).ravel()
     return v / np.linalg.norm(v)
 
@@ -66,7 +66,7 @@ def test_gimballed_thruster_magnitude_is_angle_independent():
         j.add(Thruster("jet", force=(F, 0.0, 0.0)))
         c.add(j)
         sim = _free_world(c, **{"gim.angle": angle, "jet.throttle": 1.0})
-        state = sim.step(sim.initial_state(), dt=dt)
+        state = sim.step(dt=dt)
         speed = np.linalg.norm(np.asarray(state["g"]["velocity"]).ravel())
         np.testing.assert_allclose(speed, F / m_total * dt, rtol=1e-3)
 
@@ -94,7 +94,7 @@ def test_rotor_imu_reads_centripetal_and_spin():
     c.add(wheel)
 
     sim = _free_world(c, **{"wheel.rate": omega0})
-    state = sim.step(sim.initial_state(), dt=1e-4)
+    state = sim.step(dt=1e-4)
 
     gyro  = np.asarray(sim.outputs()["fly"]["imu.gyro"]).ravel()
     accel = np.asarray(sim.outputs()["fly"]["imu.accel"]).ravel()
@@ -117,7 +117,7 @@ def test_rotor_imu_centripetal_scales_with_rate_squared():
         wheel.add(IMU("imu", transform=(d, 0.0, 0.0)))
         c.add(wheel)
         sim = _free_world(c, **{"wheel.rate": omega0})
-        state = sim.step(sim.initial_state(), dt=1e-4)
+        state = sim.step(dt=1e-4)
         return float(np.asarray(sim.outputs()["fly"]["imu.accel"]).ravel()[0])
 
     np.testing.assert_allclose(accel_x(20.0), 4.0 * accel_x(10.0), rtol=3e-3)
@@ -142,7 +142,7 @@ def test_rotor_magnetometer_reads_in_sensor_frame():
     w.add_field(MagField().add_uniform((1.0, 0.0, 0.0)))
     w.add_craft(c, **{"yaw.angle": np.pi / 2})
     sim = TargetNumpy(Sim(w))
-    state = sim.step(sim.initial_state(), dt=1e-3)
+    state = sim.step(dt=1e-3)
 
     np.testing.assert_allclose(
         np.asarray(sim.outputs()["compass"]["mag.B"]).ravel(),
@@ -173,7 +173,7 @@ def test_rotor_dragsurface_drag_tracks_rotor_frame():
     craft.add(j)
     w.add_craft(craft, **{"yaw.angle": np.pi / 2}, velocity=(V0, 0.0, 0.0))
     sim = TargetNumpy(Sim(w))
-    state = sim.step(sim.initial_state(), dt=1e-3)
+    state = sim.step(dt=1e-3)
 
     v = np.asarray(state["sub"]["velocity"]).ravel()
     # Isotropic drag opposes motion: decelerates +x, no lateral kick.

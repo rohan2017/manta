@@ -93,19 +93,18 @@ def test_ekf_predict_alone_matches_tick():
     _ekf_world.add_craft(c)
     ekf = TargetNumpy(EKF(_ekf_world))
 
-    state = truth_sim.initial_state()
     ekf.reset(state={"predict_only":
-                     {"position": state["predict_only"]["position"]}})
+                     {"position": truth_sim.state["predict_only"]["position"]}})
 
     dt = 0.01
     for _ in range(100):
         # Direct tick
-        state = truth_sim.step(state, dt=dt)
+        truth_sim.step(dt)
         # EKF predict (with no process noise)
         ekf.predict(dt=dt)
 
     # Both should now be at z = 100 − 0.5·9.81·1 = 95.095.
-    assert np.isclose(state["predict_only"]["position"][2],  95.095, atol=1e-5)
+    assert np.isclose(truth_sim.state["predict_only"]["position"][2],  95.095, atol=1e-5)
     assert np.isclose(ekf.state_dict()["predict_only"]["position"][2],
                       95.095, atol=1e-5)
 
@@ -129,7 +128,6 @@ def test_ekf_position_sensor_pulls_estimate_toward_truth():
 
     # Truth at z=100, EKF prior at z=0 — but covariance reflects the
     # uncertainty.
-    truth = truth_sim.initial_state()
     P0 = np.eye(ekf.spec.tangent_dim) * 1.0   # broad prior, tangent-dim
     ekf.reset(state={"oracle_demo": {"position": np.zeros(3)}}, P=P0)
 
@@ -141,13 +139,13 @@ def test_ekf_position_sensor_pulls_estimate_toward_truth():
     dt = 0.01
     for _ in range(500):  # 5 seconds
         # Truth integration.
-        truth = truth_sim.step(truth, dt=dt)
+        truth_sim.step(dt)
         # EKF predict + noisy measurement update.
         ekf.predict(dt=dt, Q=Q)
-        z = truth["oracle_demo"]["position"][2] + rng.normal(0.0, 0.1)
+        z = truth_sim.state["oracle_demo"]["position"][2] + rng.normal(0.0, 0.1)
         ekf.update(h_z, z=np.array([z]), R=R)
 
-    truth_z = truth["oracle_demo"]["position"][2]
+    truth_z = truth_sim.state["oracle_demo"]["position"][2]
     est_z   = ekf.state_dict()["oracle_demo"]["position"][2]
     # Truth has fallen by ½·g·t² = 122.625 → z = -22.625.
     assert np.isclose(truth_z, 100.0 - 0.5 * 9.81 * 25.0, atol=1e-3)
@@ -217,8 +215,6 @@ def test_eskf_attitude_estimation_converges():
     _ekf_world.add_craft(c)
     ekf = TargetNumpy(EKF(_ekf_world))
 
-    truth = truth_sim.initial_state()
-
     # EKF prior: wrong orientation + uncertain.
     half = math.pi / 8.0
     wrong_q = np.array([math.cos(half), 0.0, 0.0, math.sin(half)])
@@ -238,14 +234,14 @@ def test_eskf_attitude_estimation_converges():
     Q = np.eye(n_tan) * 1e-8
 
     for _ in range(500):
-        truth = truth_sim.step(truth, dt=0.01)
+        truth_sim.step(0.01)
         ekf.predict(dt=0.01, Q=Q)
-        z = truth["attitude_demo"]["orientation"] + rng.normal(0.0, 0.03, size=4)
+        z = truth_sim.state["attitude_demo"]["orientation"] + rng.normal(0.0, 0.03, size=4)
         ekf.update(h_q, z=z, R=R)
 
     # Estimate's orientation should now track truth tightly.
     est_q   = ekf.state_dict()["attitude_demo"]["orientation"]
-    truth_q = truth["attitude_demo"]["orientation"]
+    truth_q = truth_sim.state["attitude_demo"]["orientation"]
     # Inner product: |<est, truth>| ≈ 1 when they agree (modulo cover).
     inner = abs(float(np.dot(est_q, truth_q)))
     assert inner > 0.999, \

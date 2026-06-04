@@ -119,14 +119,12 @@ def test_world_uniform_gravity_matches_direct_compile():
     w.add_craft(c2, position=(0.0, 0.0, 50.0))
     cw = TargetNumpy(Sim(w))
 
-    state_d = cwd.initial_state()
-    state_w = cw.initial_state()
     for _ in range(200):
-        state_d = cwd.step(state_d, dt=0.005)
-        state_w = cw.step(state_w, dt=0.005)
+        cwd.step(0.005)
+        cw.step(0.005)
 
-    np.testing.assert_allclose(state_w["solo_b"]["position"],
-                               state_d["solo_a"]["position"], atol=1e-12)
+    np.testing.assert_allclose(cw.state["solo_b"]["position"],
+                               cwd.state["solo_a"]["position"], atol=1e-12)
 
 
 def test_world_point_mass_gravity_orbital_acceleration():
@@ -143,13 +141,12 @@ def test_world_point_mass_gravity_orbital_acceleration():
     w.add_craft(c, position=(earth_r, 0.0, 0.0))     # on +x surface
     cw = TargetNumpy(Sim(w))
 
-    state = cw.initial_state()
     # Single step: v_x ← -GM/r² · dt.
-    state = cw.step(state, dt=1e-3)
+    cw.step(1e-3)
     expected_vx = -GM / (earth_r ** 2) * 1e-3
-    np.testing.assert_allclose(state["orbiter"]["velocity"][0],
+    np.testing.assert_allclose(cw.state["orbiter"]["velocity"][0],
                                expected_vx, rtol=1e-6)
-    np.testing.assert_allclose(state["orbiter"]["velocity"][1:], 0.0, atol=1e-9)
+    np.testing.assert_allclose(cw.state["orbiter"]["velocity"][1:], 0.0, atol=1e-9)
 
 
 def test_world_no_field_is_in_vacuum():
@@ -162,12 +159,11 @@ def test_world_no_field_is_in_vacuum():
     w.add_craft(c, position=(0, 0, 100), velocity=(1.0, 0, 0))
     cw = TargetNumpy(Sim(w))
 
-    state = cw.initial_state()
     for _ in range(100):
-        state = cw.step(state, dt=0.01)
+        cw.step(0.01)
     # No gravity → x advances at 1 m/s; z stays at 100.
-    assert np.isclose(state["floater"]["position"][0], 1.0,   atol=1e-6)
-    assert np.isclose(state["floater"]["position"][2], 100.0, atol=1e-9)
+    assert np.isclose(cw.state["floater"]["position"][0], 1.0,   atol=1e-6)
+    assert np.isclose(cw.state["floater"]["position"][2], 100.0, atol=1e-9)
 
 
 # ---------------------------------------------------------------------------
@@ -198,16 +194,15 @@ def test_offset_mass_under_point_mass_gravity_feels_local_g():
     # Craft origin at anchor (r0, 0, 0) → "probe" sits at anchor (2·r0, 0, 0).
     w.add_craft(c, position=(r0, 0.0, 0.0))
     cw = TargetNumpy(Sim(w))
-    state = cw.initial_state()
 
     # One short tick — extract the net body acceleration from the velocity
     # change. Only one Mass on the craft, so a = g_probe.
     dt = 1e-4
-    state = cw.step(state, dt=dt)
+    cw.step(dt)
 
     # Expected: probe at anchor (2·r0). g_probe = -GM/(2·r0)² along -x.
     g_at_probe = -GM / (2 * r0) ** 2
-    vx = float(np.array(state["offset_mass"]["velocity"]).ravel()[0])
+    vx = float(np.array(cw.state["offset_mass"]["velocity"]).ravel()[0])
     expected_vx = g_at_probe * dt
     np.testing.assert_allclose(vx, expected_vx, rtol=1e-3)
 
@@ -223,7 +218,6 @@ def test_uniform_gravity_unchanged_after_offset_fix():
     wA = World().add_field(GravityField().add_uniform(g))
     wA.add_craft(cA, position=(0, 0, 10))
     cwA = TargetNumpy(Sim(wA))
-    sA = cwA.initial_state()
 
     # Setup B: Mass at non-zero transform on a zero-mass hub.
     cB = Craft("b")
@@ -232,12 +226,11 @@ def test_uniform_gravity_unchanged_after_offset_fix():
     wB = World().add_field(GravityField().add_uniform(g))
     wB.add_craft(cB, position=(0, 0, 10))
     cwB = TargetNumpy(Sim(wB))
-    sB = cwB.initial_state()
 
     for _ in range(100):
-        sA = cwA.step(sA, dt=0.001)
-        sB = cwB.step(sB, dt=0.001)
+        cwA.step(0.001)
+        cwB.step(0.001)
 
     # Both crafts should fall identically in z (same g, same total mass).
-    np.testing.assert_allclose(sA["a"]["velocity"][2],
-                               sB["b"]["velocity"][2], rtol=1e-9)
+    np.testing.assert_allclose(cwA.state["a"]["velocity"][2],
+                               cwB.state["b"]["velocity"][2], rtol=1e-9)
