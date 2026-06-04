@@ -31,6 +31,7 @@ import numpy as np
 
 from ...bus import MeasurementBus, PortSet
 from ...ir.module import Hosting, Module, PortRef, Role, StateRef
+from ...ir.state_spec import flatten_nested
 from ...linearized_system import resolve_suffix
 
 
@@ -174,12 +175,7 @@ class NumpyRuntime:
         """Fresh nested initial state: the manifold slots' defaults plus
         input/noise placeholder entries (commands you may set; noise seeds
         that stay at zero — a `NoiseDriver` draw never enters the dict)."""
-        spec = self._spec
-        x0 = self.module.state.field("x").init
-        nested: dict[str, dict[str, Any]] = {}
-        for full, val in spec.unpack(np.asarray(x0, dtype=float)).items():
-            owner, slot = _split(full)
-            nested.setdefault(owner, {})[slot] = val
+        nested = self._spec.to_nested(self.module.state.field("x").init)
         for f in self._u_fields():
             owner, rest = _split(f.name)
             nested.setdefault(owner, {}).setdefault(rest, f.default)
@@ -216,21 +212,14 @@ class NumpyRuntime:
     def _functional_step(self, state: dict, dt: float,
                          t: float = 0.0) -> dict[str, dict[str, Any]]:
         spec = self._spec
-        flat: dict[str, Any] = {}
-        for owner, slots in state.items():
-            for slot, val in slots.items():
-                flat[f"{owner}.{slot}"] = val
-        self._state["x"] = spec.pack(
-            {k: v for k, v in flat.items() if k in spec})
+        flat = flatten_nested(state)
+        self._state["x"] = spec.pack_any(flat)
         u = np.array([float(np.asarray(flat.get(f.name, f.default)).ravel()[0])
                       for f in self._u_fields()])
         readings = self._run(self.module.entry("step"),
                              {"u": u, "noise": self._noise_vec(flat),
                               "dt": dt, "t": t})
-        new_state: dict[str, dict[str, Any]] = {k: {} for k in state}
-        for full, val in spec.unpack(self._state["x"]).items():
-            owner, slot = _split(full)
-            new_state.setdefault(owner, {})[slot] = val
+        new_state = spec.to_nested(self._state["x"])
         # Preserve input-only entries (commands, noise placeholders); the
         # sensor readings deliberately stay OUT of the state dict.
         for owner, slots in state.items():
@@ -348,11 +337,7 @@ class NumpyRuntime:
 
     def state_dict(self) -> dict[str, dict[str, Any]]:
         """Current estimate nested by owner."""
-        nested: dict[str, dict[str, Any]] = {}
-        for full, val in self._spec.unpack(self._state["x"]).items():
-            owner, slot = _split(full)
-            nested.setdefault(owner, {})[slot] = val
-        return nested
+        return self._spec.to_nested(self._state["x"])
 
     def reset(self, state: dict | None = None, *,
               P: np.ndarray | None = None) -> None:
@@ -360,18 +345,8 @@ class NumpyRuntime:
         the Module's declared initial values, or a flat ambient vector
         taken verbatim; `P` resets the covariance."""
         x_field = self.module.state.field("x")
-        if isinstance(state, np.ndarray):
-            self._state["x"] = np.asarray(state, dtype=float).reshape(-1).copy()
-        elif state is not None:
-            base = self._spec.unpack(np.asarray(x_field.init, dtype=float))
-            for k, v in state.items():
-                if isinstance(v, dict):
-                    for slot, val in v.items():
-                        base[f"{k}.{slot}"] = val
-                else:
-                    base[k] = v
-            self._state["x"] = self._spec.pack(
-                {k: v for k, v in base.items() if k in self._spec})
+        if state is not None:
+            self._state["x"] = self._spec.pack_any(state, base=x_field.init)
         elif P is None:
             self._state["x"] = np.asarray(
                 x_field.init, dtype=float).reshape(-1).copy()
@@ -574,15 +549,7 @@ class NumpyRuntime:
     def control(self, state: dict) -> dict[str, float]:
         """Map a state estimate (nested or flat dict) → `{input: value}`,
         merged over the Module's reference point."""
-        spec = self._x_port.manifold
-        base = spec.unpack(np.asarray(self._x_port.init, dtype=float))
-        for k, v in state.items():
-            if isinstance(v, dict):
-                for slot, val in v.items():
-                    base[f"{k}.{slot}"] = val
-            else:
-                base[k] = v
-        x = spec.pack({k: v for k, v in base.items() if k in spec})
+        x = self._x_port.manifold.pack_any(state, base=self._x_port.init)
         u_vec = self.u(x)
         return {n: float(u_vec[i])
                 for i, n in enumerate(self._input_names())}

@@ -47,8 +47,8 @@ from ..ir.module import (
     EntryPoint, Hosting, Module, Port, PortField, PortRef, Role, StateField,
     StateLayout, StateRef,
 )
-from ..linearized_system import LinearizedSystem, flatten_nested, resolve_suffix
-from ..ir.state_spec import StateSpec
+from ..ir.state_spec import StateSpec, flatten_nested
+from ..linearized_system import LinearizedSystem, resolve_suffix
 
 
 class EKF:
@@ -132,7 +132,7 @@ class EKF:
 
         # ---- the typed Module -------------------------------------------
         init_flat = flatten_nested(world._initial_state_dict())
-        x0 = spec.pack({k: v for k, v in init_flat.items() if k in spec})
+        x0 = spec.pack_any(init_flat)
         fields = (
             StateField("x", "manifold", (spec.ambient_dim,),
                        init=x0, manifold=spec),

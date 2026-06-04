@@ -40,7 +40,8 @@ from .ir.module import (
     EntryPoint, Hosting, Module, Port, PortField, PortRef, Role, StateField,
     StateLayout, StateRef,
 )
-from .linearized_system import LinearizedSystem, flatten_nested
+from .ir.state_spec import flatten_nested
+from .linearized_system import LinearizedSystem
 
 if TYPE_CHECKING:
     from .world import World
@@ -106,7 +107,7 @@ class Sim:
         sys = self._sys
         spec = sys.spec
         init_flat = flatten_nested(self.world._initial_state_dict())
-        x0 = spec.pack({k: v for k, v in init_flat.items() if k in spec})
+        x0 = spec.pack_any(init_flat)
         x_field = StateField("x", "manifold", (spec.ambient_dim,),
                              init=x0, manifold=spec)
         # A command's declared default is the MODEL's initial value: an

@@ -106,19 +106,7 @@ def _operating_point(ekf, state) -> np.ndarray:
     """Pack `state` (nested or flat, merged over the world's initial
     state) into the EKF spec's ambient vector — same convention as
     the runtime's `reset`."""
-    spec = ekf.spec
-    flat: dict[str, Any] = {}
-    for owner, slots in ekf.world._initial_state_dict().items():
-        for k, v in slots.items():
-            flat[f"{owner}.{k}"] = v
-    if state is not None:
-        for k, v in state.items():
-            if isinstance(v, dict):
-                for slot, val in v.items():
-                    flat[f"{k}.{slot}"] = val
-            else:
-                flat[k] = v
-    return spec.pack({k: v for k, v in flat.items() if k in spec})
+    return ekf.spec.pack_any(state, base=ekf.world._initial_state_dict())
 
 
 def _select_sensors(ekf, sensors):
@@ -244,8 +232,7 @@ def observability_trajectory(world, *, dt: float, steps: int,
                                    np.zeros(1), np.zeros((n, 0)))
 
     def truth_vec():
-        flat = {f"{o}.{k}": v for o, s in sim.state.items() for k, v in s.items()}
-        return spec.pack({k: v for k, v in flat.items() if k in spec})
+        return spec.pack_any(sim.state)
 
     every = max(1, steps // max(1, samples))
     blocks = []

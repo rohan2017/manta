@@ -187,9 +187,7 @@ def nees(world, *, dt: float, steps: int,
     boxminus = ca.Function("bm", [xa, xb], [spec.boxminus_sym(xa, xb)])
 
     def truth_vec(world_rt) -> np.ndarray:
-        flat = {f"{o}.{k}": v for o, s in world_rt.state.items()
-                for k, v in s.items()}
-        return spec.pack({k: v for k, v in flat.items() if k in spec})
+        return spec.pack_any(world_rt.state)
 
     nees_samples: list[float] = []
     for r in range(runs):

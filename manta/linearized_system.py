@@ -45,7 +45,7 @@ from typing import Any
 import casadi as ca
 import numpy as np
 
-from .ir.state_spec import StateSpec, resolve_slotset
+from .ir.state_spec import StateSpec, flatten_nested, resolve_slotset
 
 
 # ---------------------------------------------------------------------------
@@ -71,18 +71,6 @@ def resolve_suffix(key: str, candidates, *, label: str, who: str) -> str:
             f"Use the fully-qualified form.")
     raise KeyError(
         f"{who}: unknown {label} name {key!r}. Available: {sorted(cands)}")
-
-
-def flatten_nested(nested: dict) -> dict[str, Any]:
-    """`{owner: {slot: v}}` → `{"owner.slot": v}`; passes flat dicts through."""
-    flat: dict[str, Any] = {}
-    for owner, slots in nested.items():
-        if isinstance(slots, dict):
-            for slot, v in slots.items():
-                flat[f"{owner}.{slot}"] = v
-        else:
-            flat[owner] = slots
-    return flat
 
 
 def freeze_complement(full_spec, kept, init_flat: dict,
@@ -516,7 +504,7 @@ class LinearizedSystem:
 
     def pack_ref(self, spec) -> np.ndarray:
         """Pack the operating-point reference into `spec`'s ambient layout."""
-        return spec.pack({k: v for k, v in self.ref_flat.items() if k in spec})
+        return spec.pack_any(self.ref_flat)
 
     def __repr__(self) -> str:
         return (f"<LinearizedSystem spec(tangent)={self.spec.tangent_dim} "

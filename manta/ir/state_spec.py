@@ -92,6 +92,19 @@ def resolve_slotset(craft_name: str, slotset: SlotSet) -> set[str]:
             if slotset & flag}
 
 
+def flatten_nested(nested: dict) -> dict[str, Any]:
+    """`{owner: {slot: v}}` → `{"owner.slot": v}`; passes flat entries
+    (and dotless keys) through unchanged. The one nested→flat rule."""
+    flat: dict[str, Any] = {}
+    for owner, slots in nested.items():
+        if isinstance(slots, dict):
+            for slot, v in slots.items():
+                flat[f"{owner}.{slot}"] = v
+        else:
+            flat[owner] = slots
+    return flat
+
+
 @dataclass(frozen=True)
 class StateSlot:
     """One named slot in the flat layout.
@@ -352,6 +365,50 @@ class StateSpec:
             else:
                 out[slot.name] = chunk.copy()
         return out
+
+    def pack_any(self, state=None, *, base=None) -> np.ndarray:
+        """Pack a state given in ANY of the three shapes — nested dict
+        (`{owner: {slot: v}}`), flat dict (`{"owner.slot": v}`), or ambient
+        vector — merged over `base` (ambient vector or dict), into the
+        ambient vector. The single owner of shape conversion: every
+        runtime/analysis call site goes through here instead of hand-rolling
+        the flatten + merge + filter loop.
+
+        Rules:
+          * `state` is an ndarray → taken verbatim (length-checked).
+          * `state` is a dict     → flattened; unknown keys ignored; merged
+            over `base`.
+          * `state` is None       → `base` packed as-is.
+          * every slot must be covered by `state` or `base`.
+        """
+        if isinstance(state, np.ndarray):
+            arr = np.asarray(state, dtype=float).reshape(-1)
+            if arr.shape != (self._ambient_dim,):
+                raise ValueError(
+                    f"StateSpec.pack_any: expected ambient vector of length "
+                    f"{self._ambient_dim}, got {arr.shape}")
+            return arr.copy()
+        merged: dict[str, Any] = {}
+        if base is not None:
+            merged.update(self.unpack(np.asarray(base, dtype=float))
+                          if isinstance(base, np.ndarray)
+                          else flatten_nested(base))
+        if state is not None:
+            merged.update(flatten_nested(state))
+        return self.pack({k: v for k, v in merged.items() if k in self})
+
+    def to_nested(self, flat_vector: np.ndarray) -> dict[str, Any]:
+        """Ambient vector → nested `{owner: {slot: v}}` dict (the runtime's
+        user-facing shape). A dotless slot name stays a top-level entry."""
+        nested: dict[str, Any] = {}
+        for full, val in self.unpack(np.asarray(flat_vector,
+                                                dtype=float)).items():
+            if "." in full:
+                owner, slot = full.split(".", 1)
+                nested.setdefault(owner, {})[slot] = val
+            else:
+                nested[full] = val
+        return nested
 
     # ----- Manifold operations (symbolic, for the ESKF tracer) ----------
 
