@@ -113,6 +113,42 @@ def test_closed_loop_regulates_to_setpoint():
         np.asarray(sim.state["c"]["velocity"]).ravel(), [0, 0, 0], atol=1e-2)
 
 
+def test_retarget_moves_the_reference():
+    """`retarget` is exact for a translation: u(x, x_ref+Δ) equals the
+    offset trick u(x−Δ, x_ref) (position ⊟ is plain subtraction), and
+    at the new setpoint the command is back to the trim."""
+    lqr, _ = _lqr()
+    ctrl = TargetNumpy(lqr)
+    delta = np.array([1.0, -2.0, 0.5])
+    state = {"c": {"position": (3.0, -2.0, 7.0), "velocity": (0.1, 0.2, -0.3)}}
+    shifted = {"c": {"position": tuple(np.array(state["c"]["position"]) - delta),
+                     "velocity": state["c"]["velocity"]}}
+    u_trick = ctrl.control(shifted)               # old offset-the-estimate
+    ctrl.retarget({"c": {"position": tuple(np.array([0, 0, 10]) + delta)}})
+    u_ref = ctrl.control(state)                   # actual estimate, moved ref
+    for k in lqr.input_names:
+        assert u_ref[k] == pytest.approx(u_trick[k], abs=1e-12)
+    # At the moved setpoint, at rest → exactly the trim again.
+    u_eq = ctrl.control({"c": {"position": tuple(np.array([0, 0, 10]) + delta),
+                               "velocity": (0, 0, 0)}})
+    assert u_eq["c.tz.throttle"] == pytest.approx(M * G, abs=1e-6)
+    assert u_eq["c.tx.throttle"] == pytest.approx(0.0, abs=1e-6)
+
+
+def test_retarget_closed_loop_chases_new_setpoint():
+    lqr, w = _lqr()
+    ctrl = TargetNumpy(lqr)
+    ctrl.retarget({"c": {"position": (3.0, 1.0, 12.0)}})
+    sim = TargetNumpy(Sim(w))
+    for _ in range(600):
+        for full, v in ctrl.control(sim.state).items():
+            owner, rest = full.split(".", 1)
+            sim.state[owner][rest] = v
+        sim.step(0.02)
+    np.testing.assert_allclose(
+        np.asarray(sim.state["c"]["position"]).ravel(), [3, 1, 12], atol=1e-2)
+
+
 def test_control_maps_to_named_inputs():
     lqr, _ = _lqr()
     ctrl = TargetNumpy(lqr)

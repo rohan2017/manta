@@ -591,22 +591,53 @@ class NumpyRecurrence(NumpyRuntime):
 # ---------------------------------------------------------------------------
 
 class NumpyRegulator(NumpyRuntime):
-    """A stateless control law: map a state estimate to commands."""
+    """A stateless control law: map a state estimate to commands.
+
+    Holds the live reference point `x_ref` (seeded from the Module's
+    built operating point); `retarget()` moves it at runtime."""
 
     def __init__(self, module: Module) -> None:
         super().__init__(module)
         self._est_in = None
         self._gather = None
+        st = module.ports_by_role(Role.STATE)
+        self._ref_port = st[1] if len(st) > 1 else None
+        self._x_ref = (np.asarray(self._ref_port.init, dtype=float)
+                       .reshape(-1).copy() if self._ref_port is not None
+                       else np.asarray(self._x_port.init,
+                                       dtype=float).reshape(-1).copy())
+
+    def retarget(self, state: dict) -> None:
+        """Move the reference point the law regulates to (nested or flat
+        dict, merged over the CURRENT reference). The gain K is NOT
+        re-solved: exact wherever the dynamics are invariant along the
+        moved direction (e.g. translating a hover setpoint); build a new
+        LQR for a genuinely different operating point (new A/B or trim).
+        """
+        if self._ref_port is None:
+            raise AttributeError(
+                f"{type(self).__name__}: module {self.module.name!r} has "
+                "no reference port — its control law is not retargetable.")
+        self._x_ref = self._ref_port.manifold.pack_any(state,
+                                                       base=self._x_ref)
+
+    @property
+    def x_ref(self) -> np.ndarray:
+        """The live reference point (flat ambient vector)."""
+        return self._x_ref.copy()
 
     def u(self, x_flat) -> np.ndarray:
         """Control vector for a flat ambient state (full-spec layout)."""
-        return self.call("control",
-                         {"x": np.asarray(x_flat, dtype=float)})["u"]
+        vals = {"x": np.asarray(x_flat, dtype=float)}
+        if self._ref_port is not None:
+            vals[self._ref_port.name] = self._x_ref
+        return self.call("control", vals)["u"]
 
     def control(self, state: dict) -> dict[str, float]:
         """Map a state estimate (nested or flat dict) → `{input: value}`,
-        merged over the Module's reference point."""
-        x = self._x_port.manifold.pack_any(state, base=self._x_port.init)
+        merged over the live reference point (unsupplied slots sit at
+        the reference, i.e. zero error)."""
+        x = self._x_port.manifold.pack_any(state, base=self._x_ref)
         u_vec = self.u(x)
         return {n: float(u_vec[i])
                 for i, n in enumerate(self._input_names())}
@@ -640,7 +671,7 @@ class NumpyRegulator(NumpyRuntime):
             u = self.control(est)
         else:
             self._ensure_gather()
-            x_full = np.asarray(self._x_port.init, dtype=float).copy()
+            x_full = self._x_ref.copy()
             x_src = np.asarray(est, dtype=float).reshape(-1)
             for foff, dim, soff in self._gather:
                 x_full[foff:foff + dim] = x_src[soff:soff + dim]

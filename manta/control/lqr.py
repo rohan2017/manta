@@ -98,7 +98,9 @@ class LQR:
     Attributes:
         spec (full), tracked (regulated slot names), input_names,
         K (n_u × tracked_tangent), A, B, x_ref/u_ref (vectors),
-        control_fn (`u(x_full)` baked `ca.Function`).
+        control_fn (`u(x_full, x_ref_full)` baked `ca.Function`;
+        runtimes default `x_ref` to the built reference — see
+        `NumpyRegulator.retarget`).
     """
 
     def __init__(self, world, *,
@@ -160,24 +162,39 @@ class LQR:
         self.K, self.P = _solve_dare(A, B, Qm, Rm)
 
         # --- baked control law: u = u_ref − K·(x_tracked ⊟ x_ref_tracked).
-        # Takes the FULL ambient state; gathers the tracked slots from it.
+        # Takes the FULL ambient state AND the reference as arguments;
+        # gathers the tracked slots from each. The gain K is the baked
+        # constant — feeding a moved `x_ref` retargets the regulator
+        # through the same law with NO re-solve, which is exact wherever
+        # the dynamics are invariant along the moved direction (e.g.
+        # translating a hover setpoint under uniform gravity). A genuinely
+        # different operating point (new A/B or trim) needs a new LQR.
         full_spec, spec = sys.full_spec, sys.spec
         x_full_sym = ca.MX.sym("x", full_spec.ambient_dim, 1)
-        chunks = []
-        for s in spec.slots:
-            fs = full_spec.slot(s.name)
-            chunks.append(x_full_sym[fs.ambient_offset : fs.ambient_offset + fs.ambient_dim])
-        x_sub_sym = ca.vertcat(*chunks) if chunks else x_full_sym
-        dx = spec.boxminus_sym(x_sub_sym, ca.DM(x_ref_sub.reshape(-1, 1)))
+        x_ref_sym = ca.MX.sym("x_ref", full_spec.ambient_dim, 1)
+
+        def _gather(sym):
+            chunks = []
+            for s in spec.slots:
+                fs = full_spec.slot(s.name)
+                chunks.append(
+                    sym[fs.ambient_offset : fs.ambient_offset + fs.ambient_dim])
+            return ca.vertcat(*chunks) if chunks else sym
+
+        dx = spec.boxminus_sym(_gather(x_full_sym), _gather(x_ref_sym))
         u_expr = ca.DM(u_ref_vec.reshape(-1, 1)) - ca.DM(self.K) @ dx
         self.control_fn = ca.Function(
-            "lqr_u", [x_full_sym], [u_expr], ["x"], ["u"])
+            "lqr_u", [x_full_sym, x_ref_sym], [u_expr], ["x", "x_ref"], ["u"])
 
-        # --- the typed Module: stateless, one control(x) -> u entry --------
+        # --- the typed Module: stateless, one control(x, x_ref) -> u entry.
+        # Both STATE ports carry the operating point as `init`, so a
+        # backend can default x_ref to the built reference.
         self._module = Module(
             name=f"{world.name}_lqr", state=StateLayout(()),
             ports=(
                 Port("x", Role.STATE, (full_spec.ambient_dim,),
+                     manifold=full_spec, init=x_ref_full),
+                Port("x_ref", Role.STATE, (full_spec.ambient_dim,),
                      manifold=full_spec, init=x_ref_full),
                 Port("u", Role.CONTROL, (n_u,), fields=tuple(
                     PortField(n, 1, float(u_full[n]))
@@ -185,7 +202,8 @@ class LQR:
             ),
             functions={"control": self.control_fn},
             entry_points=(EntryPoint("control", "control",
-                                     (PortRef("x"),), returns=("u",)),),
+                                     (PortRef("x"), PortRef("x_ref")),
+                                     returns=("u",)),),
             hosting=Hosting.THREADED)
 
     def module(self) -> Module:

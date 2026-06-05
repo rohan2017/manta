@@ -53,6 +53,12 @@ int main() {
     auto u2 = lqr.control(x2);
     std::printf("u2 %.17g %.17g %.17g\n",
                 u2.c_tx_throttle, u2.c_ty_throttle, u2.c_tz_throttle);
+
+    manta_gen::FfLqr::State ref;         // retarget: State{} defaults to
+    ref.c_position << 1.0, -1.0, 12.0;   // the built reference; move it
+    auto u3 = lqr.control(x, ref);
+    std::printf("u3 %.17g %.17g %.17g\n",
+                u3.c_tx_throttle, u3.c_ty_throttle, u3.c_tz_throttle);
     return 0;
 }
 """
@@ -100,8 +106,12 @@ def test_lqr_python_cpp_roundtrip(tmp_path: Path):
                                  "velocity": (0.1, 0.2, -0.3)}})
     u2_np = lqr_np.control({"c": {"position": (0.0, 0.0, 10.0),
                                   "velocity": (0.0, 0.0, 0.0)}})
+    lqr_np.retarget({"c": {"position": (1.0, -1.0, 12.0)}})
+    u3_np = lqr_np.control({"c": {"position": (3.0, -2.0, 7.0),
+                                  "velocity": (0.1, 0.2, -0.3)}})
     np.testing.assert_allclose(cpp["u"], [u_np[k] for k in order], atol=1e-9)
     np.testing.assert_allclose(cpp["u2"], [u2_np[k] for k in order], atol=1e-9)
+    np.testing.assert_allclose(cpp["u3"], [u3_np[k] for k in order], atol=1e-9)
     # Sanity: at the setpoint the command is the trim (0, 0, M·G).
     np.testing.assert_allclose(cpp["u2"], [0.0, 0.0, M * G], atol=1e-6)
 

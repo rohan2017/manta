@@ -21,6 +21,7 @@ lowers to a method, unconditionally.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -148,7 +149,7 @@ def _scatter_fields(fields, src, dst) -> list[str]:
 # Method signatures (typed, from the IR)
 # ---------------------------------------------------------------------------
 
-def _param_for(port, decl: bool) -> str | None:
+def _param_for(port, decl: bool, ctx) -> str | None:
     """The typed C++ parameter for one PortRef, by Role."""
     r = port.role
     if r is Role.CONTROL:
@@ -162,7 +163,13 @@ def _param_for(port, decl: bool) -> str | None:
     if r is Role.TIME:
         return "double t = 0.0" if decl else "double t"
     if r is Role.STATE:
-        return "const State& x"
+        # Named by port. Secondary STATE ports (e.g. an LQR's movable
+        # x_ref) additionally get a convenience overload omitting them
+        # (`_ref_overload`) — a plain default argument can't be used,
+        # since it would need State's member initializers before the
+        # enclosing class is complete.
+        return ("const State& x" if port is ctx.x_port
+                else f"const State& {_ident(port.name)}")
     if r is Role.MATRIX:
         return f"const {_mat_type(*port.shape)}& {_ident(port.name)}"
     raise NotImplementedError(f"param for role {r}")          # pragma: no cover
@@ -177,7 +184,7 @@ def _params(ep, ctx, *, decl: bool) -> list[str]:
                 break
     for a in ep.args:
         if isinstance(a, PortRef):
-            out.append(_param_for(ctx.port(a.name), decl))
+            out.append(_param_for(ctx.port(a.name), decl, ctx))
     return out
 
 
@@ -236,6 +243,45 @@ def _method_def_head(ep, ctx, q: str) -> str:
             f"{_const(ep, ctx)}")
 
 
+def _param_name(a, ctx) -> str:
+    """The C++ parameter name `_param_for` gives one PortRef arg."""
+    port = ctx.port(a.name)
+    fixed = {Role.CONTROL: "u", Role.MEASUREMENT: "z", Role.NOISE: "noise",
+             Role.TIMESTEP: "dt", Role.TIME: "t"}
+    if port.role in fixed:
+        return fixed[port.role]
+    return "x" if port is ctx.x_port else _ident(port.name)
+
+
+def _ref_overload(ep, ctx) -> str | None:
+    """An inline convenience overload omitting trailing secondary
+    STATE-role args (an LQR's movable `x_ref`): they delegate to
+    `State{}`, whose member defaults ARE the Module's built operating
+    point. Inline body, not a default argument — a default argument may
+    not use a nested class's member initializers before the enclosing
+    class is complete."""
+    args = list(ep.args)
+    dropped = 0
+    while args and isinstance(args[-1], PortRef):
+        port = ctx.port(args[-1].name)
+        if port.role is Role.STATE and port is not ctx.x_port:
+            args.pop()
+            dropped += 1
+        else:
+            break
+    if not dropped:
+        return None
+    sub = replace(ep, args=tuple(args))
+    params = ", ".join(_params(sub, ctx, decl=True))
+    names = (["x"] if (not ctx.held
+                       and any(isinstance(a, StateRef) for a in args))
+             else [])
+    names += [_param_name(a, ctx) for a in args if isinstance(a, PortRef)]
+    call = ", ".join(names + ["State{}"] * dropped)
+    return (f"{_ret_type(ep, ctx)} {ep.method}({params}){_const(ep, ctx)} "
+            f"{{ return {ep.method}({call}); }}")
+
+
 # ---------------------------------------------------------------------------
 # Method bodies (typed-arg gather → kernel call → scatter/return)
 # ---------------------------------------------------------------------------
@@ -257,7 +303,8 @@ def _arg_expr(a, ctx) -> str:
     if r is Role.TIME:
         return "&t"
     if r is Role.STATE:
-        return "x_in"
+        return ("x_in" if port is ctx.x_port
+                else f"{_ident(port.name)}_in")
     if r is Role.MATRIX:
         return f"{_ident(port.name)}.data()"
     raise NotImplementedError(f"arg for role {r}")            # pragma: no cover
@@ -265,17 +312,28 @@ def _arg_expr(a, ctx) -> str:
 
 def _method_body(ep, ctx) -> list[str]:
     L: list[str] = []
-    reads_manifold = any(
-        (isinstance(a, StateRef)
-         and ctx.m.state.field(a.name).kind == "manifold")
-        or (isinstance(a, PortRef) and ctx.port(a.name).role is Role.STATE)
-        for a in ep.args)
+    # Manifold reads: (param/member name, kernel buffer) — the held/
+    # threaded state plus any secondary STATE-role port (e.g. x_ref).
+    manifold_reads: list[tuple[str, str]] = []
+    for a in ep.args:
+        if isinstance(a, StateRef) \
+                and ctx.m.state.field(a.name).kind == "manifold":
+            pair = ("x", "x_in")
+        elif isinstance(a, PortRef) \
+                and ctx.port(a.name).role is Role.STATE:
+            port = ctx.port(a.name)
+            pair = (("x", "x_in") if port is ctx.x_port
+                    else (_ident(port.name), f"{_ident(port.name)}_in"))
+        else:
+            continue
+        if pair not in manifold_reads:
+            manifold_reads.append(pair)
     writes_manifold = "x" in ep.writes
     composite = _ret_type(ep, ctx).endswith("Result")
 
     # buffers
-    if reads_manifold:
-        L.append(f"    double x_in[{ctx.amb}];")
+    for _, buf in manifold_reads:
+        L.append(f"    double {buf}[{ctx.amb}];")
     if writes_manifold:
         L.append(f"    double x_out[{ctx.amb}];")
     if any(isinstance(a, PortRef) and ctx.port(a.name).role is Role.CONTROL
@@ -310,8 +368,8 @@ def _method_body(ep, ctx) -> list[str]:
             ret_bufs.append((name, f"{buf}.data()"))
 
     # pack
-    if reads_manifold:
-        L.append("    pack_state(x, x_in);")
+    for name, buf in manifold_reads:
+        L.append(f"    pack_state({name}, {buf});")
     if any(isinstance(a, PortRef) and ctx.port(a.name).role is Role.CONTROL
            for a in ep.args):
         L.append("    pack_inputs(u, u_in);")
@@ -432,6 +490,9 @@ def emit_module_cpp(module, out_dir, *, class_name: str,
         H += ["    State initial_state() const { return State{}; }", ""]
     for ep in entries:
         H.append(f"    {_method_decl(ep, ctx)};")
+        ov = _ref_overload(ep, ctx)
+        if ov is not None:
+            H.append(f"    {ov}")
     H += ["};", "", f"}}  // namespace {namespace}"]
     (out_dir / f"{base}.hpp").write_text("\n".join(H) + "\n")
 
