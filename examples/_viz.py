@@ -286,6 +286,58 @@ class Viz:
                                  colors=[color], fill_mode="solid"),
             static=static)
 
+    def checker_sphere(self, path, radius: float, *,
+                       colors=((25, 25, 25), (245, 205, 40)),
+                       n_lat: int = 16, n_lon: int = 32,
+                       static: bool = True) -> None:
+        """A UV-sphere checkered per octant in the two ``colors`` —
+        the classic black/yellow tracking-target marker. Centred on the
+        entity origin; logged once. ``n_lat`` should be even and
+        ``n_lon`` divisible by 4 so the grid lines land exactly on the
+        octant boundaries (crisp colour edges)."""
+        lat = np.linspace(0.0, np.pi, n_lat + 1)
+        lon = np.linspace(0.0, 2 * np.pi, n_lon + 1)
+        verts: list = []
+        vcols: list = []
+        tris: list = []
+        for i in range(n_lat):
+            for j in range(n_lon):
+                quad = []
+                for a, b in ((i, j), (i + 1, j), (i + 1, j + 1), (i, j + 1)):
+                    th, ph = lat[a], lon[b]
+                    quad.append([radius * np.sin(th) * np.cos(ph),
+                                 radius * np.sin(th) * np.sin(ph),
+                                 radius * np.cos(th)])
+                c = np.mean(quad, axis=0)
+                color = colors[int(c[0] > 0) ^ int(c[1] > 0) ^ int(c[2] > 0)]
+                k = len(verts)
+                verts.extend(quad)            # per-face verts: flat colours
+                vcols.extend([color] * 4)
+                tris.extend([[k, k + 1, k + 2], [k, k + 2, k + 3]])
+        verts = np.asarray(verts)
+        self.rr.log(path, self.rr.Mesh3D(
+            vertex_positions=verts, triangle_indices=np.asarray(tris),
+            vertex_normals=verts / radius,
+            vertex_colors=np.asarray(vcols)), static=static)
+
+    def cov_ellipsoid(self, path, center, cov, *, nsigma: float = 3.0,
+                      color=(235, 235, 255, 70),
+                      min_half: float = 0.0) -> None:
+        """An uncertainty ellipsoid at ``center`` (world coords): half-axes
+        ``nsigma·√λᵢ`` along the eigenvectors of the 3×3 covariance
+        ``cov``. Re-log every frame to animate a filter's confidence;
+        ``min_half`` floors the axes so a tight filter stays visible."""
+        cov = np.asarray(cov, dtype=float).reshape(3, 3)
+        w, V = np.linalg.eigh(cov)
+        half = np.maximum(nsigma * np.sqrt(np.maximum(w, 0.0)), min_half)
+        if np.linalg.det(V) < 0.0:    # eigh may hand back a reflection
+            V[:, 0] = -V[:, 0]
+        self.rr.log(path, self.rr.Transform3D(translation=_vec3(center),
+                                              mat3x3=V))
+        self.rr.log(path, self.rr.Ellipsoids3D(
+            centers=[[0.0, 0.0, 0.0]], half_sizes=[half], colors=[color],
+            fill_mode="solid"))
+
     def plane(self, path, *, z: float = 0.0, size: float = 20.0,
               color=(70, 110, 70, 160)) -> None:
         """A flat (thin-box) reference plane at height ``z`` — ground/water.

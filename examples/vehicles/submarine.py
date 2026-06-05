@@ -33,7 +33,7 @@ from manta.parts import (
     Thruster,
 )
 
-from .._control import common_args, make_controller
+from .._control import Pacer, common_args, make_controller
 from .._viz import Viz
 
 RHO = 1025.0           # seawater density
@@ -123,11 +123,17 @@ def main() -> None:
                 color=(120, 120, 120, 120))
 
     n = int(duration / dt)
+    # Live runs must hold sim time to the wall clock: uncapped, the loop
+    # integrates several× real time and floods the viewer's channel —
+    # latency then grows without bound and keyboard piloting is hopeless.
+    pacer = Pacer() if (args.keyboard or viz is not None) else None
     print(f"{'t (s)':>6} {'depth (m)':>10} {'vx (m/s)':>9} {'heading°':>9} "
           f"{'est err (m)':>11}")
     try:
         for i in range(n):
             t = i * dt
+            if pacer is not None:
+                pacer.pace(t)
             ctrl.update(t)
             cmd = {
                 "prop.throttle": FWD * (ctrl.held("w") - ctrl.held("s")),
@@ -145,12 +151,13 @@ def main() -> None:
             tq = np.asarray(sim.state["sub"]["orientation"]).ravel()
             est = ekf.state_dict()["sub"]
             ep = np.asarray(est["position"]).ravel()
-            if viz is not None:
+            if viz is not None and i % 2 == 0:   # 25 Hz: don't flood rerun
                 viz.t(t)
                 viz.pose("world/sub", tp, tq)
                 viz.pose("world/sub_est", ep,
                          np.asarray(est["orientation"]).ravel())
-                viz.trail("world/sub/trail", tp)
+                viz.trail("world/trail", tp,   # world coords: not under the posed sub
+                          max_len=600, min_dist=0.05)
 
             if (i + 1) % 50 == 0:
                 v = np.asarray(sim.state["sub"]["velocity"]).ravel()
