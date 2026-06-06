@@ -63,11 +63,41 @@ def test_no_spurious_wrench_on_deflected_passive_joint():
 
 
 def test_free_body_recoils_from_swinging_bob():
-    # A light free body (only 10× the bob) is NOT a fixed pivot: as the bob
-    # swings, the body must recoil so the system's angular momentum about
-    # its COM evolves only under gravity. Here we just confirm the recoil
-    # exists and the DOF still swings — i.e. the cascade couples the bob and
-    # body both ways (this is physical, not a leak).
+    # A light free body (only 10× the bob) is NOT a fixed pivot: set the
+    # bob swinging and the body must recoil so the system's angular
+    # momentum about its COM stays put. The hinge is OFFSET from the body
+    # COM so the constraint force has a lever arm — a hinge at the COM
+    # would (correctly) make the body circle without rotating. (No
+    # gravity here on purpose — a free craft under uniform gravity is in
+    # free fall, where the generalized gravity torque on the DOF cancels
+    # exactly and a pendulum, correctly, does not swing.)
+    L = 0.5
+    c = Craft("pend")
+    c.add(Mass("body", mass=10.0, moi=(1.0, 1.0, 1.0)))
+    h = RevoluteJoint("hinge", mode="passive", axis=(0.0, 1.0, 0.0),
+                      transform=(0.3, 0.0, 0.0))
+    h.add(Mass("bob", mass=1.0, moi=(1e-9, 1e-9, 1e-9), transform=(0.0, 0.0, -L)))
+    c.add(h)
+    w = World().add_field(GravityField().add_uniform((0.0, 0.0, 0.0)))
+    w.add_craft(c)
+    rt = TargetNumpy(Sim(w))
+    rt.state["pend"]["hinge.angle"] = 0.6
+    rt.state["pend"]["hinge.rate"] = 2.0
+    swung = body_recoil = 0.0
+    for _ in range(1000):
+        rt.step(1e-3)
+        swung = max(swung, abs(rt.state["pend"]["hinge.angle"] - 0.6))
+        body_recoil = max(body_recoil,
+                          abs(np.asarray(rt.state["pend"]["angular_velocity"])[1]))
+    assert swung > 0.3            # the DOF keeps turning
+    assert body_recoil > 1e-3     # the free body recoils about the joint axis
+
+
+def test_free_falling_pendulum_does_not_swing():
+    # The flip side: under UNIFORM gravity with no support, the whole
+    # craft free-falls and the apparent gravity at the hinge is zero —
+    # the deflected pendulum must stay deflected (the joint-space solve's
+    # generalized force cancels uniform gravity exactly).
     L = 0.5
     c = Craft("pend")
     c.add(Mass("body", mass=10.0, moi=(1.0, 1.0, 1.0)))
@@ -78,11 +108,7 @@ def test_free_body_recoils_from_swinging_bob():
     w.add_craft(c)
     rt = TargetNumpy(Sim(w))
     rt.state["pend"]["hinge.angle"] = 0.6
-    swung = body_recoil = 0.0
-    for _ in range(1000):
+    for _ in range(200):
         rt.step(1e-3)
-        swung = max(swung, abs(rt.state["pend"]["hinge.angle"] - 0.6))
-        body_recoil = max(body_recoil,
-                          abs(np.asarray(rt.state["pend"]["angular_velocity"])[1]))
-    assert swung > 0.3            # the DOF swings
-    assert body_recoil > 1e-3     # the free body recoils about the joint axis
+    assert abs(rt.state["pend"]["hinge.angle"] - 0.6) < 1e-9
+    assert abs(rt.state["pend"]["hinge.rate"]) < 1e-9

@@ -271,10 +271,13 @@ def test_nested_passive_joints_each_track_their_own_rate():
     for _ in range(1000):
         sim.step(0.001)
 
-    # The α_mount feedback couples the rates to the (small) body wobble
-    # the spinning gimbal induces — exact rate·t only to ~1e-4.
-    assert np.isclose(sim.state["gimbal_two_dof"]["pan.angle"],  2.0, atol=1e-3)
-    assert np.isclose(sim.state["gimbal_two_dof"]["tilt.angle"], 1.0, atol=1e-3)
+    # The joint-space solve couples the DOFs through the full mass
+    # matrix: the pan carries the tilt axis around, so the tilt rate
+    # genuinely wobbles against the light (1 kg) body — angles track
+    # rate·t to ~0.5% here, NOT exactly (the old rank-1 solve held them
+    # artificially constant by dropping the inter-joint coupling).
+    assert np.isclose(sim.state["gimbal_two_dof"]["pan.angle"],  2.0, atol=1e-2)
+    assert np.isclose(sim.state["gimbal_two_dof"]["tilt.angle"], 1.0, atol=1e-2)
 
 
 def test_nested_joint_saturating_drives_inner_rotor():

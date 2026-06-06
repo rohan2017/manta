@@ -46,10 +46,13 @@ def _slider_craft(hub_mass=100.0, bead_mass=0.5, axis=(1.0, 0.0, 0.0),
 # Centrifugal extension: d̈ = ω²·ρ (about the system COM, exactly)
 # ---------------------------------------------------------------------------
 
-def test_centrifugal_extension_matches_omega_squared_rho():
+def test_centrifugal_extension_matches_omega_squared_d():
     """A bead on a radial slide of a body spinning at ω about z is flung
-    outward at d̈ = ω²·ρ, where ρ = d·(1 − m/m_total) is the bead's
-    distance from the SYSTEM COM (the hub circles the COM too)."""
+    outward at d̈ = ω²·d — the RELATIVE coordinate: the bead accelerates
+    at ω²·ρ_bead away from the system COM while the hub recoils at
+    ω²·ρ_hub the other way, and ρ_bead + ρ_hub = d. (The recoil half is
+    the joint-space solve's mass-matrix coupling at work — a fixed-base
+    model gives only ω²·ρ_bead.)"""
     hub_m, bead_m = 100.0, 0.5
     omega, d0 = 2.0, 0.3
     rt = _sim(_slider_craft(hub_m, bead_m),
@@ -58,8 +61,7 @@ def test_centrifugal_extension_matches_omega_squared_rho():
     dt = 1e-5
     rt.step(dt)
     d_ddot = rt.state["rig"]["slide.rate"] / dt
-    rho = d0 * (1.0 - bead_m / (hub_m + bead_m))
-    np.testing.assert_allclose(d_ddot, omega**2 * rho, rtol=1e-6)
+    np.testing.assert_allclose(d_ddot, omega**2 * d0, rtol=1e-5)
 
 
 def test_centrifugal_scales_with_omega_squared():
@@ -107,20 +109,43 @@ def test_free_piston_recoil_conserves_linear_momentum():
 # Gravity along / across the slide axis
 # ---------------------------------------------------------------------------
 
-def test_gravity_driven_slide_falls_at_g_on_heavy_base():
-    """Vertical slide on a heavy base: the piston's first-tick d̈ is −g
-    (the heavy-anchor tier — the same idealization as the passive
-    pendulum's θ̈ = −(g/L)sinθ)."""
+def test_gravity_driven_slide_falls_at_g_on_supported_base():
+    """Vertical slide on a heavy HOVERING base: the piston's first-tick
+    d̈ is −g. The support thruster matters — on a free base the whole
+    craft free-falls and the slide, correctly, does not move (uniform
+    gravity cancels in the generalized force)."""
+    from manta.parts import Thruster
+    base_m, plug_m = 1e6, 2.0
     c = Craft("drop")
-    c.add(Mass("base", mass=1e6, moi=(1e6, 1e6, 1e6)))
+    c.add(Mass("base", mass=base_m, moi=(1e6, 1e6, 1e6)))
+    c.add(Thruster("hold", force=(0.0, 0.0, (base_m + plug_m) * G)))
     p = PrismaticJoint("piston", mode="passive", axis=(0.0, 0.0, 1.0))
-    p.add(Mass("plug", mass=2.0, moi=(1e-9, 1e-9, 1e-9)))
+    p.add(Mass("plug", mass=plug_m, moi=(1e-9, 1e-9, 1e-9)))
     c.add(p)
-    rt = _sim(c, fields=[GravityField(g=(0.0, 0.0, -G))])
+    rt = _sim(c, fields=[GravityField(g=(0.0, 0.0, -G))],
+              **{"hold.throttle": 1.0})
     dt = 1e-5
     rt.step(dt)
     np.testing.assert_allclose(rt.state["drop"]["piston.rate"] / dt, -G,
-                               rtol=1e-6)
+                               rtol=1e-5)
+
+
+def test_free_falling_slide_does_not_move():
+    """No support: the craft free-falls and the apparent gravity at the
+    slide is zero — displacement and rate hold exactly."""
+    c = Craft("fall")
+    c.add(Mass("base", mass=10.0, moi=(5.0, 5.0, 5.0)))
+    p = PrismaticJoint("piston", mode="passive", axis=(0.0, 0.0, 1.0))
+    p.add(Mass("plug", mass=2.0, moi=(1e-9, 1e-9, 1e-9)))
+    c.add(p)
+    rt = _sim(c, fields=[GravityField(g=(0.0, 0.0, -G))],
+              **{"piston.displacement": 0.1})
+    for _ in range(100):
+        rt.step(1e-3)
+    np.testing.assert_allclose(rt.state["fall"]["piston.displacement"], 0.1,
+                               atol=1e-9)
+    np.testing.assert_allclose(rt.state["fall"]["piston.rate"], 0.0,
+                               atol=1e-9)
 
 
 def test_gravity_across_slide_axis_does_not_drive_it():
@@ -158,10 +183,11 @@ def test_deflected_slide_holds_without_force():
 
 def test_saturating_clamp_limits_force():
     """force_cmd far above stall_force accelerates the slide at
-    stall_force/m, not force_cmd/m."""
-    stall, m = 0.5, 2.0
+    stall_force/μ (μ = m·(1−m/m_total), the reduced mass of the
+    internal pair — the base recoils too), not force_cmd/μ."""
+    stall, m, base_m = 0.5, 2.0, 1e6
     c = Craft("sat")
-    c.add(Mass("base", mass=1e6, moi=(1e6, 1e6, 1e6)))
+    c.add(Mass("base", mass=base_m, moi=(1e6, 1e6, 1e6)))
     p = PrismaticJoint("ram", mode="saturating", stall_force=stall,
                        axis=(1.0, 0.0, 0.0))
     p.add(Mass("rod", mass=m, moi=(1e-9, 1e-9, 1e-9)))
@@ -170,8 +196,9 @@ def test_saturating_clamp_limits_force():
     dt = 1e-3
     for _ in range(100):
         rt.step(dt)
+    mu = m * (1.0 - m / (base_m + m))
     np.testing.assert_allclose(rt.state["sat"]["ram.rate"],
-                               (stall / m) * 0.1, rtol=1e-6)
+                               (stall / mu) * 0.1, rtol=1e-6)
 
 
 def test_damping_decays_rate_exponentially():
@@ -197,9 +224,9 @@ def test_damping_decays_rate_exponentially():
 # ---------------------------------------------------------------------------
 
 def test_imu_on_slide_reads_slide_acceleration():
-    """An IMU riding an actuated piston reads a_body + d̈ along the axis:
-    with F internal, d̈_rel = F/m and a_body = −F/(M+m), so the absolute
-    (= specific, no gravity) acceleration is F/m − F/(M+m)."""
+    """An IMU riding an actuated piston reads the head's absolute
+    acceleration: the internal pair gives the head F/m and the body
+    −F/M (Newton's third law, exactly), so the IMU reads F/m."""
     M, m, F = 9.0, 1.0, 2.0
     c = Craft("probe")
     c.add(Mass("body", mass=M, moi=(5.0, 5.0, 5.0)))
@@ -211,8 +238,7 @@ def test_imu_on_slide_reads_slide_acceleration():
     rt = _sim(c, **{"piston.force_cmd": F})
     rt.step(1e-5)
     accel = np.asarray(rt.outputs()["probe"]["imu.accel"]).ravel()
-    expected = F / m - F / (M + m)
-    np.testing.assert_allclose(accel[0], expected, rtol=1e-6)
+    np.testing.assert_allclose(accel[0], F / m, rtol=1e-6)
     np.testing.assert_allclose(accel[1:], 0.0, atol=1e-9)
 
 

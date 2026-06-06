@@ -14,9 +14,14 @@ from manta.parts import RevoluteJoint, Mass
 
 
 def _single_step_rate(moi, omega0, *, dt=0.01) -> float:
-    """One world step of a craft that is a single passive z-axis RevoluteJoint
-    carrying one rotor Mass. Returns the joint rate after the step."""
+    """One world step of a heavy tumbling hub carrying a passive z-axis
+    RevoluteJoint with one rotor Mass. Returns the joint rate after the
+    step. The hub pins the base motion (ω ≈ const over the step) so the
+    analytic fixed-base Coriolis value is exact to O(I_rotor/I_hub) —
+    without it the stator is massless and its frame orientation is a
+    gauge, not physics."""
     c = Craft("tumbler")
+    c.add(Mass("hub", mass=1e6, moi=(1e6, 1e6, 1e6)))
     j = RevoluteJoint("rotor", mode="passive", axis=(0.0, 0.0, 1.0))
     j.add(Mass("disk", mass=1.0, moi=moi))
     c.add(j)

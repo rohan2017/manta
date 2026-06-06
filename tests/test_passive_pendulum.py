@@ -1,8 +1,15 @@
 """Passive revolute joint as a gravity-driven pendulum.
 
-The wrench cascade feeds the axial component of the subtree's external
-torque into the joint DOF, so a passive joint now swings under gravity:
+The joint-space solve feeds the generalized gravity torque into the
+joint DOF, so a passive joint on a SUPPORTED base swings:
 θ̈ = (r × m g)·axis / I_axial = −(g/L)·sinθ for a point bob of length L.
+
+The support matters: the generalized force on the DOF is the gravity
+torque MINUS the recoil of the whole craft's acceleration, so uniform
+gravity on a FREE craft cancels exactly — a free-falling pendulum does
+not swing (the apparent gravity in the falling frame is zero). The
+anchor here hovers on a thruster carrying the total weight, making it a
+true inertial pivot.
 """
 
 import numpy as np
@@ -10,19 +17,23 @@ import numpy as np
 from manta import Sim, TargetNumpy, World
 from manta.craft import Craft
 from manta.fields import GravityField
-from manta.parts import Mass, RevoluteJoint
+from manta.parts import Mass, RevoluteJoint, Thruster
 
 
 G = 9.81
+ANCHOR_M = 1.0e6
 
 
 def _pendulum(L: float, m: float = 1.0, damping: float = 0.0) -> Craft:
-    """Heavy fixed anchor + a passive hinge about +y with a point bob
+    """Heavy hovering anchor + a passive hinge about +y with a point bob
     hanging at (0, 0, −L). At angle 0 the bob hangs straight down; a
     positive angle swings it toward −x. The anchor is heavy enough that
-    the body is effectively an inertial pivot (so I_axial = m L²)."""
+    the body is effectively an inertial pivot (so I_axial = m L²), and a
+    support thruster carries the total weight (a_com = 0 — without it
+    the craft free-falls and the pendulum, correctly, would not swing)."""
     c = Craft("pend")
-    c.add(Mass("anchor", mass=1.0e6, moi=(1.0e6, 1.0e6, 1.0e6)))
+    c.add(Mass("anchor", mass=ANCHOR_M, moi=(1.0e6, 1.0e6, 1.0e6)))
+    c.add(Thruster("hold", force=(0.0, 0.0, (ANCHOR_M + m) * G)))
     h = RevoluteJoint("hinge", mode="passive", axis=(0.0, 1.0, 0.0), damping=damping)
     h.add(Mass("bob", mass=m, moi=(1e-9, 1e-9, 1e-9), transform=(0.0, 0.0, -L)))
     c.add(h)
@@ -33,6 +44,7 @@ def _sim(craft, **init):
     w = World().add_field(GravityField(g=(0.0, 0.0, -G)))
     w.add_craft(craft)
     rt = TargetNumpy(Sim(w))
+    rt.state["pend"]["hold.throttle"] = 1.0
     for k, v in init.items():
         rt.state["pend"][k] = v
     return rt
