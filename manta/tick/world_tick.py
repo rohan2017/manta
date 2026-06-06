@@ -552,19 +552,25 @@ def _trace_craft_pass1(craft,
                                          prefix + f"{part.name}.rate"))
                     dof_ddot = dof_ddot - ca.dot(axis_c_mx, alpha_sym)
             elif isinstance(part, PrismaticJoint):
-                # About-COM transport feedback: the slide's driving force
-                # is measured in the mount's accelerating frame.
-                # Decomposing the subtree-COM acceleration about the body
-                # COM gives
-                #   d̈ −= â·[ω×(ω×ρ) + α×ρ],   ρ = r_subtree_com − r_com:
-                # the centrifugal term (a radial slider on a spinning
-                # body is flung outward at d̈ = ω²·d) and the Euler term
-                # (via the body-α placeholder, resolved with the real
-                # solve exactly like the revolute −â·α feedback). The
-                # mount's LINEAR-acceleration feedback â·a_com is omitted
-                # — the documented fixed-base tier (the same tier at
-                # which a free-falling pendulum still "swings"); the
-                # joint-space block solve will close it.
+                # Transport feedback: the slide's driving force is
+                # measured in the mount's accelerating frame. Decomposing
+                # the subtree-COM absolute acceleration about the body
+                # COM, the axial DOF picks up
+                #   d̈ −= â·[ω×(ω×ρ) + α×ρ + 2ω×v_rel + a_rel_vp]
+                # with ρ = r_subtree_com − r_com: the body-spin
+                # centrifugal (a radial slider on a spinning body is
+                # flung outward at d̈ = ω²·ρ), the Euler term via the
+                # body-α placeholder (resolved with the real solve
+                # exactly like the revolute −â·α feedback), the body↔rel
+                # Coriolis, and the upstream-joint velocity products
+                # (a_rel with every DOF-acceleration placeholder zeroed —
+                # a slide riding a spinning revolute is flung outward at
+                # the pan's ω²·r even when the body is at rest). The
+                # mount's LINEAR-acceleration feedback â·a_com (and the
+                # moving-COM recoil's reduced-mass correction) is
+                # omitted — the documented fixed-base tier (the same
+                # tier at which a free-falling pendulum still "swings");
+                # the joint-space block solve will close it.
                 m_sub = part.subtree_mass
                 if m_sub > 1e-18:
                     axis_np = np.asarray(part.axis, dtype=float)
@@ -578,9 +584,34 @@ def _trace_craft_pass1(craft,
                                   r_rest.reshape(3, 1))
                               + disp_mx * axis_c_mx
                               - inertia["com_in_craft_mx"])
+                    # Mass-weighted subtree relative motion (body frame).
+                    v_rel_mx = ca.MX.zeros(3, 1)
+                    a_rel_mx = ca.MX.zeros(3, 1)
+                    for desc in part.walk():
+                        if desc is part:
+                            continue
+                        m_d = float(getattr(desc, "mass", 0.0) or 0.0)
+                        if m_d <= 0.0:
+                            continue
+                        dk = kin_states[desc]
+                        v_rel_mx = v_rel_mx + m_d * dk.velocity_rel_body
+                        a_rel_mx = a_rel_mx + m_d * dk.acceleration_rel_body
+                    v_rel_mx = v_rel_mx / m_sub
+                    a_rel_mx = a_rel_mx / m_sub
+                    # Keep only the velocity products: zero every joint
+                    # DOF-acceleration placeholder (own d̈ — which IS the
+                    # equation's LHS — and upstream θ̈, whose tangential
+                    # coupling is above this tier).
+                    acc_syms = list(joint_accel_syms.values())
+                    if acc_syms:
+                        a_rel_mx = ca.substitute(
+                            a_rel_mx, ca.vertcat(*acc_syms),
+                            ca.MX.zeros(len(acc_syms), 1))
                     om_mx = ang_vel._mx
                     transport_mx = (ca.cross(om_mx, ca.cross(om_mx, rho_mx))
-                                    + ca.cross(alpha_sym, rho_mx))
+                                    + ca.cross(alpha_sym, rho_mx)
+                                    + 2.0 * ca.cross(om_mx, v_rel_mx)
+                                    + a_rel_mx)
                     dof_ddot = dof_ddot - ca.dot(axis_c_mx, transport_mx)
             sym = joint_accel_syms.get(part)
             if sym is not None:
