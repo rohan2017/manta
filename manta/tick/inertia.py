@@ -70,7 +70,7 @@ def symbolic_inertia_rollup(root_part) -> dict:
 
     Raises ValueError if total mass is zero.
     """
-    from ..parts.articulation.joint import RevoluteJoint
+    from ..parts.articulation.joint import PrismaticJoint, RevoluteJoint
     from ..parts.base import CompositePart
 
     # Accumulators (MX). com_sum is summed as m·r vectors; I_about_origin
@@ -95,6 +95,7 @@ def symbolic_inertia_rollup(root_part) -> dict:
         # The MOUNT doesn't rotate, so input = parent.output.
         R_craft_from_input_mx = R_craft_from_parent_output_mx
 
+        r_out_in_craft_mx = r_part_in_craft_mx
         if isinstance(part, RevoluteJoint):
             axis_mx = ca.MX(np.asarray(part.axis, dtype=float).reshape(3, 1))
             angle_attr = part.angle
@@ -103,6 +104,20 @@ def symbolic_inertia_rollup(root_part) -> dict:
             R_in_from_out_mx = R_from_axis_angle(axis_mx, angle_mx)
             R_craft_from_output_mx = ca.mtimes(
                 R_craft_from_input_mx, R_in_from_out_mx)
+        elif isinstance(part, PrismaticJoint):
+            # No rotation; the output origin (children's mount) slides by
+            # `displacement · axis` within the input frame — COM and I_com
+            # pick up the displacement dependence here.
+            axis_np = np.asarray(part.axis, dtype=float)
+            axis_np = axis_np / np.linalg.norm(axis_np)
+            disp_attr = part.displacement
+            disp_mx = (disp_attr._mx if hasattr(disp_attr, "_mx")
+                       else ca.MX(float(disp_attr)))
+            R_craft_from_output_mx = R_craft_from_input_mx
+            r_out_in_craft_mx = (
+                r_part_in_craft_mx
+                + ca.mtimes(R_craft_from_input_mx,
+                            disp_mx * ca.DM(axis_np.reshape(3, 1))))
         else:
             R_craft_from_output_mx = R_craft_from_input_mx
 
@@ -136,7 +151,7 @@ def symbolic_inertia_rollup(root_part) -> dict:
         # ----- recurse into children ---------------------------------------
         if isinstance(part, CompositePart):
             for child in part.children:
-                visit(child, r_part_in_craft_mx, R_craft_from_output_mx)
+                visit(child, r_out_in_craft_mx, R_craft_from_output_mx)
 
     # Visit each child of root with parent state = root (r=0, R=I).
     from ..parts.base import CompositePart as _CompositePart

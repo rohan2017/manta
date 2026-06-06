@@ -342,7 +342,8 @@ def _trace_craft_pass1(craft,
     # `(new_rate − rate)/dt` after the update loop. These feed the
     # joint-relative acceleration of every part on the rotor (and hence
     # rotor-mounted sensors + the moving-COM origin recoil).
-    from ..parts.articulation.joint import ArticulatedJoint, RevoluteJoint
+    from ..parts.articulation.joint import (
+        ArticulatedJoint, PrismaticJoint, RevoluteJoint)
     joint_accel_syms: dict[Any, Any] = {}
     for part in craft.parts:
         if isinstance(part, ArticulatedJoint):
@@ -550,6 +551,37 @@ def _trace_craft_pass1(craft,
                                          tau_ax_tot_mx,
                                          prefix + f"{part.name}.rate"))
                     dof_ddot = dof_ddot - ca.dot(axis_c_mx, alpha_sym)
+            elif isinstance(part, PrismaticJoint):
+                # About-COM transport feedback: the slide's driving force
+                # is measured in the mount's accelerating frame.
+                # Decomposing the subtree-COM acceleration about the body
+                # COM gives
+                #   d̈ −= â·[ω×(ω×ρ) + α×ρ],   ρ = r_subtree_com − r_com:
+                # the centrifugal term (a radial slider on a spinning
+                # body is flung outward at d̈ = ω²·d) and the Euler term
+                # (via the body-α placeholder, resolved with the real
+                # solve exactly like the revolute −â·α feedback). The
+                # mount's LINEAR-acceleration feedback â·a_com is omitted
+                # — the documented fixed-base tier (the same tier at
+                # which a free-falling pendulum still "swings"); the
+                # joint-space block solve will close it.
+                m_sub = part.subtree_mass
+                if m_sub > 1e-18:
+                    axis_np = np.asarray(part.axis, dtype=float)
+                    axis_np = axis_np / np.linalg.norm(axis_np)
+                    axis_c_mx = kin.R_craft_from_input @ ca.DM(
+                        axis_np.reshape(3, 1))
+                    r_rest = part.subtree_com_offset()
+                    disp_mx = state_input_nodes[part]["displacement"]._mx
+                    rho_mx = (kin.r_in_craft
+                              + kin.R_craft_from_input @ ca.DM(
+                                  r_rest.reshape(3, 1))
+                              + disp_mx * axis_c_mx
+                              - inertia["com_in_craft_mx"])
+                    om_mx = ang_vel._mx
+                    transport_mx = (ca.cross(om_mx, ca.cross(om_mx, rho_mx))
+                                    + ca.cross(alpha_sym, rho_mx))
+                    dof_ddot = dof_ddot - ca.dot(axis_c_mx, transport_mx)
             sym = joint_accel_syms.get(part)
             if sym is not None:
                 joint_accel_reals.append((sym, dof_ddot))
@@ -705,9 +737,21 @@ def _emit_per_craft_dynamics(g_ctx, craft, pc, dt) -> None:
     alpha_sym    = pc["alpha_sym"]
     joint_accel_reals = pc.get("joint_accel_reals", [])
     joint_syms  = [sym  for sym, _    in joint_accel_reals]
-    # Each joint θ̈ carries the body-α placeholder (the −â·α mount
-    # feedback) — resolve it with the real solve now, so the θ̈
-    # expressions substituted below are placeholder-free.
+    # Each joint θ̈/d̈ carries the body-α placeholder (the −â·α / −â·(α×ρ)
+    # mount feedback) — resolve it with the real solve now, so the
+    # expressions substituted below are placeholder-free. A joint DOF
+    # acceleration must NOT depend on the body-a placeholder: the
+    # two-stage substitution here assumes α is the only feedback channel
+    # (the linear channel would be circular through the moving-COM term
+    # — the documented fixed-base tier). Guard loudly rather than emit a
+    # graph with an unresolved symbol.
+    for _, real in joint_accel_reals:
+        if ca.depends_on(real, a_world_sym):
+            raise ValueError(
+                f"Craft '{craft.name}': a joint DOF acceleration depends "
+                f"on the body-acceleration placeholder. Joint dynamics "
+                f"may feed back through the body α only (fixed-base "
+                f"linear tier).")
     joint_reals = [ca.substitute(real, alpha_sym, alpha._mx)
                    for _, real in joint_accel_reals]
     checks = [("acceleration_world", a_world_sym),

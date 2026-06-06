@@ -58,6 +58,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import casadi as ca
+import numpy as np
 
 from ..ir._rotation import (
     R_from_axis_angle,
@@ -93,6 +94,17 @@ class KinematicState:
         r_in_craft          — (3,1) body-frame position of the part's
                               origin. Equals `part.transform` for a flat
                               craft; depends on joint angles when nested.
+        r_out_in_craft / origin_out_world / velocity_out_world /
+        velocity_rel_out_body / acceleration_rel_out_body
+                            — the same quantities for the part's OUTPUT
+                              frame origin, which children compose from.
+                              Identical (same MX objects) to the input-
+                              origin fields for every part except a
+                              PrismaticJoint, whose output origin sits at
+                              `displacement · axis` along the slide and
+                              moves at `rate · axis` within the input
+                              frame (the acceleration carries the d̈
+                              placeholder).
         R_craft_from_input  — (3,3) rotates input-frame coords into
                               body-frame coords. Identity for parts
                               mounted directly on the craft root.
@@ -132,6 +144,13 @@ class KinematicState:
     acceleration_rel_body:  Any
     omega_rel_output:       Any
     alpha_rel_output:       Any
+    # Output-frame origin (what children compose from). Equal to the
+    # input-origin fields except below a PrismaticJoint.
+    r_out_in_craft:            Any
+    origin_out_world:          Any
+    velocity_out_world:        Any
+    velocity_rel_out_body:     Any
+    acceleration_rel_out_body: Any
     frame_views:            Any
 
 
@@ -260,6 +279,11 @@ def kinematic_pass(root_part,
         acceleration_rel_body=_ZERO3,
         omega_rel_output=_ZERO3,
         alpha_rel_output=_ZERO3,
+        r_out_in_craft=_ZERO3,
+        origin_out_world=body_position,
+        velocity_out_world=body_velocity,
+        velocity_rel_out_body=_ZERO3,
+        acceleration_rel_out_body=_ZERO3,
         frame_views=_assemble_frame_views(
             q_body=body_orientation,
             origin_world=body_position,
@@ -308,15 +332,18 @@ def _compute_child_state(parent_state: KinematicState, parent_part, child,
                          body_angular_acceleration,
                          body_angular_velocity,
                          joint_angular_accels) -> KinematicState:
-    from ..parts.articulation.joint import RevoluteJoint
+    from ..parts.articulation.joint import PrismaticJoint, RevoluteJoint
 
     # Child's `transform` lives in parent's OUTPUT frame coords.
     transform = ca.MX(list(child.transform))
 
     # ----- body-frame position composition ------------------------------
-    # r_child_in_craft = r_parent_in_craft + R_craft_from_parent_output · transform.
+    # r_child_in_craft = r_parent_out_in_craft
+    #                    + R_craft_from_parent_output · transform.
+    # The parent's OUTPUT origin differs from its own origin only below a
+    # PrismaticJoint (slid by `displacement · axis`).
     offset_in_craft = parent_state.R_craft_from_output @ transform
-    r_in_craft = parent_state.r_in_craft + offset_in_craft
+    r_in_craft = parent_state.r_out_in_craft + offset_in_craft
 
     # Mount doesn't rotate, so child's INPUT frame = parent's OUTPUT.
     R_craft_from_input = parent_state.R_craft_from_output
@@ -324,11 +351,11 @@ def _compute_child_state(parent_state: KinematicState, parent_part, child,
     # ----- position + velocity of child's origin, world coords ---------
     offset_world = rotate_vec_by_quat(
         parent_state.q_world_from_output, transform)
-    origin_world = parent_state.origin_world + offset_world
-    # v_child = v_parent_origin + ω_parent_output (world) × offset_world.
+    origin_world = parent_state.origin_out_world + offset_world
+    # v_child = v_parent_out_origin + ω_parent_output (world) × offset_world.
     omega_parent_world = rotate_vec_by_quat(
         q_body, parent_state.omega_output)
-    velocity_world = (parent_state.velocity_world
+    velocity_world = (parent_state.velocity_out_world
                       + ca.cross(omega_parent_world, offset_world))
 
     # ----- child input-frame ω + orientation ----------------------------
@@ -375,14 +402,15 @@ def _compute_child_state(parent_state: KinematicState, parent_part, child,
     # ----- body-relative velocity / acceleration of the origin ----------
     # Rigid-chain recursion with the body frame as the fixed base, so these
     # isolate the joint-induced motion (zero when no joint lies above the
-    # part). v̇|_body = v̇_parent|_body + ω_rel_parent × offset; the accel
+    # part). v̇|_body = v̇_parent_out|_body + ω_rel_parent × offset; the accel
     # adds the centripetal ω_rel×(ω_rel×offset) + tangential α_rel×offset.
+    # The parent OUT fields already carry any prismatic sliding terms.
     omega_rel_parent = parent_state.omega_rel_output
     alpha_rel_parent = parent_state.alpha_rel_output
-    velocity_rel_body = (parent_state.velocity_rel_body
+    velocity_rel_body = (parent_state.velocity_rel_out_body
                          + ca.cross(omega_rel_parent, offset_in_craft))
     acceleration_rel_body = (
-        parent_state.acceleration_rel_body
+        parent_state.acceleration_rel_out_body
         + ca.cross(alpha_rel_parent, offset_in_craft)
         + ca.cross(omega_rel_parent,
                    ca.cross(omega_rel_parent, offset_in_craft)))
@@ -406,6 +434,47 @@ def _compute_child_state(parent_state: KinematicState, parent_part, child,
     acceleration_world = (body_acceleration_world
                           + rotate_vec_by_quat(q_body, lever_craft))
 
+    # ----- output-frame origin (what THIS child's children compose from) -
+    # Identical to the input origin for everything except a prismatic
+    # joint, whose output origin sits at `displacement · axis` along the
+    # slide and moves at `rate · axis` within the (possibly spinning)
+    # input frame. The transport terms below are the offset's lever
+    # (α_rel×s + ω_rel×(ω_rel×s)) plus the sliding Coriolis
+    # 2·ω_rel×(ḋ·â) and the relative slide acceleration d̈·â (placeholder).
+    if isinstance(child, PrismaticJoint):
+        disp   = _attr_mx(child.displacement)
+        d_rate = _attr_mx(child.rate)
+        d_acc  = joint_angular_accels.get(child, ca.MX(0.0))
+        axis_np = np.asarray(child.axis, dtype=float)
+        axis_np = axis_np / np.linalg.norm(axis_np)
+        axis_local = ca.DM(axis_np.reshape(3, 1))
+        axis_c = R_craft_from_input @ axis_local        # craft coords
+        slide_c = disp * axis_c
+        axis_w = rotate_vec_by_quat(q_world_from_input, axis_local)
+        omega_input_world = rotate_vec_by_quat(q_body, omega_input)
+
+        r_out_in_craft = r_in_craft + slide_c
+        origin_out_world = origin_world + disp * axis_w
+        velocity_out_world = (velocity_world
+                              + ca.cross(omega_input_world, disp * axis_w)
+                              + d_rate * axis_w)
+        velocity_rel_out_body = (velocity_rel_body
+                                 + ca.cross(omega_rel_input, slide_c)
+                                 + d_rate * axis_c)
+        acceleration_rel_out_body = (
+            acceleration_rel_body
+            + ca.cross(alpha_rel_input, slide_c)
+            + ca.cross(omega_rel_input,
+                       ca.cross(omega_rel_input, slide_c))
+            + 2.0 * ca.cross(omega_rel_input, d_rate * axis_c)
+            + d_acc * axis_c)
+    else:
+        r_out_in_craft = r_in_craft
+        origin_out_world = origin_world
+        velocity_out_world = velocity_world
+        velocity_rel_out_body = velocity_rel_body
+        acceleration_rel_out_body = acceleration_rel_body
+
     # ----- ParentFrame views: motion relative to the immediate parent ---
     # The part's frame is its INPUT frame (= parent's OUTPUT frame). The
     # part's origin is rigidly fixed in the parent's OUTPUT frame, so the
@@ -425,6 +494,19 @@ def _compute_child_state(parent_state: KinematicState, parent_part, child,
         v_pf = ca.cross(omega_pf, r_pf)
         a_pf = (ca.cross(alpha_pf, r_pf)
                 + ca.cross(omega_pf, ca.cross(omega_pf, r_pf)))
+    elif isinstance(parent_part, PrismaticJoint):
+        p_axis_np = np.asarray(parent_part.axis, dtype=float)
+        p_axis_np = p_axis_np / np.linalg.norm(p_axis_np)
+        p_axis = ca.DM(p_axis_np.reshape(3, 1))
+        p_disp = _attr_mx(parent_part.displacement)
+        p_rate = _attr_mx(parent_part.rate)
+        p_accel = joint_angular_accels.get(parent_part, ca.MX(0.0))
+        # Output coords = input coords (no rotation); the child rode out
+        # along the slide, so it translates within the ParentFrame.
+        r_pf = transform + p_disp * p_axis
+        v_pf = p_rate * p_axis
+        a_pf = p_accel * p_axis
+        omega_pf, alpha_pf = _ZERO3, _ZERO3
     else:
         r_pf, v_pf, a_pf = transform, _ZERO3, _ZERO3
         omega_pf, alpha_pf = _ZERO3, _ZERO3
@@ -471,5 +553,10 @@ def _compute_child_state(parent_state: KinematicState, parent_part, child,
         acceleration_rel_body=acceleration_rel_body,
         omega_rel_output=omega_rel_output,
         alpha_rel_output=alpha_rel_output,
+        r_out_in_craft=r_out_in_craft,
+        origin_out_world=origin_out_world,
+        velocity_out_world=velocity_out_world,
+        velocity_rel_out_body=velocity_rel_out_body,
+        acceleration_rel_out_body=acceleration_rel_out_body,
         frame_views=frame_views,
     )

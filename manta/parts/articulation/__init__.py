@@ -1,3 +1,3 @@
-from .joint import ArticulatedJoint, RevoluteJoint
+from .joint import ArticulatedJoint, PrismaticJoint, RevoluteJoint
 
-__all__ = ["ArticulatedJoint", "RevoluteJoint"]
+__all__ = ["ArticulatedJoint", "PrismaticJoint", "RevoluteJoint"]

@@ -344,3 +344,104 @@ class RevoluteJoint(ArticulatedJoint):
         )
         gyro_torque = ir.Vec3[CraftFrame].from_mx(tau_gyro)
         return theta_ddot, passup, gyro_torque
+
+
+class PrismaticJoint(ArticulatedJoint):
+    """1-DOF prismatic (sliding) joint carrying a subtree of Mass children.
+
+    Parameters:
+        axis          — input-frame unit vector along the slide axis.
+                        Default (0, 0, 1).
+        mode          — "passive" or "saturating". Default "passive".
+        stall_force   — saturating-mode force clamp magnitude (N).
+                        Ignored in passive mode. Default 1.0.
+        damping       — viscous slide friction (N·s/m). Default 0.
+
+    Inputs:
+        force_cmd     — commanded force along `axis`. Clamped to
+                        ±stall_force in saturating mode; ignored
+                        entirely in passive mode.
+
+    State:
+        displacement  — slide displacement along `axis`, m.
+        rate          — slide rate (relative to the mount), m/s.
+
+    Dynamics tier (mirrors the revolute fixed-base approximation): the
+    DOF reads the axial component of the subtree's EXTERNAL force plus
+    the actuator/damping, over the subtree mass; the cascade adds the
+    about-COM transport feedback (centrifugal `−â·[ω×(ω×ρ)]` — a mass on
+    a radial slide of a spinning body is flung outward at `d̈ = ω²d` —
+    and the Euler term `−â·(α×ρ)` via the body-α placeholder). The
+    mount's LINEAR-acceleration feedback `−â·a_com` is omitted — exactly
+    the tier at which a free-falling pendulum still "swings" under
+    gravity. The pass-up wrench is the accumulated subtree wrench
+    UNCHANGED: unlike the revolute torque split (whose axial absorption
+    pairs with the body solve's rotor-inertia reduction), the linear
+    channel's bookkeeping is closed by the moving-COM origin recoil in
+    `world_tick`, which needs the full external force to keep the
+    system-COM theorem `m_total·a_com = F_ext` exact. A slide axis whose
+    line of action misses the body COM exchanges angular momentum with
+    the body through `m·(ρ×d̈â)` — NOT yet captured (needs the
+    joint-space block solve); keep heavy bodies or near-COM slide lines
+    where that matters.
+    """
+
+    stall_force: float = Parameter(1.0)
+    force_cmd:   float = Input(default=0.0)
+
+    displacement = State(init=0.0, manifold="R1")
+    rate         = State(init=0.0, manifold="R1")
+
+    def dof_state_names(self) -> tuple[str, str]:
+        return ("displacement", "rate")
+
+    # ----- resolve(): the wrench split (called by the cascade) -------------
+
+    def resolve(self, accum: Wrench, R_craft_from_input, omega_mount_c):
+        """Split the accumulated subtree wrench at this joint.
+
+        Works entirely in CraftFrame coords. Returns
+        `(d_ddot_mx, passup, gyro_torque)`:
+          * `d_ddot_mx` — the slide acceleration from the axial external
+            force + actuator + viscous friction over the subtree mass.
+            The cascade adds the about-COM transport feedback (see class
+            docstring) before integrating.
+          * `passup` — the subtree wrench UNCHANGED (see class docstring
+            for why nothing is stripped on the linear channel).
+          * `gyro_torque` — zero; a prismatic DOF carries no axial
+            angular momentum.
+        """
+        R_mx = R_craft_from_input._mx
+        axis_np = np.array(self.axis, dtype=float)
+        axis_np = axis_np / np.linalg.norm(axis_np)
+        axis_c = ca.mtimes(R_mx, ca.DM(axis_np.reshape(3, 1)))   # craft coords
+
+        f_mx    = accum.force._mx
+        rate_mx = self.rate._mx
+        m_sub   = self.subtree_mass
+
+        # Axial component of the external subtree force drives the DOF.
+        f_axial = ca.dot(f_mx, axis_c)
+
+        # Actuator force (passive → 0; saturating → clamped command).
+        if self.mode == _PASSIVE:
+            f_act = ca.MX(0.0)
+        else:
+            stall = float(self.stall_force)
+            f_act = ca.fmin(ca.fmax(self.force_cmd._mx, -stall), stall)
+
+        # Viscous slide friction (resists rate). The Coriolis force
+        # −2m·ω×(ḋ·â) is ⟂ to â — identically zero in axial projection —
+        # so unlike the revolute there is no Coriolis DOF term; its
+        # reaction on the body flows through the moving-COM machinery.
+        f_damp = -float(self.damping) * rate_mx
+
+        # DOF acceleration (slide locked if it carries no mass).
+        if m_sub > 1e-18:
+            d_ddot = (f_axial + f_act + f_damp) / m_sub
+        else:
+            d_ddot = ca.MX(0.0)
+
+        passup = Wrench(force=accum.force, torque=accum.torque)
+        gyro_torque = ir.Vec3[CraftFrame].constant((0.0, 0.0, 0.0))
+        return d_ddot, passup, gyro_torque
