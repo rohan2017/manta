@@ -5,7 +5,7 @@ import pytest
 
 from manta import World, Coupling, Craft, Sim, TargetNumpy
 from manta.fields import GravityField
-from manta.parts import Joint, Mass
+from manta.parts import RevoluteJoint, Mass
 
 
 # ---------------------------------------------------------------------------
@@ -48,12 +48,12 @@ def test_two_crafts_fall_independently():
 # ---------------------------------------------------------------------------
 
 def test_world_carries_part_state_through_step():
-    """Part-state slots (e.g. a passive Joint's angle/rate) propagate
+    """Part-state slots (e.g. a passive RevoluteJoint's angle/rate) propagate
     through World.step like any other state."""
     w = World().add_field(GravityField().add_uniform((0.0, 0.0, 0.0)))   # zero gravity for clarity
     c = Craft("with_rotor")
     c.add(Mass("body", mass=1.0))
-    j = Joint("wheel", mode="passive")
+    j = RevoluteJoint("wheel", mode="passive")
     j.add(Mass("wheel_disk", mass=0.1, moi=(0.001, 0.001, 0.005)))
     c.add(j)
     w.add_craft(c, **{"wheel.angle": 0.5, "wheel.rate": 2.0})

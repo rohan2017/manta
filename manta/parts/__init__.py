@@ -14,7 +14,7 @@ from ..ir.wrench import Wrench
 from .structure.mass import Mass
 from .structure.point_buoy import PointBuoy
 from .structure.collider import Collider
-from .articulation.joint import Joint
+from .articulation.joint import ArticulatedJoint, RevoluteJoint
 from .sensor.dvl import DVL
 from .sensor.imu import IMU
 from .sensor.magnetometer import Magnetometer
@@ -29,7 +29,7 @@ __all__ = [
     "Parameter", "Input", "Output", "State", "PartUpdate",
     "Wrench",
     "Mass", "PointBuoy", "Collider",
-    "Joint",
+    "ArticulatedJoint", "RevoluteJoint",
     "IMU", "DVL", "Magnetometer", "PositionSensor",
     "Thruster",
     "DragSurface", "Naca00xx",

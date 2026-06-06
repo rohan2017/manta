@@ -13,7 +13,7 @@ import numpy as np
 
 from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField
-from manta.parts import Joint, Mass
+from manta.parts import RevoluteJoint, Mass
 
 
 def _quat_to_R(q) -> np.ndarray:
@@ -31,7 +31,7 @@ def test_moving_com_keeps_free_floating_system_com_fixed():
 
     c = Craft("sat")
     c.add(Mass("bus", mass=M, moi=(10.0, 10.0, 10.0)))
-    wheel = Joint("wheel", mode="passive", axis=(0.0, 0.0, 1.0))
+    wheel = RevoluteJoint("wheel", mode="passive", axis=(0.0, 0.0, 1.0))
     # Rim mass offset d along x → COM swings on a circle as the wheel turns.
     wheel.add(Mass("rim", mass=m, moi=(0.01, 0.01, 0.01), transform=(d, 0.0, 0.0)))
     c.add(wheel)

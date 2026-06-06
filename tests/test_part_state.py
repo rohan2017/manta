@@ -1,7 +1,7 @@
 """State declarations on parts — read inside `update()`, written via
 PartUpdate.new_state, integrated into the compiled tick.
 
-Exercises the `Joint` part (revolute joint with Mass rotor child) — the
+Exercises the `RevoluteJoint` part (revolute joint with Mass rotor child) — the
 unified replacement for the v1 FlywheelMotor + SpinningRotor combo.
 """
 
@@ -12,7 +12,7 @@ from manta.craft import Craft
 from manta import Sim, TargetNumpy, World
 from manta.fields import GravityField
 from manta.parts import (
-    Joint,
+    RevoluteJoint,
     Mass,
     PartUpdate,
     State,
@@ -20,7 +20,7 @@ from manta.parts import (
 
 
 # ---------------------------------------------------------------------------
-# Joint(passive) — kinematic spin via initial rate
+# RevoluteJoint(passive) — kinematic spin via initial rate
 # ---------------------------------------------------------------------------
 
 def test_passive_joint_spins_at_initial_rate():
@@ -28,7 +28,7 @@ def test_passive_joint_spins_at_initial_rate():
     free — angle accumulates at 1 rad/s indefinitely (no friction)."""
     c = Craft("passive_demo")
     c.add(Mass("body", mass=1.0))
-    j = Joint("wheel", mode="passive")
+    j = RevoluteJoint("wheel", mode="passive")
     j.add(Mass("rotor", mass=0.1, moi=(0.01, 0.01, 0.05)))
     c.add(j)
 
@@ -48,9 +48,9 @@ def test_passive_joint_spins_at_initial_rate():
 def test_multiple_joints_have_independent_state():
     c = Craft("twin")
     c.add(Mass("body", mass=1.0))
-    fast = Joint("fast", mode="passive")
+    fast = RevoluteJoint("fast", mode="passive")
     fast.add(Mass("fast_disk", mass=0.1, moi=(0.001, 0.001, 0.01)))
-    slow = Joint("slow", mode="passive")
+    slow = RevoluteJoint("slow", mode="passive")
     slow.add(Mass("slow_disk", mass=0.1, moi=(0.001, 0.001, 0.01)))
     c.add(fast)
     c.add(slow)
@@ -66,14 +66,14 @@ def test_multiple_joints_have_independent_state():
 
 
 # ---------------------------------------------------------------------------
-# Joint(saturating) — commanded torque drives rotor + reacts on body
+# RevoluteJoint(saturating) — commanded torque drives rotor + reacts on body
 # ---------------------------------------------------------------------------
 
 def test_saturating_joint_below_stall_accelerates_rotor():
     """τ_cmd = 0.5 N·m < stall = 1.0 N·m: rotor accelerates at τ/I_axial."""
     c = Craft("flywheel")
     c.add(Mass("body", mass=100.0, moi=(1000.0, 1000.0, 1000.0)))  # heavy
-    j = Joint("wheel", mode="saturating", stall_torque=1.0)
+    j = RevoluteJoint("wheel", mode="saturating", stall_torque=1.0)
     j.add(Mass("rotor", mass=0.5, moi=(0.025, 0.025, 0.05)))
     c.add(j)
 
@@ -96,7 +96,7 @@ def test_saturating_joint_clamps_at_stall():
     at the clipped rate."""
     c = Craft("clamped")
     c.add(Mass("body", mass=100.0, moi=(1000.0, 1000.0, 1000.0)))
-    j = Joint("wheel", mode="saturating", stall_torque=0.2)
+    j = RevoluteJoint("wheel", mode="saturating", stall_torque=0.2)
     j.add(Mass("rotor", mass=0.5, moi=(0.025, 0.025, 0.05)))
     c.add(j)
 
@@ -121,7 +121,7 @@ def test_saturating_joint_reaction_spins_body_counter():
     angular-momentum conservation demands."""
     c = Craft("conservation")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
-    j = Joint("wheel", mode="saturating", stall_torque=1.0)
+    j = RevoluteJoint("wheel", mode="saturating", stall_torque=1.0)
     j.add(Mass("rotor", mass=0.1, moi=(0.005, 0.005, 0.05)))
     c.add(j)
 
@@ -138,17 +138,17 @@ def test_saturating_joint_reaction_spins_body_counter():
 
 
 # ---------------------------------------------------------------------------
-# Joint contributes mass + MOI to the body
+# RevoluteJoint contributes mass + MOI to the body
 # ---------------------------------------------------------------------------
 
 def test_joint_child_mass_appears_in_body_aggregate():
-    """A 1 kg rotor child in a Joint contributes its mass to the body
+    """A 1 kg rotor child in a RevoluteJoint contributes its mass to the body
     aggregate (so apparent inertia + gravity loading reflect it)."""
     c = Craft("weighted")
     body_mass = 1.0
     rotor_mass = 0.5
     c.add(Mass("body", mass=body_mass, moi=(0.1, 0.1, 0.1)))
-    j = Joint("wheel", mode="passive")
+    j = RevoluteJoint("wheel", mode="passive")
     j.add(Mass("rotor", mass=rotor_mass, moi=(0.01, 0.01, 0.05)))
     c.add(j)
 
@@ -159,7 +159,7 @@ def test_joint_child_mass_appears_in_body_aggregate():
 def test_joint_accepts_mass_child_with_nonzero_transform():
     """Children offset from the joint origin are now lifted symbolically
     by the inertia rollup — no constructor-side restriction."""
-    j = Joint("axle", mode="passive")
+    j = RevoluteJoint("axle", mode="passive")
     j.add(Mass("offset_rotor", mass=0.1, transform=(0.0, 0.0, 0.1)))
     assert j.children[0].transform == (0.0, 0.0, 0.1)
 
@@ -170,25 +170,25 @@ def test_joint_accepts_any_part_child():
     needs special handling. There is no longer an allowlist."""
     from manta.parts import IMU, Thruster, DVL, Magnetometer, DragSurface
     from manta.parts import PointBuoy, Collider, PositionSensor
-    j = Joint("axle", mode="passive")
+    j = RevoluteJoint("axle", mode="passive")
     for part in (Mass("rotor", mass=0.1), IMU("imu"), Thruster("jet"),
                  DVL("dvl"), Magnetometer("mag"), DragSurface("fin"),
                  PointBuoy("buoy"), Collider("foot"), PositionSensor("gps"),
-                 Joint("inner")):
+                 RevoluteJoint("inner")):
         j.add(part)
     assert len(j.children) == 10
 
 
 def test_joint_unknown_mode_raises():
     with pytest.raises(ValueError, match="mode must be"):
-        Joint("bad", mode="nonsense")
+        RevoluteJoint("bad", mode="nonsense")
 
 
 def test_joint_doesnt_break_free_fall():
     """A passive joint with a rotor doesn't perturb linear free-fall."""
     c = Craft("fall_with_joint")
     c.add(Mass("body", mass=1.0))
-    j = Joint("wheel", mode="passive")
+    j = RevoluteJoint("wheel", mode="passive")
     j.add(Mass("rotor", mass=0.1, moi=(0.001, 0.001, 0.01)))
     c.add(j)
 
@@ -234,7 +234,7 @@ def test_unknown_state_slot_raises():
 def test_initial_state_unknown_slot_raises():
     c = Craft("ok")
     c.add(Mass("body", mass=1.0))
-    j = Joint("wheel", mode="passive")
+    j = RevoluteJoint("wheel", mode="passive")
     j.add(Mass("rotor", mass=0.1, moi=(0.001, 0.001, 0.01)))
     c.add(j)
     with pytest.raises(KeyError, match="unknown slot"):
@@ -242,7 +242,7 @@ def test_initial_state_unknown_slot_raises():
 
 
 def test_joint_state_declarations_introspection():
-    j = Joint("wheel", mode="passive")
+    j = RevoluteJoint("wheel", mode="passive")
     decls = j.state_declarations()
     assert set(decls.keys()) == {"angle", "rate"}
 
@@ -252,15 +252,15 @@ def test_joint_state_declarations_introspection():
 # ---------------------------------------------------------------------------
 
 def test_nested_passive_joints_each_track_their_own_rate():
-    """A pan-tilt gimbal: outer Joint hosts inner Joint, each with its
+    """A pan-tilt gimbal: outer RevoluteJoint hosts inner RevoluteJoint, each with its
     own rotor and initial spin rate. Both angles accumulate independently
     over time — proves the kinematic + state plumbing reaches both
     levels of the joint chain."""
     c = Craft("gimbal_two_dof")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
-    outer = Joint("pan", mode="passive", axis=(0.0, 0.0, 1.0))
+    outer = RevoluteJoint("pan", mode="passive", axis=(0.0, 0.0, 1.0))
     outer.add(Mass("pan_disk", mass=0.1, moi=(0.001, 0.001, 0.01)))
-    inner = Joint("tilt", mode="passive", axis=(0.0, 1.0, 0.0))
+    inner = RevoluteJoint("tilt", mode="passive", axis=(0.0, 1.0, 0.0))
     inner.add(Mass("tilt_disk", mass=0.05, moi=(0.001, 0.001, 0.001)))
     outer.add(inner)
     c.add(outer)
@@ -278,14 +278,14 @@ def test_nested_passive_joints_each_track_their_own_rate():
 
 
 def test_nested_joint_saturating_drives_inner_rotor():
-    """Inner saturating Joint commands torque on its rotor; the rotor
+    """Inner saturating RevoluteJoint commands torque on its rotor; the rotor
     accelerates at τ/I and the inner-joint reaction propagates onto
     the outer joint's frame (and from there to the body)."""
     c = Craft("gimbal_drive")
     c.add(Mass("body", mass=100.0, moi=(10.0, 10.0, 10.0)))
-    outer = Joint("pan", mode="passive", axis=(0.0, 0.0, 1.0))
+    outer = RevoluteJoint("pan", mode="passive", axis=(0.0, 0.0, 1.0))
     outer.add(Mass("pan_disk", mass=0.05, moi=(0.001, 0.001, 0.01)))
-    inner = Joint("tilt", mode="saturating", stall_torque=2.0,
+    inner = RevoluteJoint("tilt", mode="saturating", stall_torque=2.0,
                   axis=(0.0, 1.0, 0.0))
     inner.add(Mass("tilt_disk", mass=0.05, moi=(0.001, 0.005, 0.001)))
     outer.add(inner)
@@ -312,7 +312,7 @@ def test_offset_rotor_at_pi_over_2_shows_com_in_y():
     motivating case for the symbolic inertia rollup."""
     c = Craft("arm_swept")
     c.add(Mass("body", mass=10.0, moi=(0.5, 0.5, 0.5)))
-    j = Joint("arm", mode="passive", axis=(0.0, 0.0, 1.0))
+    j = RevoluteJoint("arm", mode="passive", axis=(0.0, 0.0, 1.0))
     j.add(Mass("tip", mass=1.0, moi=(0.0, 0.0, 0.0),
                transform=(1.0, 0.0, 0.0)))
     c.add(j)
@@ -338,7 +338,7 @@ def test_offset_rotor_changes_body_com():
     that aggregate mass + COM make sense."""
     c = Craft("arm")
     c.add(Mass("body", mass=10.0, moi=(0.5, 0.5, 0.5)))
-    j = Joint("arm", mode="passive", axis=(0.0, 0.0, 1.0))
+    j = RevoluteJoint("arm", mode="passive", axis=(0.0, 0.0, 1.0))
     # Off-axis mass: 1 kg at +x = 1 m from joint origin.
     j.add(Mass("tip", mass=1.0, moi=(0.0, 0.0, 0.0),
                transform=(1.0, 0.0, 0.0)))

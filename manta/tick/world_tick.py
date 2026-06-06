@@ -104,7 +104,7 @@ def compile_world_tick(crafts: list,
     # Quick numpy snapshot per craft (mass-positivity guard only). The
     # actual COM / I_com used in Newton-Euler are symbolic and built
     # inside the ir.Graph block below — they pick up joint-angle
-    # dependence when a Joint reorients a rotor.
+    # dependence when a joint reorients a rotor.
     for craft in crafts:
         ai = _aggregate_inertials(craft.parts)
         if ai["m_total"] <= 0.0:
@@ -335,17 +335,17 @@ def _trace_craft_pass1(craft,
             if synth.state_update is not None:
                 rw_bias_updates.append(synth.state_update)
 
-    # Per-joint angular-acceleration placeholders. A Joint's θ̈ is not a
-    # state slot — it's computed inside Joint.update() (a pure function of
+    # Per-joint DOF-acceleration placeholders. A joint's θ̈/d̈ is not a
+    # state slot — it's computed by the wrench cascade (a pure function of
     # state) — so, exactly like the body's a/α, the kinematic pass takes a
     # placeholder symbol now and the framework substitutes the real
     # `(new_rate − rate)/dt` after the update loop. These feed the
     # joint-relative acceleration of every part on the rotor (and hence
     # rotor-mounted sensors + the moving-COM origin recoil).
-    from ..parts.articulation.joint import Joint
+    from ..parts.articulation.joint import ArticulatedJoint, RevoluteJoint
     joint_accel_syms: dict[Any, Any] = {}
     for part in craft.parts:
-        if isinstance(part, Joint):
+        if isinstance(part, ArticulatedJoint):
             joint_accel_syms[part] = ca.MX.sym(
                 f"{craft.name}_{part.name}_jaccel", 1, 1)
 
@@ -442,10 +442,10 @@ def _trace_craft_pass1(craft,
             raise KeyError(
                 f"{type(part).__name__}('{part.name}'): unknown state "
                 f"slot(s): {sorted(unknown)}.")
-        # A Joint's angle/rate are emitted by the central integrator in the
+        # A joint's DOF/rate are emitted by the central integrator in the
         # cascade below (its update() is a no-op), so skip them here to
         # avoid emitting stale (un-integrated) values.
-        if not isinstance(part, Joint):
+        if not isinstance(part, ArticulatedJoint):
             for sname in decls:
                 val = new_state.get(sname, state_input_nodes[part][sname])
                 # SO(3) state: defensively renormalize the quaternion so
@@ -494,7 +494,7 @@ def _trace_craft_pass1(craft,
     # --- Bottom-up wrench cascade --------------------------------------
     # Reduce the per-part wrenches up the joint tree. A plain composite
     # sums its children (each shifted to the composite's own origin); a
-    # Joint hands its accumulated subtree wrench to resolve(), which peels
+    # joint hands its accumulated subtree wrench to resolve(), which peels
     # the axial torque off to drive the DOF (so gravity swings a passive
     # joint) and passes the rest up. The root accumulation is the craft's
     # net wrench at the origin — bit-identical to the old per-part
@@ -519,51 +519,53 @@ def _trace_craft_pass1(craft,
                 delta_r = ir.Vec3[CraftFrame].from_mx(
                     kin_states[child].r_in_craft - r_part)
                 accum = accum + _shift_wrench(child_up, delta_r)
-        if isinstance(part, Joint):
+        if isinstance(part, ArticulatedJoint):
             kin = kin_states[part]
-            theta_ddot, passup, gyro = part.resolve(
+            dof_ddot, passup, gyro = part.resolve(
                 accum,
                 ir.Mat3[CraftFrame, PartFrame].from_mx(kin.R_craft_from_input),
                 ir.Vec3[CraftFrame].from_mx(kin.omega_input))
             gyro_torques.append(gyro)
-            # α_mount feedback: the rotor's RELATIVE rate counter-rotates
-            # when the mount angularly accelerates about the axis (its
-            # absolute axial momentum is its own DOF). `alpha_sym` is the
-            # body-α placeholder, substituted with the real Newton-Euler
-            # solve in `_emit_per_craft_dynamics`. Omitting this term
-            # (the old fixed-base approximation) pumps energy into fast
-            # rotors on precessing mounts.
-            I_ax = part.I_axial
-            if I_ax > 1e-18:
-                axis_np = np.asarray(part.axis, dtype=float)
-                axis_np = axis_np / np.linalg.norm(axis_np)
-                axis_c_mx = kin.R_craft_from_input @ ca.DM(
-                    axis_np.reshape(3, 1))
-                # τ_ax_tot = everything driving the DOF (external axial +
-                # actuator + friction + Coriolis) — resolve's θ̈ × I_ax.
-                # The momentum integrator needs it to reconstruct the pure
-                # external torque and to step the rotor's axial momentum.
-                tau_ax_tot_mx = float(I_ax) * theta_ddot
-                rate_mx = state_input_nodes[part]["rate"]._mx
-                rotor_axials.append((axis_c_mx, float(I_ax), rate_mx,
-                                     tau_ax_tot_mx,
-                                     prefix + f"{part.name}.rate"))
-                theta_ddot = theta_ddot - ca.dot(axis_c_mx, alpha_sym)
+            if isinstance(part, RevoluteJoint):
+                # α_mount feedback: the rotor's RELATIVE rate counter-rotates
+                # when the mount angularly accelerates about the axis (its
+                # absolute axial momentum is its own DOF). `alpha_sym` is the
+                # body-α placeholder, substituted with the real Newton-Euler
+                # solve in `_emit_per_craft_dynamics`. Omitting this term
+                # (the old fixed-base approximation) pumps energy into fast
+                # rotors on precessing mounts.
+                I_ax = part.I_axial
+                if I_ax > 1e-18:
+                    axis_np = np.asarray(part.axis, dtype=float)
+                    axis_np = axis_np / np.linalg.norm(axis_np)
+                    axis_c_mx = kin.R_craft_from_input @ ca.DM(
+                        axis_np.reshape(3, 1))
+                    # τ_ax_tot = everything driving the DOF (external axial +
+                    # actuator + friction + Coriolis) — resolve's θ̈ × I_ax.
+                    # The momentum integrator needs it to reconstruct the pure
+                    # external torque and to step the rotor's axial momentum.
+                    tau_ax_tot_mx = float(I_ax) * dof_ddot
+                    rate_mx = state_input_nodes[part]["rate"]._mx
+                    rotor_axials.append((axis_c_mx, float(I_ax), rate_mx,
+                                         tau_ax_tot_mx,
+                                         prefix + f"{part.name}.rate"))
+                    dof_ddot = dof_ddot - ca.dot(axis_c_mx, alpha_sym)
             sym = joint_accel_syms.get(part)
             if sym is not None:
-                joint_accel_reals.append((sym, theta_ddot))
+                joint_accel_reals.append((sym, dof_ddot))
             # Central explicit-Euler integration of the joint DOF (same
             # scheme as the body integrator and the legacy Motor).
-            rate_mx  = state_input_nodes[part]["rate"]._mx
-            angle_mx = state_input_nodes[part]["angle"]._mx
-            dt_mx    = dt._mx
-            new_rate_mx  = rate_mx + theta_ddot * dt_mx
-            new_angle_mx = (angle_mx + rate_mx * dt_mx
-                            + 0.5 * theta_ddot * dt_mx * dt_mx)
+            pos_name, rate_name = part.dof_state_names()
+            rate_mx = state_input_nodes[part][rate_name]._mx
+            pos_mx  = state_input_nodes[part][pos_name]._mx
+            dt_mx   = dt._mx
+            new_rate_mx = rate_mx + dof_ddot * dt_mx
+            new_pos_mx  = (pos_mx + rate_mx * dt_mx
+                           + 0.5 * dof_ddot * dt_mx * dt_mx)
             new_state_outputs.append(
-                (prefix + f"{part.name}.angle", ir.Scalar(new_angle_mx)))
+                (prefix + f"{part.name}.{pos_name}", ir.Scalar(new_pos_mx)))
             new_state_outputs.append(
-                (prefix + f"{part.name}.rate", ir.Scalar(new_rate_mx)))
+                (prefix + f"{part.name}.{rate_name}", ir.Scalar(new_rate_mx)))
             return passup
         return accum
 

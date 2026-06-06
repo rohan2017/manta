@@ -16,7 +16,7 @@ from manta.ir.state_spec import ALL, POSE, TWIST, SlotSet, resolve_slotset
 from manta.parts.structure.mass import Mass
 from manta.parts.sensor.position_sensor import PositionSensor
 from manta.parts.sensor.imu import IMU
-from manta.parts.articulation.joint import Joint
+from manta.parts.articulation.joint import RevoluteJoint
 
 
 def _gps_craft(name, sigma=0.1):
@@ -50,7 +50,7 @@ def test_slotset_aliases():
 def test_track_none_keeps_full_spec_with_aux_states():
     c = Craft("drone")
     c.add(Mass("body", mass=1.0))
-    wheel = Joint("wheel", mode="passive")
+    wheel = RevoluteJoint("wheel", mode="passive")
     wheel.add(Mass("rim", mass=0.2, transform=(0.1, 0, 0)))
     c.add(wheel)
     c.add(IMU("imu", gyro_noise_sigma=0.01, accel_noise_sigma=0.05, gyro_bias_sigma=1e-4))

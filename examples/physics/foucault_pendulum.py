@@ -16,7 +16,7 @@ base is fixed and the swing plane visibly rotates — the rosette trail is
 the precession. The terminal fits the precession rate and compares it to
 −Ω (ratio 1.0 = exact Foucault).
 
-Why a `Tether` and not a `Joint`: manta's articulated Joint is a cheap
+Why a `Tether` and not a `RevoluteJoint`: manta's articulated RevoluteJoint is a cheap
 fixed-base model that drops the inter-body Coriolis coupling driving
 precession; a Tether is a true two-body constraint that captures it.
 

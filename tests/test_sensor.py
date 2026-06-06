@@ -5,7 +5,7 @@ import pytest
 
 from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField
-from manta.parts import IMU, Joint, Mass, Output, Part, PartUpdate, Thruster, Wrench
+from manta.parts import IMU, RevoluteJoint, Mass, Output, Part, PartUpdate, Thruster, Wrench
 from manta.ir.frames import PartFrame
 from manta.ir.types import Vec3
 
@@ -127,7 +127,7 @@ def test_gyro_tracks_motor_reaction_spin():
     tracks the time-evolving ω."""
     c = Craft("reactive")
     c.add(Mass("body", mass=1.0, moi=(0.05, 0.05, 0.05)))
-    j = Joint("m", mode="saturating", stall_torque=1e9, axis=(0.0, 0.0, 1.0))
+    j = RevoluteJoint("m", mode="saturating", stall_torque=1e9, axis=(0.0, 0.0, 1.0))
     j.add(Mass("m_rotor", mass=1e-6, moi=(0.0, 0.0, 0.01)))
     c.add(j)
     c.add(IMU("g"))

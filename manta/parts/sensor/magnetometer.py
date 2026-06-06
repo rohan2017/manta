@@ -31,7 +31,7 @@ class Magnetometer(Part):
                                 position, in the sensor's own frame. SI
                                 units (Tesla). For a sensor mounted
                                 directly on the craft root that frame is
-                                CraftFrame; on a Joint rotor it spins
+                                CraftFrame; on a joint rotor it spins
                                 with the rotor.
 
     Noise channel (set σ to engage):

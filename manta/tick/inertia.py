@@ -70,7 +70,7 @@ def symbolic_inertia_rollup(root_part) -> dict:
 
     Raises ValueError if total mass is zero.
     """
-    from ..parts.articulation.joint import Joint
+    from ..parts.articulation.joint import RevoluteJoint
     from ..parts.base import CompositePart
 
     # Accumulators (MX). com_sum is summed as m·r vectors; I_about_origin
@@ -95,7 +95,7 @@ def symbolic_inertia_rollup(root_part) -> dict:
         # The MOUNT doesn't rotate, so input = parent.output.
         R_craft_from_input_mx = R_craft_from_parent_output_mx
 
-        if isinstance(part, Joint):
+        if isinstance(part, RevoluteJoint):
             axis_mx = ca.MX(np.asarray(part.axis, dtype=float).reshape(3, 1))
             angle_attr = part.angle
             angle_mx = (angle_attr._mx if hasattr(angle_attr, "_mx")
@@ -172,19 +172,17 @@ def symbolic_inertia_rollup(root_part) -> dict:
 # ---------------------------------------------------------------------------
 
 def _evaluate_at_zero(expr_mx, root_part) -> np.ndarray:
-    """Evaluate `expr_mx` with every Joint's angle/rate MX symbol substituted
+    """Evaluate `expr_mx` with every joint's DOF/rate MX symbol substituted
     by 0. Used for compile-time singularity checks against the at-rest
     inertia tensor without spinning up a full CasADi Function."""
-    from ..parts.articulation.joint import Joint
+    from ..parts.articulation.joint import ArticulatedJoint
 
     def collect_joint_syms(part, syms):
-        if isinstance(part, Joint):
-            angle_attr = part.angle
-            rate_attr  = part.rate
-            if hasattr(angle_attr, "_mx"):
-                syms.append(angle_attr._mx)
-            if hasattr(rate_attr, "_mx"):
-                syms.append(rate_attr._mx)
+        if isinstance(part, ArticulatedJoint):
+            for sname in part.dof_state_names():
+                attr = getattr(part, sname)
+                if hasattr(attr, "_mx"):
+                    syms.append(attr._mx)
         from ..parts.base import CompositePart
         if isinstance(part, CompositePart):
             for c in part.children:

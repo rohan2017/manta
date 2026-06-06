@@ -5,7 +5,7 @@ trainer RC plane. The main `Naca00xx` wing is mounted at +10° incidence
 with the ballast `Mass` hung below its quarter-chord; a neutral
 horizontal tail weathervanes the nose back to trim, and the vertical fin
 does the same in yaw. Every control is a real surface: small Naca panels
-riding saturating `Joint` hinges — two ailerons at the wingtip trailing
+riding saturating `RevoluteJoint` hinges — two ailerons at the wingtip trailing
 edges, an elevator behind the tail, a rudder behind the fin. The keys
 command a target deflection and a tiny P-servo (plus joint damping)
 drives each hinge there; the aerodynamic hinge moment, the servo
@@ -32,7 +32,7 @@ import numpy as np
 
 from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import CollisionField, FluidField, GravityField
-from manta.parts import Collider, DragSurface, Joint, Mass, Naca00xx, Thruster
+from manta.parts import Collider, DragSurface, RevoluteJoint, Mass, Naca00xx, Thruster
 
 from .._control import Pacer, TerminalController, common_args, make_controller
 from .._viz import Viz
@@ -61,10 +61,10 @@ SERVO_KP  = 20.0                       # hinge servo: torque = KP·(target − a
 AIL_TRIM  = np.radians(0.13)           # aileron trim vs. prop torque, per throttle
 
 
-def _hinge(name: str, pos: tuple, axis: tuple) -> Joint:
-    """A control-surface hinge: saturating Joint + a small rotor Mass so the
+def _hinge(name: str, pos: tuple, axis: tuple) -> RevoluteJoint:
+    """A control-surface hinge: saturating RevoluteJoint + a small rotor Mass so the
     DOF has inertia for the servo to push against."""
-    j = Joint(name, mode="saturating", stall_torque=5.0, damping=0.3,
+    j = RevoluteJoint(name, mode="saturating", stall_torque=5.0, damping=0.3,
               axis=axis, transform=pos)
     j.add(Mass(f"{name}_m", mass=0.02, moi=(0.002, 0.002, 0.002),
                transform=SURF_OFF))

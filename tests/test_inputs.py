@@ -1,6 +1,6 @@
 """Per-tick Input declarations — values supplied by the caller each step.
 
-Uses a `Joint` with a single rotor `Mass` child to exercise the
+Uses a `RevoluteJoint` with a single rotor `Mass` child to exercise the
 torque_cmd Input across the integration paths (World.step, EKF.predict).
 """
 
@@ -11,16 +11,16 @@ from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField
 from manta.estimation import EKF
 from manta.parts import (
-    Input, Joint, Mass, Parameter, Part, PartUpdate, State, Wrench,
+    Input, RevoluteJoint, Mass, Parameter, Part, PartUpdate, State, Wrench,
 )
 from manta.ir.frames import PartFrame, WorldFrame
 
 
-def _flywheel(name: str, I_axial: float, **kw) -> Joint:
-    """Make a saturating Joint with a single rotor Mass whose MOI about
+def _flywheel(name: str, I_axial: float, **kw) -> RevoluteJoint:
+    """Make a saturating RevoluteJoint with a single rotor Mass whose MOI about
     the spin axis equals I_axial. Used by the per-tick-input tests
     below that previously instantiated FlywheelMotor."""
-    j = Joint(name, mode="saturating", stall_torque=1e9, **kw)
+    j = RevoluteJoint(name, mode="saturating", stall_torque=1e9, **kw)
     j.add(Mass(f"{name}_rotor", mass=1e-6, moi=(0.0, 0.0, I_axial)))
     return j
 
@@ -170,7 +170,7 @@ def test_ekf_constructs_with_input_parts():
 
 
 # ---------------------------------------------------------------------------
-# Multiple Inputs on one part (no Joint dependency)
+# Multiple Inputs on one part (no RevoluteJoint dependency)
 # ---------------------------------------------------------------------------
 
 def test_multiple_inputs_on_one_part():

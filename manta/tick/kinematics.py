@@ -308,7 +308,7 @@ def _compute_child_state(parent_state: KinematicState, parent_part, child,
                          body_angular_acceleration,
                          body_angular_velocity,
                          joint_angular_accels) -> KinematicState:
-    from ..parts.articulation.joint import Joint
+    from ..parts.articulation.joint import RevoluteJoint
 
     # Child's `transform` lives in parent's OUTPUT frame coords.
     transform = ca.MX(list(child.transform))
@@ -339,9 +339,10 @@ def _compute_child_state(parent_state: KinematicState, parent_part, child,
     omega_rel_input = parent_state.omega_rel_output
     alpha_rel_input = parent_state.alpha_rel_output
 
-    # If child is a Joint, compose joint rotation onto the output frame
-    # and add `rate · axis` to the output ω (and `θ̈ · axis` to α_rel).
-    if isinstance(child, Joint):
+    # If child is a revolute joint, compose the joint rotation onto the
+    # output frame and add `rate · axis` to the output ω (and `θ̈ · axis`
+    # to α_rel).
+    if isinstance(child, RevoluteJoint):
         angle = _attr_mx(child.angle)
         rate  = _attr_mx(child.rate)
         accel = joint_angular_accels.get(child, ca.MX(0.0))
@@ -411,7 +412,7 @@ def _compute_child_state(parent_state: KinematicState, parent_part, child,
     # only relative motion w.r.t. the parent's PartFrame comes from the
     # PARENT joint's rotation (zero if the parent is the root or a static
     # composite). All in ParentFrame (= parent input-frame) coords.
-    if isinstance(parent_part, Joint):
+    if isinstance(parent_part, RevoluteJoint):
         p_axis  = ca.MX(list(parent_part.axis))
         p_angle = _attr_mx(parent_part.angle)
         p_rate  = _attr_mx(parent_part.rate)

@@ -33,19 +33,19 @@ def test_state_spec_rigid_body_layout():
 
 
 def test_state_spec_with_parts():
-    from manta.parts import Joint
+    from manta.parts import RevoluteJoint
 
     c = Craft("with_state")
     c.add(Mass("body", mass=1.0))
-    wheel = Joint("wheel", mode="passive")
+    wheel = RevoluteJoint("wheel", mode="passive")
     wheel.add(Mass("wheel_disk", mass=0.05, moi=(0.001, 0.001, 0.005)))
     c.add(wheel)
-    motor = Joint("motor", mode="saturating", stall_torque=1e6)
+    motor = RevoluteJoint("motor", mode="saturating", stall_torque=1e6)
     motor.add(Mass("motor_rotor", mass=0.05, moi=(0.001, 0.001, 0.005)))
     c.add(motor)
 
     spec = StateSpec.from_craft(c)
-    # Each Joint contributes 2 state slots (angle, rate) → 13 + 2 + 2 = 17.
+    # Each RevoluteJoint contributes 2 state slots (angle, rate) → 13 + 2 + 2 = 17.
     assert spec.ambient_dim == 13 + 2 + 2
     names = [s.name for s in spec.slots]
     assert "wheel.angle" in names
@@ -253,10 +253,10 @@ def test_eskf_attitude_estimation_converges():
 
 def test_eskf_state_spec_layout_with_tangent_offsets():
     """Tangent offsets are contiguous and respect SO3 collapse."""
-    from manta.parts import Joint
+    from manta.parts import RevoluteJoint
     c = Craft("with_state")
     c.add(Mass("body", mass=1.0))
-    wheel = Joint("wheel", mode="passive")
+    wheel = RevoluteJoint("wheel", mode="passive")
     wheel.add(Mass("wheel_disk", mass=0.01, moi=(0.0001, 0.0001, 0.0005)))
     c.add(wheel)
     _ekf_world = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))

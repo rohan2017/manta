@@ -34,11 +34,11 @@ Scope:
   placeholders (the substitution would create an unsolved fixpoint);
   the compile step validates this and raises otherwise.
 
-Articulation: nested `Joint` chains compose symbolically through the
+Articulation: nested joint chains compose symbolically through the
 kinematic pass; `r_com`, `I_com`, and per-part offsets pick up joint-
 angle dependence via `inertia.symbolic_inertia_rollup`. Native multi-
 DOF joints (ball, universal) are still future work — for now stack
-single-DOF Joints to build them.
+single-DOF joints to build them.
 
 Known omissions: non-identity static orientation between part and craft
 frames; field disturbances tied to per-craft motion (only queried, not
@@ -294,9 +294,10 @@ def _aggregate_inertials(parts: list[Part]) -> dict[str, Any]:
 
     Walks `part.mass`, `part.moi`, `part.transform` on every part. Parts
     without `mass` (Thruster, sensors, drag surfaces, …) are skipped.
-    `Joint` exposes `.mass` and `.moi` as @property aggregates over its
-    rotor children, so the body sees the rotor's inertia distribution
-    via the same code path as a plain `Mass`.
+    A joint has no `.mass` of its own — its rotor `Mass` children are
+    enumerated separately in the parts list, so the body sees the
+    rotor's inertia distribution via the same code path as a plain
+    `Mass`.
     """
     m_total = 0.0
     com_sum = np.zeros(3)        # m_i · r_i, then divide
@@ -390,7 +391,7 @@ class Craft:
     Internally a craft is a tree of parts rooted at `Craft.root` (a
     `RootPart`). `craft.add(part)` is sugar for `craft.root.add(part)`;
     `craft.parts` returns a flat tuple of all parts in the tree (DFS
-    order). Nested composition (e.g. `Joint` hosting another `Joint`
+    order). Nested composition (e.g. a joint hosting another joint
     for a pan-tilt gimbal) is supported via the standard composite
     `add()` chain on individual parts.
 

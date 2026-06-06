@@ -73,7 +73,7 @@ class PartFrame(Frame):
 class ParentFrame(Frame):
     """The frame of a part's immediate parent (the parent's PartFrame).
     For a part on the craft root this is CraftFrame; for a part on a
-    Joint's rotor it is the joint's own frame. Used by the relative-motion
+    joint's rotor it is the joint's own frame. Used by the relative-motion
     accessors (`ctx.velocity[ParentFrame]` = how the part moves relative
     to its parent)."""
 

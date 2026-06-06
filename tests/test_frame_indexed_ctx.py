@@ -10,7 +10,7 @@ import numpy as np
 
 from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField
-from manta.parts import Joint, Mass
+from manta.parts import RevoluteJoint, Mass
 from manta.parts.base import Output, Part, PartUpdate
 from manta.ir.frames import WorldFrame, CraftFrame, ParentFrame, PartFrame
 from manta.ir.types import Vec3
@@ -85,7 +85,7 @@ def test_world_craft_part_frames_are_distinct_on_a_rotor():
     V, omega0, d = 5.0, 3.0, 0.4
     c = Craft("rotorcraft")
     c.add(Mass("hub", mass=100.0, moi=(10.0, 10.0, 10.0)))
-    wheel = Joint("wheel", mode="passive", axis=(0.0, 0.0, 1.0))
+    wheel = RevoluteJoint("wheel", mode="passive", axis=(0.0, 0.0, 1.0))
     wheel.add(Mass("rim", mass=0.01, moi=(1e-4, 1e-4, 1e-4)))
     wheel.add(_FrameProbe("p", transform=(d, 0.0, 0.0)))
     c.add(wheel)
@@ -101,7 +101,7 @@ def test_world_craft_part_frames_are_distinct_on_a_rotor():
                                (V, omega0 * d, 0.0), atol=1e-3)
     np.testing.assert_allclose(_o(st, "rotorcraft", "p.omega_craft"),
                                (0.0, 0.0, omega0), atol=1e-9)
-    # Joint sits directly on the root, so "relative to parent" == "relative
+    # RevoluteJoint sits directly on the root, so "relative to parent" == "relative
     # to craft".
     np.testing.assert_allclose(_o(st, "rotorcraft", "p.vel_parent"),
                                _o(st, "rotorcraft", "p.vel_craft"), atol=1e-12)
@@ -117,9 +117,9 @@ def test_nested_gimbal_parentframe_isolates_inner_joint():
     omega_pan, omega_tilt = 2.0, 3.0
     c = Craft("gimbal")
     c.add(Mass("base", mass=10.0, moi=(1.0, 1.0, 1.0)))
-    pan = Joint("pan", mode="passive", axis=(0.0, 0.0, 1.0))
+    pan = RevoluteJoint("pan", mode="passive", axis=(0.0, 0.0, 1.0))
     pan.add(Mass("pan_rotor", mass=0.01, moi=(1e-4, 1e-4, 1e-4)))
-    tilt = Joint("tilt", mode="passive", axis=(0.0, 1.0, 0.0))
+    tilt = RevoluteJoint("tilt", mode="passive", axis=(0.0, 1.0, 0.0))
     tilt.add(Mass("tilt_rotor", mass=0.01, moi=(1e-4, 1e-4, 1e-4)))
     tilt.add(_FrameProbe("p", transform=(0.2, 0.0, 0.0)))
     pan.add(tilt)

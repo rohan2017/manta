@@ -1,6 +1,6 @@
-"""Spinning top — a fast rotor `Joint` precessing on a real contact tip.
+"""Spinning top — a fast rotor `RevoluteJoint` precessing on a real contact tip.
 
-A nearly massless pole carries a heavy disk on a passive `Joint` at its
+A nearly massless pole carries a heavy disk on a passive `RevoluteJoint` at its
 TOP — an inverted pendulum, normally unstable. The pole tip stands on a
 ground plane through a `Collider` (a frictionless point contact,
 gravity on). Two runs, same rig:
@@ -33,7 +33,7 @@ import numpy as np
 
 from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import CollisionField, GravityField
-from manta.parts import Collider, Joint, Mass
+from manta.parts import Collider, RevoluteJoint, Mass
 
 from .._viz import Viz
 
@@ -57,7 +57,7 @@ def _build_world(spin: float):
     # massless) pole into co-rotation with the disk within ~30 ms — a
     # real toy top is rigid — after which the spin lives in the body
     # and the relative joint rate sits near zero.
-    rotor = Joint("rotor", mode="passive", axis=(0.0, 0.0, 1.0),
+    rotor = RevoluteJoint("rotor", mode="passive", axis=(0.0, 0.0, 1.0),
                   damping=3.0e-4, transform=(0.0, 0.0, H))
     rotor.add(Mass("disk", mass=0.4, moi=(0.002, 0.002, 0.004)))
     top.add(rotor)

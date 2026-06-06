@@ -569,7 +569,7 @@ class Part(DeclarationHost):
     (force-at-offset → torque contribution at parent origin).
 
     Every Part also has a `parent` attribute — either another Part
-    (typically a CompositePart like the craft's RootPart or a Joint)
+    (typically a CompositePart like the craft's RootPart or a joint)
     or `None` for the unattached state. Parents are set by
     `CompositePart.add(child)` when a child is attached. The craft's
     part tree is rooted at `Craft.root`.
@@ -656,15 +656,17 @@ class Part(DeclarationHost):
 class CompositePart(Part):
     """A Part that hosts other Parts as children.
 
-    Children mount on this part's *output frame*. For a non-Joint
+    Children mount on this part's *output frame*. For a non-joint
     CompositePart the output frame is identical to the part's own
-    frame (translation only, via `transform`). A `Joint` overrides
-    this — its output frame additionally rotates by the joint angle.
+    frame (translation only, via `transform`). An `ArticulatedJoint`
+    overrides this — a `RevoluteJoint`'s output frame additionally
+    rotates by the joint angle (a `PrismaticJoint`'s translates by its
+    displacement).
 
     `add(child)` appends a child Part, sets its `parent` to self, and
     returns the child (so chained construction reads naturally):
 
-        gimbal = pan.add(Joint("tilt", axis=(0, 1, 0)))
+        gimbal = pan.add(RevoluteJoint("tilt", axis=(0, 1, 0)))
         gimbal.add(Mass("camera", mass=0.05, transform=(0.1, 0, 0)))
     """
 
@@ -701,7 +703,7 @@ class CompositePart(Part):
 
     def update(self, ctx):
         """CompositePart has no intrinsic wrench contribution by default —
-        subclasses (RootPart, Joint, etc.) override if they need to."""
+        subclasses (RootPart, joints, etc.) override if they need to."""
         from ..ir.wrench import Wrench
         from ..ir.frames import CraftFrame
         return Wrench.zero(CraftFrame)

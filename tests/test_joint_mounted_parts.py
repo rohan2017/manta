@@ -1,7 +1,7 @@
-"""Joint-mounted sensors and thrusters — the payoff of the unified
+"""RevoluteJoint-mounted sensors and thrusters — the payoff of the unified
 kinematic-acceleration pass.
 
-A part riding a Joint's rotor sees a moving frame: its thrust direction
+A part riding a RevoluteJoint's rotor sees a moving frame: its thrust direction
 rotates with the joint angle, and an accelerometer on the rim picks up the
 rotor's centripetal/tangential acceleration that the rigid lever-arm
 transfer alone misses. These tests pin both against closed-form values.
@@ -11,7 +11,7 @@ import numpy as np
 
 from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField, MagField, FluidField
-from manta.parts import Joint, Mass, Thruster, IMU, Magnetometer, DragSurface
+from manta.parts import RevoluteJoint, Mass, Thruster, IMU, Magnetometer, DragSurface
 
 
 def _free_world(craft, **overrides):
@@ -30,7 +30,7 @@ def _accel_dir_for_angle(angle: float) -> np.ndarray:
     F = 10.0
     c = Craft("gimbal_craft")
     c.add(Mass("bus", mass=1.0, moi=(1.0, 1.0, 1.0)))
-    g = Joint("gimbal", mode="passive", axis=(0.0, 0.0, 1.0))
+    g = RevoluteJoint("gimbal", mode="passive", axis=(0.0, 0.0, 1.0))
     g.add(Mass("rotor", mass=0.001, moi=(1e-4, 1e-4, 1e-4)))  # axisymmetric
     # Thrust along the thruster's own +x. At joint angle θ about z it should
     # point along (cosθ, sinθ, 0) in body coords.
@@ -61,7 +61,7 @@ def test_gimballed_thruster_magnitude_is_angle_independent():
     for angle in (0.3, 1.1, 2.7):
         c = Craft("g")
         c.add(Mass("bus", mass=1.0, moi=(1.0, 1.0, 1.0)))
-        j = Joint("gim", mode="passive", axis=(0.0, 0.0, 1.0))
+        j = RevoluteJoint("gim", mode="passive", axis=(0.0, 0.0, 1.0))
         j.add(Mass("rotor", mass=0.001, moi=(1e-4, 1e-4, 1e-4)))
         j.add(Thruster("jet", force=(F, 0.0, 0.0)))
         c.add(j)
@@ -88,7 +88,7 @@ def test_rotor_imu_reads_centripetal_and_spin():
     # Heavy axisymmetric hub so the body barely recoils over one tick and the
     # joint Coriolis torque (∝ Ix−Iy) vanishes → no tangential term.
     c.add(Mass("hub", mass=1000.0, moi=(50.0, 50.0, 50.0)))
-    wheel = Joint("wheel", mode="passive", axis=(0.0, 0.0, 1.0))
+    wheel = RevoluteJoint("wheel", mode="passive", axis=(0.0, 0.0, 1.0))
     wheel.add(Mass("rim", mass=1.0, moi=(0.01, 0.01, 0.01)))  # on-axis inertia
     wheel.add(IMU("imu", transform=(d, 0.0, 0.0)))            # offset on rim
     c.add(wheel)
@@ -112,7 +112,7 @@ def test_rotor_imu_centripetal_scales_with_rate_squared():
     def accel_x(omega0):
         c = Craft("fly")
         c.add(Mass("hub", mass=1000.0, moi=(50.0, 50.0, 50.0)))
-        wheel = Joint("wheel", mode="passive", axis=(0.0, 0.0, 1.0))
+        wheel = RevoluteJoint("wheel", mode="passive", axis=(0.0, 0.0, 1.0))
         wheel.add(Mass("rim", mass=1.0, moi=(0.01, 0.01, 0.01)))
         wheel.add(IMU("imu", transform=(d, 0.0, 0.0)))
         c.add(wheel)
@@ -133,7 +133,7 @@ def test_rotor_magnetometer_reads_in_sensor_frame():
     unrotated and a uniform B=(1,0,0), at θ=π/2 the sensor reads (0,-1,0)."""
     c = Craft("compass")
     c.add(Mass("bus", mass=1.0, moi=(1.0, 1.0, 1.0)))
-    j = Joint("yaw", mode="passive", axis=(0.0, 0.0, 1.0))
+    j = RevoluteJoint("yaw", mode="passive", axis=(0.0, 0.0, 1.0))
     j.add(Mass("rotor", mass=0.01, moi=(1e-3, 1e-3, 1e-3)))
     j.add(Magnetometer("mag"))
     c.add(j)
@@ -167,7 +167,7 @@ def test_rotor_dragsurface_drag_tracks_rotor_frame():
          .add_field(FluidField().add_uniform(density=rho)))
     craft = Craft("sub")
     craft.add(Mass("hull", mass=M, moi=(5.0, 5.0, 5.0)))
-    j = Joint("yaw", mode="passive", axis=(0.0, 0.0, 1.0))
+    j = RevoluteJoint("yaw", mode="passive", axis=(0.0, 0.0, 1.0))
     j.add(Mass("rotor", mass=0.01, moi=(1e-3, 1e-3, 1e-3)))
     j.add(DragSurface("fin", force=(-c, -c, -c)))   # isotropic linear drag
     craft.add(j)

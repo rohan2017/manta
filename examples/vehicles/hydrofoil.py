@@ -15,11 +15,11 @@ the floating draft and gives the foils a lift-vs-ride-height slope
 (the surface-piercing self-regulation of a real foiler).
 
 Foils: a front V-pair (dihedral) on a strut under the CoM carries most
-of the lift; a rear split foil rides two `Joint` hinges as **elevons**
+of the lift; a rear split foil rides two `RevoluteJoint` hinges as **elevons**
 — a pitch PID + a roll PID mix onto them. A large rear vertical
 stabilizer weathervanes yaw; yaw COMMANDS vector the stern thruster,
-which hangs on a yaw `Joint`. A two-axis laser gimbal (nested pan/tilt
-`Joint`s, one PID each) rides the foredeck, keeping its laser locked on
+which hangs on a yaw `RevoluteJoint`. A two-axis laser gimbal (nested pan/tilt
+`RevoluteJoint`s, one PID each) rides the foredeck, keeping its laser locked on
 a fixed buoy through the whole run — takeoff, waves, and carves.
 
 Controls:  X/Z throttle up/down   A/D vector thrust (yaw left/right)
@@ -36,7 +36,7 @@ from __future__ import annotations
 import numpy as np
 
 from manta import PID, Craft, Sim, TargetNumpy, World
-from manta.parts import DragSurface, Joint, Mass, Naca00xx, PointBuoy, Thruster
+from manta.parts import DragSurface, RevoluteJoint, Mass, Naca00xx, PointBuoy, Thruster
 from manta.planets import Earth, SeaWaves
 
 from .._control import Pacer, common_args, make_controller
@@ -89,8 +89,8 @@ def _tilt(incidence: float, dihedral: float):
     return tuple(chord), tuple(R_x @ normal)
 
 
-def _hinge(name: str, pos: tuple, axis: tuple) -> Joint:
-    j = Joint(name, mode="saturating", stall_torque=40.0, damping=0.8,
+def _hinge(name: str, pos: tuple, axis: tuple) -> RevoluteJoint:
+    j = RevoluteJoint(name, mode="saturating", stall_torque=40.0, damping=0.8,
               axis=axis, transform=pos)
     j.add(Mass(f"{name}_m", mass=0.15, moi=(0.004, 0.004, 0.004),
                transform=(-0.03, 0.0, 0.0)))
@@ -149,18 +149,18 @@ def build_world():
                    induced_k=0.1, chord_axis=(1, 0, 0), normal_axis=(0, 1, 0),
                    transform=(REAR_X, 0.0, -0.70)))
 
-    # Vectoring thruster: a yaw Joint at the stern carries the prop.
+    # Vectoring thruster: a yaw RevoluteJoint at the stern carries the prop.
     tv = _hinge("tvec", (-1.45, 0.0, -0.5), (0, 0, 1))
     tv.add(Thruster("prop", force=(THRUST, 0.0, 0.0)))
     b.add(tv)
 
-    # Two-axis laser gimbal on the foredeck: a pan Joint (yaw) hosting a
-    # tilt Joint (pitch); a PID per axis keeps the laser on the buoy no
+    # Two-axis laser gimbal on the foredeck: a pan RevoluteJoint (yaw) hosting a
+    # tilt RevoluteJoint (pitch); a PID per axis keeps the laser on the buoy no
     # matter what the boat does.
-    pan = Joint("pan", mode="saturating", stall_torque=8.0, damping=0.3,
+    pan = RevoluteJoint("pan", mode="saturating", stall_torque=8.0, damping=0.3,
                 axis=(0.0, 0.0, 1.0), transform=tuple(GIMBAL))
     pan.add(Mass("pan_motor", mass=0.3, moi=(0.002, 0.002, 0.003)))
-    tilt = Joint("tilt", mode="saturating", stall_torque=6.0, damping=0.3,
+    tilt = RevoluteJoint("tilt", mode="saturating", stall_torque=6.0, damping=0.3,
                  axis=(0.0, 1.0, 0.0), transform=(0.0, 0.0, 0.12))
     tilt.add(Mass("laser", mass=0.2, moi=(0.001, 0.001, 0.001)))
     pan.add(tilt)

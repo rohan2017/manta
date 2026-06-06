@@ -31,7 +31,7 @@ class Thruster(Part):
     Coefficients are 3-vectors in the thruster's own frame. For a thruster
     mounted directly on the craft root that frame is CraftFrame, so
     `Thruster("t", force=(0,0,1))` is a pure +z thrust in body coords.
-    Mounted on a Joint's rotor, the thruster's frame spins with the rotor
+    Mounted on a joint's rotor, the thruster's frame spins with the rotor
     and the framework rotates the emitted wrench into body coords — a
     gimballed thruster's thrust direction tracks the joint angle
     automatically, with no frame handling here. Any unset coefficient

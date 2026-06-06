@@ -10,7 +10,7 @@ import numpy as np
 from manta import Sim, TargetNumpy, World
 from manta.craft import Craft
 from manta.fields import GravityField
-from manta.parts import Mass, Joint
+from manta.parts import Mass, RevoluteJoint
 
 
 G = 9.81
@@ -23,7 +23,7 @@ def _pendulum(L: float, m: float = 1.0, damping: float = 0.0) -> Craft:
     the body is effectively an inertial pivot (so I_axial = m L²)."""
     c = Craft("pend")
     c.add(Mass("anchor", mass=1.0e6, moi=(1.0e6, 1.0e6, 1.0e6)))
-    h = Joint("hinge", mode="passive", axis=(0.0, 1.0, 0.0), damping=damping)
+    h = RevoluteJoint("hinge", mode="passive", axis=(0.0, 1.0, 0.0), damping=damping)
     h.add(Mass("bob", mass=m, moi=(1e-9, 1e-9, 1e-9), transform=(0.0, 0.0, -L)))
     c.add(h)
     return c

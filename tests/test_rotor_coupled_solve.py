@@ -1,6 +1,6 @@
 """Coupled body/rotor solve — regression for the α_mount energy pump.
 
-The old fixed-base Joint approximation (a) solved the body α with the
+The old fixed-base RevoluteJoint approximation (a) solved the body α with the
 FULL inertia aggregate (a freely-spinning rotor's axial inertia cannot
 react body torques), and (b) omitted the −â·α mount feedback on the
 rotor's relative rate. On a fast rotor with a precessing mount the two
@@ -18,7 +18,7 @@ import numpy as np
 
 from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField
-from manta.parts import Joint, Mass
+from manta.parts import RevoluteJoint, Mass
 
 
 def _R(q):
@@ -31,14 +31,14 @@ def _R(q):
 
 def test_fast_rotor_on_precessing_mount_no_energy_pump():
     """Spinning-top rig, torque-free: light pole, heavy disk on a passive
-    z-Joint at the top, body tilted and tumbling slightly, rotor at
+    z-RevoluteJoint at the top, body tilted and tumbling slightly, rotor at
     150 rad/s. Total world-frame angular momentum must be conserved and
     the body rates bounded. (The old model blew |ω| up ×1000 within a
     second here.)"""
     c = Craft("top")
     c.add(Mass("pole", mass=0.02, moi=(2e-4, 2e-4, 1e-5),
                transform=(0.0, 0.0, 0.15)))
-    rotor = Joint("rotor", mode="passive", axis=(0.0, 0.0, 1.0),
+    rotor = RevoluteJoint("rotor", mode="passive", axis=(0.0, 0.0, 1.0),
                   transform=(0.0, 0.0, 0.3))
     rotor.add(Mass("disk", mass=0.4, moi=(0.002, 0.002, 0.004)))
     c.add(rotor)
@@ -82,7 +82,7 @@ def test_reaction_wheel_momentum_exact():
     angular momentum I_stator·ω + I_a·(ω + s) stays exactly zero."""
     c = Craft("rw")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
-    j = Joint("wheel", mode="saturating", stall_torque=1.0)
+    j = RevoluteJoint("wheel", mode="saturating", stall_torque=1.0)
     j.add(Mass("disk", mass=0.1, moi=(0.005, 0.005, 0.05)))
     c.add(j)
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))

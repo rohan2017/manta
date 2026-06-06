@@ -11,7 +11,7 @@ import numpy as np
 from manta import Sim, TargetNumpy, World
 from manta.craft import Craft
 from manta.fields import GravityField
-from manta.parts import Mass, Joint, Thruster
+from manta.parts import Mass, RevoluteJoint, Thruster
 
 
 # ---------------------------------------------------------------------------
@@ -47,7 +47,7 @@ def test_no_spurious_wrench_on_deflected_passive_joint():
     L = 0.5
     c = Craft("pend")
     c.add(Mass("body", mass=10.0, moi=(1.0, 1.0, 1.0)))
-    h = Joint("hinge", mode="passive", axis=(0.0, 1.0, 0.0))
+    h = RevoluteJoint("hinge", mode="passive", axis=(0.0, 1.0, 0.0))
     h.add(Mass("bob", mass=1.0, moi=(1e-9, 1e-9, 1e-9), transform=(0.0, 0.0, -L)))
     c.add(h)
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))   # NO gravity
@@ -71,7 +71,7 @@ def test_free_body_recoils_from_swinging_bob():
     L = 0.5
     c = Craft("pend")
     c.add(Mass("body", mass=10.0, moi=(1.0, 1.0, 1.0)))
-    h = Joint("hinge", mode="passive", axis=(0.0, 1.0, 0.0))
+    h = RevoluteJoint("hinge", mode="passive", axis=(0.0, 1.0, 0.0))
     h.add(Mass("bob", mass=1.0, moi=(1e-9, 1e-9, 1e-9), transform=(0.0, 0.0, -L)))
     c.add(h)
     w = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))

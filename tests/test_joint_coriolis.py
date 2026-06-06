@@ -1,6 +1,6 @@
 """Coriolis joint torque — base rotation coupling through the rotor inertia.
 
-A Joint's `rate` dynamics pick up τ_corio = −[ω_rotor × (I_joint·ω_rotor)]·axis
+A RevoluteJoint's `rate` dynamics pick up τ_corio = −[ω_rotor × (I_joint·ω_rotor)]·axis
 with ω_rotor = ω_mount + rate·axis. It is identically zero for an axisymmetric
 rotor whose COM lies on the joint axis, and nonzero when a tumbling base drives
 an asymmetric rotor. These tests pin both, with an analytic first-step value.
@@ -10,14 +10,14 @@ import numpy as np
 
 from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField
-from manta.parts import Joint, Mass
+from manta.parts import RevoluteJoint, Mass
 
 
 def _single_step_rate(moi, omega0, *, dt=0.01) -> float:
-    """One world step of a craft that is a single passive z-axis Joint
+    """One world step of a craft that is a single passive z-axis RevoluteJoint
     carrying one rotor Mass. Returns the joint rate after the step."""
     c = Craft("tumbler")
-    j = Joint("rotor", mode="passive", axis=(0.0, 0.0, 1.0))
+    j = RevoluteJoint("rotor", mode="passive", axis=(0.0, 0.0, 1.0))
     j.add(Mass("disk", mass=1.0, moi=moi))
     c.add(j)
     w = World().add_field(GravityField().add_uniform((0.0, 0.0, 0.0)))

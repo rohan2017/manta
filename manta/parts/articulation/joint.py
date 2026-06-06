@@ -1,45 +1,58 @@
-"""Joint — 1-DOF revolute joint (mirrors legacy `Motor` in motor.hpp).
+"""Articulated joints — 1-DOF revolute and prismatic.
 
-A `Joint` is a `CompositePart`: one rotational degree of freedom about
-an input-frame `axis`, with internal `angle` and `rate` state. It hosts
-a subtree of children that ride the rotor — any Part: `Mass` parts (the
-rotor's inertia), nested `Joint`s (pan–tilt gimbals), thrusters, and
-sensors. The symbolic kinematic and inertia passes lift each child's
-position, velocity, acceleration, and tensors through the joint chain
-(so a rotor's COM/inertia track the joint angle), and the framework
-expresses each child's TickContext in its own spinning frame and rotates
-its emitted wrench back to the body — so a part needs no awareness of
-being on a rotor.
+An `ArticulatedJoint` is a `CompositePart` with one mechanical degree of
+freedom along/about an input-frame `axis`, hosting a subtree of children
+that ride the moving side — any Part: `Mass` parts, nested joints
+(pan–tilt gimbals), thrusters, and sensors. The symbolic kinematic and
+inertia passes lift each child's position, velocity, acceleration, and
+tensors through the joint chain (so a rotor's COM/inertia track the
+joint angle, and a slider's COM tracks its displacement), and the
+framework expresses each child's TickContext in its own moving frame and
+rotates its emitted wrench back to the body — so a part needs no
+awareness of being on a joint.
+
+Two concrete DOF types:
+
+  * `RevoluteJoint`  — rotation about `axis`; state (`angle`, `rate`),
+                       commanded via `torque_cmd` (clamped to
+                       `stall_torque` in saturating mode).
+  * `PrismaticJoint` — translation along `axis`; state (`displacement`,
+                       `rate`), commanded via `force_cmd` (clamped to
+                       `stall_force` in saturating mode).
 
 Dynamics live in `resolve()`, called by the framework's bottom-up wrench
 cascade. The joint receives the total wrench from its subtree and splits
-it: the component about `axis` drives the DOF (`θ̈ = (τ_axial + actuator +
-friction + Coriolis) / I_axial`), and the remainder — the full force, the
-perpendicular torque (constraint reaction), and the Newton-3rd reaction of
-the actuator + friction — passes up to the parent. Because the axial
-component of the *external* torque now drives the DOF, a **passive joint
-swings under gravity** (a hanging bob gives `θ̈ = −(g/L)sinθ`). The rotor's
-gyroscopic couple `−ω_mount × (I_axial·rate·axis)` is applied at the body
-level (not routed up the chain), matching the legacy `Motor`. `update()`
-itself is a no-op — children supply the wrench, the cascade does the rest.
+it along its motion subspace: a revolute peels the AXIAL TORQUE off to
+drive the DOF (`θ̈ = (τ_axial + actuator + friction + Coriolis) /
+I_axial`) and passes the rest — full force, perpendicular torque, and
+the Newton-3rd reaction of the internal terms — up to the parent; a
+prismatic peels the AXIAL FORCE off instead. Because the axial component
+of the *external* generalized force drives the DOF, a **passive joint
+moves under gravity** (a hanging bob gives `θ̈ = −(g/L)sinθ`; a vertical
+slider falls at `g`). A revolute rotor's gyroscopic couple
+`−ω_mount × (I_axial·rate·axis)` is applied at the body level (not
+routed up the chain). `update()` itself is a no-op — children supply
+the wrench, the cascade does the rest.
 
-Approximation: `I_axial` is the rotor's rest-pose axial inertia and the
-α_mount cross-coupling is omitted (fixed-base, matching the legacy). Exact
-for a single joint on a heavy/fixed mount; the inter-joint inertial
-coupling for nested joints (and the Coriolis coupling that drives e.g.
-Foucault precession) is only approximate — a full articulated-body solver
-would be needed for that.
+Approximation tier: the generalized inertia (`I_axial` / subtree mass)
+uses the rest-pose subtree geometry, and the joint solve is per-joint —
+the body-α mount feedback is coupled (handled in `world_tick`'s
+body/rotor solve), but inter-joint inertial coupling for NESTED joints
+is only approximate. A prismatic DOF additionally omits the mount's
+*linear*-acceleration feedback (fixed-base tier). The planned
+joint-space block solve removes both limitations.
 
-Modes:
-  * "passive"     — no commanded torque; the DOF responds to the axial
-                    external torque (gravity, contact, …) + friction.
-  * "saturating"  — commanded torque clipped to `±stall_torque`, applied
-                    on top of the external axial torque; its reaction
+Modes (both DOF types):
+  * "passive"     — no commanded effort; the DOF responds to the axial
+                    external generalized force (gravity, contact, …)
+                    + friction.
+  * "saturating"  — commanded effort clipped to the stall limit, applied
+                    on top of the external axial term; its reaction
                     propagates to the parent.
 
-The name `Joint` (vs. `Motor`) is intentional: `Motor` is reserved for a
-future part that models real motor dynamics (back-EMF, thermal limits,
-current/voltage curves) on top of a Joint.
+The name `Motor` stays reserved for a future part that models real
+motor dynamics (back-EMF, thermal limits, current/voltage curves) on
+top of a RevoluteJoint.
 """
 
 from __future__ import annotations
@@ -65,13 +78,13 @@ def _offset_from(ancestor, descendant) -> np.ndarray:
     compute the rest-pose offset of a child relative to a joint origin
     so the rotor's I_axial can apply a parallel-axis lift.
 
-    This is the **at-zero-angle** rest offset — it ignores any nested
-    joint rotations, since `I_axial` is the rotor's inertia about its
-    own axis and the parallel-axis lift only depends on perpendicular
-    distance, which is invariant under spins about the rotor's own
-    axis when child masses are themselves axisymmetric. For
+    This is the **at-zero-DOF** rest offset — it ignores any nested
+    joint rotations/translations, since `I_axial` is the rotor's inertia
+    about its own axis and the parallel-axis lift only depends on
+    perpendicular distance, which is invariant under spins about the
+    rotor's own axis when child masses are themselves axisymmetric. For
     cross-product moments-of-inertia that DO depend on inner-joint
-    angle, the full symbolic body-aggregate handles it; `I_axial` is
+    state, the full symbolic body-aggregate handles it; `I_axial` is
     a scalar used only inside the joint's own dynamics."""
     chain: list = []
     cur = descendant
@@ -86,61 +99,62 @@ def _offset_from(ancestor, descendant) -> np.ndarray:
                start=np.zeros(3))
 
 
-class Joint(CompositePart):
-    """1-DOF revolute joint with an axial rotor (set of Mass children).
+class ArticulatedJoint(CompositePart):
+    """Base of the 1-DOF joint family. Holds everything DOF-type-agnostic
+    (axis, mode, damping, subtree-geometry helpers, the no-op update);
+    `RevoluteJoint` / `PrismaticJoint` declare their own DOF states,
+    actuator input/limit, and `resolve()` projection.
 
     Parameters:
-        axis          — body-frame unit vector along the rotation axis.
+        axis          — input-frame unit vector along the DOF axis.
                         Default (0, 0, 1).
         mode          — "passive" or "saturating". Default "passive".
-        stall_torque  — saturating-mode torque clamp magnitude (N·m).
-                        Ignored in passive mode. Default 1.0.
-
-    Inputs:
-        torque_cmd    — commanded torque about `axis`. Clamped to
-                        ±stall_torque in saturating mode; ignored
-                        entirely in passive mode.
-
-    State:
-        angle         — joint angle, rad.
-        rate          — joint angular rate (rotor spin relative to body),
-                        rad/s.
+        damping       — viscous DOF friction coefficient. Default 0.
     """
 
     axis:          tuple = Parameter((0.0, 0.0, 1.0))
     mode:          str   = Parameter(_PASSIVE)
-    stall_torque:  float = Parameter(1.0)
     damping:       float = Parameter(0.0)
-    torque_cmd:    float = Input(default=0.0)
-
-    angle = State(init=0.0, manifold="R1")
-    rate  = State(init=0.0, manifold="R1")
 
     def __init__(self, name: str, **overrides) -> None:
         mode = overrides.get("mode", _PASSIVE)
         if mode not in _MODES:
             raise ValueError(
-                f"Joint {name!r}: mode must be one of {_MODES}, got {mode!r}")
+                f"{type(self).__name__} {name!r}: mode must be one of "
+                f"{_MODES}, got {mode!r}")
         super().__init__(name, **overrides)
 
-    # ----- Child Masses ----------------------------------------------------
+    # ----- per-DOF-type hooks ----------------------------------------------
 
-    # ----- Rotor I_axial computed from children ---------------------------
+    def dof_state_names(self) -> tuple[str, str]:
+        """(position-like, rate) state names of this joint's DOF —
+        ("angle", "rate") for revolute, ("displacement", "rate") for
+        prismatic. The central integrator, the kinematic/inertia passes,
+        and the zero-pose snapshot all enumerate DOF states through this
+        hook instead of hard-coding names."""
+        raise NotImplementedError
+
+    def resolve(self, accum: Wrench, R_craft_from_input, omega_mount_c):
+        """Split the accumulated subtree wrench at this joint — see the
+        concrete classes. Returns `(dof_ddot, passup, gyro_torque)`."""
+        raise NotImplementedError
+
+    # ----- subtree geometry (shared) ---------------------------------------
 
     @property
     def I_joint_tensor(self) -> np.ndarray:
-        """Full rotor inertia tensor (3×3) about the joint origin, in the
-        joint's input-frame coords at rest pose.
+        """Full subtree inertia tensor (3×3) about the joint origin, in
+        the joint's input-frame coords at rest pose.
 
         Walks the subtree below this joint, summing each Mass's diagonal
         MOI lifted to the joint origin via the parallel-axis theorem. The
         lift treats each child as if its frame is aligned with the joint's
-        input frame at zero angle — exact for a top-level joint, a good
+        input frame at zero DOF — exact for a top-level joint, a good
         approximation for nested ones (a child's own diagonal MOI rotates
-        with any inner Joint above it). `I_axial` is just this tensor's
-        projection onto the spin axis; `update()` needs the full tensor
-        for the Coriolis joint torque, whose off-axis components matter
-        for non-axisymmetric or off-axis rotors."""
+        with any inner joint above it). `I_axial` is just this tensor's
+        projection onto the axis; revolute `update()` needs the full
+        tensor for the Coriolis joint torque, whose off-axis components
+        matter for non-axisymmetric or off-axis rotors."""
         total = np.zeros((3, 3))
         for descendant in self.walk():
             if descendant is self:
@@ -158,12 +172,13 @@ class Joint(CompositePart):
 
     @property
     def I_axial(self) -> float:
-        """Rotor MOI about the joint's spin axis: `axisᵀ · I_joint · axis`.
+        """Subtree MOI about the joint's axis: `axisᵀ · I_joint · axis`.
 
-        The scalar inertia driving the joint's `rate` dynamics, and the
-        rotor angular-momentum factor in the gyroscopic correction. Shares
-        the rest-pose / symmetric-rotor approximation of `I_joint_tensor`;
-        the axial projection is rotation-invariant for symmetric rotors."""
+        For a revolute joint this is the scalar inertia driving the DOF
+        dynamics and the rotor angular-momentum factor in the gyroscopic
+        correction. Shares the rest-pose / symmetric-rotor approximation
+        of `I_joint_tensor`; the axial projection is rotation-invariant
+        for symmetric rotors."""
         axis = np.array(self.axis, dtype=float)
         n = float(np.linalg.norm(axis))
         if n <= 0.0:
@@ -171,28 +186,89 @@ class Joint(CompositePart):
         axis_unit = axis / n
         return float(axis_unit @ self.I_joint_tensor @ axis_unit)
 
+    @property
+    def subtree_mass(self) -> float:
+        """Total mass of the subtree riding the joint — the generalized
+        inertia of a prismatic DOF."""
+        total = 0.0
+        for descendant in self.walk():
+            if descendant is self:
+                continue
+            total += float(getattr(descendant, "mass", 0.0) or 0.0)
+        return total
+
+    def subtree_com_offset(self) -> np.ndarray:
+        """Rest-pose subtree COM offset from the joint origin, in the
+        joint's input-frame coords (mass-weighted `_offset_from` walk).
+        Zero vector for a massless subtree."""
+        m_total = 0.0
+        weighted = np.zeros(3)
+        for descendant in self.walk():
+            if descendant is self:
+                continue
+            m = float(getattr(descendant, "mass", 0.0) or 0.0)
+            if m <= 0.0:
+                continue
+            m_total += m
+            weighted += m * _offset_from(self, descendant)
+        if m_total <= 0.0:
+            return np.zeros(3)
+        return weighted / m_total
+
     # ----- update() --------------------------------------------------------
 
     def update(self, ctx) -> PartUpdate:
-        # The Joint emits no wrench of its own and does not integrate here.
+        # The joint emits no wrench of its own and does not integrate here.
         # Its children (Mass, etc.) supply the external wrench; the
         # framework's bottom-up wrench cascade calls `self.resolve(...)` to
         # split that subtree wrench (axial component → the joint DOF, the
-        # rest → the parent) and a central integrator advances angle/rate.
+        # rest → the parent) and a central integrator advances the DOF.
         zero = Vec3[PartFrame].constant((0.0, 0.0, 0.0))
         return PartUpdate(wrench=Wrench(force=zero, torque=zero),
                           new_state={})
+
+
+class RevoluteJoint(ArticulatedJoint):
+    """1-DOF revolute joint with an axial rotor (set of Mass children).
+
+    Parameters:
+        axis          — input-frame unit vector along the rotation axis.
+                        Default (0, 0, 1).
+        mode          — "passive" or "saturating". Default "passive".
+        stall_torque  — saturating-mode torque clamp magnitude (N·m).
+                        Ignored in passive mode. Default 1.0.
+        damping       — viscous joint friction (N·m·s/rad). Default 0.
+
+    Inputs:
+        torque_cmd    — commanded torque about `axis`. Clamped to
+                        ±stall_torque in saturating mode; ignored
+                        entirely in passive mode.
+
+    State:
+        angle         — joint angle, rad.
+        rate          — joint angular rate (rotor spin relative to body),
+                        rad/s.
+    """
+
+    stall_torque: float = Parameter(1.0)
+    torque_cmd:   float = Input(default=0.0)
+
+    angle = State(init=0.0, manifold="R1")
+    rate  = State(init=0.0, manifold="R1")
+
+    def dof_state_names(self) -> tuple[str, str]:
+        return ("angle", "rate")
 
     # ----- resolve(): the wrench split (called by the cascade) -------------
 
     def resolve(self, accum: Wrench, R_craft_from_input, omega_mount_c):
         """Split the accumulated subtree wrench at this joint.
 
-        Mirrors the legacy `Motor::resolve`. Works entirely in CraftFrame
-        coords. `accum` is the total wrench from this joint's subtree,
-        referenced about the joint origin. `R_craft_from_input` rotates the
-        joint's input frame into craft coords; `omega_mount_c` is the
-        mount's inertial angular velocity in craft coords.
+        Works entirely in CraftFrame coords. `accum` is the total wrench
+        from this joint's subtree, referenced about the joint origin.
+        `R_craft_from_input` rotates the joint's input frame into craft
+        coords; `omega_mount_c` is the mount's inertial angular velocity
+        in craft coords.
 
         Returns `(theta_ddot_mx, passup, gyro_torque)`:
           * `theta_ddot_mx` — the joint's angular acceleration. The AXIAL
@@ -208,12 +284,6 @@ class Joint(CompositePart):
             `−ω_mount × (I_axial·rate·axis)` (a pure couple, CraftFrame).
             Applied at the BODY level (not routed up the joint chain),
             matching the legacy `Motor` / `rotor_angular_momentum` design.
-
-        Revolute-only today: the DOF is rotation about `axis`, so the
-        projection is onto the torque-along-axis subspace. A future
-        prismatic joint would project the FORCE along the axis and
-        integrate a linear position; that is the only joint-type-specific
-        piece — the cascade and integrator are otherwise generic.
         """
         R_mx = R_craft_from_input._mx
         axis_np = np.array(self.axis, dtype=float)
