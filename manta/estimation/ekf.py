@@ -57,7 +57,8 @@ class EKF:
     def __init__(self, world, *,
                  track: dict | None = None,
                  sensors: list[str] | None = None,
-                 inputs: list[str] | None = None) -> None:
+                 inputs: list[str] | None = None,
+                 discretization: str = "exact") -> None:
         """Args:
             track:   `{craft_name: SlotSet}` lower bound of what to estimate
                      (closed under the dynamics; the rest freezes). `None`
@@ -66,9 +67,14 @@ class EKF:
                      `None` keeps every output (of tracked crafts).
             inputs:  known control inputs; `None` keeps all, excluded ones
                      freeze at their default.
+            discretization: how F discretizes the dynamics — "exact"
+                     (default; jacobian of the full discrete tick) or
+                     "euler" (F = I + dt·∂ẋ/∂δ; O(dt²) from exact, much
+                     smaller generated deploy code). See LinearizedSystem.
         """
         sys = LinearizedSystem(world, track=track, sensors=sensors,
-                               inputs=inputs, close_track=True)
+                               inputs=inputs, close_track=True,
+                               discretization=discretization)
         self.sys = sys
         self.world = world
         self.crafts = sys.crafts

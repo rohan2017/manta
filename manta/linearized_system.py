@@ -141,6 +141,27 @@ class LinearizedSystem:
         control     — also build `B_sym = ∂δ'/∂u`.
         ref         — operating-point overrides merged over the world's
                       initial state; the freeze reference.
+        discretization — how `F_sym` discretizes the dynamics:
+                      * "exact" (default) — F = ∂δ'/∂δ of the full
+                        discrete tick. The reference jacobian, but its
+                        code generation differentiates through the whole
+                        integrator (both joint-space factorizations, the
+                        momentum recovery, Rodrigues) — the dominant
+                        kernel in a C++ deploy module.
+                      * "euler" — F = I + dt·M with M = ∂²δ'/∂dt∂δ at
+                        (δ=0, dt=0): the continuous-time linearization,
+                        Euler-discretized. Equal to "exact" up to O(dt²)
+                        — below EKF fidelity — including all manifold
+                        transport terms (they fall out of the same
+                        boxminus recipe). Differentiating in dt FIRST
+                        and folding dt→0 collapses the discrete
+                        integrator out of the graph the tangent sweep
+                        traverses. Implementation note: this mode
+                        inlines the tick call so the folding can
+                        propagate; sensor H jacobians then also become
+                        flat self-contained kernels (per-kernel dead
+                        code elimination) instead of sharing one
+                        full-tick forward helper. B/L stay exact.
     """
 
     def __init__(self, world, *,
@@ -149,7 +170,8 @@ class LinearizedSystem:
                  inputs: list[str] | None = None,
                  close_track: bool = True,
                  control: bool = False,
-                 ref: dict | None = None) -> None:
+                 ref: dict | None = None,
+                 discretization: str = "exact") -> None:
         # --- world prep (idempotent) ------------------------------------
         if not world._planets_registered:
             for p in world._planets:
@@ -161,6 +183,11 @@ class LinearizedSystem:
         self.crafts = tuple(world.crafts)
         if not self.crafts:
             raise ValueError("LinearizedSystem: world has no crafts.")
+        if discretization not in ("exact", "euler"):
+            raise ValueError(
+                f"LinearizedSystem: discretization must be 'exact' or "
+                f"'euler', got {discretization!r}")
+        self.discretization = discretization
 
         # --- model validation (every transform passes through here) -----
         # Verify per-part `requires_fields` / `requires_planet` against the
@@ -324,6 +351,17 @@ class LinearizedSystem:
         zero_n = ca.MX.zeros(self.n_noise, 1)
         args, argn = [x, u, dt, t], ["x", "u", "dt", "t"]
 
+        # The euler discretization needs the tick INLINED into open MX:
+        # the dt→0 fold can then constant-propagate through the discrete
+        # integrator and prune it from the differentiated graph. A call
+        # node would stay a black box (the fold would stop at its
+        # argument) and jacobian-of-jacobian would emit forward-over-
+        # forward helpers of the FULL tick — strictly worse. The
+        # structural (build_functions=False) pass always stays on the
+        # exact call-node recipe: same cost class, and the closure /
+        # freeze decisions stay independent of the discretization choice.
+        euler = build_functions and self.discretization == "euler"
+
         # forward (noise live + zeroed)
         outs_n = self._tick_outputs(spec, x, frozen, u, dt, t, n)
         x_new_n = self._gather_state(spec, outs_n)
@@ -332,11 +370,28 @@ class LinearizedSystem:
         # F = ∂δ'/∂δ at δ=0 (error-state recipe)
         delta_in = ca.MX.sym("delta_in", n_tangent, 1)
         outs_pert = self._tick_outputs(spec, spec.boxplus_sym(x, delta_in),
-                                       frozen, u, dt, t, zero_n)
+                                       frozen, u, dt, t, zero_n,
+                                       inline=euler)
         x_pert_new = self._gather_state(spec, outs_pert)
-        delta_out = spec.boxminus_sym(x_pert_new, x_new_0)
-        F_sym = ca.substitute(ca.jacobian(delta_out, delta_in),
+        if euler:
+            # F = I + dt·M, M = ∂²δ_out/∂dt∂δ at (δ=0, dt=0): the
+            # continuous-time linearization, Euler-discretized — exact
+            # to O(dt²) including the manifold transport terms (the
+            # boxminus base point must be inlined too, or its dt-
+            # dependence drags the full tick back in as a helper).
+            outs_base = self._tick_outputs(spec, x, frozen, u, dt, t,
+                                           zero_n, inline=True)
+            delta_out = spec.boxminus_sym(
+                x_pert_new, self._gather_state(spec, outs_base))
+            ddt0 = ca.substitute(ca.jacobian(delta_out, dt),
+                                 dt, ca.MX.zeros(1, 1))
+            M = ca.substitute(ca.jacobian(ddt0, delta_in),
                               delta_in, ca.MX.zeros(n_tangent, 1))
+            F_sym = ca.cse(ca.MX.eye(n_tangent) + dt * M)
+        else:
+            delta_out = spec.boxminus_sym(x_pert_new, x_new_0)
+            F_sym = ca.substitute(ca.jacobian(delta_out, delta_in),
+                                  delta_in, ca.MX.zeros(n_tangent, 1))
         F_pattern = np.array(ca.DM(F_sym.sparsity()))
 
         # B = ∂δ'/∂u (regulators only)
@@ -373,6 +428,10 @@ class LinearizedSystem:
             h_pert = ca.reshape(outs_pert[full], dim, 1)
             H_sym = ca.substitute(ca.jacobian(h_pert, delta_in),
                                   delta_in, ca.MX.zeros(n_tangent, 1))
+            if euler:
+                # Inlined h_pert → flat self-contained H kernel; cse
+                # dedups the kinematic chains the inlining duplicated.
+                H_sym = ca.cse(H_sym)
             cols = np.flatnonzero(
                 np.array(ca.DM(H_sym.sparsity())).any(axis=0))
             h_supports.append(cols)
@@ -412,10 +471,13 @@ class LinearizedSystem:
                 "L_fn": L_fn, "blocks": blocks}
 
     def _tick_outputs(self, spec, x_sym, frozen, u_sym, dt_sym, t_sym,
-                      n_sym) -> dict:
+                      n_sym, *, inline: bool = False) -> dict:
         """Evaluate the compiled tick on flat symbolic inputs → {output
         name: MX}. Spec slots slice from `x_sym`; frozen entries bake as
-        constants; live inputs from `u_sym`; noise channels from `n_sym`."""
+        constants; live inputs from `u_sym`; noise channels from `n_sym`.
+        With `inline=True` the tick's MX graph is spliced in open (no
+        call node) so downstream substitutions can constant-fold through
+        it — see the euler-discretization note in `_differentiate`."""
         cf = self._cf
         in_names = [cf.name_in(i) for i in range(cf.n_in())]
         out_names = [cf.name_out(i) for i in range(cf.n_out())]
@@ -449,6 +511,9 @@ class LinearizedSystem:
                 raise RuntimeError(
                     f"LinearizedSystem: tick input {name!r} not handled.")
 
+        if inline:
+            result = cf.call(sliced, True, False)   # always_inline
+            return {nm: result[i] for i, nm in enumerate(out_names)}
         result = cf(*sliced)
         if len(out_names) == 1:
             return {out_names[0]: result}

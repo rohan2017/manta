@@ -53,11 +53,16 @@ class Sim:
     """Forward-dynamics transform: model validation + the linearized tick,
     emitting oracle/deploy Modules."""
 
-    def __init__(self, world: "World") -> None:
+    def __init__(self, world: "World", *,
+                 discretization: str = "exact") -> None:
         # Model validation (planet prep, requires_fields/requires_planet,
         # craft back-pointers) happens inside LinearizedSystem — the one
-        # choke point every transform passes through.
-        self._sys = LinearizedSystem(world)     # full state, all sensors
+        # choke point every transform passes through. `discretization`
+        # selects how predict_jacobian discretizes F ("exact" | "euler" —
+        # see LinearizedSystem; "euler" trades an O(dt²) jacobian
+        # difference for much smaller generated deploy code).
+        self._sys = LinearizedSystem(           # full state, all sensors
+            world, discretization=discretization)
         self.world = world
         self.crafts = self._sys.crafts
 
