@@ -632,7 +632,6 @@ def _emit_per_craft_dynamics(g_ctx, craft, pc, dt) -> None:
     # (zero generalized inertia) hold q̈ = 0. The rate output is later
     # overridden by the momentum-form value for live joints.
     dof_state_outputs: list[tuple[str, Any]] = []
-    new_pos_by_part: dict[Any, Any] = {}
     for j_part in joint_accel_syms:
         qdd_mx = qdd_by_part.get(j_part, ca.MX(0.0))
         pos_name, rate_name = j_part.dof_state_names()
@@ -640,7 +639,6 @@ def _emit_per_craft_dynamics(g_ctx, craft, pc, dt) -> None:
         pos_mx  = state_input_nodes[j_part][pos_name]._mx
         new_pos_mx = (pos_mx + rate_mx * dt_mx
                       + 0.5 * qdd_mx * dt_mx * dt_mx)
-        new_pos_by_part[j_part] = new_pos_mx
         dof_state_outputs.append(
             (prefix + f"{j_part.name}.{pos_name}", ir.Scalar(new_pos_mx)))
         dof_state_outputs.append(
@@ -778,18 +776,25 @@ def _emit_per_craft_dynamics(g_ctx, craft, pc, dt) -> None:
         p_q_new = p_mx[3:] + (js["force_q"] + js["dTdq"]) * dt_mx
         # Recover the new velocities from the ADVANCED configuration's
         # mass matrix: next tick rebuilds p = A(q⁺)·u⁺, so solving with
-        # A(q⁺) makes the momentum advance exact — solving with the
-        # stale A(q) silently drops the (∂A/∂q·q̇)·u drift and leaks
-        # angular momentum whenever the mass matrix is configuration-
-        # dependent (offset hinges, gimbals, sliders).
-        q_pos_syms, q_pos_new = [], []
+        # the advanced A makes the momentum flow consistent — solving
+        # with the stale A(q) silently drops the (∂A/∂q·q̇)·u drift and
+        # leaks angular momentum whenever the mass matrix is
+        # configuration-dependent (offset hinges, gimbals, sliders).
+        # Advance with q + q̇·dt (NOT the full q⁺ = q + q̇·dt + ½q̈·dt²):
+        # the ½q̈dt² term only changes A at O(dt²) per step — the same
+        # tier as the rest of the integrator — while substituting q̈ (the
+        # whole block-solve expression) into every entry of A would
+        # square the graph size and blow up code generation.
+        q_pos_syms, q_pos_adv = [], []
         for j_part in js["joints"]:
-            pos_name, _ = j_part.dof_state_names()
-            q_pos_syms.append(state_input_nodes[j_part][pos_name]._mx)
-            q_pos_new.append(new_pos_by_part[j_part])
+            pos_name, rate_name = j_part.dof_state_names()
+            pos_mx  = state_input_nodes[j_part][pos_name]._mx
+            rate_mx = state_input_nodes[j_part][rate_name]._mx
+            q_pos_syms.append(pos_mx)
+            q_pos_adv.append(pos_mx + rate_mx * dt_mx)
         A_new = ca.substitute(js["A"],
                               ca.vertcat(*q_pos_syms),
-                              ca.vertcat(*q_pos_new))
+                              ca.vertcat(*q_pos_adv))
         u_new = ca.solve(A_new, ca.vertcat(p_w_new, p_q_new))
         new_om_mx = u_new[0:3]
         for jdx, j_part in enumerate(js["joints"]):

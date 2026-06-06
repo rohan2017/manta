@@ -36,9 +36,11 @@ Scope:
 
 Articulation: nested joint chains compose symbolically through the
 kinematic pass; `r_com`, `I_com`, and per-part offsets pick up joint-
-angle dependence via `inertia.symbolic_inertia_rollup`. Native multi-
-DOF joints (ball, universal) are still future work — for now stack
-single-DOF joints to build them.
+angle dependence via `inertia.symbolic_inertia_rollup`, and the
+joint-space block solve (`tick/joint_space.py`) makes stacked chains
+dynamically exact — a 2-axis gimbal is two stacked `RevoluteJoint`s,
+full coupling included. Native multi-DOF joint PARTS (ball, universal)
+are just ergonomics on top of that, still future work.
 
 Known omissions: non-identity static orientation between part and craft
 frames; field disturbances tied to per-craft motion (only queried, not

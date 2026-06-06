@@ -132,7 +132,7 @@ scope:
   RW bias state (synthesizes its own state slot + driver input).
 
 Stock parts: `Mass`, `PointBuoy`, `Collider`, `Thruster` (polynomial
-in throttle), `Joint` (1-DOF revolute, with optional Mass child for
+in throttle), `RevoluteJoint` and `PrismaticJoint` (1-DOF joints, with Mass children for
 rotors), `DragSurface`, `Naca00xx` airfoil, `IMU` (gyro+accel, with
 Kalibr 4-parameter noise model), `DVL`, `Magnetometer`,
 `PositionSensor`, `TetherEndpoint`.
@@ -257,14 +257,14 @@ a self-running scripted fallback so they work unattended):
 ```bash
 # physics/ — visualized
 .venv/bin/python -m examples.physics.bouncing_ball       # Collider + CollisionField
-.venv/bin/python -m examples.physics.spinning_top        # gyroscopic precession (Joint)
+.venv/bin/python -m examples.physics.spinning_top        # gyroscopic precession (RevoluteJoint)
 .venv/bin/python -m examples.physics.foucault_pendulum   # Planet + Tether + Coriolis
 
 # vehicles/ — visualized + keyboard (add --keyboard for live control)
 .venv/bin/python -m examples.vehicles.quadcopter         # Sim + EKF + LQR closed loop
-.venv/bin/python -m examples.vehicles.airplane           # control surfaces on Joint hinges
+.venv/bin/python -m examples.vehicles.airplane           # control surfaces on RevoluteJoint hinges
 .venv/bin/python -m examples.vehicles.submarine          # PointBuoy + DVL + EKF
-.venv/bin/python -m examples.vehicles.hydrofoil          # nested-Joint laser gimbal (PID)
+.venv/bin/python -m examples.vehicles.hydrofoil          # nested-RevoluteJoint laser gimbal (PID)
 ```
 
 Visualized demos need the rerun SDK (`.venv/bin/pip install rerun-sdk`); pass

@@ -16,9 +16,11 @@ base is fixed and the swing plane visibly rotates — the rosette trail is
 the precession. The terminal fits the precession rate and compares it to
 −Ω (ratio 1.0 = exact Foucault).
 
-Why a `Tether` and not a `RevoluteJoint`: manta's articulated RevoluteJoint is a cheap
-fixed-base model that drops the inter-body Coriolis coupling driving
-precession; a Tether is a true two-body constraint that captures it.
+Suspension: a `Tether` (a wire/ball pivot, like the real instrument).
+A stacked two-axis `RevoluteJoint` gimbal works too — the joint-space
+solve carries the inter-body Coriolis coupling that drives the
+precession (see tests/test_foucault_joints.py) — but the wire is the
+physically faithful suspension for this rig.
 
 Run::
 
