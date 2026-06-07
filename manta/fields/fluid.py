@@ -133,6 +133,9 @@ class UniformFluid(Disturbance):
         super().__init__(name=name)
         self.density  = float(density)
         self.velocity = tuple(float(x) for x in velocity)
+        if self.density < 0.0:
+            raise ValueError(
+                f"UniformFluid: density must be >= 0, got {density!r}")
         if len(self.velocity) != 3:
             raise ValueError(
                 f"UniformFluid: velocity must be length-3, got {velocity!r}")

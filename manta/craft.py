@@ -406,13 +406,10 @@ class Craft:
     """
 
     def __init__(self, name: str) -> None:
+        from .ir.module import check_name
         from .parts.base import RootPart
-        self.name = name
+        self.name = check_name(name, who="Craft")
         self.root = RootPart(f"{name}_root")
-        # Set by Sim(world) — used by TickContext helpers
-        # (`ctx.has_field`, `ctx.get_field`, `ctx.planet`) so parts can
-        # introspect optional registrations.
-        self._world: "World | None" = None
 
     def add(self, part: Part) -> Part:
         """Attach a part to the craft's root. Equivalent to

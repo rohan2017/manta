@@ -37,6 +37,20 @@ class Mass(Part):
     mass: float                              = Parameter(1.0)
     moi:  "tuple[float, float, float]"       = Parameter((0.0, 0.0, 0.0))
 
+    def __init__(self, name: str, **overrides) -> None:
+        super().__init__(name, **overrides)
+        # Zero is allowed per-part (the craft-level total-mass guard
+        # catches an all-massless craft); negative mass/MOI is nonsense.
+        if float(self.mass) < 0.0:
+            raise ValueError(
+                f"{type(self).__name__} {name!r}: mass must be >= 0, "
+                f"got {self.mass!r}")
+        moi = tuple(float(x) for x in self.moi)
+        if len(moi) != 3 or any(x < 0.0 for x in moi):
+            raise ValueError(
+                f"{type(self).__name__} {name!r}: moi must be three "
+                f"non-negative diagonal entries, got {self.moi!r}")
+
     def update(self, ctx) -> Wrench:
         # ctx.position[WorldFrame] is the part's mount-point (chain-composed
         # by the kinematic pass). Querying the GravityField there picks up

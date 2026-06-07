@@ -33,7 +33,7 @@ import casadi as ca
 
 from ..ir.frames import WorldFrame
 from ..ir.types import Vec3
-from ..parts.base import RandomWalkNoise
+from ..parts.base import RandomWalkNoise, active_trace
 from .base import Disturbance
 from .fluid import FluidState
 
@@ -56,7 +56,7 @@ class CraftWindBubble(Disturbance):
     Args:
         craft   — owning Craft. The bubble follows the craft's
                   WorldFrame position symbolically (read inside
-                  `contribute_at_sym` via `craft._sym_state`).
+                  `contribute_at_sym` from the active trace's bindings).
         radius  — bubble radius in meters. Outside this, the
                   contribution is exactly zero.
         sigma   — RW drift density σ/√Hz for the wind. Larger ⇒ EKF
@@ -86,11 +86,16 @@ class CraftWindBubble(Disturbance):
         self.radius = float(radius)
 
     def contribute_at_sym(self, point, t) -> FluidState:
-        # Craft's symbolic position (set up by compile_world_tick
-        # Pass 0a). Bubbles must be added AFTER their anchor craft
-        # was added to the world; Sim(world) then guarantees the
-        # symbolic state is in scope.
-        craft_pos = self.craft._sym_state["position"]
+        # Craft's symbolic position (bound on the active trace by
+        # compile_world_tick Pass 0a). Bubbles must be added AFTER their
+        # anchor craft was added to the world; Sim(world) then guarantees
+        # the symbolic state is in scope.
+        trace = active_trace()
+        if trace is None:
+            raise RuntimeError(
+                "CraftWindBubble.contribute_at_sym: no active trace — this "
+                "is only callable during a world-tick compile.")
+        craft_pos = trace.craft_sym_state(self.craft)["position"]
         delta_mx  = point._mx - craft_pos._mx
         d_sq      = ca.dot(delta_mx, delta_mx)
         in_bubble = ca.if_else(d_sq < self.radius ** 2,

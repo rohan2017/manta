@@ -142,13 +142,12 @@ class Tether(Coupling):
 
         # Lift force-at-offset to wrench-at-craft-origin:
         #   F at offset r yields F at origin plus torque r × F about origin.
-        zero_t = Vec3[CraftFrame].constant((0.0, 0.0, 0.0))
         wrench_a = Wrench(
             force=F_on_a_craft,
-            torque=off_a_craft.cross(F_on_a_craft) + zero_t,
+            torque=off_a_craft.cross(F_on_a_craft),
         )
         wrench_b = Wrench(
             force=F_on_b_craft,
-            torque=off_b_craft.cross(F_on_b_craft) + zero_t,
+            torque=off_b_craft.cross(F_on_b_craft),
         )
         return wrench_a, wrench_b

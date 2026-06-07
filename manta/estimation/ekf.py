@@ -45,7 +45,7 @@ import numpy as np
 
 from ..ir.module import (
     EntryPoint, Hosting, Module, Port, PortField, PortRef, Role, StateField,
-    StateLayout, StateRef,
+    StateLayout, StateRef, entry_ident,
 )
 from ..ir.state_spec import StateSpec, flatten_nested
 from ..linearized_system import LinearizedSystem, resolve_suffix
@@ -145,7 +145,7 @@ class EKF:
             IKH = eye - K @ H
             P_upd = _sym(IKH @ P @ IKH.T + K @ R @ K.T)
             updates[full] = ca.Function(
-                f"ekf_update_{full.replace('.', '_')}",
+                f"ekf_update_{entry_ident(full)}",
                 [x, P, z, u, t], [x_upd, P_upd],
                 ["x", "P", "z", "u", "t"], ["x_new", "P_new"])
 
@@ -177,7 +177,7 @@ class EKF:
                        writes=("x", "P")),
         ]
         for full, s in sys.sensors.items():
-            ident = full.replace(".", "_")
+            ident = entry_ident(full)
             ports.append(Port(full, Role.MEASUREMENT, (s.dim,),
                               rate=sys.sample_rates.get(full)))
             functions[f"update_{ident}"] = updates[full]

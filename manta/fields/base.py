@@ -83,8 +83,11 @@ class Disturbance(DeclarationHost, ABC):
     def __init__(self, name: str | None = None, *,
                  combining: str | None = None,
                  **overrides: Any) -> None:
-        self.name = name if name is not None else (
-            f"{type(self).__name__}_{next(_DISTURBANCE_NAME_COUNTER)}")
+        from ..ir.module import check_name
+        self.name = check_name(
+            name if name is not None else (
+                f"{type(self).__name__}_{next(_DISTURBANCE_NAME_COUNTER)}"),
+            who=type(self).__name__)
         if combining is not None:
             if combining not in ("additive", "averaged", "projected"):
                 raise ValueError(

@@ -109,6 +109,13 @@ class PointMassGravity(Disturbance):
         self.position = tuple(float(x) for x in position)
         self.GM = float(GM)
         self.eps = float(eps)
+        if self.GM <= 0.0:
+            raise ValueError(
+                f"PointMassGravity: GM must be > 0, got {GM!r}")
+        # eps == 0 is allowed: exact Newtonian, singular only at the source.
+        if self.eps < 0.0:
+            raise ValueError(
+                f"PointMassGravity: eps must be >= 0, got {eps!r}")
 
     def contribute_at_sym(self, point, t):
         r_src = _VEC3_ANCHOR.constant(self.position)
@@ -172,6 +179,13 @@ class J2Gravity(Disturbance):
             raise ValueError("J2Gravity: polar_axis must be nonzero.")
         self._axis = axis / n
         self.eps = float(eps)
+        if self.GM <= 0.0:
+            raise ValueError(f"J2Gravity: GM must be > 0, got {GM!r}")
+        if self.eq_radius <= 0.0:
+            raise ValueError(
+                f"J2Gravity: eq_radius must be > 0, got {eq_radius!r}")
+        if self.eps < 0.0:
+            raise ValueError(f"J2Gravity: eps must be >= 0, got {eps!r}")
 
     def contribute_at_sym(self, point, t):
         r_src = _VEC3_ANCHOR.constant(self.position)

@@ -40,7 +40,7 @@ import numpy as np
 
 from .ir.module import (
     EntryPoint, Hosting, Module, Port, PortField, PortRef, Role, StateField,
-    StateLayout, StateRef,
+    StateLayout, StateRef, entry_ident,
 )
 from .ir.state_spec import flatten_nested
 from .linearized_system import LinearizedSystem
@@ -113,7 +113,7 @@ class Sim:
                     ca.reshape(sys.sensors[f].h_noisy_sym,
                                sys.sensors[f].dim, 1) for f in sensor_fulls],
                 ["x", "u", "noise", "dt", "t"],
-                ["x_new"] + [f.replace(".", "_") for f in sensor_fulls])
+                ["x_new"] + [entry_ident(f) for f in sensor_fulls])
             return Module(
                 name=self.world.name, state=StateLayout((x_field,)),
                 ports=(u_port, noise_port, dtp, tp, *meas_ports),
@@ -144,7 +144,7 @@ class Sim:
         margs = [sys.x_sym, sys.u_sym, sys.t_sym]
         margn = ["x", "u", "t"]
         for full, s in sys.sensors.items():
-            ident = full.replace(".", "_")
+            ident = entry_ident(full)
             h = ca.substitute(s.h_sym, sys.dt_sym, zero_dt)
             H = ca.substitute(s.H_sym, sys.dt_sym, zero_dt)
             functions[f"measure_{ident}"] = ca.Function(

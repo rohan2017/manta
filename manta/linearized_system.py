@@ -45,6 +45,7 @@ from typing import Any
 import casadi as ca
 import numpy as np
 
+from .ir.module import entry_ident
 from .ir.state_spec import StateSpec, flatten_nested, resolve_slotset
 
 
@@ -110,9 +111,6 @@ class SensorModel:
     `(x,u,dt,t)` convenience functions for point evaluation/analysis."""
     full:          str
     dim:           int
-    craft_name:    str
-    part_name:     str
-    out_name:      str
     h_sym:         ca.MX
     h_noisy_sym:   ca.MX
     H_sym:         ca.MX
@@ -191,10 +189,8 @@ class LinearizedSystem:
 
         # --- model validation (every transform passes through here) -----
         # Verify per-part `requires_fields` / `requires_planet` against the
-        # world's registry, and stamp the craft back-pointers parts use to
-        # introspect fields/planets via TickContext.
+        # world's registry.
         for craft in self.crafts:
-            craft._world = world
             for part in craft.parts:
                 for req_cls in getattr(type(part), "requires_fields", []):
                     if not any(isinstance(f, req_cls) for f in world.fields):
@@ -224,6 +220,7 @@ class LinearizedSystem:
             fluid_field=world.get_field(FluidField),
             mag_field=world.get_field(MagField),
             collision_field=world.get_field(CollisionField),
+            world=world,
         )
         self._cf = compiled.casadi_function
         self.tick = compiled
@@ -233,8 +230,6 @@ class LinearizedSystem:
         self.noise_specs = sig.noise
         self.n_noise = sum(s.dim for s in sig.noise)
         self.input_defaults = dict(sig.input_defaults)
-        self._sensor_meta = {s.full: (s.craft.name, s.part.name, s.output_name)
-                             for s in sig.sensors}
 
         # --- live-input subset (excluded inputs freeze at default) ------
         frozen: dict[str, Any] = {}
@@ -440,13 +435,11 @@ class LinearizedSystem:
                        if self.n_noise > 0 else None)
             h_fn = H_fn = None
             if build_functions:
-                safe = full.replace(".", "_")
+                safe = entry_ident(full)
                 h_fn = ca.Function(f"h_{safe}", args, [h_sym], argn, ["h"])
                 H_fn = ca.Function(f"H_{safe}", args, [H_sym], argn, ["H"])
-            craft_name, part_name, out_name = self._sensor_meta[full]
             sensors[full] = SensorModel(
-                full=full, dim=dim, craft_name=craft_name,
-                part_name=part_name, out_name=out_name,
+                full=full, dim=dim,
                 h_sym=h_sym, h_noisy_sym=h_noisy, H_sym=H_sym,
                 L_h_sym=L_h_sym, observed_cols=cols, h_fn=h_fn, H_fn=H_fn)
 

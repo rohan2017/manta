@@ -52,7 +52,8 @@ class World:
     """Top-level simulation container."""
 
     def __init__(self, name: str = "world") -> None:
-        self.name = name
+        from .ir.module import check_name
+        self.name = check_name(name, who="World")
         # _crafts: list of dicts with craft, initial_state_overrides.
         self._crafts: list[dict[str, Any]] = []
         self._couplings: list[Coupling] = []

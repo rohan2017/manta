@@ -53,7 +53,8 @@ class Planet:
                  position: tuple[float, float, float] = (0.0, 0.0, 0.0),
                  rotation_axis: tuple[float, float, float] = (0.0, 0.0, 1.0),
                  omega: float = 0.0) -> None:
-        self.name = str(name)
+        from ..ir.module import check_name
+        self.name = check_name(str(name), who=type(self).__name__)
         pos = np.asarray(position, dtype=float)
         if pos.shape != (3,):
             raise ValueError(f"Planet: position must be length-3, got {position!r}")

@@ -38,7 +38,7 @@ import casadi as ca
 import numpy as np
 
 from ...bus import MeasurementBus, PortSet
-from ...ir.module import Hosting, Module, PortRef, Role, StateRef
+from ...ir.module import Hosting, Module, PortRef, Role, StateRef, entry_ident
 from ...ir.state_spec import flatten_nested
 from ...linearized_system import resolve_suffix
 
@@ -429,7 +429,7 @@ class NumpyFilter(NumpyRuntime):
             raise ValueError(
                 f"update {full}: expected z of size {port.size}, got "
                 f"{z_arr.size}.")
-        self._run(self.module.entry(f"update_{full.replace('.', '_')}"),
+        self._run(self.module.entry(f"update_{entry_ident(full)}"),
                   {full: z_arr, "u": u_vec, "t": t})
 
     def _update_low_level(self, h_sym: Callable, z, R) -> None:

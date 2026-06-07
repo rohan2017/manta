@@ -58,26 +58,72 @@ class TraceBindings:
     instance is NEVER mutated. Exception-safe by construction — the
     bindings live here, not on the objects, so there is nothing to restore
     when a trace unwinds (normally or via an exception).
+
+    Craft rigid-body state symbols live here too (`bind_craft_state` /
+    `craft_sym_state`), so a disturbance anchored to a craft (e.g.
+    CraftWindBubble) can read that craft's symbolic position mid-trace
+    without the compiler ever stashing anything on the Craft instance.
     """
 
-    __slots__ = ("_by_owner",)
+    __slots__ = ("_by_owner", "_craft_state")
 
     def __init__(self) -> None:
         self._by_owner: dict[int, dict[str, Any]] = {}
+        self._craft_state: dict[int, dict[str, Any]] = {}
 
     def bind(self, owner, name: str, symbol) -> None:
         """Bind `owner.<name>` to `symbol` for the duration of the trace."""
         self._by_owner.setdefault(id(owner), {})[name] = symbol
 
+    def bind_craft_state(self, craft, syms: dict) -> None:
+        """Bind a craft's rigid-body state symbols (compile Pass 0a)."""
+        self._craft_state[id(craft)] = syms
+
+    def craft_sym_state(self, craft) -> dict:
+        """The bound rigid-body state symbols of `craft` for this trace."""
+        try:
+            return self._craft_state[id(craft)]
+        except KeyError:
+            raise RuntimeError(
+                f"TraceBindings: craft '{craft.name}' has no symbolic state "
+                f"bound — it is not part of the world being compiled.")
+
     def __enter__(self) -> "TraceBindings":
-        if getattr(_trace_local, "by_owner", None) is not None:
+        if getattr(_trace_local, "active", None) is not None:
             raise RuntimeError(
                 "TraceBindings: a trace is already active on this thread.")
-        _trace_local.by_owner = self._by_owner
+        _trace_local.active = self
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
-        _trace_local.by_owner = None
+        _trace_local.active = None
+
+
+def active_trace() -> "TraceBindings | None":
+    """The trace active on this thread, if any. Compile-time hook for code
+    that runs inside a trace without a `trace` handle in scope (e.g. a
+    disturbance's `contribute_at_sym`)."""
+    return getattr(_trace_local, "active", None)
+
+
+def unit_axis(value, *, who: str, what: str) -> tuple:
+    """Validate a length-3, nonzero axis parameter; return it normalized.
+
+    Construction-time guard for parts whose math assumes a unit axis
+    (joint DOF axes, airfoil chord/normal): a zero axis is a config
+    error and a non-unit one would silently scale the physics."""
+    try:
+        axis = tuple(float(x) for x in value)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"{who}: {what} must be a length-3 vector, got {value!r}")
+    if len(axis) != 3:
+        raise ValueError(
+            f"{who}: {what} must be length-3, got {value!r}")
+    n = (axis[0] ** 2 + axis[1] ** 2 + axis[2] ** 2) ** 0.5
+    if n == 0.0:
+        raise ValueError(f"{who}: {what} must be nonzero.")
+    return (axis[0] / n, axis[1] / n, axis[2] / n)
 
 
 # ---------------------------------------------------------------------------
@@ -482,9 +528,9 @@ class DeclarationHost:
         # Inside an active trace, declared attributes resolve through the
         # trace's bindings (the current tick's symbols); everything else —
         # and everything outside a trace — reads the instance as normal.
-        by_owner = getattr(_trace_local, "by_owner", None)
-        if by_owner is not None:
-            bound = by_owner.get(id(self))
+        tr = getattr(_trace_local, "active", None)
+        if tr is not None:
+            bound = tr._by_owner.get(id(self))
             if bound is not None:
                 sym = bound.get(name)
                 if sym is not None:
@@ -599,7 +645,8 @@ class Part(DeclarationHost):
     transform: "tuple[float, float, float]" = Parameter((0.0, 0.0, 0.0))
 
     def __init__(self, name: str, **overrides: Any) -> None:
-        self.name = name
+        from ..ir.module import check_name
+        self.name = check_name(name, who=type(self).__name__)
         self.parent: "Part | None" = None
         self._apply_declarations(overrides)
 

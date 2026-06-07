@@ -42,6 +42,13 @@ class PointBuoy(Part):
 
     volume: float = Parameter(1e-3)     # m³
 
+    def __init__(self, name: str, **overrides) -> None:
+        super().__init__(name, **overrides)
+        if float(self.volume) < 0.0:
+            raise ValueError(
+                f"{type(self).__name__} {name!r}: volume must be >= 0, "
+                f"got {self.volume!r}")
+
     def update(self, ctx) -> PartUpdate:
         # ctx.position is already the buoy's world-frame mount point (the
         # kinematic pass composed the transform + any joints). Field queries

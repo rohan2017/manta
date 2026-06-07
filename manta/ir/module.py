@@ -27,6 +27,29 @@ from math import prod
 from typing import Any
 
 
+def entry_ident(name: str) -> str:
+    """A dotted manta name (`craft.part.out`) → the flat identifier used in
+    entry-point/kernel names and C++ symbols. The single home of the
+    dot→underscore convention: transforms name their entries with it and
+    runtimes/backends look entries up with it, so they can never drift."""
+    return name.replace(".", "_")
+
+
+def check_name(name: str, *, who: str) -> str:
+    """Require a model-object name to be a valid identifier.
+
+    Craft/Part/Disturbance/World names flow into tick-signature dot-names,
+    Module entry-point names, and (via `entry_ident`) C++ symbols — a name
+    like `"imu-9dof"` would only fail when the *generated* code compiles,
+    far from the mistake. Refuse it at construction instead."""
+    if not isinstance(name, str) or not name.isidentifier():
+        raise ValueError(
+            f"{who}: name {name!r} is not a valid identifier. Names appear "
+            f"in generated kernel names and C++ symbols — use letters, "
+            f"digits, and underscores only, not starting with a digit.")
+    return name
+
+
 # ---------------------------------------------------------------------------
 # State
 # ---------------------------------------------------------------------------

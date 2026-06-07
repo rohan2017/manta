@@ -36,7 +36,7 @@ import casadi as ca
 from ...fields import FluidField
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3
-from ..base import Parameter, Part, PartUpdate
+from ..base import Parameter, Part, PartUpdate, unit_axis
 from ...ir.wrench import Wrench
 
 
@@ -69,6 +69,27 @@ class Naca00xx(Part):
     CL_max:      float = Parameter(1.2)
     CD_0:        float = Parameter(0.01)
     induced_k:   float = Parameter(0.1)
+
+    def __init__(self, name: str, **overrides) -> None:
+        super().__init__(name, **overrides)
+        who = f"{type(self).__name__} {name!r}"
+        if float(self.area) <= 0.0:
+            raise ValueError(f"{who}: area must be > 0, got {self.area!r}")
+        if float(self.CD_0) < 0.0 or float(self.induced_k) < 0.0:
+            raise ValueError(
+                f"{who}: CD_0 and induced_k must be >= 0, got "
+                f"CD_0={self.CD_0!r}, induced_k={self.induced_k!r}")
+        # The AoA decomposition assumes orthonormal chord/normal axes —
+        # normalize each and refuse a non-perpendicular pair.
+        self.chord_axis  = unit_axis(self.chord_axis,
+                                     who=who, what="chord_axis")
+        self.normal_axis = unit_axis(self.normal_axis,
+                                     who=who, what="normal_axis")
+        dot = sum(c * n for c, n in zip(self.chord_axis, self.normal_axis))
+        if abs(dot) > 1e-6:
+            raise ValueError(
+                f"{who}: chord_axis and normal_axis must be perpendicular "
+                f"(unit-vector dot product is {dot:.3e}).")
 
     def update(self, ctx) -> PartUpdate:
         # --- relative wind at the airfoil's mount point (world frame) ---

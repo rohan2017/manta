@@ -36,7 +36,7 @@ from ..craft import (
     _wrench_rotate_to_craft, _shift_wrench,
 )
 from .inertia import symbolic_inertia_rollup
-from .joint_space import build_joint_space
+from .joint_space import DEGENERATE_INERTIA_EPS, build_joint_space
 from .kinematics import kinematic_pass
 from ..ir.frames import WorldFrame, CraftFrame, PartFrame
 from ..ir.manifold import SO3Manifold
@@ -51,6 +51,7 @@ def compile_world_tick(crafts: list,
                        fluid_field=None,
                        mag_field=None,
                        collision_field=None,
+                       world=None,
                        ) -> "ir.graph.CompiledGraph":
     """Compile a CasADi-MX tick over multiple coupled crafts.
 
@@ -65,6 +66,9 @@ def compile_world_tick(crafts: list,
                     unset field defaults
                     to its empty form (zero gravity / zero density /
                     zero B / zero penetration).
+        world     — the owning World, if any; handed to each TickContext
+                    so parts can introspect optional registrations
+                    (`ctx.has_field`, `ctx.get_field`, `ctx.planet`).
 
     State layout (input + output):
         <craft_name>.position
@@ -114,67 +118,62 @@ def compile_world_tick(crafts: list,
                 f"{ai['m_total']}; need m > 0.")
 
     name = "_".join(c.name for c in crafts) + "_world_tick"
-    try:
-        # All State/Input/Noise attribute reads inside the trace resolve
-        # through `trace` (thread-local TraceBindings) — the part and
-        # disturbance instances are never mutated, so there is nothing to
-        # restore, even when a part's update() raises mid-trace.
-        with ir.Graph(name=name) as g, TraceBindings() as trace:
-            dt = ir.Scalar.input("dt")
-            t  = ir.Scalar.input("t")
+    # All State/Input/Noise attribute reads (and the per-craft rigid-body
+    # state symbols) inside the trace resolve through `trace` (thread-local
+    # TraceBindings) — the part, disturbance, and craft instances are never
+    # mutated, so there is nothing to restore, even when a part's update()
+    # raises mid-trace.
+    with ir.Graph(name=name) as g, TraceBindings() as trace:
+        dt = ir.Scalar.input("dt")
+        t  = ir.Scalar.input("t")
 
-            # Pass 0a: rigid-body state inputs for every craft, stashed on
-            # the craft so disturbances (and the per-craft trace below) can
-            # reference any craft's symbolic state. This must precede
-            # disturbance plumbing because a disturbance might close over a
-            # craft's position (e.g. CraftWindBubble).
-            for craft in crafts:
-                prefix = f"{craft.name}."
-                craft._sym_state = {
-                    "position":         ir.Vec3[WorldFrame].input(prefix + "position"),
-                    "orientation":      ir.Quat[WorldFrame, CraftFrame].input(prefix + "orientation"),
-                    "velocity":         ir.Vec3[WorldFrame].input(prefix + "velocity"),
-                    "angular_velocity": ir.Vec3[CraftFrame].input(prefix + "angular_velocity"),
-                }
-
-            # Pass 0b: plumb State/Noise declarations on field disturbances.
-            # These bindings need to be in scope BEFORE any part's update()
-            # queries a field.
-            all_fields = [gravity_field, fluid_field, mag_field,
-                          collision_field]
-            dist_state_outputs = _plumb_field_disturbances(
-                all_fields, dt, trace)
-
-            # Pass 1: per-craft trace. The rigid-body state symbols are
-            # already created (Pass 0a); the per-craft helper picks them up
-            # from craft._sym_state.
-            per_craft: dict[int, dict[str, Any]] = {}
-            for craft in crafts:
-                per_craft[id(craft)] = _trace_craft_pass1(
-                    craft, gravity_field, fluid_field, mag_field, dt, t,
-                    trace, collision_field=collision_field)
-
-            # Pass 2: coupling wrench injection.
-            for cp in couplings:
-                pc_a = per_craft[id(cp.craft_a)]
-                pc_b = per_craft[id(cp.craft_b)]
-                w_a, w_b = cp.compute_wrenches_sym(pc_a["ctx"], pc_b["ctx"])
-                pc_a["net"] = pc_a["net"] + w_a
-                pc_b["net"] = pc_b["net"] + w_b
-
-            # Pass 3: finalize per-craft dynamics.
-            for craft in crafts:
-                _emit_per_craft_dynamics(g, craft, per_craft[id(craft)], dt)
-
-            # Disturbance state outputs (deterministic passthrough for plain
-            # State; bias_next = bias + sqrt(dt)·driver for RW Noise).
-            for out_name, out_val in dist_state_outputs:
-                g.output(out_val, out_name)
-    finally:
-        # Clear the per-craft symbolic-state stash; the compiled function
-        # carries the references internally now.
+        # Pass 0a: rigid-body state inputs for every craft, bound on the
+        # trace so disturbances (and the per-craft trace below) can
+        # reference any craft's symbolic state. This must precede
+        # disturbance plumbing because a disturbance might close over a
+        # craft's position (e.g. CraftWindBubble).
         for craft in crafts:
-            craft._sym_state = None
+            prefix = f"{craft.name}."
+            trace.bind_craft_state(craft, {
+                "position":         ir.Vec3[WorldFrame].input(prefix + "position"),
+                "orientation":      ir.Quat[WorldFrame, CraftFrame].input(prefix + "orientation"),
+                "velocity":         ir.Vec3[WorldFrame].input(prefix + "velocity"),
+                "angular_velocity": ir.Vec3[CraftFrame].input(prefix + "angular_velocity"),
+            })
+
+        # Pass 0b: plumb State/Noise declarations on field disturbances.
+        # These bindings need to be in scope BEFORE any part's update()
+        # queries a field.
+        all_fields = [gravity_field, fluid_field, mag_field,
+                      collision_field]
+        dist_state_outputs = _plumb_field_disturbances(
+            all_fields, dt, trace)
+
+        # Pass 1: per-craft trace. The rigid-body state symbols are
+        # already created (Pass 0a); the per-craft helper picks them up
+        # from the trace.
+        per_craft: dict[int, dict[str, Any]] = {}
+        for craft in crafts:
+            per_craft[id(craft)] = _trace_craft_pass1(
+                craft, gravity_field, fluid_field, mag_field, dt, t,
+                trace, collision_field=collision_field, world=world)
+
+        # Pass 2: coupling wrench injection.
+        for cp in couplings:
+            pc_a = per_craft[id(cp.craft_a)]
+            pc_b = per_craft[id(cp.craft_b)]
+            w_a, w_b = cp.compute_wrenches_sym(pc_a["ctx"], pc_b["ctx"])
+            pc_a["net"] = pc_a["net"] + w_a
+            pc_b["net"] = pc_b["net"] + w_b
+
+        # Pass 3: finalize per-craft dynamics.
+        for craft in crafts:
+            _emit_per_craft_dynamics(g, craft, per_craft[id(craft)], dt)
+
+        # Disturbance state outputs (deterministic passthrough for plain
+        # State; bias_next = bias + sqrt(dt)·driver for RW Noise).
+        for out_name, out_val in dist_state_outputs:
+            g.output(out_val, out_name)
 
     cg = g.compile(defaults={"t": 0.0})
     # Aggregate per-part rate declarations (ctx.sample / ctx.hold) onto
@@ -272,7 +271,8 @@ def _trace_craft_pass1(craft,
                        dt,
                        t,
                        trace,
-                       collision_field=None) -> dict[str, Any]:
+                       collision_field=None,
+                       world=None) -> dict[str, Any]:
     """Set up one craft's state inputs, part bindings (via `trace`),
     TickContext, run all parts' update(), and collect their wrench
     contributions + state outputs + sensor outputs. Returns a dict
@@ -280,12 +280,13 @@ def _trace_craft_pass1(craft,
     prefix = f"{craft.name}."
 
     # Rigid-body state symbols were created in `compile_world_tick`'s
-    # Pass 0a and stashed on `craft._sym_state` (so disturbances anchored
-    # to other crafts can reference them). Pick them up here.
-    position    = craft._sym_state["position"]
-    orientation = craft._sym_state["orientation"]
-    velocity    = craft._sym_state["velocity"]
-    ang_vel     = craft._sym_state["angular_velocity"]
+    # Pass 0a and bound on the trace (so disturbances anchored to other
+    # crafts can reference them). Pick them up here.
+    sym_state   = trace.craft_sym_state(craft)
+    position    = sym_state["position"]
+    orientation = sym_state["orientation"]
+    velocity    = sym_state["velocity"]
+    ang_vel     = sym_state["angular_velocity"]
     # Placeholder MX symbols for current-tick body acceleration / α
     # (substituted with the real Newton-Euler outputs after the wrench
     # sum is known — see the TickContext docstring in craft.py for why
@@ -372,7 +373,7 @@ def _trace_craft_pass1(craft,
         t=t,
         dt=dt,
         fields=fields_tuple,
-        world=getattr(craft, "_world", None),
+        world=world,
         orientation=orientation,                 # Quat[WorldFrame, CraftFrame]
         position=fv_root["position"],
         velocity=fv_root["velocity"],
@@ -408,7 +409,7 @@ def _trace_craft_pass1(craft,
             t=t,
             dt=dt,
             fields=fields_tuple,
-            world=getattr(craft, "_world", None),
+            world=world,
             orientation=orientation_part,
             position=fv["position"],
             velocity=fv["velocity"],
@@ -615,7 +616,7 @@ def _emit_per_craft_dynamics(g_ctx, craft, pc, dt) -> None:
     # Without joints: the plain 3×3 body solve, bit-identical to before.
     qdd_by_part: dict[Any, Any] = {}
     if js is None:
-        if np.linalg.det(I_com_at_zero_np) > 1e-18:
+        if np.linalg.det(I_com_at_zero_np) > DEGENERATE_INERTIA_EPS:
             alpha_mx = ca.solve(I_com_mx, tau_eff._mx)
             alpha = ir.Vec3[CraftFrame].from_mx(alpha_mx)
         else:
@@ -766,7 +767,7 @@ def _emit_per_craft_dynamics(g_ctx, craft, pc, dt) -> None:
     if js is None:
         H_mx = I_com_mx @ om_mx
         H_new_mx = R_neg @ (H_mx + tau_com._mx * dt_mx)
-        if np.linalg.det(I_com_at_zero_np) > 1e-18:
+        if np.linalg.det(I_com_at_zero_np) > DEGENERATE_INERTIA_EPS:
             new_om_mx = ca.solve(I_com_mx, H_new_mx)
         else:
             new_om_mx = om_mx + alpha._mx * dt_mx

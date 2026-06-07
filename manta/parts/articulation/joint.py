@@ -50,7 +50,7 @@ import numpy as np
 
 from ...ir.frames import PartFrame
 from ...ir.types import Vec3
-from ..base import CompositePart, Input, Parameter, PartUpdate, State
+from ..base import CompositePart, Input, Parameter, PartUpdate, State, unit_axis
 from ...ir.wrench import Wrench
 
 
@@ -101,6 +101,11 @@ class ArticulatedJoint(CompositePart):
                 f"{type(self).__name__} {name!r}: mode must be one of "
                 f"{_MODES}, got {mode!r}")
         super().__init__(name, **overrides)
+        # The kinematic pass and the joint-space rows both assume a unit
+        # axis — normalize once here (a zero axis is a config error).
+        self.axis = unit_axis(self.axis,
+                              who=f"{type(self).__name__} {name!r}",
+                              what="axis")
 
     # ----- per-DOF-type hooks ----------------------------------------------
 

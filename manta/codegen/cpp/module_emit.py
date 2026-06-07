@@ -33,6 +33,7 @@ from .cmake import emit_cmakelists
 from .kernels import emit_kernel_list
 from .types import cpp_type_for
 from ...ir.module import Hosting, PortRef, Role, StateRef
+from ...ir.module import entry_ident as _ident
 
 
 # ---------------------------------------------------------------------------
@@ -68,10 +69,6 @@ class _Ctx:
     def n_u(self) -> int:
         return (sum(f.dim for f in self.u_port.fields)
                 if self.u_port is not None else 0)
-
-
-def _ident(name: str) -> str:
-    return S.cpp_ident(name)
 
 
 def _mat_type(r: int, c: int) -> str:
@@ -429,8 +426,6 @@ def _ret_assign(ctx, name, dst, raw) -> list[str]:
     if port.role in (Role.CONTROL, Role.OUTPUT):     # pragma: no cover
         raise NotImplementedError(
             "struct-valued member inside a composite result")
-    if len(port.shape) == 2 or port.size > 1:
-        return [f"    {dst} = {raw};"]
     return [f"    {dst} = {raw};"]
 
 

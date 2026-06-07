@@ -61,6 +61,14 @@ from typing import Any
 import casadi as ca
 import numpy as np
 
+# Below this, an inertia evaluated numerically at the zero pose (a joint's
+# generalized inertia here; det of the 3×3 body inertia in world_tick) is
+# treated as exactly zero — a massless rotor / point-mass craft — and the
+# corresponding rotational solve is locked/skipped instead of inverted.
+# Far below any physical value in SI (a 1 g, 1 mm bolt is ~1e-9 kg·m²) yet
+# far above accumulated round-off from the symbolic assembly.
+DEGENERATE_INERTIA_EPS = 1e-18
+
 
 def _generalized_inertia(joint) -> float:
     """Numeric scalar deciding whether the DOF is dynamically live:
@@ -115,8 +123,8 @@ def build_joint_space(craft, *,
     for part in craft.parts:
         if not isinstance(part, ArticulatedJoint):
             continue
-        (joints if _generalized_inertia(part) > 1e-18 else locked).append(
-            part)
+        (joints if _generalized_inertia(part) > DEGENERATE_INERTIA_EPS
+         else locked).append(part)
     if not joints:
         return None
 

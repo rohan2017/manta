@@ -3,7 +3,7 @@
 Capstone test for the field-bus design:
   * Each craft maintains its own RW-evolving wind state.
   * The bubble is a hard-edged sphere centered on the craft's
-    symbolic position (via `craft._sym_state`).
+    symbolic position (via the trace's craft-state bindings).
   * Overlapping bubbles use the FluidField's "averaged" combining so
     crafts compromise on the mean of their estimates inside overlap.
   * EKF picks up each bubble's wind as a separate state slot with
