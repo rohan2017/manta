@@ -1,6 +1,6 @@
 """OpticalSource — adds a semantic ellipsoid disturbance for cameras.
 
-Bolt it to a vehicle and any `Camera` on another craft can see it: the
+Bolt it to a vehicle and any camera on another craft can see it: the
 source adds a `BodySemanticEllipsoid` (a coarse 3-D extent + class label)
 to the world's `OpticalField` (which must be registered). The ellipsoid
 rides this craft's pose, and the camera projects that quadric to an

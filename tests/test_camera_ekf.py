@@ -13,7 +13,7 @@ import pytest
 
 from manta import Craft, EKF, Sim, TargetNumpy, World
 from manta.fields import GravityField, OpticalField
-from manta.parts import Camera, Mass, OpticalSource, PositionSensor
+from manta.parts import BBoxCamera, Mass, OpticalSource, PositionSensor
 
 EDGES = ("xmin", "ymin", "xmax", "ymax")
 SEMI = (0.5, 0.5, 0.5)
@@ -23,8 +23,8 @@ def _world(*, bbox_sigma=1.0, tgt_pos=(-7.0, 0.0, 9.0), tgt_vel=(0.0, 0.0, 0.0),
            g=0.0):
     obs = Craft("obs")
     obs.add(Mass("body", mass=10.0, moi=(1, 1, 1)))
-    obs.add(Camera("cam", width=640, height=480, hfov_deg=100,
-                   bbox_sigma=bbox_sigma))
+    obs.add(BBoxCamera("cam", width=640, height=480, hfov_deg=100,
+                       bbox_sigma=bbox_sigma))
     obs.add(PositionSensor("gps", position_noise_sigma=0.01))
     tgt = Craft("tgt")
     tgt.add(Mass("body", mass=1.0, moi=(0.05, 0.05, 0.05)))

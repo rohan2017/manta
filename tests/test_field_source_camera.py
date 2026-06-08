@@ -11,7 +11,7 @@ import pytest
 from manta import Craft, EKF, Sim, TargetNumpy, World
 from manta.fields import GravityField, MagField, OpticalField
 from manta.parts import (
-    Camera, GravitySource, MagneticSource, Mass, Magnetometer,
+    BBoxCamera, GravitySource, MagneticSource, Mass, Magnetometer,
     OpticalSource, PositionSensor,
 )
 
@@ -19,7 +19,7 @@ from manta.parts import (
 def _probe_with_camera(**cam_kw):
     c = Craft("probe")
     c.add(Mass("body", mass=1.0))
-    c.add(Camera("cam", **cam_kw))
+    c.add(BBoxCamera("cam", **cam_kw))
     return c
 
 
@@ -106,7 +106,7 @@ def test_camera_does_not_see_own_craft():
     not box itself."""
     c = Craft("solo")
     c.add(Mass("body", mass=1.0))
-    c.add(Camera("cam"))
+    c.add(BBoxCamera("cam"))
     c.add(OpticalSource("self", semi_axes=(1, 1, 1)))
     w = World().add_field(OpticalField())
     w.add_craft(c, position=(0, 0, 0))

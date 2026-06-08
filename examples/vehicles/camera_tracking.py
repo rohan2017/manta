@@ -44,7 +44,7 @@ import numpy as np
 from manta import Craft, EKF, LQR, Sim, TargetNumpy, World
 from manta.fields import FluidField, GravityField, OpticalField
 from manta.parts import (
-    Camera, DragSurface, IMU, Mass, OpticalSource, PositionSensor,
+    BBoxCamera, DragSurface, IMU, Mass, OpticalSource, PositionSensor,
     RevoluteJoint, Thruster,
 )
 
@@ -107,7 +107,7 @@ def build_world():
     gx.add(gy)
     rocket.add(gx)
     # Nose camera looking up (+z); IMU + GPS for the rocket's own block.
-    rocket.add(Camera("cam", width=W_IMG, height=H_IMG, hfov_deg=HFOV,
+    rocket.add(BBoxCamera("cam", width=W_IMG, height=H_IMG, hfov_deg=HFOV,
                       bbox_sigma=BBOX_SIGMA, transform=(0, 0, NOSE_Z)))
     rocket.add(IMU("imu", gyro_noise_sigma=GYRO_SIGMA, accel_noise_sigma=2e-2))
     rocket.add(PositionSensor("gps", position_noise_sigma=GPS_SIGMA))

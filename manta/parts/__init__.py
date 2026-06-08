@@ -19,7 +19,7 @@ from .sensor.dvl import DVL
 from .sensor.imu import IMU
 from .sensor.magnetometer import Magnetometer
 from .sensor.position_sensor import PositionSensor
-from .sensor.camera import Camera
+from .sensor.camera import BBoxCamera, CentroidCamera, ProjectiveCamera
 from .actuation.thruster import Thruster
 from .aero.drag_surface import DragSurface
 from .aero.naca_airfoil import Naca00xx
@@ -37,7 +37,8 @@ __all__ = [
     "Wrench",
     "Mass", "PointBuoy", "Collider",
     "ArticulatedJoint", "PrismaticJoint", "RevoluteJoint",
-    "IMU", "DVL", "Magnetometer", "PositionSensor", "Camera",
+    "IMU", "DVL", "Magnetometer", "PositionSensor",
+    "ProjectiveCamera", "BBoxCamera", "CentroidCamera",
     "Thruster",
     "DragSurface", "Naca00xx",
     "TetherEndpoint",

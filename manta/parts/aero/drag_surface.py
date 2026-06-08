@@ -141,6 +141,24 @@ class DragSurface(Part):
         A_2 = -0.5 * area * drag_coefficient * np.eye(3)
         return cls(name, force_tensors=[A_1, A_2], **kwargs)
 
+    @classmethod
+    def directional_quadratic(cls,
+                              name: str,
+                              *,
+                              areas: tuple,
+                              drag_coefficient: float,
+                              **kwargs) -> "DragSurface":
+        """Anisotropic quadratic drag — a per-body-axis reference area:
+            F_i = -½·ρ·areas_i·Cd · v_i·|v_i|   (diagonal A_2)
+        Use it for a slender body: a cylindrical fuselage along, say, body
+        +z is ``areas=(side, side, frontal)`` with ``frontal ≪ side`` —
+        low drag nose-on, high drag broadside (and an off-axis flow gets a
+        restoring body torque through the standard force-at-offset lift)."""
+        ax, ay, az = (float(a) for a in areas)
+        A_1 = np.zeros((3, 3))
+        A_2 = -0.5 * drag_coefficient * np.diag([ax, ay, az])
+        return cls(name, force_tensors=[A_1, A_2], **kwargs)
+
     def __init__(self,
                  name: str,
                  *,

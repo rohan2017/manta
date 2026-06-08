@@ -251,14 +251,14 @@ class World:
         craft-anchored disturbance to its target field. The field must
         already be registered — a source CONTRIBUTES to a field, it does
         not provide one; using a `GravitySource` with no `GravityField`
-        registered is a configuration error. Then point every `Camera`
+        registered is a configuration error. Then point every camera
         at the optical ellipsoids it can see (all but its own craft's).
         Idempotent — guarded by `_sources_registered`; runs once at the
         first transform, like planet registration."""
         if self._sources_registered:
             return
         from .parts.field_source.base import FieldSource, cumulative_offset
-        from .parts.sensor.camera import Camera
+        from .parts.sensor.camera import ProjectiveCamera
         from .fields.optical import OpticalField
 
         for craft in self.crafts:
@@ -283,7 +283,7 @@ class World:
         if optical is not None:
             for craft in self.crafts:
                 for part in craft.parts:
-                    if isinstance(part, Camera):
+                    if isinstance(part, ProjectiveCamera):
                         part._targets = [
                             e for e in optical.ellipsoids
                             if e.source_craft is not craft]

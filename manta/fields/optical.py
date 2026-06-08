@@ -1,11 +1,11 @@
-"""OpticalField + semantic ellipsoids — what a Camera sees.
+"""OpticalField + semantic ellipsoids — what a camera sees.
 
 Unlike GravityField / MagField / FluidField, an OpticalField is NOT a
 superposition: a camera needs each object SEPARATELY to draw a separate
 bounding box, so summing contributions into one "value" is meaningless.
 The field therefore just CARRIES its disturbances (semantic ellipsoids)
 and exposes them for enumeration — `OpticalField.ellipsoids` — and the
-`Camera` part projects each one to an image-frame box.
+camera part projects each one to an image-frame box.
 
 A semantic ellipsoid is a coarse 3-D extent + a class label: the
 quadric ``(x − c)ᵀ M (x − c) ≤ 1`` with ``M = R · diag(1/a², 1/b²,
@@ -61,7 +61,7 @@ class _EllipsoidBase(Disturbance):
         # Optical disturbances are never summed (the camera enumerates
         # them); the base Field.value_at_sym is overridden to forbid it.
         raise NotImplementedError(
-            "OpticalField disturbances are not summed — a Camera enumerates "
+            "OpticalField disturbances are not summed — a camera enumerates "
             "OpticalField.ellipsoids and projects each quadric.")
 
     # ---- per-flavour ----------------------------------------------------
@@ -127,7 +127,7 @@ class BodySemanticEllipsoid(_EllipsoidBase):
 
 class OpticalField(Field):
     """A scene of semantic ellipsoids. Carries (does not sum) its
-    disturbances; the `Camera` part enumerates `ellipsoids` and projects
+    disturbances; the camera part enumerates `ellipsoids` and projects
     each quadric to an image-frame bounding box."""
 
     value_shape = SemanticQuadric
@@ -150,7 +150,7 @@ class OpticalField(Field):
 
     def value_at_sym(self, point, t):
         raise NotImplementedError(
-            "OpticalField is not a superposition field; a Camera enumerates "
+            "OpticalField is not a superposition field; a camera enumerates "
             "OpticalField.ellipsoids and projects each quadric to a box.")
 
 

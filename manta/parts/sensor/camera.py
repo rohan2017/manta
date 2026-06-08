@@ -1,37 +1,39 @@
-"""Camera — a pinhole sensor that bounding-boxes semantic ellipsoids.
+"""Projective cameras over the OpticalField — `BBoxCamera` + `CentroidCamera`.
 
-The camera enumerates the `OpticalField`'s ellipsoids (every other
-vehicle's `OpticalSource`, plus any scenery), projects each quadric to
-the image plane, and outputs the axis-aligned bounding box — exactly the
-2-D detections a perception stack consumes.
+Both enumerate the `OpticalField`'s semantic ellipsoids (every other
+vehicle's `OpticalSource`, plus any scenery), project each through a pinhole,
+and emit per-target image measurements. They differ only in WHAT they report:
 
-The projection is the dual-quadric trick, fully differentiable:
+  * `BBoxCamera` → the axis-aligned bounding box ``(xmin, ymin, xmax, ymax)``
+    — the 2-D detection a perception stack consumes. The box SIZE encodes
+    range (given the target's known semi-axes), so even ONE bbox camera is a
+    range sensor — but a *size-dependent* one (a bigger-but-farther object
+    looks identical).
 
-  * an ellipsoid ``(x−c)ᵀM(x−c) ≤ 1`` is the 4×4 point quadric
-    ``Q = [[M, −Mc], [−(Mc)ᵀ, cᵀMc − 1]]``; its dual is ``Q* = Q⁻¹``;
-  * the 3×4 camera ``P = K·[R_cw | −R_cw·C]`` maps it to the image dual
-    conic ``C* = P·Q*·Pᵀ`` (3×3);
-  * the box edges are the conic's tangent vertical/horizontal lines:
-    ``u = (C*₀₂ ± √(C*₀₂² − C*₀₀·C*₂₂)) / C*₂₂`` and the v-analogue.
+  * `CentroidCamera` → just the projected centre ``(u, v)`` — a pure BEARING,
+    INDEPENDENT of target size. One centroid pins the target to a ray; the
+    EKF recovers range by triangulating several spaced cameras' rays (and the
+    Kalman update IS that noise-weighted ray intersection — no triangulation
+    code). Size-free, and as good as the baseline you give it.
 
-Optical convention: the camera looks down its own +z axis, image +x
-right, +y down. Intrinsics are a focal length (from horizontal FOV) and
-the principal point at the image center.
+Both project with the dual-quadric / point projection through
+``P = K·[R_cw | −R_cw·C]`` (looks down its own +z; image +x right, +y down;
+intrinsics from a horizontal FOV with a centred principal point). The output
+set is fixed at compile time: `World._register_field_sources` fills
+`self._targets` with every ellipsoid not on the camera's own craft before the
+tick is traced, and both `output_declarations` and `update` iterate it.
 
-Outputs (per visible source ``S``, five scalars):
-  ``<S>_xmin``, ``<S>_ymin``, ``<S>_xmax``, ``<S>_ymax`` — pixel box,
-  clamped to the image; ``<S>_vis`` — 1 when the object is in front of
-  the camera and projects to a real ellipse, else 0 (the box is
-  meaningless then). ``S`` is the source disturbance's name, so a box on
-  craft ``rover`` carrying ``OpticalSource("beacon")`` is ``rover_beacon_*``.
-
-The set of outputs is fixed at compile time: `World._register_field_sources`
-fills `self._targets` with every ellipsoid not on the camera's own craft
-before the tick is traced, and both `output_declarations` and `update`
-iterate it.
+EKF use: a target's measurement is a differentiable function of BOTH the
+camera craft's pose AND the target's pose, so selecting the measurement
+outputs as EKF sensors couples the two craft blocks into one joint filter.
+Set ``noise`` (`bbox_sigma` / `pixel_sigma`) > 0 to declare the per-component
+white noise the filter needs for a nonzero R; the ``_vis`` flag carries no
+noise and must be excluded from ``sensors=[...]``.
 """
 
 from __future__ import annotations
+
+from typing import ClassVar
 
 import casadi as ca
 
@@ -41,40 +43,28 @@ from ...ir.types import Scalar, Vec3
 from ...ir.wrench import Wrench
 from ..base import Output, Parameter, Part, PartUpdate, WhiteNoise
 
-_BOX_EDGES = ("xmin", "ymin", "xmax", "ymax")
 
-
-class Camera(Part):
-    """Pinhole camera emitting per-object image-frame bounding boxes.
+class ProjectiveCamera(Part):
+    """Base for a pinhole camera that measures `OpticalField` ellipsoids.
 
     Construct with the image size and horizontal field of view (the focal
-    length and a centered principal point are derived), or override any
-    intrinsic explicitly::
-
-        Camera("cam", width=640, height=480, hfov_deg=70)
-        Camera("cam", width=1280, height=720, fx=900, fy=900, rate=30)
+    length and a centred principal point are derived), or override any
+    intrinsic explicitly. Subclasses set `_COMPONENTS` (the per-target scalar
+    measurement names, excluding ``vis``) and implement `_project`.
 
     Parameters:
         width, height — image size in pixels.
         fx, fy, cx, cy — intrinsics (focal lengths + principal point, px).
         rate — optional capture rate (Hz); `None` ⇒ every tick.
-        bbox_sigma — per-edge pixel measurement noise σ. Default 0 leaves
-            the camera a noiseless oracle (byte-identical to before). Set
-            it > 0 to make the four box edges EKF-usable measurements: each
-            edge gets an independent white-noise channel so the filter can
-            assemble a nonzero R and recover a target's 3-D position from
-            its bearing + apparent size (the box scale → range, given the
-            target's known semi-axes). See `examples/vehicles/camera_tracking`.
-
-    EKF use: the box of a target is a differentiable function of BOTH the
-    camera craft's pose AND the target craft's pose, so selecting the edge
-    outputs as EKF sensors (and tracking both crafts) yields a single joint
-    filter — the camera measurement couples the two craft blocks. Select
-    only the edges via `sensors=[...]` (the `_vis` flag carries no noise and
-    must not be folded as a measurement).
+        noise_sigma — per-component pixel measurement σ (subclasses expose it
+            under a friendlier name). 0 ⇒ noiseless oracle, no noise channels
+            (byte-identical to a camera with none), and not EKF-usable.
     """
 
     requires_fields = [OpticalField]
+
+    #: Per-target scalar measurement names (excludes the ``vis`` flag).
+    _COMPONENTS: ClassVar[tuple[str, ...]] = ()
 
     width:  float = Parameter(640.0)
     height: float = Parameter(480.0)
@@ -83,11 +73,11 @@ class Camera(Part):
     cx:     float = Parameter(0.0)
     cy:     float = Parameter(0.0)
     rate:   float = Parameter(None)
-    bbox_sigma: float = Parameter(0.0)
+    noise_sigma: float = Parameter(0.0)
 
     def __init__(self, name: str, *, width: float = 640.0, height: float = 480.0,
                  hfov_deg: float = 70.0, fx=None, fy=None, cx=None, cy=None,
-                 rate=None, bbox_sigma: float = 0.0,
+                 rate=None, noise_sigma: float = 0.0,
                  transform=(0.0, 0.0, 0.0)) -> None:
         import math
         w, h = float(width), float(height)
@@ -98,74 +88,140 @@ class Camera(Part):
             fy=float(fy) if fy is not None else (float(fx) if fx is not None else f),
             cx=float(cx) if cx is not None else w / 2.0,
             cy=float(cy) if cy is not None else h / 2.0,
-            rate=rate, bbox_sigma=float(bbox_sigma), transform=transform)
+            rate=rate, noise_sigma=float(noise_sigma), transform=transform)
         # Filled by World._register_field_sources (every ellipsoid not on
-        # this camera's craft). Drives both output_declarations and update.
+        # this camera's craft). Drives output/noise declarations and update.
         self._targets: list = []
 
-    # The output set is per-instance (one box per visible source), so we
-    # override the class-level declaration walk with a dynamic one.
+    # The output set is per-instance (one detection per visible source), so
+    # we override the class-level declaration walk with a dynamic one.
     def output_declarations(self) -> dict:
         out: dict = {}
         for e in self._targets:
-            for suffix in (*_BOX_EDGES, "vis"):
+            for suffix in (*self._COMPONENTS, "vis"):
                 out[f"{e.name}_{suffix}"] = Output()
         return out
 
-    # Per-instance noise: one independent white-noise channel per box edge
-    # per target, so the EKF can build a nonzero R for the edge measurements.
-    # Mirrors `output_declarations` (the target set is dynamic). Inert — and
-    # byte-identical to the old camera — when bbox_sigma == 0.
+    # Per-instance noise: one independent white-noise channel per measurement
+    # component per target, so the EKF can build a nonzero R. Mirrors
+    # `output_declarations`; inert (byte-identical) when noise_sigma == 0.
     def noise_declarations(self) -> dict:
-        sigma = float(self.bbox_sigma)
+        sigma = float(self.noise_sigma)
         if sigma <= 0.0 or not self._targets:
             return {}
         decls: dict = {}
         for e in self._targets:
-            for suffix in _BOX_EDGES:
+            for suffix in self._COMPONENTS:
                 name = f"{e.name}_{suffix}_noise"
                 decls[name] = WhiteNoise("R1", sigma=sigma)
                 # The tick-signature walk reads `<name>_sigma` off the owner.
                 setattr(self, f"{name}_sigma", sigma)
         return decls
 
-    def update(self, ctx) -> PartUpdate:
-        zero = Vec3[PartFrame].constant((0.0, 0.0, 0.0))
-        if not self._targets:
-            return PartUpdate(wrench=Wrench(force=zero, torque=zero))
-
-        # Camera pose: C = world position; R_cw = world→camera rotation
-        # (the camera looks down its own +z). ctx.orientation is
-        # Quat[World, Part]; its conjugate's matrix is R_cam_from_world.
+    def _camera_matrix(self, ctx):
+        """The 3×4 pinhole matrix P (+ R_cw, C, W, H) at this tick."""
         C = ctx.position[WorldFrame]._mx
         R_cw = ctx.orientation.conjugate().to_rotmat()._mx
         fx, fy = float(self.fx), float(self.fy)
         cx, cy = float(self.cx), float(self.cy)
         W, H = float(self.width), float(self.height)
         K = ca.DM([[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]])
-        P = K @ ca.horzcat(R_cw, -R_cw @ C)          # 3×4 camera matrix
+        P = K @ ca.horzcat(R_cw, -R_cw @ C)
+        return P, R_cw, C, W, H
 
-        noisy = float(self.bbox_sigma) > 0.0
+    def update(self, ctx) -> PartUpdate:
+        zero = Vec3[PartFrame].constant((0.0, 0.0, 0.0))
+        if not self._targets:
+            return PartUpdate(wrench=Wrench(force=zero, torque=zero))
+        P, R_cw, C, W, H = self._camera_matrix(ctx)
+        noisy = float(self.noise_sigma) > 0.0
         outputs: dict = {}
         for e in self._targets:
             c = e.center_world()._mx                  # 3×1 world center
             M = e.shape_world_mx()                    # 3×3 world shape
-            box, vis = _project_box(P, R_cw, C, c, M, W, H)
+            comps, vis = self._project(P, R_cw, C, c, M, W, H)
             tag = e.name
-            for i, suffix in enumerate(_BOX_EDGES):
-                edge = Scalar(box[i])
-                if noisy:                             # additive per-edge pixel noise
-                    edge = edge + getattr(self, f"{tag}_{suffix}_noise")
-                outputs[f"{tag}_{suffix}"] = ctx.sample(edge, rate=self.rate)
+            for suffix in self._COMPONENTS:
+                val = Scalar(comps[suffix])
+                if noisy:
+                    val = val + getattr(self, f"{tag}_{suffix}_noise")
+                outputs[f"{tag}_{suffix}"] = ctx.sample(val, rate=self.rate)
             outputs[f"{tag}_vis"] = ctx.sample(Scalar(vis), rate=self.rate)
         return PartUpdate(wrench=Wrench(force=zero, torque=zero),
                           outputs=outputs)
 
+    def _project(self, P, R_cw, C, c, M, W, H):
+        """Return ``(components: dict[str, MX], vis: MX)`` for one target —
+        `components` keyed by `_COMPONENTS`. Subclass implements."""
+        raise NotImplementedError(
+            f"{type(self).__name__}: must implement _project().")
+
+
+class BBoxCamera(ProjectiveCamera):
+    """Pinhole camera emitting per-object image-frame bounding boxes.
+
+    Outputs per visible source ``S``: ``<S>_xmin/_ymin/_xmax/_ymax`` (pixel
+    box, clamped to the image) and ``<S>_vis`` (1 when in front and a real
+    ellipse, else 0). The box size encodes range given the target's semi-axes.
+
+        BBoxCamera("cam", width=640, height=480, hfov_deg=70)
+        BBoxCamera("cam", width=1280, height=720, bbox_sigma=2.0)   # EKF-usable
+    """
+
+    _COMPONENTS = ("xmin", "ymin", "xmax", "ymax")
+
+    def __init__(self, name: str, *, bbox_sigma: float = 0.0, **kw) -> None:
+        super().__init__(name, noise_sigma=bbox_sigma, **kw)
+
+    def _project(self, P, R_cw, C, c, M, W, H):
+        box, vis = _project_box(P, R_cw, C, c, M, W, H)
+        return {"xmin": box[0], "ymin": box[1],
+                "xmax": box[2], "ymax": box[3]}, vis
+
+
+class CentroidCamera(ProjectiveCamera):
+    """Pinhole camera emitting per-object image-frame CENTROIDS ``(u, v)``.
+
+    A centroid is the projection of the target's centre — a pure bearing,
+    independent of the target's size. Outputs per visible source ``S``:
+    ``<S>_u``, ``<S>_v`` (pixels) and ``<S>_vis``. One camera fixes a ray;
+    space several apart and select their ``_u``/``_v`` as EKF sensors and the
+    filter triangulates the target's 3-D position (the wider the baseline, the
+    better the range — size never enters).
+
+        CentroidCamera("c0", width=1280, height=720, hfov_deg=40,
+                       pixel_sigma=1.0)
+    """
+
+    _COMPONENTS = ("u", "v")
+
+    def __init__(self, name: str, *, pixel_sigma: float = 0.0, **kw) -> None:
+        super().__init__(name, noise_sigma=pixel_sigma, **kw)
+
+    def _project(self, P, R_cw, C, c, M, W, H):
+        u, v, vis = _project_point(P, R_cw, C, c, W, H)
+        return {"u": u, "v": v}, vis
+
+
+def _project_point(P, R_cw, C, c, W, H):
+    """Project a world point `c` through camera `P` to an (unclamped) image
+    centre ``(u, v)`` and a 0/1 visibility flag (in front + inside the image
+    rectangle). All args are CasADi MX/DM. No clamping — an out-of-frame
+    centroid is simply flagged not-visible (and never folded), so the
+    in-frame measurement Jacobian stays clean."""
+    x = P @ ca.vertcat(c, ca.DM(1.0))                # 3×1 homogeneous
+    depth = x[2]
+    u = x[0] / depth
+    v = x[1] / depth
+    in_front = (R_cw @ (c - C))[2] > 1e-6
+    in_frame = (u > 0.0) * (u < W) * (v > 0.0) * (v < H)
+    return u, v, in_front * in_frame
+
 
 def _project_box(P, R_cw, C, c, M, W, H):
-    """Project the ellipsoid (center `c`, shape `M`) through camera `P`
-    to an axis-aligned image box (clamped to [0,W]×[0,H]) and a 0/1
-    visibility flag. All args are CasADi MX/DM."""
+    """Project the ellipsoid (center `c`, shape `M`) through camera `P` to an
+    axis-aligned image box (clamped to [0,W]×[0,H]) and a 0/1 visibility flag.
+    All args are CasADi MX/DM."""
     Mc = M @ c
     Q = ca.vertcat(                                  # 4×4 point quadric
         ca.horzcat(M, -Mc),
