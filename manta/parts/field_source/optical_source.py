@@ -25,7 +25,7 @@ class OpticalSource(FieldSource):
         label     — integer class id the camera reports with each box.
     """
 
-    disturbance_field = OpticalField
+    emits_field = OpticalField
 
     semi_axes: tuple = Parameter((1.0, 1.0, 1.0))
     label:     int   = Parameter(0)

@@ -1,7 +1,7 @@
 """FieldSource — base for parts that add a disturbance to a field.
 
 A subclass declares which Field class it contributes to
-(`disturbance_field`) and how to build its craft-anchored `Disturbance`
+(`emits_field`) and how to build its craft-anchored `Disturbance`
 (`make_disturbance`). The world, at compile time, walks every craft for
 FieldSource parts and adds each one's disturbance to that field — see
 `World._register_field_sources`. A source does NOT provide the field: the
@@ -37,7 +37,7 @@ def cumulative_offset(part) -> np.ndarray:
 class FieldSource(Part):
     """Base for a part that adds a disturbance to a world field.
 
-    Subclasses set the class attribute `disturbance_field` (the `Field`
+    Subclasses set the class attribute `emits_field` (the `Field`
     subclass the disturbance belongs to — which must be registered on the
     world) and implement `make_disturbance(craft, offset_body)` returning
     the craft-anchored `Disturbance`. A field source contributes no
@@ -45,7 +45,7 @@ class FieldSource(Part):
 
     #: The Field subclass this source contributes a disturbance to. The
     #: field must be registered on the world. Subclasses override.
-    disturbance_field: type | None = None
+    emits_field: type | None = None
 
     def make_disturbance(self, craft, offset_body):
         """Build the craft-anchored Disturbance this source emits.

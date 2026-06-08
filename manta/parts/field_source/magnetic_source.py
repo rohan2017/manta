@@ -24,7 +24,7 @@ class MagneticSource(FieldSource):
         eps    — softening length (m) at the dipole position.
     """
 
-    disturbance_field = MagField
+    emits_field = MagField
 
     moment: tuple = Parameter((0.0, 0.0, 1.0e-2))
     eps:    float = Parameter(1e-3)

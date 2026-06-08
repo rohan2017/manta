@@ -28,7 +28,7 @@ class GravitySource(FieldSource):
         eps — softening length (m) capping the singularity at the source.
     """
 
-    disturbance_field = GravityField
+    emits_field = GravityField
 
     GM:  float = Parameter(1.0e6)
     eps: float = Parameter(1.0)

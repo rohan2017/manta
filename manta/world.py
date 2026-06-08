@@ -265,14 +265,14 @@ class World:
             for part in craft.parts:
                 if not isinstance(part, FieldSource):
                     continue
-                field = self.get_field(part.disturbance_field)
+                field = self.get_field(part.emits_field)
                 if field is None:
                     raise ValueError(
                         f"World '{self.name}': part {type(part).__name__}"
                         f"('{part.name}') on craft '{craft.name}' adds a "
-                        f"disturbance to a {part.disturbance_field.__name__}, "
+                        f"disturbance to a {part.emits_field.__name__}, "
                         f"but none is registered. add_field a "
-                        f"{part.disturbance_field.__name__} to the world first.")
+                        f"{part.emits_field.__name__} to the world first.")
                 field.add(part.make_disturbance(
                     craft, cumulative_offset(part)))
 
