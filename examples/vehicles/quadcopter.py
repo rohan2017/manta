@@ -286,7 +286,7 @@ def main() -> None:
             sim.step(dt)                   # apply commands; publish GPS+gyro
             ekf.step(dt)                   # predict on commands; fold sensors
 
-            if viz is not None and i % 3 == 0:   # ~33 Hz: don't flood rerun
+            if viz is not None and viz.due(t):   # throttle to ~30 Hz
                 tp = np.asarray(sim.state["quad"]["position"]).ravel()
                 tq = np.asarray(sim.state["quad"]["orientation"]).ravel()
                 viz.t(t)

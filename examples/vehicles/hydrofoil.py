@@ -86,7 +86,10 @@ def _tilt(incidence: float, dihedral: float):
     normal = np.array([-si, 0.0, ci])
     cd, sd = np.cos(dihedral), np.sin(dihedral)
     R_x = np.array([[1, 0, 0], [0, cd, -sd], [0, sd, cd]])
-    return tuple(chord), tuple(R_x @ normal)
+    # Roll the WHOLE foil frame by the dihedral (both axes), so chord and
+    # normal stay perpendicular — rotating only one breaks orthogonality
+    # whenever the incidence is nonzero.
+    return tuple(R_x @ chord), tuple(R_x @ normal)
 
 
 def _hinge(name: str, pos: tuple, axis: tuple) -> RevoluteJoint:
@@ -103,14 +106,16 @@ def build_world():
                transform=(0.0, 0.0, -0.2)))
 
     # Hull: 9 buoy + 9 drag elements on the triangular-prism edges.
-    for x in STATIONS:
+    # Name by station INDEX (part names must be valid identifiers — a
+    # signed coordinate like `+1` is not).
+    for si, x in enumerate(STATIONS):
         for tag, (y, z) in (("pl", (+DECK_Y, DECK_Z)),
                             ("pr", (-DECK_Y, DECK_Z)),
                             ("kl", (0.0, KEEL_Z))):
-            b.add(PointBuoy(f"b_{tag}{x:+.0f}", volume=BUOY_V,
+            b.add(PointBuoy(f"b_{tag}{si}", volume=BUOY_V,
                             transform=(x, y, z)))
             b.add(DragSurface.isotropic_quadratic(
-                f"d_{tag}{x:+.0f}", area=0.006, drag_coefficient=0.6,
+                f"d_{tag}{si}", area=0.006, drag_coefficient=0.6,
                 transform=(x, y, z)))
 
     # Superstructure air drag — the speed-dependent term that gives the
@@ -337,7 +342,7 @@ def main() -> None:
 
             st = sim.state["boat"]
             p = np.asarray(st["position"]).ravel()
-            if viz is not None and f % 2 == 0:
+            if viz is not None and viz.due(t):    # throttle to ~30 Hz
                 q = np.asarray(st["orientation"]).ravel()
                 viz.t(t)
                 if f == 0:

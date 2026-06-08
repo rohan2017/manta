@@ -309,7 +309,7 @@ def main() -> None:
 
             gx = float(np.asarray(st["gimbal_x.angle"]).ravel()[0])
             gy = float(np.asarray(st["gimbal_y.angle"]).ravel()[0])
-            if viz is not None:
+            if viz is not None and viz.due(t):   # throttle to ~30 Hz
                 quat = np.asarray(st["orientation"]).ravel()
                 viz.t(t)
                 viz.pose("world/rocket", pos, quat)

@@ -151,7 +151,7 @@ def main() -> None:
             tq = np.asarray(sim.state["sub"]["orientation"]).ravel()
             est = ekf.state_dict()["sub"]
             ep = np.asarray(est["position"]).ravel()
-            if viz is not None and i % 2 == 0:   # 25 Hz: don't flood rerun
+            if viz is not None and viz.due(t):   # throttle to ~30 Hz
                 viz.t(t)
                 viz.pose("world/sub", tp, tq)
                 viz.pose("world/sub_est", ep,

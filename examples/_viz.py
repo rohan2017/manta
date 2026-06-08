@@ -5,20 +5,26 @@ right-handed, **z-up**, metres. Manta quaternions are ``[w, x, y, z]``;
 rerun wants ``[x, y, z, w]``, so :meth:`Viz.pose` converts for you.
 
 rerun is imported lazily, so examples that don't visualize (``quickstart``)
-don't need it installed. A demo creates one :class:`Viz`, calls
-:meth:`Viz.t` once per logged frame to stamp the timeline, then logs
-geometry under stable entity paths::
+don't need it installed. A demo creates one :class:`Viz`, logs static geometry ONCE before the loop,
+then inside the loop gates visualization with :meth:`Viz.due` (so the
+control/physics loop runs at its own high rate but the viewer sees ~30 Hz),
+stamps the timeline with :meth:`Viz.t`, and re-logs the moving geometry::
 
     viz = Viz("manta/quadcopter")
     viz.box("world/quad/body", (0.1, 0.1, 0.03), color=(80, 140, 220))   # once
     for ...:
-        viz.t(t)
-        viz.pose("world/quad", pos, quat_wxyz)        # moves the body frame
-        viz.trail("world/quad/trail", pos)
+        sim.step(dt)
+        if viz is not None and viz.due(t):            # ~30 Hz, not every step
+            viz.t(t)
+            viz.pose("world/quad", pos, quat_wxyz)    # moves the body frame
+            viz.trail("world/trail", pos)             # WORLD path (see below)
 
 Entity paths are hierarchical: a child (``world/quad/rotor0``) inherits its
 parent's :meth:`pose`, so nested frames (a gimbal on a hull) compose by
-logging a local transform at each level — exactly manta's frame chain.
+logging a local transform at each level — exactly manta's frame chain. The
+flip side: a world-frame overlay (a trail, a ground-truth marker) must be a
+SIBLING of a posed entity, never a child, or it rides the moving body —
+hence ``world/trail``, not ``world/quad/trail``.
 """
 
 from __future__ import annotations
@@ -51,6 +57,11 @@ def require_rerun():
     return rr
 
 
+# Default viz frame rate. Demos integrate far faster (50–500 Hz) but log
+# geometry to the viewer at most this often — see `Viz.due`.
+VIZ_HZ = 30.0
+
+
 def _vec3(v) -> np.ndarray:
     return np.asarray(v, dtype=float).ravel()[:3]
 
@@ -81,12 +92,31 @@ class Viz:
         self._trails: dict[str, list[np.ndarray]] = {}
         self._cams: set[str] = set()
         self._grid_idx: dict[tuple, np.ndarray] = {}
+        self._last_due: float | None = None
 
     # ---- timeline ------------------------------------------------------
 
     def t(self, seconds: float) -> None:
         """Stamp subsequent logs at sim-time ``seconds`` on the timeline."""
         self.rr.set_time("sim_time", duration=float(seconds))
+
+    def due(self, t: float, *, hz: float = VIZ_HZ) -> bool:
+        """Frame-rate gate for viz logging. Returns True at most once per
+        ``1/hz`` of sim-time, so a control/physics loop running far faster
+        than the display can call it every step and only log ~``hz`` frames.
+
+        This is the one place every demo throttles its visualization — the
+        loop integrates at its own (high) rate, but re-sending geometry to
+        the viewer faster than ~30 Hz only floods the stream without adding
+        anything the eye can see. Use as ``if viz is not None and viz.due(t)``.
+        Time may jump backwards between runs sharing a Viz; a backward step
+        always logs (and re-arms the clock).
+        """
+        last = self._last_due
+        if last is None or t < last or t - last >= 1.0 / hz - 1e-9:
+            self._last_due = t
+            return True
+        return False
 
     # ---- chase camera ----------------------------------------------------
 

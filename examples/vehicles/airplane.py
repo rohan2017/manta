@@ -253,7 +253,7 @@ def main() -> None:
 
             st = sim.state["plane"]
             p = np.asarray(st["position"]).ravel()
-            if viz is not None and f % 2 == 0:    # 25 Hz: half the rows
+            if viz is not None and viz.due(t):    # throttle to ~30 Hz
                 q = np.asarray(st["orientation"]).ravel()
                 viz.t(t)
                 viz.pose("world/plane", p, q)

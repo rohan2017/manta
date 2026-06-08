@@ -48,6 +48,7 @@ from manta.parts import (
     RevoluteJoint, Thruster,
 )
 
+from .._control import Pacer
 from .._viz import Viz
 
 # --- world / rates ---------------------------------------------------------
@@ -229,6 +230,7 @@ def main() -> None:
     viz = None if args.no_viz else Viz("manta/camera_tracking", addr=args.viz_addr)
     if viz is not None:
         _viz_setup(viz)
+    pacer = Pacer() if viz is not None else None   # real-time playback for viz
 
     locked = False
     n = int(args.duration / DT_CTRL)
@@ -238,6 +240,8 @@ def main() -> None:
     hit_t = None
     for i in range(n):
         t = i * DT_CTRL
+        if pacer is not None:
+            pacer.pace(t)
         rk = truth.state["interceptor"]
         tg = truth.state["target"]
         rk_p = np.asarray(rk["position"]).ravel()
@@ -351,7 +355,7 @@ def main() -> None:
             if d < HIT_RADIUS and hit_t is None:
                 hit_t = t + (k + 1) * DT_SIM
 
-        if viz is not None:
+        if viz is not None and viz.due(t):   # throttle to ~30 Hz
             _viz_step(viz, t, truth, tgt_est, box, vis)
         if i % int(0.5 / DT_CTRL) == 0:
             print(f"{t:>5.2f} {np.round(rk_p, 1)!s:>20} "
