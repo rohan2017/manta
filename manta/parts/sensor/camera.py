@@ -87,7 +87,8 @@ class Camera(Part):
 
     def __init__(self, name: str, *, width: float = 640.0, height: float = 480.0,
                  hfov_deg: float = 70.0, fx=None, fy=None, cx=None, cy=None,
-                 rate=None, bbox_sigma: float = 0.0) -> None:
+                 rate=None, bbox_sigma: float = 0.0,
+                 transform=(0.0, 0.0, 0.0)) -> None:
         import math
         w, h = float(width), float(height)
         f = (w / 2.0) / math.tan(math.radians(hfov_deg) / 2.0)
@@ -97,7 +98,7 @@ class Camera(Part):
             fy=float(fy) if fy is not None else (float(fx) if fx is not None else f),
             cx=float(cx) if cx is not None else w / 2.0,
             cy=float(cy) if cy is not None else h / 2.0,
-            rate=rate, bbox_sigma=float(bbox_sigma))
+            rate=rate, bbox_sigma=float(bbox_sigma), transform=transform)
         # Filled by World._register_field_sources (every ellipsoid not on
         # this camera's craft). Drives both output_declarations and update.
         self._targets: list = []
