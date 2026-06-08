@@ -175,6 +175,9 @@ class LinearizedSystem:
             for p in world._planets:
                 p.register_disturbances(world)
             world._planets_registered = True
+        # Field-source parts emit their disturbances onto the world fields
+        # (and point cameras at what they can see) before the tick compiles.
+        world._register_field_sources()
         world._resolve_planet_state_overrides()
 
         self.world = world

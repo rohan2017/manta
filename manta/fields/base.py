@@ -30,6 +30,30 @@ from ..ir.types import Vec3
 from ..parts.base import DeclarationHost
 
 
+def anchored_pose(craft, offset_body):
+    """World pose of a body-fixed point during the tick trace.
+
+    A disturbance emitted by a `FieldSource` part follows its carrying
+    craft: its world position is ``craft_pos + R·offset`` and it inherits
+    the craft's orientation. The craft's symbolic state is read from the
+    active `TraceBindings` (the same channel `CraftWindBubble` uses), so
+    nothing is stashed on the craft. Returns ``(center, R, quat)`` —
+    ``center`` a Vec3[WorldFrame], ``R`` a Mat3[WorldFrame, CraftFrame],
+    ``quat`` the craft's Quat[WorldFrame, CraftFrame]. Only callable inside
+    a world-tick compile."""
+    from ..parts.base import active_trace
+    from ..ir.frames import CraftFrame
+    tr = active_trace()
+    if tr is None:
+        raise RuntimeError(
+            "anchored_pose: no active trace — a field source's contribution "
+            "is only callable during a world-tick compile.")
+    st = tr.craft_sym_state(craft)
+    pos, quat = st["position"], st["orientation"]
+    off = Vec3[CraftFrame].constant(tuple(float(x) for x in offset_body))
+    return pos + quat.apply(off), quat.to_rotmat(), quat
+
+
 # Global counter for default disturbance names. Disturbances participate
 # in the IR state vector by name, so unique names are required when more
 # than one is registered. The user can pass `name="..."` explicitly; the

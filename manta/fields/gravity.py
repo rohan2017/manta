@@ -133,6 +133,49 @@ class PointMassGravity(Disturbance):
         return (f"<PointMassGravity position={self.position} GM={self.GM:.3e}>")
 
 
+class BodyPointMassGravity(Disturbance):
+    """Inverse-square gravity from a point mass that RIDES a craft — the
+    field a `GravitySource` part emits to simulate a massive body (planet,
+    asteroid, station) moving through the sim. Same law as
+    `PointMassGravity`, but the source position tracks the carrying
+    craft's pose (read from the active trace), not a fixed world point.
+
+    Args:
+        craft       — the craft carrying the source.
+        offset_body — the source position in the craft's body frame, m.
+        GM          — gravitational parameter (G·M), m³/s².
+        eps         — softening length, m. Default 1.0.
+    """
+
+    field_value_shape = _VEC3_ANCHOR
+
+    def __init__(self, craft, offset_body, GM: float,
+                 eps: float = 1.0, *, name: str | None = None) -> None:
+        super().__init__(name=name)
+        self.craft = craft
+        self.offset_body = tuple(float(x) for x in offset_body)
+        self.GM = float(GM)
+        self.eps = float(eps)
+        if self.GM <= 0.0:
+            raise ValueError(f"BodyPointMassGravity: GM must be > 0, got {GM!r}")
+        if self.eps < 0.0:
+            raise ValueError(f"BodyPointMassGravity: eps must be >= 0, got {eps!r}")
+
+    def contribute_at_sym(self, point, t):
+        from .base import anchored_pose
+        center, _R, _q = anchored_pose(self.craft, self.offset_body)
+        r = point - center
+        r_mx = r._mx
+        r_sq = ca.dot(r_mx, r_mx) + self.eps**2
+        r_mag = ca.sqrt(r_sq)
+        g_mx = (-self.GM / (r_sq * r_mag)) * r_mx
+        return _VEC3_ANCHOR.from_mx(g_mx)
+
+    def __repr__(self) -> str:
+        return (f"<BodyPointMassGravity craft={self.craft.name!r} "
+                f"GM={self.GM:.3e}>")
+
+
 class J2Gravity(Disturbance):
     """J2 oblateness perturbation around a point mass.
 

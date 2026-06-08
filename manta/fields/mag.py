@@ -133,3 +133,55 @@ class DipoleMag(Disturbance):
 
     def __repr__(self) -> str:
         return (f"<DipoleMag position={self.position} moment={self.moment}>")
+
+
+class BodyDipoleMag(Disturbance):
+    """A magnetic dipole that RIDES a craft — the field a `MagneticSource`
+    part emits to model the magnetic signature of motors, magnets, or
+    magnetized structure on a moving vehicle. Same law as `DipoleMag`, but
+    BOTH the dipole position and its moment vector are body-fixed: the
+    position tracks the craft and the moment rotates with it (read from
+    the active trace), so a magnetometer on another craft sees the field
+    swing as the source turns.
+
+    Args:
+        craft       — the craft carrying the source.
+        offset_body — dipole position in the craft body frame, m.
+        moment_body — dipole moment in the craft body frame, A·m².
+        eps         — softening length, m. Default 1e-3.
+    """
+
+    field_value_shape = _VEC3_ANCHOR
+
+    def __init__(self, craft, offset_body,
+                 moment_body: tuple[float, float, float],
+                 eps: float = 1e-3, *, name: str | None = None) -> None:
+        super().__init__(name=name)
+        self.craft = craft
+        self.offset_body = tuple(float(x) for x in offset_body)
+        self.moment_body = tuple(float(x) for x in moment_body)
+        if len(self.moment_body) != 3:
+            raise ValueError(
+                f"BodyDipoleMag: moment_body must be length-3, "
+                f"got {moment_body!r}")
+        self.eps = float(eps)
+
+    def contribute_at_sym(self, point, t):
+        from .base import anchored_pose
+        from ..ir.frames import CraftFrame
+        center, _R, quat = anchored_pose(self.craft, self.offset_body)
+        # Moment is body-fixed → rotate into world with the craft attitude.
+        m_world = quat.apply(Vec3[CraftFrame].constant(self.moment_body))
+        r = point - center
+        r_mx, m_mx = r._mx, m_world._mx
+        r_sq = ca.dot(r_mx, r_mx) + self.eps**2
+        r_mag = ca.sqrt(r_sq)
+        r_cubed = r_sq * r_mag
+        m_dot_r = ca.dot(m_mx, r_mx)
+        B_mx = _MU0_OVER_4PI * (
+            (3.0 * m_dot_r / (r_cubed * r_sq)) * r_mx - m_mx / r_cubed)
+        return _VEC3_ANCHOR.from_mx(B_mx)
+
+    def __repr__(self) -> str:
+        return (f"<BodyDipoleMag craft={self.craft.name!r} "
+                f"moment={self.moment_body}>")

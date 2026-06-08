@@ -19,10 +19,14 @@ from .sensor.dvl import DVL
 from .sensor.imu import IMU
 from .sensor.magnetometer import Magnetometer
 from .sensor.position_sensor import PositionSensor
+from .sensor.camera import Camera
 from .actuation.thruster import Thruster
 from .aero.drag_surface import DragSurface
 from .aero.naca_airfoil import Naca00xx
 from .attachment.tether_endpoint import TetherEndpoint
+from .field_source import (
+    FieldSource, GravitySource, MagneticSource, OpticalSource,
+)
 
 __all__ = [
     "Part", "CompositePart", "RootPart",
@@ -30,8 +34,9 @@ __all__ = [
     "Wrench",
     "Mass", "PointBuoy", "Collider",
     "ArticulatedJoint", "PrismaticJoint", "RevoluteJoint",
-    "IMU", "DVL", "Magnetometer", "PositionSensor",
+    "IMU", "DVL", "Magnetometer", "PositionSensor", "Camera",
     "Thruster",
     "DragSurface", "Naca00xx",
     "TetherEndpoint",
+    "FieldSource", "GravitySource", "MagneticSource", "OpticalSource",
 ]

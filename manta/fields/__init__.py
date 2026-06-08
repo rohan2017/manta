@@ -26,19 +26,27 @@ User-facing surface::
 """
 
 from .base import Disturbance, Field
-from .gravity import GravityField, J2Gravity, PointMassGravity, UniformGravity
+from .gravity import (
+    BodyPointMassGravity, GravityField, J2Gravity, PointMassGravity,
+    UniformGravity,
+)
 from .fluid   import (
     CurrentFlow, FluidField, FluidState, UniformFluid,
 )
-from .mag     import DipoleMag, MagField, UniformMag
+from .mag     import BodyDipoleMag, DipoleMag, MagField, UniformMag
 from .collision import CollisionField, HalfSpace, Sphere
+from .optical import (
+    BodySemanticEllipsoid, OpticalField, SemanticEllipsoid,
+)
 from .wind_bubble import CraftWindBubble
 
 __all__ = [
     "Disturbance", "Field",
     "GravityField", "UniformGravity", "PointMassGravity", "J2Gravity",
+    "BodyPointMassGravity",
     "FluidField", "FluidState", "UniformFluid", "CurrentFlow",
     "CraftWindBubble",
-    "MagField", "UniformMag", "DipoleMag",
+    "MagField", "UniformMag", "DipoleMag", "BodyDipoleMag",
     "CollisionField", "HalfSpace", "Sphere",
+    "OpticalField", "SemanticEllipsoid", "BodySemanticEllipsoid",
 ]

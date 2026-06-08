@@ -68,6 +68,9 @@ class World:
         # Set to True once compile() has walked the planet list — guards
         # against double-registration if the user re-compiles.
         self._planets_registered = False
+        # Same guard for field-source parts (GravitySource / MagneticSource
+        # / OpticalSource): their emitted disturbances are registered once.
+        self._sources_registered = False
 
     # ---- Fields ----------------------------------------------------------
 
@@ -242,6 +245,41 @@ class World:
                     init.update(ndecl.initial_state_entries(nname, dist))
                 out[dist.name] = init
         return out
+
+    def _register_field_sources(self) -> None:
+        """Walk every craft for `FieldSource` parts, build each one's
+        craft-anchored disturbance and attach it to the matching world
+        field (creating the field if absent). Then point every `Camera`
+        at the optical ellipsoids it can see (all but its own craft's).
+        Idempotent — guarded by `_sources_registered`; runs once at the
+        first transform, like planet registration."""
+        if self._sources_registered:
+            return
+        from .parts.field_source.base import FieldSource, cumulative_offset
+        from .parts.sensor.camera import Camera
+        from .fields.optical import OpticalField
+
+        has_camera = False
+        for craft in self.crafts:
+            for part in craft.parts:
+                if isinstance(part, FieldSource):
+                    dist = part.make_disturbance(
+                        craft, cumulative_offset(part))
+                    self.get_or_create_field(part.emits_field).add(dist)
+                elif isinstance(part, Camera):
+                    has_camera = True
+
+        # A camera with no optical sources still needs the field to exist
+        # (its `requires_fields`); create an empty one.
+        if has_camera or self.get_field(OpticalField) is not None:
+            optical = self.get_or_create_field(OpticalField)
+            for craft in self.crafts:
+                for part in craft.parts:
+                    if isinstance(part, Camera):
+                        part._targets = [
+                            e for e in optical.ellipsoids
+                            if e.source_craft is not craft]
+        self._sources_registered = True
 
     def _resolve_planet_state_overrides(self) -> None:
         """Walk every craft entry and replace any `PlanetState`-wrapped
