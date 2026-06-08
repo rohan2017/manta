@@ -39,7 +39,9 @@ from ...fields.optical import OpticalField
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Scalar, Vec3
 from ...ir.wrench import Wrench
-from ..base import Output, Parameter, Part, PartUpdate
+from ..base import Output, Parameter, Part, PartUpdate, WhiteNoise
+
+_BOX_EDGES = ("xmin", "ymin", "xmax", "ymax")
 
 
 class Camera(Part):
@@ -56,6 +58,20 @@ class Camera(Part):
         width, height — image size in pixels.
         fx, fy, cx, cy — intrinsics (focal lengths + principal point, px).
         rate — optional capture rate (Hz); `None` ⇒ every tick.
+        bbox_sigma — per-edge pixel measurement noise σ. Default 0 leaves
+            the camera a noiseless oracle (byte-identical to before). Set
+            it > 0 to make the four box edges EKF-usable measurements: each
+            edge gets an independent white-noise channel so the filter can
+            assemble a nonzero R and recover a target's 3-D position from
+            its bearing + apparent size (the box scale → range, given the
+            target's known semi-axes). See `examples/vehicles/camera_tracking`.
+
+    EKF use: the box of a target is a differentiable function of BOTH the
+    camera craft's pose AND the target craft's pose, so selecting the edge
+    outputs as EKF sensors (and tracking both crafts) yields a single joint
+    filter — the camera measurement couples the two craft blocks. Select
+    only the edges via `sensors=[...]` (the `_vis` flag carries no noise and
+    must not be folded as a measurement).
     """
 
     requires_fields = [OpticalField]
@@ -67,10 +83,11 @@ class Camera(Part):
     cx:     float = Parameter(0.0)
     cy:     float = Parameter(0.0)
     rate:   float = Parameter(None)
+    bbox_sigma: float = Parameter(0.0)
 
     def __init__(self, name: str, *, width: float = 640.0, height: float = 480.0,
                  hfov_deg: float = 70.0, fx=None, fy=None, cx=None, cy=None,
-                 rate=None) -> None:
+                 rate=None, bbox_sigma: float = 0.0) -> None:
         import math
         w, h = float(width), float(height)
         f = (w / 2.0) / math.tan(math.radians(hfov_deg) / 2.0)
@@ -80,7 +97,7 @@ class Camera(Part):
             fy=float(fy) if fy is not None else (float(fx) if fx is not None else f),
             cx=float(cx) if cx is not None else w / 2.0,
             cy=float(cy) if cy is not None else h / 2.0,
-            rate=rate)
+            rate=rate, bbox_sigma=float(bbox_sigma))
         # Filled by World._register_field_sources (every ellipsoid not on
         # this camera's craft). Drives both output_declarations and update.
         self._targets: list = []
@@ -90,9 +107,26 @@ class Camera(Part):
     def output_declarations(self) -> dict:
         out: dict = {}
         for e in self._targets:
-            for suffix in ("xmin", "ymin", "xmax", "ymax", "vis"):
+            for suffix in (*_BOX_EDGES, "vis"):
                 out[f"{e.name}_{suffix}"] = Output()
         return out
+
+    # Per-instance noise: one independent white-noise channel per box edge
+    # per target, so the EKF can build a nonzero R for the edge measurements.
+    # Mirrors `output_declarations` (the target set is dynamic). Inert — and
+    # byte-identical to the old camera — when bbox_sigma == 0.
+    def noise_declarations(self) -> dict:
+        sigma = float(self.bbox_sigma)
+        if sigma <= 0.0 or not self._targets:
+            return {}
+        decls: dict = {}
+        for e in self._targets:
+            for suffix in _BOX_EDGES:
+                name = f"{e.name}_{suffix}_noise"
+                decls[name] = WhiteNoise("R1", sigma=sigma)
+                # The tick-signature walk reads `<name>_sigma` off the owner.
+                setattr(self, f"{name}_sigma", sigma)
+        return decls
 
     def update(self, ctx) -> PartUpdate:
         zero = Vec3[PartFrame].constant((0.0, 0.0, 0.0))
@@ -110,17 +144,19 @@ class Camera(Part):
         K = ca.DM([[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]])
         P = K @ ca.horzcat(R_cw, -R_cw @ C)          # 3×4 camera matrix
 
+        noisy = float(self.bbox_sigma) > 0.0
         outputs: dict = {}
         for e in self._targets:
             c = e.center_world()._mx                  # 3×1 world center
             M = e.shape_world_mx()                    # 3×3 world shape
             box, vis = _project_box(P, R_cw, C, c, M, W, H)
             tag = e.name
-            vals = {"xmin": box[0], "ymin": box[1],
-                    "xmax": box[2], "ymax": box[3], "vis": vis}
-            for suffix, mx in vals.items():
-                outputs[f"{tag}_{suffix}"] = ctx.sample(
-                    Scalar(mx), rate=self.rate)
+            for i, suffix in enumerate(_BOX_EDGES):
+                edge = Scalar(box[i])
+                if noisy:                             # additive per-edge pixel noise
+                    edge = edge + getattr(self, f"{tag}_{suffix}_noise")
+                outputs[f"{tag}_{suffix}"] = ctx.sample(edge, rate=self.rate)
+            outputs[f"{tag}_vis"] = ctx.sample(Scalar(vis), rate=self.rate)
         return PartUpdate(wrench=Wrench(force=zero, torque=zero),
                           outputs=outputs)
 
