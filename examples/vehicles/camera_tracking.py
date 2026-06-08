@@ -388,12 +388,15 @@ def _viz_step(viz, t, truth, tgt_est, box, vis):
     viz.pose("world/interceptor", rk_p, rk_q)
     viz.arrow("world/interceptor/los", (0, 0, NOSE_Z), (0, 0, 4.0),
               color=(120, 220, 140), radius=0.05)
-    viz.trail("world/interceptor/trail", rk_p, max_len=4000, min_dist=0.05)
+    # Trails live at world level, NOT under the posed `world/interceptor`
+    # entity — a child would inherit the rocket's transform and the path
+    # would ride along with the rocket instead of staying world-fixed.
+    viz.trail("world/interceptor_trail", rk_p, max_len=4000, min_dist=0.05)
     viz.rr.log("world/target", viz.rr.Ellipsoids3D(
         centers=[tg_p], half_sizes=[TGT_SEMI], colors=[(255, 170, 90)],
         fill_mode="solid"))
     viz.point("world/target_est", tgt_est, color=(90, 230, 120), radius=0.3)
-    viz.trail("world/target/trail", tg_p, max_len=4000, min_dist=0.05)
+    viz.trail("world/target_trail", tg_p, max_len=4000, min_dist=0.05)
     if vis:
         viz.rr.log("image/boxes", viz.rr.Boxes2D(
             mins=[[box[0], box[1]]], sizes=[[box[2] - box[0], box[3] - box[1]]],
