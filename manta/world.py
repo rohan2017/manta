@@ -247,9 +247,11 @@ class World:
         return out
 
     def _register_field_sources(self) -> None:
-        """Walk every craft for `FieldSource` parts, build each one's
-        craft-anchored disturbance and attach it to the matching world
-        field (creating the field if absent). Then point every `Camera`
+        """Walk every craft for `FieldSource` parts and add each one's
+        craft-anchored disturbance to its target field. The field must
+        already be registered — a source CONTRIBUTES to a field, it does
+        not provide one; using a `GravitySource` with no `GravityField`
+        registered is a configuration error. Then point every `Camera`
         at the optical ellipsoids it can see (all but its own craft's).
         Idempotent — guarded by `_sources_registered`; runs once at the
         first transform, like planet registration."""
@@ -259,20 +261,26 @@ class World:
         from .parts.sensor.camera import Camera
         from .fields.optical import OpticalField
 
-        has_camera = False
         for craft in self.crafts:
             for part in craft.parts:
-                if isinstance(part, FieldSource):
-                    dist = part.make_disturbance(
-                        craft, cumulative_offset(part))
-                    self.get_or_create_field(part.emits_field).add(dist)
-                elif isinstance(part, Camera):
-                    has_camera = True
+                if not isinstance(part, FieldSource):
+                    continue
+                field = self.get_field(part.disturbance_field)
+                if field is None:
+                    raise ValueError(
+                        f"World '{self.name}': part {type(part).__name__}"
+                        f"('{part.name}') on craft '{craft.name}' adds a "
+                        f"disturbance to a {part.disturbance_field.__name__}, "
+                        f"but none is registered. add_field a "
+                        f"{part.disturbance_field.__name__} to the world first.")
+                field.add(part.make_disturbance(
+                    craft, cumulative_offset(part)))
 
-        # A camera with no optical sources still needs the field to exist
-        # (its `requires_fields`); create an empty one.
-        if has_camera or self.get_field(OpticalField) is not None:
-            optical = self.get_or_create_field(OpticalField)
+        # Point each camera at every ellipsoid it can see (all but its own
+        # craft's). A camera with no OpticalField registered fails the
+        # `requires_fields` check below; here we just skip target wiring.
+        optical = self.get_field(OpticalField)
+        if optical is not None:
             for craft in self.crafts:
                 for part in craft.parts:
                     if isinstance(part, Camera):

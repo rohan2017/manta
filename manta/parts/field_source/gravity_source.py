@@ -1,8 +1,10 @@
-"""GravitySource — a part that emits an inverse-square gravity field.
+"""GravitySource — adds an inverse-square gravity disturbance.
 
 Bolt it to a craft that stands in for a massive body (a planet, asteroid,
-station, or a heavy vehicle) and other craft feel its pull. The emitted
-`BodyPointMassGravity` rides this craft's pose, so the source can move.
+station, or a heavy vehicle) and other craft feel its pull. It adds a
+`BodyPointMassGravity` disturbance to the world's `GravityField` (which
+must be registered); the disturbance rides this craft's pose, so the
+source can move.
 
 Note this is the gravity OTHER craft feel; it does not add the source's
 mass to its own carrier's dynamics — give the carrier a `Mass` for that.
@@ -18,7 +20,7 @@ from .base import FieldSource
 
 
 class GravitySource(FieldSource):
-    """Emits a point-mass gravity field that rides the carrying craft.
+    """Adds a point-mass gravity disturbance that rides the carrying craft.
 
     Parameters:
         GM  — gravitational parameter G·M (m³/s²). Earth ≈ 3.986e14,
@@ -26,7 +28,7 @@ class GravitySource(FieldSource):
         eps — softening length (m) capping the singularity at the source.
     """
 
-    emits_field = GravityField
+    disturbance_field = GravityField
 
     GM:  float = Parameter(1.0e6)
     eps: float = Parameter(1.0)

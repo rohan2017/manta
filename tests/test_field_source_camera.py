@@ -199,6 +199,17 @@ def test_field_source_adds_no_wrench():
     assert np.allclose(np.asarray(sim.state["c"]["position"]).ravel(), 0.0)
 
 
+def test_source_requires_its_field_registered():
+    """A source contributes to a field — it does not create one. Using a
+    GravitySource with no GravityField registered is a config error."""
+    w = World()                                    # no GravityField
+    rock = Craft("rock"); rock.add(Mass("c", mass=1.0))
+    rock.add(GravitySource("g", GM=4.0e5))
+    w.add_craft(rock, position=(0, 0, 0))
+    with pytest.raises(ValueError, match="GravityField"):
+        Sim(w)
+
+
 def test_optical_field_value_at_sym_forbidden():
     f = OpticalField().add_ellipsoid((0, 0, 1), (1, 1, 1))
     with pytest.raises(NotImplementedError):
