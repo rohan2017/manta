@@ -24,6 +24,9 @@ from .actuation.thruster import Thruster
 from .aero.drag_surface import DragSurface
 from .aero.naca_airfoil import Naca00xx
 from .attachment.tether_endpoint import TetherEndpoint
+from .attachment.trajectory_endpoint import (
+    LinearTrajectory, TrajectoryEndpoint, TrajectorySample, hover,
+)
 from .field_source import (
     FieldSource, GravitySource, MagneticSource, OpticalSource,
 )
@@ -38,5 +41,6 @@ __all__ = [
     "Thruster",
     "DragSurface", "Naca00xx",
     "TetherEndpoint",
+    "TrajectoryEndpoint", "TrajectorySample", "LinearTrajectory", "hover",
     "FieldSource", "GravitySource", "MagneticSource", "OpticalSource",
 ]
