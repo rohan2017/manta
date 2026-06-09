@@ -29,15 +29,21 @@ a hand-off to onboard `BBoxCamera` homing:
     range comes from the EKF) — PN nulls the line-of-sight rate onto a
     collision course.
 
-Physics integrates with semi-implicit Euler; at a 500+ m/s pass the
-quadratic drag is stiff, so the substep is 1 kHz. The terminal closure
-against a fast crossing target off a coarse km-range cue is genuinely hard —
-the demo gets to a several-hundred-metre pass, not a hit-to-kill.
+Physics integrates with semi-implicit Euler; the quadratic drag is stiff at a
+500+ m/s pass, so the substep is adaptive (1 kHz when the interceptor is
+fast, 500 Hz otherwise). The terminal closure against a fast crossing target
+off a coarse km-range cue is genuinely hard — the demo gets to a several-
+hundred-metre pass, not a hit-to-kill.
 
 Run::
 
-    .venv/bin/python -m examples.vehicles.camera_tracking
-    .venv/bin/python -m examples.vehicles.camera_tracking --no-viz
+    .venv/bin/python -m examples.vehicles.camera_tracking            # live viewer
+    .venv/bin/python -m examples.vehicles.camera_tracking --no-viz   # headless
+    # WSL: record a file, then open it in a native viewer (no live link):
+    .venv/bin/python -m examples.vehicles.camera_tracking --record run.rrd
+    rerun run.rrd
+    # or stream to a viewer already running on the host:
+    .venv/bin/python -m examples.vehicles.camera_tracking --viz-addr 172.x.x.x
 """
 
 from __future__ import annotations
@@ -46,7 +52,7 @@ import argparse
 
 import numpy as np
 
-from manta import Craft, EKF, Sim, TargetNumpy, World
+from manta import ALL, Craft, EKF, Sim, TargetNumpy, World
 from manta.fields import (
     CollisionField, FluidField, GravityField, HalfSpace, OpticalField,
 )
@@ -60,8 +66,14 @@ from .._viz import Viz
 
 # --- world / rates ---------------------------------------------------------
 G = 9.81
-DT_SIM, SUBSTEPS = 0.001, 20           # 1 kHz physics (stiff TVC + drag)
-DT = DT_SIM * SUBSTEPS                  # 50 Hz control / EKF
+DT = 0.02                              # 50 Hz control / EKF
+# Physics substep is ADAPTIVE: the quadratic drag is stiff only at high
+# speed, so we step 1 kHz while the interceptor is fast and 500 Hz the rest
+# of the flight (target rising, rocket on the pad, tracking) — roughly half
+# the cost for the same stability.
+SUBSTEPS_FAST, SUBSTEPS_SLOW = 20, 10
+FAST_SPEED = 50.0                      # m/s above which we substep finely
+DT_SIM = DT / SUBSTEPS_FAST            # finest substep (also the settle step)
 RHO = 1.225
 
 # --- tracker (fixed ground array) ------------------------------------------
@@ -274,14 +286,23 @@ def nose_deproject(out, rk_p, rk_q, range_hint):
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--no-viz", action="store_true")
-    ap.add_argument("--viz-addr", default=None)
+    ap.add_argument("--viz-addr", default=None,
+                    help="stream to a running rerun viewer at host[:port]")
+    ap.add_argument("--record", default=None, metavar="FILE.rrd",
+                    help="save the run to a rerun .rrd (no viewer, full "
+                         "speed); open later with `rerun FILE.rrd`")
     ap.add_argument("--duration", type=float, default=48.0)
     args = ap.parse_args()
 
     rng = np.random.default_rng(0)
     truth = TargetNumpy(Sim(build_world()))
     truth.step(DT_SIM)
-    ekf = TargetNumpy(EKF(build_world(), sensors=GND_SENSORS))
+    # Estimate only the target — the interceptor isn't measured by these
+    # sensors, so dropping its (gimballed) block from the filter both shrinks
+    # the predict Jacobian and is correct. The tracker stays in (its pose is
+    # read by every camera measurement) but is pinned via Q.
+    ekf = TargetNumpy(EKF(build_world(), sensors=GND_SENSORS,
+                          track={"target": ALL}))
     spec = ekf.spec
     ta = _tan(spec, "target.position")
     va = _tan(spec, "target.velocity")
@@ -294,10 +315,12 @@ def main() -> None:
     Q[va[0]:va[1]] = 0.5
     Qm = np.diag(Q)
 
-    viz = None if args.no_viz else Viz("manta/camera_tracking", addr=args.viz_addr)
+    viz = None if args.no_viz else Viz(
+        "manta/camera_tracking", addr=args.viz_addr, save=args.record)
     if viz is not None:
         _viz_setup(viz)
-    pacer = Pacer() if viz is not None else None
+    # Pace to real-time only for a LIVE viewer; recording runs full speed.
+    pacer = Pacer() if (viz is not None and not args.record) else None
 
     locked = launched = False
     min_miss, hit_t = 1e9, None
@@ -455,8 +478,12 @@ def _step(truth, u):
     if isinstance(u, dict):
         for name, val in u.items():
             truth.command(name).set(float(val))
-    for _ in range(SUBSTEPS):
-        truth.step(DT_SIM)
+    spd = float(np.linalg.norm(
+        np.asarray(truth.state["interceptor"]["velocity"]).ravel()))
+    nsub = SUBSTEPS_FAST if spd > FAST_SPEED else SUBSTEPS_SLOW
+    dt = DT / nsub
+    for _ in range(nsub):
+        truth.step(dt)
 
 
 def _viz_setup(viz):

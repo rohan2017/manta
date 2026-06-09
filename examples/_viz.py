@@ -76,10 +76,17 @@ class Viz:
     Windows-native viewer, instead of the software-rasterized WSLg one.
     """
 
-    def __init__(self, app_id: str, addr: str | None = None) -> None:
+    def __init__(self, app_id: str, addr: str | None = None,
+                 save: str | None = None) -> None:
         rr = require_rerun()
         self.rr = rr
-        if addr:
+        if save:
+            # Record to a .rrd file instead of a live viewer — the run can
+            # then go full speed (no real-time pacing) and you scrub it in the
+            # viewer afterwards (`rerun FILE.rrd`). Best path on WSL.
+            rr.init(app_id)
+            rr.save(save)
+        elif addr:
             if "://" not in addr:
                 if ":" not in addr:
                     addr += ":9876"
