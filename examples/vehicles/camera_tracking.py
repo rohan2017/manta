@@ -307,7 +307,7 @@ def main() -> None:
     args = ap.parse_args()
 
     rng = np.random.default_rng(0)
-    truth = TargetNumpy(Sim(build_world()))
+    truth = TargetNumpy(Sim(build_world()), compile=True)
     truth.step(DT_SIM)
 
     ekf = TargetNumpy(EKF(build_world(), sensors=GND_SENSORS,
@@ -412,8 +412,7 @@ def main() -> None:
 
         if viz is not None and viz.due(t):
             _viz_step(viz, t, truth, tgt_est, vis, aim)
-        for _ in range(SUBSTEPS):
-            truth.step(DT_SIM)
+        truth.step_n(DT_SIM, SUBSTEPS)
 
         if i % int(2.0 / DT) == 0 and phase == "track":
             print(f"{t:6.1f} {nvis:4d} {errs[-1]:9.1f} {rk_phase:>9} "

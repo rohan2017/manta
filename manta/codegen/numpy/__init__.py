@@ -32,6 +32,11 @@ backend never mentions a transform.
 
 from __future__ import annotations
 
+import hashlib
+import os
+import shutil
+import subprocess
+import tempfile
 from typing import Any, Callable
 
 import casadi as ca
@@ -49,6 +54,61 @@ def _split(full: str) -> tuple[str, str]:
 
 
 # ---------------------------------------------------------------------------
+# Optional compilation: codegen the Module's CasADi functions to C, build
+# them with `cc -O3`, and call them as `external`s instead of interpreting
+# the MX graph. Bit-identical; ~8x per call (the interpretation overhead
+# dominates for these small systems). Cached on disk by the generated-source
+# hash so repeated runs skip the compiler.
+# ---------------------------------------------------------------------------
+
+_COMPILE_CACHE: dict[str, dict[str, Any]] = {}
+# Above this many MX nodes, codegen + gcc on the (huge symbolic) functions
+# costs more than it ever saves — e.g. an EKF that linearizes the full coupled
+# world tick is ~7k nodes -> hundreds of thousands of lines of C. Skip those
+# *before* codegen (which is itself slow for them) and stay interpreted.
+_MAX_INSTR = 3000
+
+
+def _compiled_functions(functions: dict[str, Any]) -> dict[str, Any]:
+    """Return externals keyed the same as `functions`, or `functions`
+    unchanged if it's too big to bother / no C compiler is available."""
+    if sum(f.n_instructions() for f in functions.values()) > _MAX_INSTR:
+        return functions
+    tmp = tempfile.mkdtemp()
+    try:
+        cg = ca.CodeGenerator("mod.c", {"with_header": True})
+        for f in functions.values():
+            cg.add(f)
+        cg.generate(tmp + os.sep)
+        src = open(os.path.join(tmp, "mod.c")).read()
+        key = hashlib.sha1(src.encode()).hexdigest()[:16]
+        if key in _COMPILE_CACHE:
+            return _COMPILE_CACHE[key]
+        cache_dir = os.path.join(tempfile.gettempdir(), "manta_compiled")
+        os.makedirs(cache_dir, exist_ok=True)
+        so_path = os.path.join(cache_dir, f"mod_{key}.so")
+        try:
+            if not os.path.exists(so_path):
+                # -O1, not -O3: these are huge straight-line numerical
+                # functions (symbolic Jacobians / Joseph updates), where -O2/3
+                # compile time is super-linear for ~no runtime gain. Cap the
+                # compiler and fall back to the interpreter if it's slow.
+                subprocess.run(
+                    ["cc", "-O1", "-fPIC", "-shared",
+                     os.path.join(tmp, "mod.c"), "-o", so_path],
+                    check=True, capture_output=True, timeout=30)
+            out = {k: ca.external(f.name(), so_path)
+                   for k, f in functions.items()}
+        except (OSError, subprocess.CalledProcessError,
+                subprocess.TimeoutExpired):
+            out = functions                  # no/slow compiler — interpret
+        _COMPILE_CACHE[key] = out
+        return out
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
 # The kernel engine
 # ---------------------------------------------------------------------------
 
@@ -58,6 +118,7 @@ class NumpyRuntime:
 
     def __init__(self, module: Module) -> None:
         self.module = module
+        self._functions = module.functions      # swapped by _enable_compile()
         self._spec = module.spec
         self._state: dict[str, np.ndarray] = {}
         for f in module.state.fields:
@@ -78,6 +139,12 @@ class NumpyRuntime:
 
         self._t = 0.0
         self._ports = PortSet()
+
+    def _enable_compile(self) -> "NumpyRuntime":
+        """Replace the interpreted CasADi functions with `cc -O3`-compiled
+        externals (bit-identical, ~8x per call). Idempotent."""
+        self._functions = _compiled_functions(self.module.functions)
+        return self
 
     # ---- kernel engine (typed-arg gather → call → scatter) -----------
 
@@ -106,7 +173,7 @@ class NumpyRuntime:
                         f"{a.name!r}.")
             else:                                  # pragma: no cover
                 raise TypeError(f"unknown kernel arg {a!r}")
-        fn = m.functions[ep.fn]
+        fn = self._functions[ep.fn]
         res = fn(*args)
         outs = [res] if fn.n_out() == 1 else list(res)
         for i, w in enumerate(ep.writes):
@@ -252,6 +319,70 @@ class NumpySim(NumpyRuntime):
         for full, reading in readings.items():
             owner, slot = _split(full)
             self._outputs.setdefault(owner, {})[slot] = reading
+        return new_state
+
+    def step_n(self, dt: float, n: int, *, t: float | None = None
+               ) -> dict[str, dict[str, Any]]:
+        """Advance `n` substeps of `dt` in ONE folded call — commands held
+        (ZOH), state chained through a `mapaccum` of the step kernel. Output
+        readings + state are bit-identical to `n` sequential `step(dt)` calls;
+        compiled (`_enable_compile`) it runs the whole inner loop in C.
+
+        Falls back to sequential stepping when a `NoiseDriver` is attached (a
+        fresh stochastic draw per substep cannot be folded)."""
+        if n <= 1 or self._driver is not None:
+            for k in range(int(n)):
+                self.step(dt, t=None if t is None else t + k * dt)
+            return self._sim_state
+        t0 = self._t if t is None else t
+        st = self.state
+        for full, v in self._ports.pull(t0).items():
+            owner, rest = _split(full)
+            st.setdefault(owner, {})[rest] = v
+        self._sim_state = self._advance_n(st, float(dt), int(n), t0)
+        self._t = t0 + n * float(dt)
+        readings = {f"{o}.{s}": v for o, slots in self._outputs.items()
+                    for s, v in slots.items()}
+        self._ports.publish(readings, t0)
+        return self._sim_state
+
+    def _step_n_fn(self, n: int):
+        cache = self.__dict__.setdefault("_stepn_cache", {})
+        if n not in cache:
+            # accumulate output 0 (x_new) -> input 0 (x); u/noise/dt/t are
+            # per-substep parameters.
+            cache[n] = self._functions["step"].mapaccum(f"step_x{n}", n,
+                                                        [0], [0])
+        return cache[n]
+
+    def _advance_n(self, state: dict, dt: float, n: int, t: float) -> dict:
+        spec = self._spec
+        flat = flatten_nested(state)
+        x0 = np.asarray(spec.pack_any(flat), dtype=float).reshape(-1, 1)
+        u = np.array([float(np.asarray(flat.get(f.name, f.default)).ravel()[0])
+                      for f in self._u_fields()])
+        noise = self._noise_vec(flat)
+        fn = self._step_n_fn(n)
+        U = ca.repmat(ca.DM(u.reshape(-1, 1)), 1, n) if u.size else ca.DM(0, n)
+        NO = (ca.repmat(ca.DM(noise.reshape(-1, 1)), 1, n) if noise.size
+              else ca.DM(0, n))
+        DT = ca.repmat(ca.DM(float(dt)), 1, n)
+        T = ca.DM(np.array([[t + k * dt for k in range(n)]]))
+        res = fn(x0, U, NO, DT, T)
+        outs = [res] if not isinstance(res, (list, tuple)) else list(res)
+        self._state["x"] = np.asarray(outs[0])[:, -1].reshape(-1)
+        new_state = spec.to_nested(self._state["x"])
+        for owner, slots in state.items():
+            new_state.setdefault(owner, {})
+            for slot, val in slots.items():
+                if slot not in new_state[owner]:
+                    new_state[owner][slot] = val
+        ep = self.module.entry("step")
+        self._outputs = {}
+        for i, name in enumerate(ep.returns):
+            owner, slot = _split(name)
+            self._outputs.setdefault(owner, {})[slot] = (
+                np.asarray(outs[len(ep.writes) + i])[:, -1].reshape(-1))
         return new_state
 
     def _noise_vec(self, flat: dict | None = None) -> np.ndarray:
@@ -735,22 +866,31 @@ class NoiseDriver:
 # TargetNumpy
 # ---------------------------------------------------------------------------
 
-def TargetNumpy(x) -> NumpyRuntime:
+def TargetNumpy(x, *, compile: bool = False) -> NumpyRuntime:
     """Lower a typed `Module` — or any transform exposing `.module()`
     (`Sim`, `EKF`, `LQR`, a recurrence block) — to the matching
     native-Python view (sim / filter / recurrence / regulator), or the
-    bare kernel engine when no view matches."""
+    bare kernel engine when no view matches.
+
+    `compile=True` builds the kernel's CasADi functions with `cc -O3` and
+    calls them as externals instead of interpreting the MX graph
+    (bit-identical, ~8x per call; cached on disk). Pair with `NumpySim`'s
+    `step_n` to fold substeps for a further amortization."""
     from ..target import as_module
     m = as_module(x, "TargetNumpy")
     methods = {e.method for e in m.entry_points}
+    runtime: NumpyRuntime
     if m.hosting is Hosting.HELD:
         if "predict" in methods:
-            return NumpyFilter(m)
-        if m.ports_by_role(Role.OUTPUT):
-            return NumpyRecurrence(m)
+            runtime = NumpyFilter(m)
+        elif m.ports_by_role(Role.OUTPUT):
+            runtime = NumpyRecurrence(m)
+        else:
+            runtime = NumpyRuntime(m)
+    elif "control" in methods:
+        runtime = NumpyRegulator(m)
+    elif "step" in methods:
+        runtime = NumpySim(m)
     else:
-        if "control" in methods:
-            return NumpyRegulator(m)
-        if "step" in methods:
-            return NumpySim(m)
-    return NumpyRuntime(m)
+        runtime = NumpyRuntime(m)
+    return runtime._enable_compile() if compile else runtime
