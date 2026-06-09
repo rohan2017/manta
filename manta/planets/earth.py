@@ -124,6 +124,7 @@ class Earth(Planet):
                  *,
                  position: tuple[float, float, float] = (0.0, 0.0, 0.0),
                  rotation_rate: float = 0.0,
+                 rotation_axis: tuple[float, float, float] = (0.0, 0.0, 1.0),
                  sea_level: float = 0.0,
                  water_density: float = 1025.0,
                  air_density: float = 1.225,
@@ -134,9 +135,13 @@ class Earth(Planet):
                  waves: SeaWaves | None = None,
                  surface_collision: bool = True,
                  surface_smoothing: float = 0.0) -> None:
+        # rotation_axis lets a LOCAL-tangent sim sit at a latitude: tilt the
+        # spin axis off local-up so the inertial Earth rate the IMU senses has
+        # a horizontal (north) component — the gyrocompass signal. Default +z
+        # (sub at the pole / spin axis = local vertical).
         super().__init__(name=name,
                          position=position,
-                         rotation_axis=(0.0, 0.0, 1.0),
+                         rotation_axis=rotation_axis,
                          omega=rotation_rate)
         self.sea_level     = float(sea_level)
         self.water_density = float(water_density)

@@ -54,6 +54,20 @@ BUOY_FAC = 1.15                   # total displaced volume / (MASS/RHO): slight
 COM_Z = -0.20                     # CoM below the buoy line (z=0) → pendulum
 DECK_Z = 0.70                     # GPS mast: antennas well clear of the wave band
 
+# --- Earth rotation ---------------------------------------------------------
+# The world frame is INERTIAL and the Earth spins in it, so the IMU gyro
+# (= angular_velocity[WorldFrame]) reads the body's INERTIAL rate with NO
+# Earth-rate term in the part model: a sub co-rotating with the Earth senses
+# the planet's spin. We sit at the pole (spin axis = local up) so the gyro
+# reads Ω cleanly on its vertical axis AND the co-rotating ocean is stationary
+# here (Ω×r = 0 on the axis). A mid-latitude would put a horizontal NORTH
+# component on the gyro — the true gyrocompass signal — but in this
+# inertial-world frame the co-rotating ocean then sweeps a fixed point at
+# Ω·R·cos(lat) ≈ 300 m/s; a clean latitude demo needs a rotating local-tangent
+# nav frame (a framework addition, not done here).
+EARTH_AXIS = (0.0, 0.0, 1.0)
+OMEGA_EARTH = Earth.SIDEREAL * np.array(EARTH_AXIS)          # world-frame rate
+
 # --- thrust (N, N) ----------------------------------------------------------
 SURGE, SWAY, HEAVE, YAW, PITCH = 900.0, 350.0, 450.0, 350.0, 120.0
 
@@ -113,15 +127,20 @@ def build_world():
     sub.add(Thruster("v_fore", force=(0, 0, 1), transform=(1.0, 0, 0)))
     sub.add(Thruster("v_aft", force=(0, 0, 1), transform=(-1.0, 0, 0)))
 
-    # Sensors: IMU + DVL (dead-reckoning) + two water-gated GPS (fore/aft).
+    # Sensors: IMU (gyro carries the body's inertial rate, so on the spinning
+    # Earth it reads Ω) + DVL (dead-reckoning) + two water-gated GPS (fore/aft).
     sub.add(IMU("imu", gyro_noise_sigma=0.01, gyro_bias_sigma=5e-4))
     sub.add(DVL("dvl", velocity_noise_sigma=0.05))
     sub.add(SurfaceGPS("gps_fore", position_noise_sigma=0.1, transform=(1.0, 0, DECK_Z)))
     sub.add(SurfaceGPS("gps_aft", position_noise_sigma=0.1, transform=(-1.0, 0, DECK_Z)))
 
-    earth = Earth(position=(0, 0, -Earth.R_EQ), waves=WAVES, surface_smoothing=SMOOTH)
+    earth = Earth(position=(0, 0, -Earth.R_EQ), rotation_rate=Earth.SIDEREAL,
+                  rotation_axis=EARTH_AXIS, waves=WAVES, surface_smoothing=SMOOTH)
     w = World().add_planet(earth)
-    w.add_craft(sub, position=(0, 0, -0.2))
+    # Co-rotating with the Earth: the IMU then reads Earth's spin (a real
+    # Earth-fixed sub does). Over the run this turns the sub ~0.2°, which the
+    # filter tracks; the point is the steady inertial rate on the gyro.
+    w.add_craft(sub, position=(0, 0, -0.2), angular_velocity=tuple(OMEGA_EARTH))
     return w, sub
 
 
@@ -156,13 +175,22 @@ def main() -> None:
 
     w, c = build_world()
     sim = TargetNumpy(Sim(w))
+    # The IMU gyro reads angular_velocity[WorldFrame] — the body's INERTIAL
+    # rate — so co-rotating with the spinning Earth it senses Earth's spin with
+    # NO Earth-rate term in the part model. Confirm it on a noiseless step.
+    sim.step(1e-3)
+    g0 = np.asarray(sim.outputs()["sub"]["imu.gyro"]).ravel()
+    print(f"IMU senses Earth's spin (inertial rate, no part code): gyro = "
+          f"{np.array2string(g0, precision=2)} rad/s, |gyro| = "
+          f"{np.linalg.norm(g0):.2e} vs Ω = {Earth.SIDEREAL:.2e}")
     sim.attach_driver(NoiseDriver(seed=5))
 
     sensors = ["sub.imu.gyro", "sub.dvl.velocity",
                "sub.gps_fore.position", "sub.gps_aft.position"]
     ekf_ir = EKF(w, sensors=sensors)
     ekf = TargetNumpy(ekf_ir)
-    ekf.reset(state={"sub": c.initial_state(position=(0.0, 0.0, -0.2))},
+    ekf.reset(state={"sub": c.initial_state(
+                  position=(0.0, 0.0, -0.2), angular_velocity=tuple(OMEGA_EARTH))},
               P=np.eye(ekf.spec.tangent_dim) * 0.1)
     # Always-on inertial sensors + the thruster commands ride the bus; the two
     # GPS are folded by hand, only when their antenna is out of the water.
@@ -223,8 +251,9 @@ def main() -> None:
                 ekf.command(name).set(val)
 
             sim.step(dt)
-            # Gated GPS: fold each fix only while its antenna is dry.
             out = sim.outputs()["sub"]
+            # Gated GPS: fold each fix only while its antenna is dry.
+            surfaced = False
             surfaced = False
             for g in ("gps_fore", "gps_aft"):
                 if float(np.asarray(out[f"{g}.wet"]).ravel()[0]) < 0.5:
