@@ -1,19 +1,24 @@
-"""Submarine — direct piloting with an Error-State EKF watching along.
+"""Submarine — a neutrally-buoyant AUV that surfaces to fix, dives to run.
 
-A neutrally-buoyant AUV in a seawater `FluidField`: `Mass` + `PointBuoy`
-(displacement set to cancel weight) + hydrodynamic `DragSurface`, driven
-by a stern propeller, a vertical thruster, and a yaw thruster. The buoy
-sits above the centre of mass, so the hull is **pendulum-stable** in
-roll/pitch — you only steer heading and depth.
+A cylindrical AUV in a real Earth ocean (`Earth` + `SeaWaves`): a line of
+`PointBuoy`s along the hull rides the waves when surfaced, the centre of mass
+sits below the centre of buoyancy so the hull is **passively pendulum-stable**
+in roll and pitch, and the roll moment of inertia is much smaller than the
+pitch one (a cylinder) so it holds a pitch attitude without constant thrust.
 
-You pilot it directly (no controller in the loop). Meanwhile an `EKF`
-fuses the noisy IMU + DVL (body-frame velocity) + position fixes into a
-state estimate, and the terminal reports the estimate error so you can
-watch the filter stay locked on while you fly. Process noise comes from
-the propeller `force_noise`; measurement noise from each sensor's σ — all
-model-derived, and the same σ drive the truth via a `NoiseDriver`.
+Thrust is a 5-thruster vector layout:
+  * one powerful stern thruster — surge (+x);
+  * two horizontal (fore + aft) — together: sway (±y); differential: yaw;
+  * two vertical (fore + aft)   — together: heave (±z); differential: pitch.
 
-Controls:  W/S ahead/astern   A/D yaw left/right   space/shift rise/dive
+Navigation is the point. Two GPS receivers (a custom water-gated
+`PositionSensor` defined here) sit on the fore and aft deck: each only
+resolves when its antenna is ABOVE the wave surface (it samples the fluid and
+suppresses its reading underwater). Surfaced, the two fixes give absolute
+position AND heading (the fore/aft baseline); submerged, the EKF
+dead-reckons on the IMU gyro + DVL body-velocity until the next surfacing.
+
+Controls:  W/S surge   A/D yaw   space/shift heave (rise/dive)   Q/E sway
 
 Run::
 
@@ -27,145 +32,229 @@ from __future__ import annotations
 import numpy as np
 
 from manta import Craft, EKF, NoiseDriver, Sim, TargetNumpy, World, wire
-from manta.fields import FluidField, GravityField, MagField
-from manta.parts import (
-    DVL, DragSurface, IMU, Magnetometer, Mass, PointBuoy, PositionSensor,
-    Thruster,
-)
+from manta.fields import FluidField
+from manta.ir.frames import WorldFrame
+from manta.ir.types import Scalar
+from manta.parts import DVL, DragSurface, IMU, Mass, PointBuoy, PositionSensor, Thruster
+from manta.parts.base import Output
+from manta.planets import Earth, SeaWaves
 
 from .._control import Pacer, common_args, make_controller
 from .._viz import Viz
 
-RHO = 1025.0           # seawater density
+# --- sea state + hull -------------------------------------------------------
+RHO = 1025.0                      # seawater density
 MASS = 120.0
-FWD, VERT, YAW = 600.0, 250.0, 120.0    # command magnitudes (N, N, N·m)
+WAVES = SeaWaves(amplitude=0.18, wavelength=12.0)
+SMOOTH = 0.20                     # water/air blend band (m)
+HULL_L, HULL_R = 2.4, 0.30        # cylinder length / radius
+N_BUOY = 7
+BUOY_FAC = 1.15                   # total displaced volume / (MASS/RHO): slight
+                                  # positive trim → it floats to the surface
+COM_Z = -0.20                     # CoM below the buoy line (z=0) → pendulum
+DECK_Z = 0.70                     # GPS mast: antennas well clear of the wave band
+
+# --- thrust (N, N) ----------------------------------------------------------
+SURGE, SWAY, HEAVE, YAW, PITCH = 900.0, 350.0, 450.0, 350.0, 120.0
+
+
+# ---------------------------------------------------------------------------
+# A water-gated GPS: a PositionSensor that only resolves above the surface.
+# It samples the FluidField at its own mount point and reports a `wet` flag
+# (≈1 submerged, ≈0 in air); the loop folds the fix only when it's dry.
+# ---------------------------------------------------------------------------
+
+class SurfaceGPS(PositionSensor):
+    """`PositionSensor` that also reports whether its antenna is underwater.
+
+    `wet` is a smooth 0..1 from the local fluid density (seawater → 1, air →
+    0), so the example can gate the position fix on surfacing."""
+
+    wet = Output()
+
+    def update(self, ctx):
+        out = super().update(ctx)
+        rho = ctx.field(FluidField).value_at_sym(
+            ctx.position[WorldFrame], ctx.t).density
+        out.outputs["wet"] = ctx.sample(Scalar(rho * (1.0 / RHO)), rate=self.rate)
+        return out
 
 
 def build_world():
     sub = Craft("sub")
-    sub.add(Mass("hull", mass=MASS, moi=(3.0, 12.0, 12.0)))
-    # Neutral buoyancy, buoy above CoM for pendulum (metacentric) stability.
-    sub.add(PointBuoy("buoy", volume=MASS / RHO, transform=(0.0, 0.0, 0.15)))
-    sub.add(DragSurface.isotropic_quadratic("drag", area=0.09,
-                                            drag_coefficient=0.5))
-    # Tail fins: an offset drag panel sees the local ω×r velocity, so it
-    # damps yaw + pitch rates — the hull's hydrodynamic stability that keeps
-    # heading from running away under a held yaw command.
-    sub.add(DragSurface.isotropic_quadratic("fin", area=0.35,
-                                            drag_coefficient=1.1,
-                                            transform=(-1.3, 0.0, 0.0)))
-    sub.add(Thruster("prop", force=(1.0, 0.0, 0.0), transform=(-1.0, 0, 0),
+    # Cylinder: long in x. Roll MoI (about x) ≪ pitch/yaw (about y, z); CoM
+    # below the buoy line for pendulum stability in roll + pitch.
+    sub.add(Mass("hull", mass=MASS, moi=(5.0, 60.0, 60.0), transform=(0, 0, COM_Z)))
+
+    # A line of buoys along the hull axis (z = 0): rides the wave profile when
+    # surfaced. Co-located axial drag fades with submersion the same way.
+    xs = np.linspace(-1.2, 1.2, N_BUOY)
+    v_each = BUOY_FAC * MASS / RHO / N_BUOY
+    for i, x in enumerate(xs):
+        sub.add(PointBuoy(f"buoy{i}", volume=v_each, transform=(float(x), 0, 0)))
+        sub.add(DragSurface.isotropic_quadratic(f"hd{i}", area=0.05,
+                                                drag_coefficient=0.8,
+                                                transform=(float(x), 0, 0)))
+    # Top/bottom panels at three stations: these are OFF the roll axis, so
+    # they damp roll + pitch rate (the axial line above cannot).
+    for j, x in enumerate((1.0, 0.0, -1.0)):
+        sub.add(DragSurface.isotropic_quadratic(f"top{j}", area=0.07,
+                                                drag_coefficient=1.0,
+                                                transform=(x, 0, HULL_R)))
+        sub.add(DragSurface.isotropic_quadratic(f"bot{j}", area=0.07,
+                                                drag_coefficient=1.0,
+                                                transform=(x, 0, -HULL_R)))
+
+    # 5-thruster vector layout.
+    sub.add(Thruster("surge", force=(1, 0, 0), transform=(-1.2, 0, 0),
                      force_noise_sigma=3.0))
-    sub.add(Thruster("vert", force=(0.0, 0.0, 1.0)))
-    sub.add(Thruster("yaw", torque=(0.0, 0.0, 1.0)))
-    sub.add(IMU("imu", gyro_noise_sigma=0.01))
-    sub.add(DVL("dvl", velocity_noise_sigma=0.02))
-    sub.add(PositionSensor("gps", position_noise_sigma=0.1))
-    sub.add(Magnetometer("mag", B_noise_sigma=1.0e-6))     # compass (heading)
-    w = (World()
-         .add_field(GravityField().add_uniform((0.0, 0.0, -9.81)))
-         .add_field(FluidField().add_uniform(density=RHO))
-         .add_field(MagField().add_uniform((2.0e-5, 0.0, -4.0e-5))))
-    w.add_craft(sub, position=(0.0, 0.0, -8.0))     # 8 m depth
+    sub.add(Thruster("h_fore", force=(0, 1, 0), transform=(1.0, 0, 0)))
+    sub.add(Thruster("h_aft", force=(0, 1, 0), transform=(-1.0, 0, 0)))
+    sub.add(Thruster("v_fore", force=(0, 0, 1), transform=(1.0, 0, 0)))
+    sub.add(Thruster("v_aft", force=(0, 0, 1), transform=(-1.0, 0, 0)))
+
+    # Sensors: IMU + DVL (dead-reckoning) + two water-gated GPS (fore/aft).
+    sub.add(IMU("imu", gyro_noise_sigma=0.01, gyro_bias_sigma=5e-4))
+    sub.add(DVL("dvl", velocity_noise_sigma=0.05))
+    sub.add(SurfaceGPS("gps_fore", position_noise_sigma=0.1, transform=(1.0, 0, DECK_Z)))
+    sub.add(SurfaceGPS("gps_aft", position_noise_sigma=0.1, transform=(-1.0, 0, DECK_Z)))
+
+    earth = Earth(position=(0, 0, -Earth.R_EQ), waves=WAVES, surface_smoothing=SMOOTH)
+    w = World().add_planet(earth)
+    w.add_craft(sub, position=(0, 0, -0.2))
     return w, sub
+
+
+def mix(surge, sway, heave, yaw, pitch):
+    """5 DOF commands → 5 thruster throttles (N)."""
+    return {
+        "surge.throttle": SURGE * surge,
+        "h_fore.throttle": SWAY * sway + YAW * yaw,
+        "h_aft.throttle": SWAY * sway - YAW * yaw,
+        "v_fore.throttle": HEAVE * heave + PITCH * pitch,
+        "v_aft.throttle": HEAVE * heave - PITCH * pitch,
+    }
+
+
+def _eta(x, y, t):
+    """Wave elevation at (x, y, t) — the same planar sinusoid the Earth uses."""
+    k = 2 * np.pi / WAVES.wavelength
+    g0 = Earth.MU / Earth.R_EQ**2
+    omega = k * np.sqrt(g0 * WAVES.wavelength / (2 * np.pi))
+    return WAVES.amplitude * np.cos(k * x - omega * t)
+
+
+def _heading(q):
+    w, x, y, z = q
+    return np.degrees(np.arctan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z)))
 
 
 def main() -> None:
     args = common_args(__doc__).parse_args()
     dt = 0.02
-    duration = args.duration or (1e9 if args.keyboard else 16.0)
+    duration = args.duration or (1e9 if args.keyboard else 48.0)
 
     w, c = build_world()
     sim = TargetNumpy(Sim(w))
     sim.attach_driver(NoiseDriver(seed=5))
 
-    ekf_ir = EKF(w)
+    sensors = ["sub.imu.gyro", "sub.dvl.velocity",
+               "sub.gps_fore.position", "sub.gps_aft.position"]
+    ekf_ir = EKF(w, sensors=sensors)
     ekf = TargetNumpy(ekf_ir)
-    ekf.reset(state={"sub": c.initial_state(position=(0.0, 0.0, -8.0))},
+    ekf.reset(state={"sub": c.initial_state(position=(0.0, 0.0, -0.2))},
               P=np.eye(ekf.spec.tangent_dim) * 0.1)
-    # Wire the sensor + command bus: position fix + DVL body-velocity +
-    # gyro + compass. The compass fixes absolute heading — without it,
-    # gyro-integrated heading drifts a few degrees through a turn, and that
-    # rotates the DVL body-velocity into a growing dead-reckoning error.
-    # (We leave the IMU accelerometer out of the attitude solution: under
-    # thrust its specific-force reading is dominated by acceleration, not
-    # gravity, so it would corrupt heading.)
-    wire(sim.out("sub.gps.position"), ekf.meas("sub.gps.position"))
-    wire(sim.out("sub.dvl.velocity"), ekf.meas("sub.dvl.velocity"))
+    # Always-on inertial sensors + the thruster commands ride the bus; the two
+    # GPS are folded by hand, only when their antenna is out of the water.
     wire(sim.out("sub.imu.gyro"), ekf.meas("sub.imu.gyro"))
-    wire(sim.out("sub.mag.B"), ekf.meas("sub.mag.B"))
+    wire(sim.out("sub.dvl.velocity"), ekf.meas("sub.dvl.velocity"))
 
-    # Why the compass earns its place: an observability check on the
-    # symbolic F/H shows that at rest GPS + DVL + gyro can't see absolute
-    # heading (it's only observable while turning) — so it has no absolute
-    # reference and can wander on long straight legs. The magnetometer
-    # makes orientation observable everywhere.
-    no_compass = ekf_ir.observability(
-        sensors=["sub.imu.gyro", "sub.dvl.velocity", "sub.gps.position"])
-    full_rep = ekf_ir.observability()
-    print(f"observability — full suite: {full_rep.rank}/"
-          f"{full_rep.tangent_dim}; without compass: "
-          f"{no_compass.rank}/{no_compass.tangent_dim} "
-          f"(unobservable: {', '.join(n for n, _ in no_compass.unobservable) or 'none'})\n")
+    full = ekf_ir.observability()
+    dr = ekf_ir.observability(sensors=["sub.imu.gyro", "sub.dvl.velocity"])
+    print(f"observability — surfaced (2 GPS): {full.rank}/{full.tangent_dim}; "
+          f"submerged (gyro+DVL): {dr.rank}/{dr.tangent_dim} "
+          f"(dead-reckons {', '.join(n.split('.')[-1] for n, _ in dr.unobservable)})\n")
 
-    script = [(1.0, 6.0, {"w"}), (3.0, 5.0, {"d"}), (7.0, 11.0, {"shift"}),
-              (9.0, 11.0, {"a"}), (12.0, 15.0, {"w"})]
+    # Mission: cruise on the surface (GPS lock), dive and run a dog-leg blind,
+    # then surface to re-fix. (surge, sway, heave, yaw, pitch)
+    script = [(2.0, 6.0, {"w"}),                 # cruise out on the surface (GPS lock)
+              (6.0, 10.0, {"shift"}),            # dive setpoint → ~12 m
+              (6.0, 36.0, {"w"}),                # long blind transit at depth
+              (14.0, 18.0, {"d"}), (24.0, 28.0, {"a"}),   # two blind dog-legs
+              (37.0, 43.0, {"space"}),           # surface setpoint → 0, re-fix
+              (45.0, 48.0, {"w"})]
     ctrl = make_controller(args.keyboard, script)
     if args.keyboard:
-        print("Controls:  W/S ahead/astern   A/D yaw   space/shift rise/dive"
-              "   (Ctrl-C to quit)\n")
+        print("Controls:  W/S surge   A/D yaw   space/shift heave   Q/E sway\n")
 
     viz = None if args.no_viz else Viz("manta/submarine", addr=args.viz_addr)
     if viz is not None:
-        viz.plane("world/surface", z=0.0, size=40.0, color=(40, 90, 160, 120))
-        viz.box("world/sub/hull", (1.0, 0.18, 0.18), color=(230, 210, 80))
-        viz.box("world/sub_est/hull", (1.0, 0.18, 0.18),
-                color=(120, 120, 120, 120))
+        viz.split_cylinder("world/sub/hull", HULL_R, HULL_L,
+                           colors=((210, 200, 90), (180, 140, 40)))
+        viz.pose("world/sub/hull", (0, 0, 0), (np.cos(np.pi/4), 0, np.sin(np.pi/4), 0))
+        viz.box("world/sub_est/hull", (HULL_L, 0.2, 0.2), color=(120, 120, 120, 130))
+        viz.plane("world/seabed", z=-25.0, size=80.0, color=(30, 40, 35, 255))
 
     n = int(duration / dt)
-    # Live runs must hold sim time to the wall clock: uncapped, the loop
-    # integrates several× real time and floods the viewer's channel —
-    # latency then grows without bound and keyboard piloting is hopeless.
     pacer = Pacer() if (args.keyboard or viz is not None) else None
-    print(f"{'t (s)':>6} {'depth (m)':>10} {'vx (m/s)':>9} {'heading°':>9} "
-          f"{'est err (m)':>11}")
+    # Fly-by-wire: space/shift drive a DEPTH SETPOINT, a depth-hold loop on the
+    # (pressure-accurate) depth flies heave to it; surge + yaw are direct. A
+    # positive-trim AUV can't hold depth on open-loop thrust.
+    depth_sp = -0.2
+    print(f"{'t':>5} {'depth':>7} {'mode':>5} {'pos err':>8} {'head err°':>9}")
     try:
         for i in range(n):
             t = i * dt
             if pacer is not None:
                 pacer.pace(t)
             ctrl.update(t)
-            cmd = {
-                "prop.throttle": FWD * (ctrl.held("w") - ctrl.held("s")),
-                "vert.throttle": VERT * (ctrl.held("space") - ctrl.held("shift")),
-                "yaw.throttle": YAW * (ctrl.held("a") - ctrl.held("d")),
-            }
+            depth_sp = float(np.clip(
+                depth_sp + (ctrl.held("space") - ctrl.held("shift")) * 3.0 * dt,
+                -18.0, 0.0))
+            z = float(np.asarray(sim.state["sub"]["position"]).ravel()[2])
+            vz = float(np.asarray(sim.state["sub"]["velocity"]).ravel()[2])
+            heave = float(np.clip(0.4 * (depth_sp - z) - 0.8 * vz, -1.0, 1.0))
+            cmd = mix(surge=ctrl.held("w") - ctrl.held("s"),
+                      sway=ctrl.held("e") - ctrl.held("q"),
+                      heave=heave,
+                      yaw=ctrl.held("a") - ctrl.held("d"), pitch=0.0)
             for name, val in cmd.items():
                 sim.command(name).set(val)
                 ekf.command(name).set(val)
 
             sim.step(dt)
-            ekf.step(dt)
+            # Gated GPS: fold each fix only while its antenna is dry.
+            out = sim.outputs()["sub"]
+            surfaced = False
+            for g in ("gps_fore", "gps_aft"):
+                if float(np.asarray(out[f"{g}.wet"]).ravel()[0]) < 0.5:
+                    ekf.update(f"sub.{g}.position", out[f"{g}.position"])
+                    surfaced = True
+            ekf.step(dt)              # fold gyro + DVL, predict forward
 
             tp = np.asarray(sim.state["sub"]["position"]).ravel()
             tq = np.asarray(sim.state["sub"]["orientation"]).ravel()
             est = ekf.state_dict()["sub"]
             ep = np.asarray(est["position"]).ravel()
-            if viz is not None and viz.due(t):   # throttle to ~30 Hz
+            eq = np.asarray(est["orientation"]).ravel()
+            if viz is not None and viz.due(t):
                 viz.t(t)
                 viz.pose("world/sub", tp, tq)
-                viz.pose("world/sub_est", ep,
-                         np.asarray(est["orientation"]).ravel())
-                viz.trail("world/trail", tp,   # world coords: not under the posed sub
-                          max_len=600, min_dist=0.05)
-
+                viz.pose("world/sub_est", ep, eq)
+                viz.trail("world/trail", tp, max_len=2000, min_dist=0.1,
+                          color=(120, 230, 255) if surfaced else (90, 130, 180))
+                # Sub-centred wave surface (same η the physics uses) + a deep
+                # seabed plane for depth reference.
+                xs = tp[0] + np.linspace(-12, 12, 12)
+                ys = tp[1] + np.linspace(-12, 12, 12)
+                Xg, Yg = np.meshgrid(xs, ys)
+                viz.heightfield("world/waves", Xg, Yg, _eta(Xg, Yg, t),
+                                color=(40, 110, 165))
+                viz.pose("world/seabed", (tp[0], tp[1], 0.0))
             if (i + 1) % 50 == 0:
-                v = np.asarray(sim.state["sub"]["velocity"]).ravel()
-                heading = np.degrees(np.arctan2(
-                    2 * (tq[0]*tq[3] + tq[1]*tq[2]),
-                    1 - 2 * (tq[2]**2 + tq[3]**2)))
-                print(f"{t:>6.2f} {tp[2]:>10.2f} {v[0]:>9.3f} {heading:>9.1f} "
-                      f"{np.linalg.norm(tp - ep):>11.4f}")
+                he = abs((_heading(tq) - _heading(eq) + 180) % 360 - 180)
+                print(f"{t:>5.1f} {tp[2]:>7.2f} {'GPS' if surfaced else ' DR':>5} "
+                      f"{np.linalg.norm(tp - ep):>8.3f} {he:>9.2f}")
     except KeyboardInterrupt:
         pass
     finally:
