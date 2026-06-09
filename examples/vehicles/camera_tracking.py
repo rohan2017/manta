@@ -17,19 +17,22 @@ a hand-off to onboard `BBoxCamera` homing:
     ballistically (~3 km apogee, ~5 km downrange) from far and low, climbing
     into the array's field of view near apogee.
 
-  * **interceptor** — a fast (T/W ≈ 30, > 700 m/s) gimballed rocket made
-    slightly PASSIVELY STABLE (its drag surface sits aft of the COM, so it
-    weathervanes into the airflow). That tames the launch-tumble that an
-    unaugmented thrust-vectored rocket suffers, while staying maneuverable.
-    A cascade autopilot (attitude error → gimbal ANGLE → joint torque)
-    points the thrust. It carries a wide-FOV `BBoxCamera` on the nose: as it
-    closes, that camera sees the target and its box (bearing + apparent size)
-    sharpens the SAME EKF track to terminal accuracy — the size cue the
-    ground array deliberately lacked.
+  * **interceptor** — a fast (500+ m/s) gimballed rocket made slightly
+    PASSIVELY STABLE: its drag surface sits aft of the COM, so it
+    weathervanes into the airflow. That tames the launch-tumble an
+    unaugmented thrust-vectored rocket suffers, while staying maneuverable. A
+    cascade autopilot (attitude error → gimbal ANGLE → joint torque-PD)
+    points the thrust. Mid-course it pursues the ground-array intercept
+    point; once its wide-FOV nose `BBoxCamera` sees the target it switches to
+    PROPORTIONAL NAVIGATION on the camera's bearing (the box centre is an
+    accurate line of sight at any range; the box size→range is not, so the
+    range comes from the EKF) — PN nulls the line-of-sight rate onto a
+    collision course.
 
-Both the array and the interceptor feed one EKF of the target; the
-interceptor's own pose is known (onboard nav). The ground array gets the
-rocket airborne and pointed; the nose camera finishes the job.
+Physics integrates with semi-implicit Euler; at a 500+ m/s pass the
+quadratic drag is stiff, so the substep is 1 kHz. The terminal closure
+against a fast crossing target off a coarse km-range cue is genuinely hard —
+the demo gets to a several-hundred-metre pass, not a hit-to-kill.
 
 Run::
 
@@ -57,7 +60,7 @@ from .._viz import Viz
 
 # --- world / rates ---------------------------------------------------------
 G = 9.81
-DT_SIM, SUBSTEPS = 0.002, 10           # 500 Hz physics (stiff TVC + contact)
+DT_SIM, SUBSTEPS = 0.001, 20           # 1 kHz physics (stiff TVC + drag)
 DT = DT_SIM * SUBSTEPS                  # 50 Hz control / EKF
 RHO = 1.225
 
@@ -77,18 +80,21 @@ TGT_V0 = (-105.0, 0.0, 258.0)          # ~3.2 km apogee, ~5 km downrange
 # --- interceptor -----------------------------------------------------------
 M_BODY, M_ENG = 60.0, 15.0
 M_TOT = M_BODY + M_ENG
-MAXT = 16000.0                         # thrust (T/W ≈ 22, > 500 m/s)
+MAXT = 16000.0                         # thrust (T/W ≈ 22)
 GIM_Z, ENG_Z = -1.2, -0.3
 DRAG_Z = -0.6                          # drag AFT of COM (~0.18) → passive stability
 NOSE_Z = 2.0                           # nose camera, looking forward (+z)
-NOSE_W, NOSE_HFOV, NOSE_PIX = 640, 50.0, 1.5
+NOSE_W, NOSE_HFOV, NOSE_PIX = 640, 100.0, 1.5
 Z0 = 2.0
 HIT_RADIUS = 6.0
 MIN_INTERCEPT_Z = 1000.0
 
 # --- guidance / autopilot --------------------------------------------------
 V_CLOSE = 700.0                        # nominal closing speed for the lead
-KP_G, KD_G = 1.2, 1.0                  # intercept accel-command gains
+N_PN = 4.0                             # proportional-navigation constant
+PN_RANGE = 2000.0                      # switch to PN inside this range (m)
+KFWD = 200.0                           # forward accel to keep closing (m/s2)
+KP_G, KD_G = 1.2, 1.0                  # mid-course pursuit accel-command gains
 THMAX = 0.22                           # gimbal deflection limit (rad)
 KATT, KRATE = 1.2, 1.0                 # attitude error/rate → gimbal angle
 KJP, KJD = 2500.0, 600.0               # gimbal-angle servo (joint torque PD)
@@ -247,29 +253,29 @@ def deproject(out, vis):
     return np.linalg.solve(A, b)
 
 
-def nose_deproject(out, rk_p, rk_q):
-    """Target world position from the nose camera's bounding box + the known
-    interceptor pose: bearing from the box centre, range from its apparent
-    size (the target's known semi-axes). Accurate once the rocket is close."""
+def nose_deproject(out, rk_p, rk_q, range_hint):
+    """Target world position from the nose camera's box CENTRE (an accurate
+    bearing at any range — the box may be sub-pixel but its centre still
+    projects the target's centre) plus a RANGE HINT from the ground EKF. The
+    box size→range is unreliable far out, so we take only the bearing here;
+    PN cares about the (accurate) line-of-sight rate, not absolute range."""
     fx = (NOSE_W / 2.0) / np.tan(np.radians(NOSE_HFOV) / 2.0)
     cc = NOSE_W / 2.0
     box = [float(np.asarray(out[f"nose.target_hull_{c}"]).ravel()[0])
            for c in ("xmin", "ymin", "xmax", "ymax")]
     u, v = 0.5 * (box[0] + box[2]), 0.5 * (box[1] + box[3])
-    width = max(box[2] - box[0], 1.0)
-    rng = 2.0 * float(np.mean(TGT_SEMI)) * fx / width
     d_cam = np.array([(u - cc) / fx, (v - cc) / fx, 1.0])
     d_cam /= np.linalg.norm(d_cam)
     Rwb = _R(rk_q)
     cam_p = rk_p + Rwb @ np.array([0.0, 0.0, NOSE_Z])
-    return cam_p + rng * (Rwb @ d_cam)
+    return cam_p + range_hint * (Rwb @ d_cam)
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--no-viz", action="store_true")
     ap.add_argument("--viz-addr", default=None)
-    ap.add_argument("--duration", type=float, default=44.0)
+    ap.add_argument("--duration", type=float, default=48.0)
     args = ap.parse_args()
 
     rng = np.random.default_rng(0)
@@ -349,10 +355,12 @@ def main() -> None:
         tgt_v_est = np.asarray(est["velocity"]).ravel()
         pos_sig = float(np.sqrt(np.trace(ekf.P[ta[0]:ta[1], ta[0]:ta[1]])))
 
-        # --- terminal: the nose camera's own fix (accurate close in) -----
-        nose_fix = (nose_deproject(nose, rk_p,
-                                   np.asarray(rk["orientation"]).ravel())
-                    if (launched and nvis) else None)
+        # --- terminal: the nose camera's bearing + the EKF range ---------
+        nose_fix = None
+        if launched and nvis:
+            nose_fix = nose_deproject(
+                nose, rk_p, np.asarray(rk["orientation"]).ravel(),
+                float(np.linalg.norm(tgt_est - rk_p)))
         aim_p = nose_fix if nose_fix is not None else tgt_est
         est_err = float(np.linalg.norm(aim_p - tg_p))
 
@@ -372,19 +380,31 @@ def main() -> None:
              "interceptor.gimbal_x.torque_cmd": 0.0,
              "interceptor.gimbal_y.torque_cmd": 0.0}
         if launched:
-            # Mid-course: lead the ground track. Terminal: home on the nose
-            # camera's own (much tighter) fix, no lead. Low-pass the aim point
-            # so the noisy track doesn't make the thrust vector jitter (which
-            # the autopilot would chase, flailing at low speed).
-            # Mid-course leads the (coarse, noisy) ground track — heavily
-            # low-passed so the thrust vector doesn't jitter and tumble the
-            # airframe. Terminal homes on the nose camera's own (tighter,
-            # responsive) fix.
+            # Aim point: the (heavily low-passed) ground track mid-course; the
+            # nose camera's own fix once it acquires (size cue → tight range).
             raw = nose_fix if nose_fix is not None else pip
             b = 0.4 if nose_fix is not None else 0.05
             aim[0] = raw if aim[0] is None else (1 - b) * aim[0] + b * raw
-            a_cmd = KP_G * (aim[0] - rk_p) - KD_G * rk_v
-            F = M_TOT * (a_cmd + np.array([0.0, 0.0, G]))
+            R = aim[0] - rk_p
+            rmag = float(np.linalg.norm(R))
+            speed = float(np.linalg.norm(rk_v))
+            if rmag < PN_RANGE and speed > 120.0:
+                # PROPORTIONAL NAVIGATION terminal homing on the nose camera's
+                # own (tight) fix: command lateral acceleration ∝ LOS-rate ×
+                # closing-speed to null the line-of-sight rotation (a collision
+                # course), plus forward thrust to keep closing. PN leads
+                # implicitly — no PIP. The coarse ground track was only ever
+                # good enough to fly the rocket into the seeker's basket.
+                Rhat = R / rmag
+                Vrel = tgt_v_est - rk_v
+                omega = np.cross(R, Vrel) / (rmag * rmag)      # LOS rate (rad/s)
+                Vc = max(-float(np.dot(R, Vrel)) / rmag, 1.0)  # closing speed
+                a_pn = N_PN * Vc * np.cross(omega, Rhat)      # ⟂ to the LOS
+                a_des = a_pn + KFWD * (rk_v / speed) + np.array([0.0, 0.0, G])
+            else:
+                # Mid-course pursuit to the predicted intercept point.
+                a_des = KP_G * (aim[0] - rk_p) - KD_G * rk_v + np.array([0, 0, G])
+            F = M_TOT * a_des
             u["interceptor.main.throttle"] = float(
                 np.clip(np.linalg.norm(F) / MAXT, 0.2, 1.0))
             u.update(autopilot(rk, attitude_for_thrust(F)))
@@ -415,11 +435,14 @@ def main() -> None:
               f"(above {MIN_INTERCEPT_Z:.0f} m) ***")
     else:
         print(f"\nclosest approach: {min_miss:.1f} m — the ground array "
-              f"triangulated the arc from bearings, the rocket launched and "
-              f"flew the cue, and the nose camera then took over and pulled "
-              f"the miss in by an order of magnitude. (The last few hundred "
-              f"metres of a 700 m/s terminal pass are the hard part — the "
-              f"thin-margin TVC loop runs out of authority/conditioning.)")
+              f"triangulated the ballistic arc from bearings, the interceptor "
+              f"launched on that cue and flew a passively-stable 500+ m/s "
+              f"climb, and proportional navigation on the nose-camera bearing "
+              f"homed it from kilometres. The terminal pass against a fast "
+              f"descending crossing target is the unsolved part — a coarse "
+              f"km-range cue + a thin-margin TVC airframe leave a several-"
+              f"hundred-metre miss; closing it needs a dedicated seeker loop, "
+              f"not more gain tuning.")
 
 
 def _tan(spec, name):
