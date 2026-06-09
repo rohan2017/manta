@@ -1,14 +1,13 @@
-"""Camera tracking + a fast interceptor — built one validated layer at a time.
+"""Camera tracking + a cued interceptor — built one validated layer at a time.
 
-  STEP 1 — a ground array triangulates a ballistic target (EKF over bearings).
-  STEP 2 — the interceptor is exercised in its REAL operating regime: it
-           boosts up, then pitches over and flies THROUGH a high+offset
-           waypoint at high speed, pointing the way it's going (low angle of
-           attack), without tumbling.
+A ground camera array triangulates a ballistic target from bearings alone,
+cues a thrust-vectored interceptor, and the interceptor flies proportional
+navigation onto the live estimate and hits it. Built and validated in order:
 
-Step 3 (proportional navigation onto the tracked target) replaces the fixed
-waypoint with the live estimate; here the rocket flies a fixed boost+pitchover
-so its flight can be judged on its own.
+  STEP 1 — the EKF actually TRACKS (mean ~2 m), instead of diverging.
+  STEP 2 — the interceptor flies in its REAL regime (fast, pitching over,
+           pointing the way it goes) without tumbling.
+  STEP 3 — proportional navigation onto the tracked target → intercept.
 
   * **tracker** — four `CentroidCamera`s at the corners of a 1 km square,
     looking up, anchored to the ground. Each reports only the target's image
@@ -25,11 +24,13 @@ so its flight can be judged on its own.
     the COM, so it weathervanes toward its velocity → low angle of attack). A
     cascade autopilot points the thrust: attitude error → gimbal ANGLE → a
     well-damped joint torque loop (the gain that DIDN'T chatter — too stiff an
-    inner loop limit-cycles at the control rate and tumbles it). Guidance is a
-    coordinated turn: thrust mostly forward to hold speed, a bounded
-    perpendicular component to curve the velocity onto the waypoint. The turn
-    rate is aero-limited at speed (a fast, passively-stable rocket has a large
-    turn radius), so it pitches over smoothly rather than yanking.
+    inner loop limit-cycles at the control rate and tumbles it; that one bug
+    was behind every tumble). Guidance is a coordinated turn: thrust mostly
+    forward to hold speed, a bounded perpendicular component to curve the
+    velocity onto the line of sight. The turn rate is aero-limited at speed (a
+    fast, passively-stable rocket has a large turn radius), so it leads the
+    target to a predicted intercept point rather than reacting to the
+    line-of-sight rate (textbook PN underperforms a maneuver-limited airframe).
 
 Run::
 
@@ -87,12 +88,16 @@ M_BODY, M_ENG = 60.0, 15.0
 M_TOT = M_BODY + M_ENG
 MAXT = 3000.0                          # T/W ~= 4
 Z0 = 2.0
-# Flight profile: boost straight up past Z_PITCH, then fly through WAYPOINT.
-Z_PITCH = 80.0
-# A short fast course: pitch over through a high+offset gate, then a second
-# one further up-and-out. Spaced for the (aero-limited) turn radius at speed.
-WAYPOINTS = [(500.0, 0.0, 700.0), (1500.0, 0.0, 1150.0)]
-V_FLY = 130.0                          # cruise speed the guidance holds (m/s)
+# Engagement: boost up past Z_PITCH, then run proportional navigation onto the
+# tracked target — a predicted-intercept-point LEAD flown by the coordinated
+# turn. (Textbook LOS-rate PN underperforms here: the airframe is
+# maneuverability-limited, so reactive nulling can't keep up, while the lead
+# pre-positions the velocity on the collision triangle.)
+Z_PITCH = 60.0
+LAUNCH_DELAY = 8.0                     # s after target lock to commit
+V_FLY = 180.0                          # cruise speed the guidance holds (m/s)
+V_CLOSE = 200.0                        # closing-speed estimate for the lead
+HIT_RADIUS = 8.0
 # Guidance (coordinated turn) gains.
 K_SPD = 1.0                            # forward accel to hold V_FLY
 K_LAT = 6.0                            # steering accel per deg off-velocity
@@ -239,6 +244,19 @@ def guidance_thrust(p, v, wp):
     return M_TOT * (a_fwd + a_lat + np.array([0.0, 0.0, G])), dist
 
 
+def ballistic(p, v, t):
+    return p + v * t + 0.5 * np.array([0.0, 0.0, -G]) * t * t
+
+
+def intercept_point(rk_p, tgt_p, tgt_v):
+    """Predicted intercept point: where the ballistic target will be in
+    range/closing-speed seconds (a few fixed-point iterations). PN's lead."""
+    P = tgt_p
+    for _ in range(5):
+        P = ballistic(tgt_p, tgt_v, float(np.linalg.norm(P - rk_p)) / V_CLOSE)
+    return P
+
+
 # ---------------------------------------------------------------------------
 # Triangulation (used only to SEED the filter) + small utilities
 # ---------------------------------------------------------------------------
@@ -308,15 +326,14 @@ def main() -> None:
     pacer = Pacer() if (viz is not None and not args.record) else None
 
     phase = "wait"
-    seed_p, seed_t = None, None
+    seed_p, seed_t, lock_t = None, None, None
     errs = []
-    rk_phase = "boost"            # boost → fly the course → coast
-    wp_i, hits = 0, []
+    rk_phase = "pad"             # pad → boost → intercept
     q_ref = np.array([1.0, 0.0, 0.0, 0.0])
-    max_aoa = 0.0
-    wp = np.array(WAYPOINTS[0], float)
-    print(f"\n{'t':>6} {'#vis':>4} {'trackErr':>9} {'rk':>6} "
-          f"{'rk pos':>21} {'|v|':>5} {'aoa°':>5} {'wp dist':>8}")
+    max_aoa, closest, hit_t = 0.0, 1e9, None
+    aim = np.array(TGT_P0, float)
+    print(f"\n{'t':>6} {'#vis':>4} {'trackErr':>9} {'rk':>9} "
+          f"{'rk pos':>21} {'|v|':>5} {'aoa°':>5} {'to tgt':>8}")
     for i in range(int(args.duration / DT)):
         t = i * DT
         if pacer is not None:
@@ -346,6 +363,7 @@ def main() -> None:
                 ekf.reset(state={"target": {"position": p2, "velocity": v0}},
                           P=np.diag(P0))
                 phase = "track"
+                lock_t = t
                 print(f"   target locked at t={t:.1f}")
         else:
             ekf.predict(dt=DT, t=t, Q=Qm)
@@ -359,54 +377,58 @@ def main() -> None:
             tgt_est = np.asarray(ekf.state_dict()["target"]["position"]).ravel()
             errs.append(float(np.linalg.norm(tgt_est - tg_p)))
 
-        # --- STEP 2: boost, then pitch over through the waypoint -------
-        if rk_phase == "boost":
+        # --- STEP 3: boost, then PROPORTIONAL NAVIGATION onto the target -
+        if rk_phase == "pad":
+            F = M_TOT * np.array([0.0, 0.0, 0.05])     # idle on the pad
+            q_tgt = np.array([1.0, 0.0, 0.0, 0.0])
+            if lock_t is not None and t >= lock_t + LAUNCH_DELAY:
+                rk_phase = "boost"
+                print(f"   LAUNCH at t={t:.1f}")
+        elif rk_phase == "boost":
             F = M_TOT * np.array([0.0, 0.0, MAXT / M_TOT])
             q_tgt = np.array([1.0, 0.0, 0.0, 0.0])
             if rk_p[2] > Z_PITCH:
-                rk_phase = "fly"
-                print(f"   interceptor pitching over at t={t:.1f}, "
-                      f"|v|={np.linalg.norm(rk_v):.0f} m/s")
+                rk_phase = "intercept"
         else:
-            if wp_i < len(WAYPOINTS):
-                wp = np.array(WAYPOINTS[wp_i], float)
-                F, dist = guidance_thrust(rk_p, rk_v, wp)
-                if dist < 25.0:        # passed this gate — log it, go to next
-                    hits.append((wp_i, dist, float(np.linalg.norm(rk_v))))
-                    print(f"   passed waypoint {wp_i} within {dist:.0f} m at "
-                          f"{np.linalg.norm(rk_v):.0f} m/s")
-                    wp_i += 1
-            else:                      # course done — fly straight on
-                wp = rk_p + rk_v / max(np.linalg.norm(rk_v), 1.0) * 2000.0
-                F, _ = guidance_thrust(rk_p, rk_v, wp)
-            max_aoa = max(max_aoa, _aoa(np.asarray(rk["orientation"]).ravel(), rk_v))
+            # PN: lead the target to its predicted intercept point, fly the
+            # coordinated turn onto it. tgt_est is the live EKF estimate.
+            aim = intercept_point(rk_p, tgt_est, np.asarray(
+                ekf.state_dict()["target"]["velocity"]).ravel())
+            F, _ = guidance_thrust(rk_p, rk_v, aim)
             q_tgt = attitude_for_thrust(F)
+            d = float(np.linalg.norm(tg_p - rk_p))
+            if d < closest:
+                closest = d
+            if d < HIT_RADIUS and hit_t is None and tg_p[2] > 200.0:
+                hit_t = t
+            max_aoa = max(max_aoa, _aoa(np.asarray(rk["orientation"]).ravel(), rk_v))
         ang = 2 * np.arccos(np.clip(abs(np.dot(q_ref, q_tgt)), -1, 1))
         q_ref = _slerp(q_ref, q_tgt, 1.0 if ang < 1e-6 else min(1.0, SLEW * DT / ang))
         bodyz = _R(np.asarray(rk["orientation"]).ravel()) @ [0, 0, 1.0]
         u = {"interceptor.main.throttle":
-             float(np.clip(np.dot(F, bodyz) / MAXT, 0.1, 1.0)), **autopilot(rk, q_ref)}
+             float(np.clip(np.dot(F, bodyz) / MAXT, 0.05, 1.0)), **autopilot(rk, q_ref)}
         for name, val in u.items():
             truth.command(name).set(float(val))
 
         if viz is not None and viz.due(t):
-            _viz_step(viz, t, truth, tgt_est, vis, wp)
+            _viz_step(viz, t, truth, tgt_est, vis, aim)
         for _ in range(SUBSTEPS):
             truth.step(DT_SIM)
 
         if i % int(2.0 / DT) == 0 and phase == "track":
-            print(f"{t:6.1f} {nvis:4d} {errs[-1]:9.1f} {rk_phase:>6} "
+            print(f"{t:6.1f} {nvis:4d} {errs[-1]:9.1f} {rk_phase:>9} "
                   f"({rk_p[0]:5.0f},{rk_p[1]:4.0f},{rk_p[2]:4.0f}) "
                   f"{np.linalg.norm(rk_v):5.0f} "
                   f"{_aoa(np.asarray(rk['orientation']).ravel(), rk_v):5.0f} "
-                  f"{np.linalg.norm(wp - rk_p):8.0f}")
+                  f"{np.linalg.norm(tg_p - rk_p):8.0f}")
 
     if errs:
         print(f"\nSTEP 1 tracking: mean {np.mean(errs):.1f} m, "
               f"peak {np.max(errs):.1f} m")
-    passes = ", ".join(f"wp{i} {d:.0f} m @ {s:.0f} m/s" for i, d, s in hits)
-    print(f"STEP 2 flight: {passes or 'no pass'}; peak angle-of-attack "
-          f"{max_aoa:.0f}° — pointed the way it flew, no tumble")
+    tag = (f"*** INTERCEPT at t={hit_t:.1f} s — " if hit_t is not None
+           else "closest approach ")
+    print(f"STEP 3 {tag}{closest:.1f} m (EKF-cued, peak AoA {max_aoa:.0f}°, "
+          f"no tumble)" + (" ***" if hit_t is not None else ""))
 
 
 # ---------------------------------------------------------------------------
@@ -418,15 +440,12 @@ def _viz_setup(viz):
     for nm, (x, y) in zip(CAM_NAMES, CAM_XY):
         viz.box(f"world/tracker/{nm}", (14, 14, 14), center=(x, y, 6),
                 color=(80, 170, 220))
-    for k, wp in enumerate(WAYPOINTS):
-        viz.box(f"world/waypoint/{k}", (24, 24, 24), center=tuple(wp),
-                color=(230, 120, 60))
     viz.split_cylinder("world/interceptor/hull", 1.4, 14.0,
                        colors=((220, 222, 228), (180, 60, 50)))
     viz.pose("world/interceptor/hull", (0, 0, -1.2 + 7))
 
 
-def _viz_step(viz, t, truth, tgt_est, vis, wp):
+def _viz_step(viz, t, truth, tgt_est, vis, aim):
     rk_p = np.asarray(truth.state["interceptor"]["position"]).ravel()
     rk_q = np.asarray(truth.state["interceptor"]["orientation"]).ravel()
     tg_p = np.asarray(truth.state["target"]["position"]).ravel()
@@ -440,6 +459,7 @@ def _viz_step(viz, t, truth, tgt_est, vis, wp):
     viz.trail("world/target_trail", tg_p, max_len=6000, min_dist=3.0)
     if tgt_est is not None:
         viz.point("world/target_est", tgt_est, color=(90, 230, 120), radius=28.0)
+        viz.point("world/intercept_point", aim, color=(230, 120, 60), radius=20.0)
         for nm, (x, y) in zip(CAM_NAMES, CAM_XY):
             if vis[nm]:
                 viz.line(f"world/ray_{nm}", [(x, y, CAM_Z), tuple(tgt_est)],
