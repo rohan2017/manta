@@ -130,6 +130,37 @@ def test_observable_basis_shape():
     assert rep.basis.shape == (rep.tangent_dim, rep.rank)
 
 
+def test_sigma_horizon_grades_heading_by_sensor_set():
+    """The covariance-horizon analysis agrees with the rank test where the
+    rank test is right: without a compass the orientation slot's worst
+    direction (yaw) stays at its prior over the horizon; adding the
+    compass collapses it."""
+    w = _sub_world()
+    ekf = EKF(w)
+    kw = dict(horizon=2.0, dt=0.02, P0=0.1)
+    blind = ekf.sigma_horizon(sensors=["imu.gyro", "dvl.velocity",
+                                       "gps.position"], **kw)
+    sighted = ekf.sigma_horizon(sensors=["imu.gyro", "dvl.velocity",
+                                         "gps.position", "mag.B"], **kw)
+    o = "sub.orientation"
+    assert blind.sigmaT(o) > 0.9 * blind.sigma0(o)          # yaw untouched
+    assert sighted.sigmaT(o) < 0.3 * sighted.sigma0(o)      # compass pins it
+    # position is directly measured in both — it must converge regardless.
+    assert blind.sigmaT("sub.position") < 0.3 * blind.sigma0("sub.position")
+
+
+def test_sigma_horizon_report_shapes_and_summary():
+    ekf = EKF(_sub_world())
+    rep = ekf.sigma_horizon(horizon=1.0, dt=0.02,
+                            P0=np.full(ekf.spec.tangent_dim, 0.1))
+    n = ekf.spec.tangent_dim
+    assert rep.P_final.shape == (n, n)
+    assert set(rep.sigmas) == {s.name for s in ekf.spec.slots}
+    assert all(len(v) == len(rep.times) for v in rep.sigmas.values())
+    text = rep.summary()
+    assert "σ-horizon" in text and "sub.orientation" in text
+
+
 def test_trajectory_observability_reveals_heading_through_motion():
     """Single-point observability says heading is unobservable from
     GPS+DVL+gyro at rest; over a moving trajectory the DVL/GPS pairing

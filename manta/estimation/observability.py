@@ -9,7 +9,11 @@ model alone — so "make the model correct and the EKF follows" silently
 fails on unobservable modes. They don't error; they drift, and the filter
 reports tight covariance while doing it. (The canonical example: heading
 is unobservable from GPS + DVL + gyro — only its *rate* is measured — so a
-submarine's yaw estimate wanders until a compass is added.)
+submarine's yaw estimate wanders until a compass is added. Caveat: that
+holds on a non-rotating model. On a spinning planet the Earth rate makes
+heading *weakly* observable through the dynamics — gyrocompassing — at
+singular values far below this rank test's threshold; `sigma_horizon`
+below is the tool that resolves such slow channels.)
 
 manta is well placed to catch this automatically, because the symbolic
 state-transition `F` and per-sensor measurement Jacobians `H` already
@@ -34,6 +38,15 @@ Usage::
 This is *local* observability at the supplied operating point (the
 standard linear test, evaluated along the dynamics for ``n`` steps). Check
 a few representative points if your system is strongly nonlinear.
+
+The rank test is binary and short-horizon (`n` steps ≈ a fraction of a
+second), so it cannot grade *weak* observability — information that
+arrives through slow dynamics over many seconds. For that, use
+:func:`sigma_horizon`: it runs the filter's own covariance recursion
+(no data needed — F, H, Q, R are already baked) along the nominal
+trajectory and reports how tight each state *can* get after `horizon`
+seconds. A slot this rank test calls unobservable but whose σ shrinks
+there is weakly observable, with the convergence time read off directly.
 """
 
 from __future__ import annotations
@@ -42,6 +55,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
+
+from ..ir.module import entry_ident
 
 
 @dataclass
@@ -246,3 +261,217 @@ def observability_trajectory(world, *, dt: float, steps: int,
                                    ekf_ir._build_u(u_dict or None), dt, t, pairs, n))
         sim.step(dt)
     return _report_from_O(np.vstack(blocks), spec, names, rtol)
+
+
+# ---------------------------------------------------------------------------
+# Covariance-horizon analysis — how tight can each state get in T seconds?
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SigmaHorizonReport:
+    """Result of :func:`sigma_horizon`.
+
+    Attributes:
+        horizon, dt — the analyzed window and step.
+        sensors     — sensor output names folded into the recursion.
+        times       — recorded sample times, shape `(k,)`.
+        sigmas      — `{slot_name: (k,) array}` of the slot's
+                      worst-direction σ (√ of the largest eigenvalue of its
+                      tangent covariance block) at each recorded time.
+        P_final     — full tangent covariance at `horizon`.
+    """
+
+    horizon: float
+    dt: float
+    sensors: list[str]
+    times: np.ndarray
+    sigmas: dict[str, np.ndarray]
+    P_final: np.ndarray
+
+    def sigma0(self, slot: str) -> float:
+        return float(self.sigmas[slot][0])
+
+    def sigmaT(self, slot: str) -> float:
+        return float(self.sigmas[slot][-1])
+
+    def summary(self) -> str:
+        lines = [f"σ-horizon {self.horizon:g} s @ dt {self.dt:g}  "
+                 f"(sensors: {', '.join(self.sensors) or 'none'})",
+                 f"  {'slot':28s} {'σ₀':>9}   {'σ(T)':>9}  {'ratio':>7}"]
+        for name, sig in self.sigmas.items():
+            s0, sT = float(sig[0]), float(sig[-1])
+            ratio = sT / s0 if s0 > 0 else float("inf")
+            if ratio < 0.5:
+                verdict = "converges"
+            elif ratio < 0.95:
+                verdict = "converging (slow)"
+            elif ratio <= 1.05:
+                verdict = "static — unconstrained over this horizon"
+            else:
+                verdict = "growing — process noise, unconstrained"
+            lines.append(f"  {name:28s} {s0:>9.3g} → {sT:>9.3g}  "
+                         f"{ratio:>7.3f}  {verdict}")
+        lines.append(
+            "  (a slot that converges here but fails the observability() "
+            "rank test is weakly observable — constrained through slow "
+            "dynamics, e.g. gyrocompassing)")
+        return "\n".join(lines)
+
+    def __str__(self) -> str:  # pragma: no cover - thin
+        return self.summary()
+
+
+def sigma_horizon(ekf, *, horizon: float, dt: float = 0.02,
+                  state=None, control: "Callable | dict | None" = None,
+                  sensors: list[str] | None = None,
+                  P0: "np.ndarray | float | None" = None,
+                  Q: np.ndarray | None = None,
+                  t0: float = 0.0, samples: int = 60,
+                  record: int = 200) -> SigmaHorizonReport:
+    """Per-slot σ attainable after `horizon` seconds — the covariance
+    recursion run open-loop (no data), i.e. the linear-Gaussian CRLB along
+    the nominal trajectory.
+
+    Where :func:`observability` asks the binary "is this direction in the
+    observable subspace?" over an `n`-step window, this asks the graded
+    question the rank test cannot: *how tight does each state get, and how
+    fast?* It propagates the nominal state with the filter's own predict,
+    evaluates F, Q, H, R along it (all already baked on the EKF), and runs
+
+        P ← F P Fᵀ + Q;   per due sensor: P ← Joseph(P, H, R)
+
+    recording each slot's worst-direction σ. Slow channels the rank test
+    misses — heading from the Earth rate (gyrocompassing), drag-coupled
+    biases — show up as σ trajectories with their convergence time
+    readable directly.
+
+    Args:
+        ekf      — the `EKF` transform (`EKF(world, ...)`).
+        horizon  — analysis window (s).
+        dt       — filter step (s).
+        state    — starting operating point (nested or flat), merged over
+                   the world's initial state.
+        control  — `{name: value}` or `t -> {name: value}` nominal inputs.
+        sensors  — restrict to these outputs (full names / suffixes);
+                   `None` ⇒ all registered on the EKF.
+        P0       — initial tangent covariance: full matrix, diagonal
+                   vector, or scalar·I. Default `0.1·I` (as `nees`). Use a
+                   generous prior on the states in question — σ can only
+                   show convergence the prior leaves room for.
+        Q        — process-noise override (else the model's auto `L Σ Lᵀ`).
+        t0       — start time (matters on a time-dependent world, e.g. a
+                   rotating planet).
+        samples  — how many points along the trajectory F/Q/H/R are
+                   re-evaluated at (held constant in between).
+        record   — max number of recorded σ samples.
+
+    Returns:
+        :class:`SigmaHorizonReport`.
+    """
+    import casadi as ca
+
+    ir = _resolve_ir(ekf)
+    sys = ir.sys
+    spec = ir.spec
+    n = spec.tangent_dim
+    steps = max(1, int(round(horizon / dt)))
+
+    # --- P0: scalar | diag vector | full matrix --------------------------
+    if P0 is None:
+        P = np.eye(n) * 0.1
+    else:
+        P0 = np.asarray(P0, dtype=float)
+        if P0.ndim == 0:
+            P = np.eye(n) * float(P0)
+        elif P0.ndim == 1:
+            P = np.diag(P0)
+        else:
+            P = P0.copy()
+    if P.shape != (n, n):
+        raise ValueError(f"sigma_horizon: P0 must be scalar, ({n},) or "
+                         f"({n},{n}); got shape {np.shape(P0)}")
+
+    # --- per-sensor H/R/rate ---------------------------------------------
+    x_s, u_s, dt_s, t_s = sys.x_sym, sys.u_sym, sys.dt_sym, sys.t_sym
+    zero_dt = ca.MX.zeros(1, 1)
+    chosen = []                                  # (full, H_fn, R_fn, period)
+    for H_fn, full in _select_sensors(ir, sensors):
+        s = sys.sensors[full]
+        if s.L_h_sym is not None and sys.Sigma is not None:
+            L_h = ca.substitute(s.L_h_sym, dt_s, zero_dt)
+            R_expr = L_h @ ca.DM(sys.Sigma) @ L_h.T
+        else:
+            R_expr = ca.DM.zeros(s.dim, s.dim)
+        R_fn = ca.Function(f"R_{entry_ident(full)}",
+                           [x_s, u_s, t_s], [R_expr])
+        rate = sys.sample_rates.get(full)
+        period = max(1, int(round(1.0 / (rate * dt)))) if rate else 1
+        chosen.append((full, s.dim, H_fn, R_fn, period))
+    names = [full for full, *_ in chosen]
+
+    # --- Q: model auto L Σ Lᵀ unless overridden ---------------------------
+    Q_fn = None
+    if Q is not None:
+        Q_const = np.asarray(Q, dtype=float)
+    elif sys.L_sym is not None:
+        Q_fn = ca.Function("Q_auto", [x_s, u_s, dt_s, t_s],
+                           [sys.L_sym @ ca.DM(sys.Sigma) @ sys.L_sym.T])
+        Q_const = None
+    else:
+        Q_const = np.zeros((n, n))
+
+    # --- the recursion -----------------------------------------------------
+    x = _operating_point(ir, state)
+    eye = np.eye(n)
+    refresh = max(1, steps // max(1, samples))
+    rec_every = max(1, steps // max(1, record))
+    slots = [(s.name, s.tangent_offset, s.tangent_offset + s.tangent_dim)
+             for s in spec.slots]
+
+    times: list[float] = []
+    sigmas: dict[str, list[float]] = {name: [] for name, _, _ in slots}
+
+    def record_point(t: float) -> None:
+        times.append(t)
+        for name, lo, hi in slots:
+            block = P[lo:hi, lo:hi]
+            sigmas[name].append(float(np.sqrt(max(
+                np.max(np.linalg.eigvalsh(0.5 * (block + block.T))), 0.0))))
+
+    record_point(t0)
+    F = Qk = None
+    HRs: list = []
+    for i in range(steps):
+        t = t0 + i * dt
+        u_dict = control(t) if callable(control) else (control or None)
+        u_vec = ir._build_u(u_dict)
+        if i % refresh == 0:                     # re-linearize along the way
+            F = np.asarray(sys.F_fn(x, u_vec, dt, t), float).reshape(n, n)
+            Qk = (Q_const if Q_fn is None else
+                  np.asarray(Q_fn(x, u_vec, dt, t), float).reshape(n, n))
+            HRs = []
+            for full, dim, H_fn, R_fn, period in chosen:
+                H = np.asarray(H_fn(x, u_vec, 0.0, t), float).reshape(dim, n)
+                R = np.asarray(R_fn(x, u_vec, t), float).reshape(dim, dim)
+                if not np.any(np.abs(R) > 0):
+                    raise ValueError(
+                        f"sigma_horizon: sensor {full!r} has zero R — the "
+                        f"update is singular. Declare a noise σ on it or "
+                        f"exclude it via sensors=[...].")
+                HRs.append((H, R, period))
+        x = np.asarray(sys.predict_fn(x, u_vec, dt, t), float).reshape(-1)
+        P = F @ P @ F.T + Qk
+        for H, R, period in HRs:
+            if i % period:
+                continue
+            S = H @ P @ H.T + R
+            K = np.linalg.solve(S, H @ P).T      # P Hᵀ S⁻¹ (S SPD)
+            IKH = eye - K @ H
+            P = IKH @ P @ IKH.T + K @ R @ K.T    # Joseph
+        P = 0.5 * (P + P.T)
+        if (i + 1) % rec_every == 0 or i == steps - 1:
+            record_point(t0 + (i + 1) * dt)
+
+    return SigmaHorizonReport(
+        horizon=horizon, dt=dt, sensors=names, times=np.asarray(times),
+        sigmas={k: np.asarray(v) for k, v in sigmas.items()}, P_final=P)

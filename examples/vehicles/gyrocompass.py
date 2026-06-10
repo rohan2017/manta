@@ -1,21 +1,38 @@
-"""Gyrocompass — finding true north from Earth's rotation alone.
+"""Gyrocompass — the EKF finds true north from Earth's rotation, automatically.
 
 A gyrocompass needs no magnetometer and no GPS: it finds north by *sensing the
 planet spin*. The world frame is inertial and the Earth turns in it, so a
 strapdown IMU reads the body's INERTIAL angular rate — a body fixed to the
 Earth therefore measures the spin vector Ω (7.29e-5 rad/s). At a latitude φ
 that vector has a horizontal component Ω·cos φ pointing at TRUE NORTH; the
-accelerometer measures gravity (down). Two known world vectors (Ω, g) seen in
-the body frame fix the full attitude — including heading — by TRIAD.
+accelerometer measures gravity (down). Together they fix the full attitude —
+including heading.
 
-The catch is that Ω is tiny: a single gyro sample is almost all noise. So the
-instrument *averages* the gyro over an alignment interval to pull Ω out of the
-noise (this is why real gyrocompasses take minutes to settle), then TRIADs the
-averaged gyro + accel against the known Ω and gravity.
+The point of this example is that **nobody writes that logic**. The instrument
+is a heavily-damped buoy floating in a calm sea at 45°N, co-rotating with the
+Earth, carrying only an IMU. The EKF is auto-derived from the same world
+model as the truth — the planet's spin is in its *process model* — so heading
+information reaches the filter on its own, through two indirect channels:
 
-Here the instrument is a heavily-damped buoy floating in a calm sea at 45°N,
-co-rotating (and co-orbiting, `v = Ω×r`, so it feels no current) with the
-Earth. From a wrong initial heading it aligns to < 1° in ~30 s.
+  * the drag dynamics predict the buoy's angular rate co-rotating with the sea
+    *as seen from the estimated attitude*, R(q̂)ᵀΩ, while the gyro keeps
+    measuring R(q_true)ᵀΩ — a persistent innovation whenever heading is wrong;
+  * a heading error rotates into a tilt error at the rate Ω·cos φ (the classic
+    INS alignment coupling), and the accelerometer sees tilt at gain g.
+
+Neither sensor measures heading directly — the gyro's measurement Jacobian
+w.r.t. orientation is exactly zero — which is why the `observability()` rank
+test calls heading unobservable here. It is *weakly* observable, through slow
+dynamics; `sigma_horizon()` (printed at startup) resolves it, showing heading
+σ collapsing over the alignment window. From a 35° initial heading error the
+filter pulls most of it out in the first seconds, then grinds the rest out
+Earth-rate slow: ~1.5° after five minutes and still closing (real marine
+gyrocompasses take minutes-to-hours for the same reason — the north signal
+is only Ω·cos φ ≈ 5e-5 rad/s).
+
+A tiny `ProcessNoise` part declares the unmodeled buffeting (micro-chop): the
+same channel jitters the truth and auto-builds the filter's Q, keeping the
+covariance honest so the slow Earth-rate channel stays weighted in.
 
 Run::
 
@@ -27,8 +44,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from manta import Craft, NoiseDriver, Sim, TargetNumpy, World
-from manta.parts import DragSurface, IMU, Mass, PointBuoy
+from manta import Craft, EKF, NoiseDriver, Sim, TargetNumpy, World, wire
+from manta.parts import DragSurface, IMU, Mass, PointBuoy, ProcessNoise
 from manta.planets import Earth, SeaWaves
 
 from .._control import Pacer, common_args
@@ -39,8 +56,6 @@ MASS = 120.0
 LAT = np.radians(45.0)                       # latitude (sets the north signal)
 EARTH_AXIS = (float(np.cos(LAT)), 0.0, float(np.sin(LAT)))   # north = +x
 OMEGA = Earth.SIDEREAL * np.array(EARTH_AXIS)                # world-frame spin
-G_WORLD = np.array([0.0, 0.0, -9.81])        # gravity at the instrument (down)
-SETTLE = 15.0                                # let the buoy still itself first
 GYRO_SIGMA = 1.0e-5                           # FOG/RLG-grade: resolves 7e-5 rad/s
 
 
@@ -58,6 +73,10 @@ def build_world(heading_deg: float):
         b.add(DragSurface.isotropic_quadratic(f"dl{i}", area=0.6, drag_coefficient=3.0,
                                               transform=(float(x), 0, -0.3)))
     b.add(IMU("imu", gyro_noise_sigma=GYRO_SIGMA, accel_noise_sigma=1e-3))
+    # Unmodeled buffeting: jitters the truth AND auto-builds the EKF's Q
+    # (zero Q ⇒ the covariance collapses and the slow Earth-rate channel
+    # gets down-weighted into a stall).
+    b.add(ProcessNoise("pn", force_noise_sigma=0.02, torque_noise_sigma=1e-3))
 
     earth = Earth(position=(0, 0, -Earth.R_EQ), rotation_rate=Earth.SIDEREAL,
                   rotation_axis=EARTH_AXIS, waves=SeaWaves(amplitude=0.0, wavelength=12.0),
@@ -71,16 +90,7 @@ def build_world(heading_deg: float):
     w.add_craft(b, position=(0, 0, -0.2), velocity=tuple(v_orbit),
                 angular_velocity=tuple(OMEGA),
                 orientation=(np.cos(h / 2), 0, 0, np.sin(h / 2)))
-    return w, b
-
-
-def _triad(b1, b2, r1, r2):
-    """Attitude R (body→world) from two vector pairs, body bᵢ = Rᵀ·world rᵢ."""
-    def frame(u, v):
-        x = u / np.linalg.norm(u)
-        z = np.cross(u, v); z = z / np.linalg.norm(z)
-        return np.column_stack([x, np.cross(z, x), z])
-    return frame(r1, r2) @ frame(b1, b2).T
+    return w, b, v_orbit
 
 
 def _heading(q):
@@ -91,14 +101,42 @@ def _heading(q):
 def main() -> None:
     p = common_args(__doc__)
     p.add_argument("--heading", type=float, default=35.0,
-                   help="initial heading off north (deg)")
+                   help="true heading off north (deg) — the filter starts at 0")
     args = p.parse_args()
     dt = 0.02
-    duration = args.duration or 90.0
+    duration = args.duration or 300.0
 
-    w, c = build_world(args.heading)
+    w, c, v_orbit = build_world(args.heading)
     sim = TargetNumpy(Sim(w))
     sim.attach_driver(NoiseDriver(seed=1))
+
+    # The filter: same world model, gyro + accel only. Coarse-alignment
+    # prior — position/velocity/Ω known (moored at a known latitude),
+    # heading NOT (orientation starts at identity, prior σ ~40°).
+    ekf_ir = EKF(w, sensors=["gyro.imu.gyro", "gyro.imu.accel"])
+    ekf = TargetNumpy(ekf_ir)
+    P0 = np.diag([0.5] * 3 + [0.5] * 3 + [0.1] * 3 + [1e-4] * 3)
+    ekf.reset(state={"gyro": c.initial_state(
+                  position=(0, 0, -0.2), velocity=tuple(v_orbit),
+                  angular_velocity=tuple(OMEGA),
+                  orientation=(1.0, 0.0, 0.0, 0.0))},
+              P=P0)
+    wire(sim.out("gyro.imu.gyro"), ekf.meas("gyro.imu.gyro"))
+    wire(sim.out("gyro.imu.accel"), ekf.meas("gyro.imu.accel"))
+
+    # The rank test calls heading unobservable — the Earth-rate channel is
+    # 5 orders below its threshold. The σ-horizon recursion resolves it.
+    rep = ekf_ir.observability()
+    unobs = ", ".join(n.split(".")[-1] for n, _ in rep.unobservable) or "none"
+    print(f"  rank test: {rep.rank}/{rep.tangent_dim} "
+          f"(calls unobservable: {unobs})")
+    sh = ekf_ir.sigma_horizon(horizon=60.0, dt=dt, P0=P0)
+    s0, sT = sh.sigma0("gyro.orientation"), sh.sigmaT("gyro.orientation")
+    print(f"  σ-horizon: orientation σ {np.degrees(s0):.0f}° → "
+          f"{np.degrees(sT):.2f}° in 60 s — heading is (weakly) observable\n")
+    print(f"  latitude {np.degrees(LAT):.0f}°N, Ω={Earth.SIDEREAL:.2e} rad/s "
+          f"(north component {Earth.SIDEREAL*np.cos(LAT):.2e})")
+    print(f"  true heading {args.heading:.1f}°; filter starts at 0°\n")
 
     viz = None if args.no_viz else Viz("manta/gyrocompass", addr=args.viz_addr)
     if viz is not None:
@@ -108,45 +146,32 @@ def main() -> None:
                   radius=0.05)               # +x = true north (fixed)
 
     pacer = Pacer() if (args.keyboard or viz is not None) else None
-    gyro_avg = np.zeros(3)
-    accel_avg = np.zeros(3)
-    n = 0
-    est_heading = float("nan")
-    print(f"  latitude {np.degrees(LAT):.0f}°N, Ω={Earth.SIDEREAL:.2e} rad/s "
-          f"(north component {Earth.SIDEREAL*np.cos(LAT):.2e})")
-    print(f"  start heading {args.heading:.1f}° off north; {SETTLE:.0f}s settle, "
-          f"then align\n")
-    print(f"{'t (s)':>6} {'align (s)':>9} {'est °':>8} {'true °':>8} {'err °':>7}")
+    print(f"{'t (s)':>6} {'est °':>8} {'true °':>8} {'err °':>7} {'σ_yaw °':>8}")
     for i in range(int(duration / dt)):
         t = i * dt
         if pacer is not None:
             pacer.pace(t)
         sim.step(dt)
-        o = sim.outputs()["gyro"]
-        if t >= SETTLE:                       # average only once it's still
-            n += 1
-            gyro_avg += (np.asarray(o["imu.gyro"]).ravel() - gyro_avg) / n
-            accel_avg += (np.asarray(o["imu.accel"]).ravel() - accel_avg) / n
-            # Two world refs (Ω, gravity) seen in the body frame → attitude.
-            R = _triad(gyro_avg, -accel_avg, OMEGA, G_WORLD)
-            est_heading = np.degrees(np.arctan2(R[1, 0], R[0, 0]))
+        ekf.step(dt)
 
+        eq = np.asarray(ekf.state_dict()["gyro"]["orientation"]).ravel()
+        est_heading = _heading(eq)
         tp = np.asarray(sim.state["gyro"]["position"]).ravel()
         tq = np.asarray(sim.state["gyro"]["orientation"]).ravel()
         if viz is not None and viz.due(t):
             viz.t(t)
             viz.pose("world/buoy", tp, tq)
-            if not np.isnan(est_heading):
-                # Needle: where the instrument currently thinks north is.
-                a = np.radians(-est_heading)
-                viz.arrow("world/buoy/needle", (0, 0, 0.6),
-                          (3 * np.cos(a), 3 * np.sin(a), 0), color=(235, 80, 80),
-                          radius=0.05)
-        if (i + 1) % int(5 / dt) == 0 and t >= SETTLE:
+            # Needle: where the filter currently thinks north is.
+            a = np.radians(-est_heading)
+            viz.arrow("world/buoy/needle", (0, 0, 0.6),
+                      (3 * np.cos(a), 3 * np.sin(a), 0), color=(235, 80, 80),
+                      radius=0.05)
+        if (i + 1) % int(10 / dt) == 0:
             true = _heading(tq)
             err = abs((est_heading - true + 180) % 360 - 180)
-            print(f"{t+dt:>6.0f} {t+dt-SETTLE:>9.0f} {est_heading:>8.2f} "
-                  f"{true:>8.2f} {err:>7.2f}")
+            sig_yaw = np.degrees(np.sqrt(np.asarray(ekf.P)[5, 5]))
+            print(f"{t+dt:>6.0f} {est_heading:>8.2f} {true:>8.2f} "
+                  f"{err:>7.2f} {sig_yaw:>8.2f}")
 
 
 if __name__ == "__main__":

@@ -222,6 +222,13 @@ class EKF:
         from .observability import observability
         return observability(self, **kwargs)
 
+    def sigma_horizon(self, **kwargs):
+        """Per-slot σ attainable after a horizon — the covariance
+        recursion run open-loop, resolving the weak/slow observability the
+        rank test can't (see `manta.estimation.observability`)."""
+        from .observability import sigma_horizon
+        return sigma_horizon(self, **kwargs)
+
     def __repr__(self) -> str:
         return (f"<EKF tangent={self.spec.tangent_dim} "
                 f"sensors={list(self._sensors)} n_blocks={self.n_blocks}>")

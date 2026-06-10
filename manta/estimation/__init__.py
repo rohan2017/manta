@@ -6,7 +6,8 @@ Public surface:
   * `measurement_component` — h_sym builder for "observe one component
                               of a slot" (e.g. z position only).
 Plus the recurrence attitude filters (`Madgwick`, `Mahony`,
-`IMUIntegrator`) and the analysis tools (`observability`, `nees`).
+`IMUIntegrator`) and the analysis tools (`observability`,
+`sigma_horizon`, `nees`).
 
 The state-layout types (`StateSpec`, `StateSlot`, `SlotSet`, …) live in
 `manta.ir.state_spec` — they are IR, not estimation.
@@ -17,7 +18,8 @@ from .imu_integrator import IMUIntegrator
 from .madgwick import Madgwick
 from .mahony import Mahony
 from .observability import (
-    ObservabilityReport, observability, observability_trajectory,
+    ObservabilityReport, SigmaHorizonReport, observability,
+    observability_trajectory, sigma_horizon,
 )
 from .consistency import NEESReport, nees
 
@@ -25,5 +27,6 @@ __all__ = [
     "EKF", "measurement_slot", "measurement_component",
     "Madgwick", "Mahony", "IMUIntegrator",
     "observability", "observability_trajectory", "ObservabilityReport",
+    "sigma_horizon", "SigmaHorizonReport",
     "nees", "NEESReport",
 ]

@@ -14,7 +14,7 @@ from manta import (
     Craft, EKF, LQR, NoiseDriver, Sim, TargetNumpy, World, wire,
 )
 from manta.fields import GravityField
-from manta.parts import Mass, PositionSensor, Thruster
+from manta.parts import Mass, PositionSensor, ProcessNoise, Thruster
 
 
 def _free_flyer(force_sigma):
@@ -71,6 +71,64 @@ def test_driver_jitters_truth_from_thruster_noise():
         ends.append(np.asarray(sim.state["c"]["velocity"]).ravel())
     np.testing.assert_allclose(
         np.asarray(ends).std(axis=0), dt / m * sigma, rtol=0.12)
+
+
+def _drifter(force_sigma=0.0, torque_sigma=0.0):
+    """A craft with NO actuator — the case the ProcessNoise part exists
+    for (a thruster-less buoy/glider would otherwise declare Q = 0)."""
+    c = Craft("c")
+    c.add(Mass("body", mass=2.0, moi=(0.1, 0.1, 0.1)))
+    c.add(ProcessNoise("pn", force_noise_sigma=force_sigma,
+                       torque_noise_sigma=torque_sigma))
+    c.add(PositionSensor("gps", position_noise_sigma=0.05))
+    w = World().add_field(GravityField(g=(0, 0, 0)))
+    w.add_craft(c, position=(0, 0, 0))
+    return w, c
+
+
+def test_process_noise_part_inert_by_default():
+    """Both σ=0 ⇒ the part contributes nothing: zero wrench, no auto-Q."""
+    w, _ = _drifter()
+    ekf = EKF(w)
+    rt = TargetNumpy(ekf)
+    if ekf.sys.L_fn is not None:
+        L = np.asarray(ekf.sys.L_fn(rt.x, ekf.sys.u_defaults, 0.02, 0.0))
+        assert np.allclose(L @ ekf.sys.Sigma @ L.T, 0.0)
+
+
+def test_process_noise_part_builds_Q_without_actuators():
+    """Force and torque channels build the velocity / angular-velocity Q
+    blocks — same math as Thruster noise, on a craft with no actuator."""
+    sigma_f, sigma_t, dt, m = 0.5, 0.05, 0.02, 2.0
+    w, _ = _drifter(force_sigma=sigma_f, torque_sigma=sigma_t)
+    ekf = EKF(w)
+    rt = TargetNumpy(ekf)
+    L = np.asarray(ekf.sys.L_fn(rt.x, ekf.sys.u_defaults, dt, 0.0))
+    Q = L @ ekf.sys.Sigma @ L.T
+    vel = ekf.spec.slot("c.velocity")
+    qv = np.diag(Q)[vel.tangent_offset:vel.tangent_offset + 3]
+    np.testing.assert_allclose(qv, (dt / m) ** 2 * sigma_f ** 2, rtol=1e-6)
+    ang = ekf.spec.slot("c.angular_velocity")
+    qw = np.diag(Q)[ang.tangent_offset:ang.tangent_offset + 3]
+    np.testing.assert_allclose(qw, (dt / 0.1) ** 2 * sigma_t ** 2, rtol=1e-6)
+
+
+def test_process_noise_part_buffets_truth():
+    """A NoiseDriver samples the channel: the drifting craft picks up
+    motion a clean run doesn't have."""
+    w, _ = _drifter(force_sigma=2.0)
+    sim = TargetNumpy(Sim(w))
+    sim.attach_driver(NoiseDriver(seed=7))
+    for _ in range(50):
+        sim.step(0.02)
+    assert np.linalg.norm(np.asarray(sim.state["c"]["velocity"]).ravel()) > 0
+
+    w0, _ = _drifter(force_sigma=0.0)
+    clean = TargetNumpy(Sim(w0))
+    clean.attach_driver(NoiseDriver(seed=7))
+    for _ in range(50):
+        clean.step(0.02)
+    assert np.allclose(np.asarray(clean.state["c"]["velocity"]), 0.0)
 
 
 def test_model_Q_keeps_filter_alive_in_closed_loop():
