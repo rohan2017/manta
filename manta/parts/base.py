@@ -480,30 +480,42 @@ class State(_Declaration):
 class PartUpdate:
     """Bundle returned by `Part.update(ctx)` describing this tick's
     contributions: a wrench (force + torque on parent in CraftFrame), new
-    values for any declared State slots, and any declared Output values
-    the part produces.
+    values for any declared State slots, any declared Output values the
+    part produces, and the rates its I/O runs at.
 
     Construction::
 
         return PartUpdate(wrench, {"angle": a})
         return PartUpdate(wrench=w, new_state={"angle": a, "rate": r})
-        return PartUpdate(wrench=w, outputs={"gyro": gyro_vec})
+        return PartUpdate(wrench=w, outputs={"gyro": gyro_vec},
+                          rates={"gyro": self.rate})
+
+    `rates` maps this part's Output slots and/or Input attribute names to
+    a rate in Hz (`None` ⇒ every tick). It is metadata only — the
+    compiled tick stays a pure function (no sample-and-hold state enters
+    the kernel, so it never complicates autodiff or the EKF/LQR
+    linearization). The runtimes gate the matching *port*: an Output is
+    published once per 1/rate window and held in between; an Input
+    command is latched (ZOH) once per window, so truth and the
+    estimator's predict see the *same* held command.
 
     Stateless parts can return a bare `Wrench` instead — the framework
     wraps it as `PartUpdate(wrench=w)` automatically.
     """
 
-    __slots__ = ("wrench", "new_state", "outputs")
+    __slots__ = ("wrench", "new_state", "outputs", "rates")
 
     def __init__(self,
                  wrench=None,
                  new_state: dict | None = None,
-                 outputs: dict | None = None) -> None:
+                 outputs: dict | None = None,
+                 rates: dict | None = None) -> None:
         if wrench is None:
             raise TypeError("PartUpdate: wrench is required")
         self.wrench = wrench
         self.new_state = dict(new_state) if new_state else {}
         self.outputs   = dict(outputs)   if outputs   else {}
+        self.rates     = dict(rates)     if rates     else {}
 
 
 # ---------------------------------------------------------------------------
@@ -575,28 +587,30 @@ class DeclarationHost:
                 setattr(self, sigma_key,
                         float(overrides.get(sigma_key, decl.sigma)))
 
-    @classmethod
-    def state_declarations(cls) -> dict[str, "State"]:
+    # The declaration accessors are INSTANCE methods: the default set is
+    # class-scoped, but a host whose I/O is decided per instance (e.g. a
+    # camera pointed at compile-discovered targets) overrides these with
+    # the same instance-call convention. Every framework call site holds
+    # an instance.
+
+    def state_declarations(self) -> dict[str, "State"]:
         """Just the State entries (subset of _declarations)."""
-        return {n: d for n, d in cls._declarations().items()
+        return {n: d for n, d in type(self)._declarations().items()
                 if isinstance(d, State)}
 
-    @classmethod
-    def input_declarations(cls) -> dict[str, "Input"]:
+    def input_declarations(self) -> dict[str, "Input"]:
         """Just the Input entries (subset of _declarations)."""
-        return {n: d for n, d in cls._declarations().items()
+        return {n: d for n, d in type(self)._declarations().items()
                 if isinstance(d, Input)}
 
-    @classmethod
-    def output_declarations(cls) -> dict[str, "Output"]:
+    def output_declarations(self) -> dict[str, "Output"]:
         """Just the Output entries (subset of _declarations)."""
-        return {n: d for n, d in cls._declarations().items()
+        return {n: d for n, d in type(self)._declarations().items()
                 if isinstance(d, Output)}
 
-    @classmethod
-    def noise_declarations(cls) -> dict[str, "Noise"]:
+    def noise_declarations(self) -> dict[str, "Noise"]:
         """Just the Noise entries (subset of _declarations)."""
-        return {n: d for n, d in cls._declarations().items()
+        return {n: d for n, d in type(self)._declarations().items()
                 if isinstance(d, Noise)}
 
 

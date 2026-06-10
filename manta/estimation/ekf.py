@@ -33,7 +33,7 @@ Lower the Module to a backend to run::
 
 `track` is a *lower bound*: the system expands it (and whatever the chosen
 sensors observe) to a set closed under the dynamics and freezes the rest —
-see `manta.linearized_system`. Q/R auto-assembly comes from the model's
+see `manta.linearization`. Q/R auto-assembly comes from the model's
 Noise channels; `observability()` analyzes the chosen sensor set at an
 operating point.
 """
@@ -48,7 +48,7 @@ from ..ir.module import (
     StateLayout, StateRef, entry_ident,
 )
 from ..ir.state_spec import StateSpec, flatten_nested
-from ..linearized_system import LinearizedSystem, resolve_suffix
+from ..linearization import LinearizedSystem, resolve_suffix
 
 
 class EKF:
@@ -73,7 +73,7 @@ class EKF:
                      smaller generated deploy code). See LinearizedSystem.
         """
         sys = LinearizedSystem(world, track=track, sensors=sensors,
-                               inputs=inputs, close_track=True,
+                               inputs=inputs, track_mode="closure",
                                discretization=discretization)
         self.sys = sys
         self.world = world
@@ -130,10 +130,19 @@ class EKF:
                 R = ca.MX.zeros(s.dim, s.dim)
             # A σ=0 sensor bakes R = 0: the first update collapses its
             # covariance block to exactly zero, the second meets a singular
-            # S and NaNs silently. Refuse at construction.
-            R0 = np.asarray(ca.Function("R0", [x, u, t], [R])(
-                x0, sys.u_defaults, 0.0))
-            if not np.any(np.abs(R0) > 0.0):
+            # S and NaNs silently. Refuse at construction. R can be
+            # state-dependent (L_h varying with x), so probe a perturbed
+            # point too — this is a sampled check, not a proof; an R that
+            # vanishes only away from both probes still slips through.
+            R_fn = ca.Function("R0", [x, u, t], [R])
+            probes = [(x0, sys.u_defaults, 0.0)]
+            if ca.depends_on(R, ca.vertcat(x, u, t)):
+                x1 = spec.boxplus_num(
+                    np.asarray(x0, dtype=float).reshape(-1),
+                    1e-3 * np.ones(n_tan))
+                probes.append((x1, sys.u_defaults + 1e-3, 1.0))
+            if all(not np.any(np.abs(np.asarray(R_fn(*p))) > 0.0)
+                   for p in probes):
                 raise ValueError(
                     f"EKF: sensor {full!r} has no active noise channel — its "
                     f"baked R is zero and the update is singular (the second "

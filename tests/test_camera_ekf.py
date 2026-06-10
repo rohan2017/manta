@@ -39,7 +39,7 @@ def _world(*, bbox_sigma=1.0, tgt_pos=(-7.0, 0.0, 9.0), tgt_vel=(0.0, 0.0, 0.0),
 def _camera_of(w):
     # Field sources (and so the camera's target list) are wired lazily at
     # the first transform; trigger it so the dynamic declarations exist.
-    w._register_field_sources()
+    w.finalize()
     return next(p for c in w.crafts if c.name == "obs"
                 for p in c.parts if p.name == "cam")
 

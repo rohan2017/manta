@@ -90,7 +90,8 @@ class SurfaceGPS(PositionSensor):
         out = super().update(ctx)
         rho = ctx.field(FluidField).value_at_sym(
             ctx.position[WorldFrame], ctx.t).density
-        out.outputs["wet"] = ctx.sample(Scalar(rho * (1.0 / RHO)), rate=self.rate)
+        out.outputs["wet"] = Scalar(rho * (1.0 / RHO))
+        out.rates["wet"] = self.rate
         return out
 
 

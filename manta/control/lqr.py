@@ -1,6 +1,6 @@
 """LQR — infinite-horizon discrete linear-quadratic regulator.
 
-`LQR(world, *, x_ref, u_ref, Q, R, dt, track)` is an analysis transform
+`LQR(world, *, x_ref, u_ref, Q, R, dt, regulate)` is an analysis transform
 over the model, a sibling of `Sim(world)` / `EKF(world)`. It:
 
   1. linearizes the world tick at the supplied equilibrium `(x_ref,
@@ -19,13 +19,14 @@ Lower with `TargetNumpy(LQR(...))` to a runtime controller.
 rigid-body state is not stabilizable for any realistic actuator set (the
 uncontrolled position / attitude integrators sit on the unit circle, so
 the Riccati iteration won't converge). Regulate the *controllable* subset
-with `track=` — e.g. `track=["c.position", "c.velocity"]` for a craft
-with 3-axis thrust — and the rest is frozen at `x_ref`. `track=None`
-(full state) is for genuinely fully-actuated systems. Unlike the EKF's
-`track` (which is *closed* over the dynamics), LQR's is taken verbatim:
-freezing the uncontrollable states at the operating point is the whole
-point — it's what makes the reduced system stabilizable. So `Q` is sized
-to exactly the slots you list (their summed tangent dim).
+with `regulate=` — e.g. `regulate=["c.position", "c.velocity"]` for a
+craft with 3-axis thrust — and the rest is frozen at `x_ref`.
+`regulate=None` (full state) is for genuinely fully-actuated systems.
+Unlike the EKF's `track` (a lower bound that is *closed* over the
+dynamics), `regulate` is taken verbatim: freezing the uncontrollable
+states at the operating point is the whole point — it's what makes the
+reduced system stabilizable. So `Q` is sized to exactly the slots you
+list (their summed tangent dim).
 
 `Q` (tracked-tangent²) and `R` (n_inputs²) are the LQR **cost** weights —
 not the EKF's process/measurement noise (same letters, different role).
@@ -47,7 +48,7 @@ import numpy as np
 from ..ir.module import (
     EntryPoint, Hosting, Module, Port, PortField, PortRef, Role, StateLayout,
 )
-from ..linearized_system import LinearizedSystem, resolve_suffix
+from ..linearization import LinearizedSystem, resolve_suffix
 
 
 def _solve_dare(A, B, Q, R, *, max_iter: int = 10000, tol: float = 1e-12):
@@ -71,8 +72,8 @@ def _solve_dare(A, B, Q, R, *, max_iter: int = 10000, tol: float = 1e-12):
         raise RuntimeError(
             "LQR: discrete Riccati iteration did not converge — the "
             "linearized (A, B) is likely not stabilizable at this operating "
-            "point. Regulate a controllable subset via `track=`, or check "
-            "Q/R.")
+            "point. Regulate a controllable subset via `regulate=`, or "
+            "check Q/R.")
     BtP = B.T @ P
     K = np.linalg.solve(R + BtP @ B, BtP @ A)
     return K, P
@@ -88,15 +89,16 @@ class LQR:
                  initial state for any unspecified slot.
         u_ref  — trim inputs (`{input_name: value}`), merged over each
                  Part Input's default. The equilibrium command.
-        Q, R   — LQR cost weights (tracked-tangent², n_inputs²). Default
+        Q, R   — LQR cost weights (regulated-tangent², n_inputs²). Default
                  to identity. `R` must be positive-definite.
         dt     — the discrete step the controller will run at.
-        track  — slot full-names to regulate (e.g. `["c.position",
-                 "c.velocity"]`); the rest are frozen at `x_ref`. `None`
-                 regulates the full state (fully-actuated systems only).
+        regulate — slot full-names to regulate, taken verbatim (e.g.
+                 `["c.position", "c.velocity"]`); the rest are frozen at
+                 `x_ref`. `None` regulates the full state (fully-actuated
+                 systems only).
 
     Attributes:
-        spec (full), tracked (regulated slot names), input_names,
+        spec (full), regulated (regulated slot names), input_names,
         K (n_u × tracked_tangent), A, B, x_ref/u_ref (vectors),
         control_fn (`u(x_full, x_ref_full)` baked `ca.Function`;
         runtimes default `x_ref` to the built reference — see
@@ -108,25 +110,27 @@ class LQR:
                  u_ref: dict | None = None,
                  Q=None, R=None,
                  dt: float = 0.01,
-                 track: list[str] | None = None) -> None:
+                 regulate: list[str] | None = None) -> None:
         if not world.crafts:
             raise ValueError("LQR: world has no crafts.")
 
         # All the linearization plumbing — tick compile, signature, the
-        # VERBATIM tracked subset frozen at the operating point, and
-        # B = ∂f/∂u — lives in `LinearizedSystem`. `track` is taken verbatim
-        # (NOT closed over the dynamics like the EKF's): for an underactuated
-        # craft the whole point is to freeze the uncontrollable states (e.g.
-        # attitude) at the operating point so the reduced system is
-        # stabilizable; closing the set would pull them back and the Riccati
-        # solve would diverge. The reference point doubles as the freeze value.
-        sys = LinearizedSystem(world, track=track, inputs=None,
-                               close_track=False, control=True, ref=x_ref)
+        # VERBATIM regulated subset frozen at the operating point, and
+        # B = ∂f/∂u — lives in `LinearizedSystem`. `regulate` is taken
+        # verbatim (NOT closed over the dynamics like the EKF's `track`):
+        # for an underactuated craft the whole point is to freeze the
+        # uncontrollable states (e.g. attitude) at the operating point so
+        # the reduced system is stabilizable; closing the set would pull
+        # them back and the Riccati solve would diverge. The reference
+        # point doubles as the freeze value.
+        sys = LinearizedSystem(world, track=regulate, inputs=None,
+                               track_mode="verbatim", control=True,
+                               ref=x_ref)
         self.sys     = sys
         self.world   = world
         self.spec    = sys.full_spec      # full layout (the law gathers from it)
         self._spec   = sys.spec           # tracked subspec
-        self.tracked = sys.tracked
+        self.regulated = sys.tracked
         self.input_names = sys.input_names
         n_u = len(self.input_names)
         if n_u == 0:
@@ -218,4 +222,4 @@ class LQR:
 
     def __repr__(self) -> str:
         return (f"<LQR n_x={self._spec.tangent_dim} n_u={len(self.input_names)} "
-                f"tracked={self.tracked} inputs={self.input_names}>")
+                f"regulated={self.regulated} inputs={self.input_names}>")

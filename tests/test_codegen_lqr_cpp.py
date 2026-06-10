@@ -31,7 +31,7 @@ def _lqr_ir():
     w.add_craft(c, position=(0, 0, 10))
     return LQR(w, x_ref={"c": {"position": (0, 0, 10), "velocity": (0, 0, 0)}},
                u_ref={"tz.throttle": M * G},
-               track=["c.position", "c.velocity"],
+               regulate=["c.position", "c.velocity"],
                Q=np.diag([10, 10, 10, 1, 1, 1]), R=np.eye(3) * 0.1, dt=0.02)
 
 

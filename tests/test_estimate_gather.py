@@ -33,7 +33,7 @@ def _stack(seed_pos):
               P=np.eye(ekf.spec.tangent_dim))
     lqr = TargetNumpy(LQR(
         w, x_ref={"c": {"position": tuple(target), "velocity": (0, 0, 0)}},
-        u_ref={"tz.throttle": M * G}, track=["c.position", "c.velocity"],
+        u_ref={"tz.throttle": M * G}, regulate=["c.position", "c.velocity"],
         Q=np.diag([10, 10, 10, 1, 1, 1]), R=np.eye(3) * 0.1, dt=dt))
     return ekf, lqr, c
 
@@ -52,7 +52,7 @@ def test_estimate_port_is_flat_vector_with_layout():
 def test_gather_matches_dict_path():
     """compute() (flat + gather) must equal control(state_dict) (legacy)."""
     ekf, lqr, _ = _stack([3, -2, 7])
-    wire(ekf.estimate, lqr.estimate)
+    wire(ekf.estimate, lqr.estimate_in)
     # Move the estimate off the seed so the control is nontrivial.
     ekf.predict(dt=0.02, u={"c.tz.throttle": 19.62})
     ekf.estimate.set(ekf.x)                          # refresh the port
@@ -65,7 +65,7 @@ def test_gather_matches_dict_path():
 
 def test_gather_built_once_and_indexes_by_name():
     ekf, lqr, _ = _stack([1, 1, 9])
-    wire(ekf.estimate, lqr.estimate)
+    wire(ekf.estimate, lqr.estimate_in)
     lqr.compute()
     g = lqr._gather
     # Identity here (EKF full spec == LQR full spec): each slot maps to
@@ -98,9 +98,9 @@ def test_non_identity_gather_two_crafts():
     ekf = TargetNumpy(EKF(w, track={"a": POSE | TWIST}))   # subset: a only
     lqr = TargetNumpy(LQR(
         w, x_ref={"a": {"position": (0, 0, 10), "velocity": (0, 0, 0)}},
-        u_ref={"a.tz.throttle": M * G}, track=["a.position", "a.velocity"],
+        u_ref={"a.tz.throttle": M * G}, regulate=["a.position", "a.velocity"],
         Q=np.diag([10, 10, 10, 1, 1, 1]), R=np.eye(3) * 0.1, dt=dt))
-    wire(ekf.estimate, lqr.estimate)
+    wire(ekf.estimate, lqr.estimate_in)
     lqr.compute()
 
     # EKF layout carries only craft-a slots; full spec spans b+a.

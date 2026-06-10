@@ -32,14 +32,17 @@ import casadi as ca
 
 from ..ir.frames import WorldFrame
 from ..ir.types import Vec3
+from ..smoothing import smooth_max0, soft_norm
 from .base import Disturbance, Field
 
 
 _VEC3_ANCHOR = Vec3[WorldFrame]
 
-# Smoothing parameter for the penetration-depth `max(0, x)` regularizer.
-# Small enough that depth ≈ |x| for |x| > 1mm; large enough to keep
-# Jacobians well-conditioned near the boundary.
+# Smoothing parameter for the penetration-depth `max(0, x)` regularizer:
+# the kink is rounded over ±sqrt(1e-12) = ±1 µm of signed distance, so
+# depth ≈ max(0, x) to better than 0.5 µm for |x| > 1 µm — invisible at
+# the millimetre scales contact springs act on — while the contact
+# Jacobian ramps smoothly instead of stepping at the boundary.
 _SMOOTH_EPS_SQ = 1.0e-12
 
 
@@ -108,8 +111,7 @@ class HalfSpace(Disturbance):
         normal_mx = normal_v._mx
         signed_d  = ca.dot(diff_mx, normal_mx)
         # Penetration depth = max(0, -signed_d), smoothed.
-        neg = -signed_d
-        depth = 0.5 * (neg + ca.sqrt(neg * neg + _SMOOTH_EPS_SQ))
+        depth = smooth_max0(-signed_d, _SMOOTH_EPS_SQ)
         # Outward vector = depth · normal.
         out_mx = normal_mx * depth
         return _VEC3_ANCHOR.from_mx(out_mx)
@@ -149,11 +151,10 @@ class Sphere(Disturbance):
     def contribute_at_sym(self, point, t):
         center_v = _VEC3_ANCHOR.constant(self.center)
         diff_mx  = (point - center_v)._mx
-        r = ca.sqrt(ca.dot(diff_mx, diff_mx) + 1e-30)
+        r = soft_norm(diff_mx)
         # Signed distance from the surface (positive = outside).
         signed_d = r - self.radius
-        neg = -signed_d
-        depth = 0.5 * (neg + ca.sqrt(neg * neg + _SMOOTH_EPS_SQ))
+        depth = smooth_max0(-signed_d, _SMOOTH_EPS_SQ)
         out_mx = (diff_mx / r) * depth
         return _VEC3_ANCHOR.from_mx(out_mx)
 

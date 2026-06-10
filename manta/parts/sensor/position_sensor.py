@@ -53,5 +53,6 @@ class PositionSensor(Part):
         reading = ctx.position[WorldFrame] + self.position_noise
         return PartUpdate(
             wrench=Wrench(force=zero_v, torque=zero_v),
-            outputs={"position": ctx.sample(reading, rate=self.rate)},
+            outputs={"position": reading},
+            rates={"position": self.rate},
         )

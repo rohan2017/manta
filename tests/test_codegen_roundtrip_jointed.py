@@ -99,7 +99,7 @@ def test_jointed_python_cpp_roundtrip(tmp_path: Path):
 
     w      = _jointed_world()
     cw     = Sim(w)
-    result = TargetCpp(cw.module(noise=False), tmp_path, class_name="Rover")
+    result = TargetCpp(cw.deploy_module(), tmp_path, class_name="Rover")
 
     k_obj = tmp_path / "kernels.o"
     w_obj = tmp_path / "wrapper.o"
@@ -147,7 +147,7 @@ def test_jointed_python_cpp_roundtrip(tmp_path: Path):
     for _ in range(200):
         sim.step(0.002)
 
-    m = cw.module(noise=False)
+    m = cw.deploy_module()
     spec = m.spec
     flat = {f"rover.{k}": v for k, v in sim.state["rover"].items()
             if f"rover.{k}" in spec}

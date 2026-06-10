@@ -20,7 +20,7 @@ import pytest
 from manta import Craft, Sim, TargetNumpy, World
 from manta.estimation import EKF
 from manta.fields import GravityField
-from manta.linearized_system import LinearizedSystem
+from manta.linearization import LinearizedSystem
 from manta.parts import (
     IMU, Mass, PositionSensor, PrismaticJoint, RevoluteJoint, Thruster,
 )

@@ -163,7 +163,7 @@ def main() -> None:
     lqr_t = LQR(
         w, x_ref={"quad": {"position": tuple(p0)}},
         u_ref={f"{r}.throttle": hover for r in ROTORS},
-        track=["quad.position", "quad.velocity",
+        regulate=["quad.position", "quad.velocity",
                "quad.orientation", "quad.angular_velocity"],
         Q=Q, R=np.eye(4) * 0.5, dt=dt)
     lqr = TargetNumpy(lqr_t)

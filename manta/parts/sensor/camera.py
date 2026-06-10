@@ -19,7 +19,7 @@ and emit per-target image measurements. They differ only in WHAT they report:
 Both project with the dual-quadric / point projection through
 ``P = K·[R_cw | −R_cw·C]`` (looks down its own +z; image +x right, +y down;
 intrinsics from a horizontal FOV with a centred principal point). The output
-set is fixed at compile time: `World._register_field_sources` fills
+set is fixed at compile time: `World.finalize()` fills
 `self._targets` with every ellipsoid not on the camera's own craft before the
 tick is traced, and both `output_declarations` and `update` iterate it.
 
@@ -89,9 +89,16 @@ class ProjectiveCamera(Part):
             cx=float(cx) if cx is not None else w / 2.0,
             cy=float(cy) if cy is not None else h / 2.0,
             rate=rate, noise_sigma=float(noise_sigma), transform=transform)
-        # Filled by World._register_field_sources (every ellipsoid not on
-        # this camera's craft). Drives output/noise declarations and update.
-        self._targets: list = []
+        # Set via set_targets() by World.finalize() (every
+        # ellipsoid not on this camera's craft). Drives output/noise
+        # declarations and update.
+        self._targets: tuple = ()
+
+    def set_targets(self, targets) -> None:
+        """Point the camera: fix the compile-time set of ellipsoids it
+        measures. Called once by `World.finalize()` before
+        the tick is traced; the output/noise declarations follow it."""
+        self._targets = tuple(targets)
 
     # The output set is per-instance (one detection per visible source), so
     # we override the class-level declaration walk with a dynamic one.
@@ -145,10 +152,12 @@ class ProjectiveCamera(Part):
                 val = Scalar(comps[suffix])
                 if noisy:
                     val = val + getattr(self, f"{tag}_{suffix}_noise")
-                outputs[f"{tag}_{suffix}"] = ctx.sample(val, rate=self.rate)
-            outputs[f"{tag}_vis"] = ctx.sample(Scalar(vis), rate=self.rate)
+                outputs[f"{tag}_{suffix}"] = val
+            outputs[f"{tag}_vis"] = Scalar(vis)
+        rates = ({name: self.rate for name in outputs}
+                 if self.rate is not None else None)
         return PartUpdate(wrench=Wrench(force=zero, torque=zero),
-                          outputs=outputs)
+                          outputs=outputs, rates=rates)
 
     def _project(self, P, R_cw, C, c, M, W, H):
         """Return ``(components: dict[str, MX], vis: MX)`` for one target —

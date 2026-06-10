@@ -1,18 +1,17 @@
 """Sim — the forward-dynamics transform of a World.
 
 `Sim(world)` validates the model and linearizes the compiled world tick
-(via `LinearizedSystem`); `sim.module(noise=…)` emits the typed `Module` a
-backend lowers. The with/without-noise choice is made HERE, at IR
-construction — the two are different Modules and lowering just lowers:
+(via `LinearizedSystem`); it emits two structurally different Modules,
+chosen HERE, at IR construction — lowering just lowers:
 
-* ``module(noise=True)`` — the **oracle** (simulation truth): one `step`
-  entry, the full forward tick — it advances the state AND returns every
+* ``module()`` — the **oracle** (simulation truth): one `step` entry,
+  the full forward tick — it advances the state AND returns every
   sensor reading, all from one noise draw (so a driven run's state and
   readings share the same realization; pass zeros for a noiseless oracle)::
 
       step(x; u, noise, dt, t) -> x', readings…
 
-* ``module(noise=False)`` — the **deploy** shape (what runs on a robot
+* ``deploy_module()`` — the **deploy** shape (what runs on a robot
   against real sensors): noiseless forward map, per-sensor measurement
   models, and their Jacobians::
 
@@ -23,12 +22,12 @@ The Module's state is THREADED (a kernel maps state in → state out; a
 C++ caller owns its `State` struct). The numpy view (`NumpySim`) holds
 the nested state dict for you::
 
-    sim = TargetNumpy(Sim(w))                  # lowers module(noise=True)
+    sim = TargetNumpy(Sim(w))                  # lowers the oracle module()
     sim.state["drone"]["t.throttle"] = 14.7    # mutate the held state
     sim.step(0.01)                             # advance truth
     sim.outputs()                              # this step's readings
 
-    TargetCpp(Sim(w).module(noise=False), out, class_name="Drone")
+    TargetCpp(Sim(w).deploy_module(), out, class_name="Drone")
 """
 
 from __future__ import annotations
@@ -43,7 +42,7 @@ from .ir.module import (
     StateLayout, StateRef, entry_ident,
 )
 from .ir.state_spec import flatten_nested
-from .linearized_system import LinearizedSystem
+from .linearization import LinearizedSystem
 
 if TYPE_CHECKING:
     from .world import World
@@ -77,8 +76,8 @@ class Sim:
         """The compiled world tick (named CasADi I/O)."""
         return self._sys.tick
 
-    def module(self, noise: bool = True) -> Module:
-        """Emit the typed Module — oracle (`noise=True`) or deploy."""
+    def _module_scaffold(self):
+        """The port/state pieces both Module shapes share."""
         sys = self._sys
         spec = sys.spec
         init_flat = flatten_nested(self.world._initial_state_dict())
@@ -98,34 +97,43 @@ class Sim:
         meas_ports = [Port(full, Role.MEASUREMENT, (s.dim,),
                            rate=sys.sample_rates.get(full))
                       for full, s in sys.sensors.items()]
+        return x_field, u_port, dtp, tp, meas_ports
+
+    def module(self) -> Module:
+        """The **oracle** Module (simulation truth): one `step` entry —
+        the full forward tick, one live noise draw → state + readings."""
+        sys = self._sys
+        x_field, u_port, dtp, tp, meas_ports = self._module_scaffold()
         sensor_fulls = list(sys.sensors)
+        noise_port = Port(
+            "noise", Role.NOISE, (sys.n_noise,),
+            fields=tuple(PortField(c.full, c.dim, 0.0, sigma=c.sigma)
+                         for c in sys.noise_specs))
+        step_fn = ca.Function(
+            "step",
+            [sys.x_sym, sys.u_sym, sys.n_sym, sys.dt_sym, sys.t_sym],
+            [sys.x_new_noisy] + [
+                ca.reshape(sys.sensors[f].h_noisy_sym,
+                           sys.sensors[f].dim, 1) for f in sensor_fulls],
+            ["x", "u", "noise", "dt", "t"],
+            ["x_new"] + [entry_ident(f) for f in sensor_fulls])
+        return Module(
+            name=self.world.name, state=StateLayout((x_field,)),
+            ports=(u_port, noise_port, dtp, tp, *meas_ports),
+            functions={"step": step_fn},
+            entry_points=(EntryPoint(
+                "step", "step",
+                (StateRef("x"), PortRef("u"), PortRef("noise"),
+                 PortRef("dt"), PortRef("t")),
+                writes=("x",), returns=tuple(sensor_fulls)),),
+            hosting=Hosting.THREADED)
 
-        if noise:
-            # Oracle: the full forward tick, one noise draw → state + readings.
-            noise_port = Port(
-                "noise", Role.NOISE, (sys.n_noise,),
-                fields=tuple(PortField(c.full, c.dim, 0.0, sigma=c.sigma)
-                             for c in sys.noise_specs))
-            step_fn = ca.Function(
-                "step",
-                [sys.x_sym, sys.u_sym, sys.n_sym, sys.dt_sym, sys.t_sym],
-                [sys.x_new_noisy] + [
-                    ca.reshape(sys.sensors[f].h_noisy_sym,
-                               sys.sensors[f].dim, 1) for f in sensor_fulls],
-                ["x", "u", "noise", "dt", "t"],
-                ["x_new"] + [entry_ident(f) for f in sensor_fulls])
-            return Module(
-                name=self.world.name, state=StateLayout((x_field,)),
-                ports=(u_port, noise_port, dtp, tp, *meas_ports),
-                functions={"step": step_fn},
-                entry_points=(EntryPoint(
-                    "step", "step",
-                    (StateRef("x"), PortRef("u"), PortRef("noise"),
-                     PortRef("dt"), PortRef("t")),
-                    writes=("x",), returns=tuple(sensor_fulls)),),
-                hosting=Hosting.THREADED)
-
-        # Deploy: noiseless forward map + measurement models + Jacobians.
+    def deploy_module(self) -> Module:
+        """The **deploy** Module (runs on a robot against real sensors):
+        noiseless forward map + per-sensor measurement models + Jacobians."""
+        sys = self._sys
+        spec = sys.spec
+        x_field, u_port, dtp, tp, meas_ports = self._module_scaffold()
         # A measurement is dt-independent — dt is eliminated at construction,
         # so the measure kernels honestly take (x, u, t).
         tan = spec.tangent_dim

@@ -30,7 +30,7 @@ def _sim_kernels(m):
 
 
 def test_emit_kernels_produces_c_and_h(tmp_path: Path):
-    m = _hover_world().module(noise=False)
+    m = _hover_world().deploy_module()
     paths = emit_kernel_list(_sim_kernels(m), tmp_path,
                              basename=m.name)
     assert paths["c"].exists()
@@ -40,7 +40,7 @@ def test_emit_kernels_produces_c_and_h(tmp_path: Path):
 
 
 def test_kernel_header_declares_every_function(tmp_path: Path):
-    m = _hover_world().module(noise=False)
+    m = _hover_world().deploy_module()
     paths = emit_kernel_list(_sim_kernels(m), tmp_path,
                              basename=m.name)
     header_text = paths["h"].read_text()
@@ -62,7 +62,7 @@ def test_kernel_c_compiles_with_cc(tmp_path: Path):
     if cc is None:
         pytest.skip("no C compiler on PATH")
 
-    m = _hover_world().module(noise=False)
+    m = _hover_world().deploy_module()
     paths = emit_kernel_list(_sim_kernels(m), tmp_path,
                              basename=m.name)
 

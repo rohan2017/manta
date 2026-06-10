@@ -28,6 +28,16 @@ The held state is nested by owner: `sim.state["drone"]["position"]`,
 plus one top-level key per state-bearing disturbance (e.g. a
 CraftWindBubble's estimated wind appears at
 `sim.state["drone_wind"]["wind"]`).
+
+Lifecycle: the first transform built over the world (`Sim`, `EKF`,
+`LQR`, …) calls `world.finalize()`, which resolves the compile-time
+registrations (planets contribute their standing disturbances, field-
+source parts emit onto the shared fields, cameras get pointed at their
+targets) and LOCKS the model — `add_craft` / `add_field` / `add_planet`
+/ `add_coupling` raise afterwards. This is what makes several transforms
+over one world consistent: they all see the same finalized model, and
+nothing can be added that an already-built transform would silently
+miss.
 """
 
 from __future__ import annotations
@@ -61,16 +71,52 @@ class World:
         # FluidField, …). Concrete subclasses query by class.
         self._fields: dict[type, Field] = {}
         # Planets registered with this world. Each one contributes its
-        # standing field disturbances at compile() time via
+        # standing field disturbances at finalize() time via
         # `planet.register_disturbances(world)`. Multi-planet supported;
         # disturbances superpose into the shared field instances.
         self._planets: list = []
-        # Set to True once compile() has walked the planet list — guards
-        # against double-registration if the user re-compiles.
-        self._planets_registered = False
-        # Same guard for field-source parts (GravitySource / MagneticSource
-        # / OpticalSource): their emitted disturbances are registered once.
-        self._sources_registered = False
+        # Set by finalize(): compile-time registrations have run and the
+        # model is locked (the add_* mutators raise).
+        self._finalized = False
+
+    # ---- Finalization -----------------------------------------------------
+
+    @property
+    def finalized(self) -> bool:
+        """True once `finalize()` has locked the model."""
+        return self._finalized
+
+    def finalize(self) -> "World":
+        """Resolve the compile-time registrations and lock the model.
+
+        Runs once (idempotent): planets contribute their standing
+        disturbances to the shared fields, field-source parts emit their
+        craft-anchored disturbances, cameras are pointed at the optical
+        ellipsoids they can see, and `PlanetState` initial-state wrappers
+        resolve to WorldFrame. Afterwards `add_craft` / `add_field` /
+        `add_planet` / `add_coupling` raise — every transform built over
+        this world sees the same finalized model.
+
+        Called automatically by the first transform (`Sim`, `EKF`,
+        `LQR`, …); call it directly only to lock a world early.
+        """
+        if self._finalized:
+            return self
+        for p in self._planets:
+            p.register_disturbances(self)
+        self._register_field_sources()
+        self._resolve_planet_state_overrides()
+        self._finalized = True
+        return self
+
+    def _require_mutable(self, what: str) -> None:
+        if self._finalized:
+            raise RuntimeError(
+                f"World '{self.name}': cannot {what} — the world was "
+                f"finalized when its first transform (Sim/EKF/LQR) was "
+                f"built, and a transform built later would not see the "
+                f"addition. Build the full model first, then the "
+                f"transforms.")
 
     # ---- Fields ----------------------------------------------------------
 
@@ -81,6 +127,7 @@ class World:
 
         Returns self for chaining.
         """
+        self._require_mutable("add a field")
         if not isinstance(field, Field):
             raise TypeError(
                 f"World.add_field: expected a Field, got "
@@ -125,6 +172,7 @@ class World:
         shared fields. Multi-planet worlds superpose contributions
         from every registered planet.
         """
+        self._require_mutable("add a planet")
         from .planets.base import Planet
         if not isinstance(planet, Planet):
             raise TypeError(
@@ -175,6 +223,7 @@ class World:
             **extra_state    — per-part state overrides
                                (e.g., `**{"wheel.angle": 0.5}`).
         """
+        self._require_mutable("add a craft")
         # Validate uniqueness.
         for entry in self._crafts:
             if entry["craft"] is craft:
@@ -203,6 +252,7 @@ class World:
         be registered via `add_craft`. The coupling forces them into the
         same connected component at compile time → one shared compiled
         tick over both."""
+        self._require_mutable("add a coupling")
         if not isinstance(coupling, Coupling):
             raise TypeError(
                 f"World.add_coupling: expected Coupling, got "
@@ -253,10 +303,7 @@ class World:
         not provide one; using a `GravitySource` with no `GravityField`
         registered is a configuration error. Then point every camera
         at the optical ellipsoids it can see (all but its own craft's).
-        Idempotent — guarded by `_sources_registered`; runs once at the
-        first transform, like planet registration."""
-        if self._sources_registered:
-            return
+        Runs once, from `finalize()`."""
         from .parts.field_source.base import FieldSource, cumulative_offset
         from .parts.sensor.camera import ProjectiveCamera
         from .fields.optical import OpticalField
@@ -284,10 +331,9 @@ class World:
             for craft in self.crafts:
                 for part in craft.parts:
                     if isinstance(part, ProjectiveCamera):
-                        part._targets = [
+                        part.set_targets(
                             e for e in optical.ellipsoids
-                            if e.source_craft is not craft]
-        self._sources_registered = True
+                            if e.source_craft is not craft)
 
     def _resolve_planet_state_overrides(self) -> None:
         """Walk every craft entry and replace any `PlanetState`-wrapped

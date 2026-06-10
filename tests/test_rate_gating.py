@@ -1,4 +1,4 @@
-"""Rate gating — `ctx.sample` / `ctx.hold` (Approach A).
+"""Rate gating — `PartUpdate.rates` (metadata only).
 
 A part declares a rate inside `update()`; the value is returned
 unchanged (the compiled kernel stays a pure function), and the rate is
@@ -19,24 +19,25 @@ from manta.ir.frames import PartFrame
 from manta.ir.types import Vec3
 from manta.ir.wrench import Wrench
 from manta.parts import Mass, PositionSensor
-from manta.parts.base import Input, Parameter, Part
+from manta.parts.base import Input, Parameter, Part, PartUpdate
 
 
 # ---------------------------------------------------------------------------
-# A custom actuator that gates its command intake with ctx.hold
+# A custom actuator that gates its command intake via PartUpdate.rates
 # ---------------------------------------------------------------------------
 
 class GatedThruster(Part):
-    """+z thruster whose throttle is accepted at `rate` Hz (ctx.hold)."""
+    """+z thruster whose throttle is accepted at `rate` Hz (ZOH)."""
 
     rate: float = Parameter(None)
     gain: float = Parameter(1.0)
     throttle: float = Input(default=0.0)
 
     def update(self, ctx):
-        thr = ctx.hold(self.throttle, rate=self.rate)
-        f = Vec3[PartFrame].constant((0.0, 0.0, self.gain)) * thr
-        return Wrench(force=f, torque=Vec3[PartFrame].constant((0, 0, 0)))
+        f = Vec3[PartFrame].constant((0.0, 0.0, self.gain)) * self.throttle
+        return PartUpdate(
+            wrench=Wrench(force=f, torque=Vec3[PartFrame].constant((0, 0, 0))),
+            rates={"throttle": self.rate})
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +136,7 @@ def test_ekf_folds_once_per_window():
 
 
 # ---------------------------------------------------------------------------
-# Actuator: ctx.hold gates the command (ZOH) on both sim and EKF
+# Actuator: PartUpdate.rates gates the command (ZOH) on both sim and EKF
 # ---------------------------------------------------------------------------
 
 def test_command_zoh_holds_between_intake_windows():

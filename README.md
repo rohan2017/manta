@@ -89,7 +89,7 @@ TargetCpp(Sim(w), "out", class_name="Drone")
 
 `LQR(world, …)` synthesizes a state-feedback regulator about an operating
 point — the third sibling transform. It regulates a controllable subset
-(`track=`), freezing the rest; the runtime maps a state estimate to
+(`regulate=`), freezing the rest; the runtime maps a state estimate to
 commands:
 
 ```python
@@ -105,7 +105,7 @@ lqr = TargetNumpy(LQR(
     w,
     x_ref={"drone": {"position": (0, 0, 10), "velocity": (0, 0, 0)}},
     u_ref={"t.throttle": 1.5 * 9.81},          # hover trim
-    track=["drone.position", "drone.velocity"],
+    regulate=["drone.position", "drone.velocity"],
     Q=np.diag([10, 10, 10, 1, 1, 1]), R=np.eye(3), dt=0.02))
 
 u = lqr.control(ekf.state_dict())              # {input_name: command}
@@ -113,7 +113,7 @@ u = lqr.control(ekf.state_dict())              # {input_name: command}
 
 (Q/R here are LQR *cost* weights, not the EKF's noise. A free rigid body
 is underactuated, so full-state LQR isn't stabilizable — regulate the
-controllable subspace via `track=`.)
+controllable subspace via `regulate=`.)
 
 ## Core concepts
 
@@ -216,8 +216,10 @@ manta/                     library package
     world.py               World (the declarative model)
     sim.py                 Sim (forward-dynamics transform)
     recurrence.py          RecurrenceBlock base (PID/Madgwick/Mahony/IMU)
-    linearized_system.py   LinearizedSystem — manifold-aware F/B/H/L +
-                           slot/sensor/subset machinery (the shared seam)
+    linearization/         LinearizedSystem (system) + TickLinearizer
+                           (engine) + closure/partition + name helpers —
+                           the shared seam every transform reads
+    smoothing.py           Shared softened-norm / smooth-max primitives
     bus.py                 MeasurementBus + PortSet (backend-agnostic bus)
     signal.py              Signal value-channel + wire()
     tick/                  World-tick compile + kinematics/inertia/signature
@@ -230,9 +232,10 @@ manta/                     library package
     control/               LQR + PID
     codegen/               Backends (one generic Module lowering per target)
         target.py          as_module — the backend entry-point contract
-        numpy/             TargetNumpy + the one NumpyRuntime + NoiseDriver
+        numpy/             TargetNumpy + NumpyRuntime engine + the four
+                           views (_sim/_filter/_recurrence/_regulator)
         cpp/               TargetCpp + the generic module_emit emitter
-tests/                     407 tests
+tests/                     498 tests
 examples/                  quickstart + physics/ + vehicles/
     _viz.py                rerun visualization helpers
     _control.py            keyboard (pynput) + scripted-fallback control
@@ -285,7 +288,7 @@ GPU-rendered Windows-native viewer from WSL). Shared helpers live in
 
 In active development. The public API (`World`, `Craft`, `Sim`, `EKF`,
 `LQR`, `TargetNumpy`, `TargetCpp`) is settled enough that the demos
-and 407 tests don't carry compat shims. The full deploy-to-robot path
+and 498 tests don't carry compat shims. The full deploy-to-robot path
 lowers to C++ — `TargetCpp` handles `Sim`, `EKF` (mutable state + Joseph
 update), and `LQR` (feed-forward control law), each verified against the
 numpy backend by a compile-and-run roundtrip test. Open items:

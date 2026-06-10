@@ -99,7 +99,7 @@ def test_python_cpp_roundtrip(tmp_path: Path):
     # ---- 1: TargetCpp ----
     w      = _hover_world()
     cw     = Sim(w)
-    result = TargetCpp(cw.module(noise=False), tmp_path, class_name="Drone")
+    result = TargetCpp(cw.deploy_module(), tmp_path, class_name="Drone")
 
     # ---- 2: compile kernels + wrapper ----
     k_obj = tmp_path / "kernels.o"
@@ -144,7 +144,7 @@ def test_python_cpp_roundtrip(tmp_path: Path):
         sim.step(0.005)
 
     # ---- 6: Jacobian sanity checks via the same Module kernels ----
-    m = cw.module(noise=False)
+    m = cw.deploy_module()
     spec = m.spec
     flat = {f"drone.{k}": v for k, v in sim.state["drone"].items()
             if f"drone.{k}" in spec}

@@ -41,7 +41,9 @@ from .kinematics import kinematic_pass
 from ..ir.frames import WorldFrame, CraftFrame, PartFrame
 from ..ir.manifold import SO3Manifold
 from ..parts.base import CompositePart, Part, PartUpdate, TraceBindings
+from ..ir.types import _IRValue
 from ..ir.wrench import Wrench
+from ..smoothing import NORM_EPS_SQ
 
 
 def compile_world_tick(crafts: list,
@@ -176,7 +178,7 @@ def compile_world_tick(crafts: list,
             g.output(out_val, out_name)
 
     cg = g.compile(defaults={"t": 0.0})
-    # Aggregate per-part rate declarations (ctx.sample / ctx.hold) onto
+    # Aggregate per-part rate declarations (PartUpdate.rates) onto
     # the compiled tick. Approach A: this is pure metadata — the kernel
     # is unchanged; the Sim/EKF runtimes read it to gate their I/O ports.
     rates: dict[str, float] = {}
@@ -264,6 +266,223 @@ def _typed_views(fv_raw: dict) -> dict:
             for qty, by_frame in fv_raw.items()}
 
 
+def _bind_part_states_inputs(craft, prefix, trace
+                             ) -> dict[Part, dict[str, Any]]:
+    """Phase: bind each part's declared State and Input attributes to
+    symbolic graph inputs (via `trace`). Must run BEFORE the kinematic
+    pass, so it sees the joint angle/rate symbols when building per-part
+    kinematic states. Returns the per-part state symbol map."""
+    state_input_nodes: dict[Part, dict[str, Any]] = {}
+    for part in craft.parts:
+        decls = part.state_declarations()
+        if decls:
+            part_states: dict[str, Any] = {}
+            for sname, sdecl in decls.items():
+                input_name = prefix + f"{part.name}.{sname}"
+                sym = sdecl.manifold.ir_input(
+                    input_name, default_frame=CraftFrame)
+                part_states[sname] = sym
+                trace.bind(part, sname, sym)
+            state_input_nodes[part] = part_states
+
+        for iname in part.input_declarations():
+            trace.bind(part, iname,
+                       ir.Scalar.input(prefix + f"{part.name}.{iname}"))
+    return state_input_nodes
+
+
+def _bind_part_noise(craft, prefix, dt, trace) -> list[tuple[str, Any]]:
+    """Phase: plumb each part's Noise declarations — synthesis is
+    polymorphic on the Noise subclass (see manta/parts/base.py). Binds
+    the returned symbol (via `trace`) and returns any synthesized state
+    updates (`(state_name, bias_next)` pairs, e.g. random-walk biases)."""
+    rw_bias_updates: list[tuple[str, Any]] = []
+    for part in craft.parts:
+        for nname, ndecl in part.noise_declarations().items():
+            input_name = prefix + f"{part.name}.{nname}"
+            synth = ndecl.synthesize(
+                base_name=input_name,
+                name=nname,
+                dt=dt,
+                default_frame=CraftFrame,
+                owner=part,
+            )
+            trace.bind(part, nname, synth.signal_sym)
+            if synth.state_update is not None:
+                rw_bias_updates.append(synth.state_update)
+    return rw_bias_updates
+
+
+def _part_tick_context(kin, fields_tuple, dt, t, world) -> TickContext:
+    """One part's TickContext: each kinematic quantity as a frame-indexed
+    view (X[Frame] = the value relative to Frame, in Frame coords), the
+    part's own world attitude, and the Craft←Part rotation."""
+    fv = _typed_views(kin.frame_views)
+    return TickContext(
+        t=t,
+        dt=dt,
+        fields=fields_tuple,
+        world=world,
+        orientation=ir.Quat[WorldFrame, PartFrame].from_mx(
+            kin.q_world_from_input),
+        position=fv["position"],
+        velocity=fv["velocity"],
+        acceleration=fv["acceleration"],
+        angular_velocity=fv["angular_velocity"],
+        angular_acceleration=fv["angular_acceleration"],
+        R_craft_from_part=ir.Mat3[CraftFrame, PartFrame].from_mx(
+            kin.R_craft_from_input),
+    )
+
+
+def _validated_part_update(part, result):
+    """Normalize + validate one part's `update()` return value.
+    Returns `(wrench, new_state, outputs, rates)`."""
+    if isinstance(result, Wrench):
+        w_part, new_state, outputs, rates = result, {}, {}, {}
+    elif isinstance(result, PartUpdate):
+        w_part, new_state, outputs, rates = (
+            result.wrench, result.new_state, result.outputs, result.rates)
+    else:
+        raise TypeError(
+            f"{type(part).__name__}('{part.name}').update(): must "
+            f"return Wrench or PartUpdate, got {type(result).__name__}")
+    if w_part.frame is not PartFrame:
+        from ..ir.frames import FrameError, _capture_user_source
+        raise FrameError(
+            f"{type(part).__name__}.update",
+            expected="Wrench in PartFrame",
+            got=f"frame={w_part.frame.__name__}",
+            source=_capture_user_source(),
+        )
+    new_decls = part.state_declarations()
+    unknown = set(new_state) - set(new_decls)
+    if unknown:
+        raise KeyError(
+            f"{type(part).__name__}('{part.name}'): unknown state "
+            f"slot(s): {sorted(unknown)}.")
+    out_decls = part.output_declarations()
+    unknown_out = set(outputs) - set(out_decls)
+    missing_out = set(out_decls) - set(outputs)
+    if unknown_out:
+        raise KeyError(
+            f"{type(part).__name__}('{part.name}'): unknown output "
+            f"slot(s): {sorted(unknown_out)}.")
+    if missing_out:
+        raise KeyError(
+            f"{type(part).__name__}('{part.name}'): output slot(s) "
+            f"declared but not written: {sorted(missing_out)}.")
+    if rates:
+        known = set(out_decls) | set(part.input_declarations())
+        unknown_rates = set(rates) - known
+        if unknown_rates:
+            raise KeyError(
+                f"{type(part).__name__}('{part.name}'): rates "
+                f"declared for unknown I/O slot(s): "
+                f"{sorted(unknown_rates)}. Declared outputs: "
+                f"{sorted(out_decls)}; inputs: "
+                f"{sorted(part.input_declarations())}.")
+    return w_part, new_state, outputs, rates
+
+
+def _run_part_updates(craft, prefix, kin_states, fields_tuple, dt, t,
+                      world, state_input_nodes):
+    """Phase: run every part's `update()` against its own TickContext and
+    queue the results. Returns `(own_wrench, new_state_outputs,
+    sensor_outputs, sample_rates)`:
+
+      * own_wrench — per-part external wrench, rotated to body coords
+        about the part's own origin (NOT lifted; the cascade lifts).
+      * new_state_outputs / sensor_outputs — `(full_name, value)` queues.
+      * sample_rates — validated `PartUpdate.rates`, fully named.
+    """
+    from ..parts.articulation.joint import ArticulatedJoint
+    own_wrench: dict[Part, Wrench] = {}
+    new_state_outputs: list[tuple[str, Any]] = []
+    sensor_outputs:    list[tuple[str, Any]] = []
+    sample_rates:      dict[str, float] = {}
+    for part in craft.parts:
+        kin = kin_states[part]
+        # A part's update() works entirely in its OWN frame; the wrench
+        # it returns is in PartFrame and `_wrench_rotate_to_craft` maps
+        # it to body coords.
+        ctx_part = _part_tick_context(kin, fields_tuple, dt, t, world)
+        result = part.update(ctx_part)
+        w_part, new_state, outputs, rates = _validated_part_update(
+            part, result)
+
+        # A joint's DOF/rate are emitted by the central integrator (its
+        # update() is a no-op), so skip them here to avoid emitting
+        # stale (un-integrated) values.
+        decls = part.state_declarations()
+        if not isinstance(part, ArticulatedJoint):
+            for sname in decls:
+                val = new_state.get(sname, state_input_nodes[part][sname])
+                # SO(3) state: defensively renormalize the quaternion so
+                # multi-tick integration doesn't drift off the unit
+                # sphere — mirrors the rigid-body orientation handling.
+                # A Part integrates such a slot via SO3Manifold().boxplus,
+                # which already returns a (frame-tagged) Quat.
+                if decls[sname].manifold.kind == "quat":
+                    val = val.normalize()
+                new_state_outputs.append(
+                    (prefix + f"{part.name}.{sname}", val))
+
+        for oname, oval in outputs.items():
+            sensor_outputs.append((prefix + f"{part.name}.{oname}", oval))
+        for rname, r in rates.items():
+            if r is not None:
+                sample_rates[prefix + f"{part.name}.{rname}"] = float(r)
+
+        ctx_R = ir.Mat3[CraftFrame, PartFrame].from_mx(
+            kin.R_craft_from_input)
+        own_wrench[part] = _wrench_rotate_to_craft(w_part, ctx_R)
+    return own_wrench, new_state_outputs, sensor_outputs, sample_rates
+
+
+def _net_wrench(craft, own_wrench, kin_states) -> Wrench:
+    """Phase: bottom-up wrench cascade. Reduce the per-part wrenches up
+    the part tree: every composite — joints included — sums its children
+    (each shifted to the composite's own origin). NOTHING is split or
+    absorbed at a joint: the net wrench is the craft's full external
+    wrench about the origin, which both the system-COM linear theorem
+    (a_com = F/m) and the body rows of the joint-space solve need whole.
+    The per-hop shifts telescope to the single r×F lift of the flat
+    path."""
+    zero_w = Wrench.zero(CraftFrame)
+
+    def _cascade(part) -> Wrench:
+        accum = own_wrench.get(part, zero_w)
+        r_part = kin_states[part].r_in_craft
+        if isinstance(part, CompositePart):
+            for child in part.children:
+                child_up = _cascade(child)
+                delta_r = ir.Vec3[CraftFrame].from_mx(
+                    kin_states[child].r_in_craft - r_part)
+                accum = accum + _shift_wrench(child_up, delta_r)
+        return accum
+
+    return _cascade(craft.root)
+
+
+def _com_relative_motion(craft, kin_states, m_total):
+    """Phase: body-relative COM motion for the moving-COM origin recoil
+    — the mass-weighted reduction of the per-part relative kinematics
+    (same quantities a rotor-mounted sensor reads). Zero when no joint
+    shifts the COM. Carries the θ̈/d̈ placeholders via a_rel; resolved in
+    `_emit_per_craft_dynamics`. Returns `(v_com_rel_mx, a_com_rel_mx)`."""
+    v_com_rel_mx = ca.MX.zeros(3, 1)
+    a_com_rel_mx = ca.MX.zeros(3, 1)
+    for part in craft.parts:
+        m = float(getattr(part, "mass", 0.0) or 0.0)
+        if m <= 0.0:
+            continue
+        kin = kin_states[part]
+        v_com_rel_mx = v_com_rel_mx + m * kin.velocity_rel_body
+        a_com_rel_mx = a_com_rel_mx + m * kin.acceleration_rel_body
+    return v_com_rel_mx / m_total, a_com_rel_mx / m_total
+
+
 def _trace_craft_pass1(craft,
                        gravity_field,
                        fluid_field,
@@ -273,10 +492,11 @@ def _trace_craft_pass1(craft,
                        trace,
                        collision_field=None,
                        world=None) -> dict[str, Any]:
-    """Set up one craft's state inputs, part bindings (via `trace`),
-    TickContext, run all parts' update(), and collect their wrench
-    contributions + state outputs + sensor outputs. Returns a dict
-    carrying everything the later passes need."""
+    """One craft's pass-1 trace, as a sequence of named phases: bind
+    state/input/noise symbols, run the kinematic + inertia passes, run
+    every part's update(), cascade wrenches, reduce COM-relative motion,
+    and assemble the joint-space blocks. Returns a dict carrying
+    everything the later passes need."""
     prefix = f"{craft.name}."
 
     # Rigid-body state symbols were created in `compile_world_tick`'s
@@ -298,44 +518,8 @@ def _trace_craft_pass1(craft,
         from ..fields import CollisionField as _CF
         collision_field = _CF()
 
-    # State + Input bindings on each part — must happen BEFORE the
-    # kinematic pass, so it sees the joint angle/rate symbols when
-    # building per-part kinematic states.
-    state_input_nodes: dict[Part, dict[str, Any]] = {}
-    for part in craft.parts:
-        decls = part.state_declarations()
-        if decls:
-            part_states: dict[str, Any] = {}
-            for sname, sdecl in decls.items():
-                input_name = prefix + f"{part.name}.{sname}"
-                sym = sdecl.manifold.ir_input(
-                    input_name, default_frame=CraftFrame)
-                part_states[sname] = sym
-                trace.bind(part, sname, sym)
-            state_input_nodes[part] = part_states
-
-        for iname in part.input_declarations():
-            trace.bind(part, iname,
-                       ir.Scalar.input(prefix + f"{part.name}.{iname}"))
-
-    # Per-part Noise plumbing — synthesis is polymorphic on the Noise
-    # subclass (see manta/parts/base.py). The compiler binds the
-    # returned symbol (via `trace`) and records any synthesized state
-    # update.
-    rw_bias_updates: list[tuple[str, Any]] = []   # (state_name, bias_next)
-    for part in craft.parts:
-        for nname, ndecl in part.noise_declarations().items():
-            input_name = prefix + f"{part.name}.{nname}"
-            synth = ndecl.synthesize(
-                base_name=input_name,
-                name=nname,
-                dt=dt,
-                default_frame=CraftFrame,
-                owner=part,
-            )
-            trace.bind(part, nname, synth.signal_sym)
-            if synth.state_update is not None:
-                rw_bias_updates.append(synth.state_update)
+    state_input_nodes = _bind_part_states_inputs(craft, prefix, trace)
+    rw_bias_updates = _bind_part_noise(craft, prefix, dt, trace)
 
     # Per-joint DOF-acceleration placeholders. A joint's θ̈/d̈ is not a
     # state slot — it's an output of the joint-space solve (a pure
@@ -384,154 +568,15 @@ def _trace_craft_pass1(craft,
             root_kin.R_craft_from_input),
     )
 
-    # Per-part external wrench, rotated to body coords about the part's
-    # own origin (NOT lifted). The cascade below reduces these into the
-    # craft net wrench; the joint-space assembly projects them onto each
-    # joint's motion subspace.
-    own_wrench: dict[Part, Wrench] = {}
-    new_state_outputs: list[tuple[str, Any]] = []
-    sensor_outputs:    list[tuple[str, Any]] = []
-    # Rate declarations (ctx.sample / ctx.hold) → {full_io_name: rate_hz}.
-    sample_rates:      dict[str, float] = {}
-    for part in craft.parts:
-        kin = kin_states[part]
-        # A part's update() works entirely in its OWN frame. ctx exposes
-        # each kinematic quantity as a frame-indexed view (X[Frame] = the
-        # value relative to Frame, in Frame coords), the part's own world
-        # attitude, and the Craft←Part rotation. The wrench the part returns
-        # is in PartFrame; `_wrench_rotate_to_craft` maps it to body coords.
-        orientation_part = ir.Quat[WorldFrame, PartFrame].from_mx(
-            kin.q_world_from_input)
-        R_craft_from_part = ir.Mat3[CraftFrame, PartFrame].from_mx(
-            kin.R_craft_from_input)
-        fv = _typed_views(kin.frame_views)
-        ctx_part = TickContext(
-            t=t,
-            dt=dt,
-            fields=fields_tuple,
-            world=world,
-            orientation=orientation_part,
-            position=fv["position"],
-            velocity=fv["velocity"],
-            acceleration=fv["acceleration"],
-            angular_velocity=fv["angular_velocity"],
-            angular_acceleration=fv["angular_acceleration"],
-            R_craft_from_part=R_craft_from_part,
-        )
-        result = part.update(ctx_part)
-        if isinstance(result, Wrench):
-            w_part = result; new_state = {}; outputs = {}
-        elif isinstance(result, PartUpdate):
-            w_part, new_state, outputs = result.wrench, result.new_state, result.outputs
-        else:
-            raise TypeError(
-                f"{type(part).__name__}('{part.name}').update(): must "
-                f"return Wrench or PartUpdate, got {type(result).__name__}")
-        if w_part.frame is not PartFrame:
-            from ..ir.frames import FrameError, _capture_user_source
-            raise FrameError(
-                f"{type(part).__name__}.update",
-                expected="Wrench in PartFrame",
-                got=f"frame={w_part.frame.__name__}",
-                source=_capture_user_source(),
-            )
+    own_wrench, new_state_outputs, sensor_outputs, sample_rates = \
+        _run_part_updates(craft, prefix, kin_states, fields_tuple, dt, t,
+                          world, state_input_nodes)
 
-        # State validation + queue.
-        decls = part.state_declarations()
-        unknown = set(new_state) - set(decls)
-        if unknown:
-            raise KeyError(
-                f"{type(part).__name__}('{part.name}'): unknown state "
-                f"slot(s): {sorted(unknown)}.")
-        # A joint's DOF/rate are emitted by the central integrator in the
-        # cascade below (its update() is a no-op), so skip them here to
-        # avoid emitting stale (un-integrated) values.
-        if not isinstance(part, ArticulatedJoint):
-            for sname in decls:
-                val = new_state.get(sname, state_input_nodes[part][sname])
-                # SO(3) state: defensively renormalize the quaternion so
-                # multi-tick integration doesn't drift off the unit sphere
-                # — mirrors the rigid-body orientation handling below. A
-                # Part integrates such a slot via SO3Manifold().boxplus,
-                # which already returns a (frame-tagged) Quat.
-                if decls[sname].manifold.kind == "quat":
-                    val = val.normalize()
-                new_state_outputs.append(
-                    (prefix + f"{part.name}.{sname}", val))
+    net = _net_wrench(craft, own_wrench, kin_states)
 
-        # Output validation + queue.
-        out_decls = part.output_declarations()
-        unknown_out = set(outputs) - set(out_decls)
-        missing_out = set(out_decls) - set(outputs)
-        if unknown_out:
-            raise KeyError(
-                f"{type(part).__name__}('{part.name}'): unknown output "
-                f"slot(s): {sorted(unknown_out)}.")
-        if missing_out:
-            raise KeyError(
-                f"{type(part).__name__}('{part.name}'): output slot(s) "
-                f"declared but not written: {sorted(missing_out)}.")
-        for oname, oval in outputs.items():
-            sensor_outputs.append((prefix + f"{part.name}.{oname}", oval))
-
-        # Rate declarations: match the values passed to ctx.sample()/
-        # ctx.hold() (by identity) against this part's emitted outputs and
-        # its bound Input symbols, recording {full_io_name: rate_hz}.
-        if ctx_part._sample_records:
-            rate_by_id = {sid: r for sid, r, _ in ctx_part._sample_records}
-            for oname, oval in outputs.items():
-                r = rate_by_id.get(id(oval))
-                if r is not None:
-                    sample_rates[prefix + f"{part.name}.{oname}"] = r
-            for iname in part.input_declarations():
-                r = rate_by_id.get(id(getattr(part, iname)))
-                if r is not None:
-                    sample_rates[prefix + f"{part.name}.{iname}"] = r
-
-        # Part-frame wrench → rotate to body coords (NO lift). The cascade
-        # below lifts + sums it up the joint tree.
-        own_wrench[part] = _wrench_rotate_to_craft(w_part, R_craft_from_part)
-
-    # --- Bottom-up wrench cascade --------------------------------------
-    # Reduce the per-part wrenches up the part tree: every composite —
-    # joints included — sums its children (each shifted to the
-    # composite's own origin). NOTHING is split or absorbed at a joint:
-    # the net wrench is the craft's full external wrench about the
-    # origin, which both the system-COM linear theorem (a_com = F/m) and
-    # the body rows of the joint-space solve need whole. The per-hop
-    # shifts telescope to the single r×F lift of the flat path.
-    zero_w = Wrench.zero(CraftFrame)
-
-    def _cascade(part) -> Wrench:
-        accum = own_wrench.get(part, zero_w)
-        r_part = kin_states[part].r_in_craft
-        if isinstance(part, CompositePart):
-            for child in part.children:
-                child_up = _cascade(child)
-                delta_r = ir.Vec3[CraftFrame].from_mx(
-                    kin_states[child].r_in_craft - r_part)
-                accum = accum + _shift_wrench(child_up, delta_r)
-        return accum
-
-    net = _cascade(craft.root)
-
-    # Body-relative COM motion for the moving-COM origin recoil — the
-    # mass-weighted reduction of the per-part relative kinematics the
-    # kinematic pass just produced (same quantities a rotor-mounted sensor
-    # reads). Zero when no joint shifts the COM. Carries the θ̈/d̈
-    # placeholders via a_rel; resolved in `_emit_per_craft_dynamics`.
     m_total = inertia["m_total"]
-    v_com_rel_mx = ca.MX.zeros(3, 1)
-    a_com_rel_mx = ca.MX.zeros(3, 1)
-    for part in craft.parts:
-        m = float(getattr(part, "mass", 0.0) or 0.0)
-        if m <= 0.0:
-            continue
-        kin = kin_states[part]
-        v_com_rel_mx = v_com_rel_mx + m * kin.velocity_rel_body
-        a_com_rel_mx = a_com_rel_mx + m * kin.acceleration_rel_body
-    v_com_rel_mx = v_com_rel_mx / m_total
-    a_com_rel_mx = a_com_rel_mx / m_total
+    v_com_rel_mx, a_com_rel_mx = _com_relative_motion(
+        craft, kin_states, m_total)
 
     # --- Joint-space block assembly --------------------------------------
     # The coupled body ⊕ joint dynamics: generalized mass matrix A(q)
@@ -570,10 +615,166 @@ def _trace_craft_pass1(craft,
     }
 
 
+def _integrate_joint_dofs(prefix, joint_accel_syms, qdd_by_part,
+                          state_input_nodes, dt_mx) -> list[tuple[str, Any]]:
+    """Phase: central integration of the joint DOF states — the same
+    semi-implicit scheme as the body integrator. Locked joints (zero
+    generalized inertia) hold q̈ = 0. The rate output is later overridden
+    by the momentum-form value for live joints."""
+    dof_state_outputs: list[tuple[str, Any]] = []
+    for j_part in joint_accel_syms:
+        qdd_mx = qdd_by_part.get(j_part, ca.MX(0.0))
+        pos_name, rate_name = j_part.dof_state_names()
+        rate_mx = state_input_nodes[j_part][rate_name]._mx
+        pos_mx  = state_input_nodes[j_part][pos_name]._mx
+        new_pos_mx = (pos_mx + rate_mx * dt_mx
+                      + 0.5 * qdd_mx * dt_mx * dt_mx)
+        dof_state_outputs.append(
+            (prefix + f"{j_part.name}.{pos_name}", ir.Scalar(new_pos_mx)))
+        dof_state_outputs.append(
+            (prefix + f"{j_part.name}.{rate_name}",
+             ir.Scalar(rate_mx + qdd_mx * dt_mx)))
+    return dof_state_outputs
+
+
+def _validate_state_only_dynamics(craft, net, a_world_sym, alpha_sym,
+                                  joint_accel_syms, qdd_by_part):
+    """Phase: validate wrench independence from placeholder dynamics.
+    Wrenches must be functions of state only: forbid dependence on the
+    body a/α placeholders AND on any joint q̈ placeholder (each would
+    otherwise leave an unresolved symbol in `net`, which we never
+    substitute). Returns `(joint_syms, joint_reals)` for the resolver."""
+    joint_syms = []
+    joint_reals = []
+    for j_part, sym in joint_accel_syms.items():
+        joint_syms.append(sym)
+        joint_reals.append(qdd_by_part.get(j_part, ca.MX(0.0)))
+    # The solved q̈ are pure functions of state by construction (A and the
+    # generalized forces contain no placeholders) — assert it, so a
+    # future feedback channel can't silently emit an unresolved symbol.
+    for real in joint_reals:
+        if (ca.depends_on(real, a_world_sym)
+                or ca.depends_on(real, alpha_sym)):
+            raise ValueError(
+                f"Craft '{craft.name}': a joint DOF acceleration depends "
+                f"on a body-dynamics placeholder — the joint-space solve "
+                f"must be a function of state only.")
+    checks = [("acceleration_world", a_world_sym),
+              ("acceleration_body", a_world_sym),
+              ("angular_acceleration", alpha_sym)]
+    checks += [("a joint's angular acceleration", s) for s in joint_syms]
+    for sym_name, sym_mx in checks:
+        if (ca.depends_on(net.force._mx, sym_mx)
+                or ca.depends_on(net.torque._mx, sym_mx)):
+            raise ValueError(
+                f"Craft '{craft.name}': a part's wrench or a coupling "
+                f"depends on ctx.{sym_name}. Wrenches must be a function "
+                f"of state only.")
+    return joint_syms, joint_reals
+
+
+def _placeholder_resolver(placeholders, real_values):
+    """Phase: build the placeholder→real-dynamics substitution for
+    emitted outputs, preserving each IR value's frame tags."""
+    def _resolve(val):
+        if not isinstance(val, _IRValue):
+            return val
+        new_mx = ca.substitute(val._mx, placeholders, real_values)
+        if isinstance(val, ir.Vec3):
+            return type(val)._from_mx(new_mx, frame=val._frame)
+        if isinstance(val, (ir.Mat3, ir.Quat)):
+            return type(val)._from_mx(new_mx,
+                                       from_frame=val._from_frame,
+                                       to_frame=val._to_frame)
+        return type(val)._from_mx(new_mx)
+
+    return _resolve
+
+
+def _integrate_angular_momentum(prefix, js, inertia, ang_vel, alpha,
+                                tau_com, state_input_nodes, dt_mx):
+    """Phase: structure-preserving angular update.
+
+    Explicit Euler on ω (ω += α·dt) pumps energy into gyroscopic
+    oscillations at λ ≈ Ω²·dt/2 (Ω = nutation rate) — fatal for fast
+    rotors on precessing mounts, and a slow leak for any tumbling body.
+    Instead, integrate the body-frame GENERALIZED momentum p = A·[ω; q̇]
+    (p_ω is the total angular momentum about the COM, p_q the joint
+    momenta):
+      p_ω⁺ = Exp(−ω·dt)·(p_ω + τ_com·dt)      (world-frame H exactly
+                                               conserved at zero torque)
+      p_q⁺ = p_q + (Q_q + ∂T/∂q)·dt           (Hamel joint-row impulse)
+      [ω⁺; q̇⁺] = A⁻¹·p⁺
+    — the joint rates come from the SAME momentum solve; an Euler rate
+    update alongside the momentum ω update would break the axial-
+    momentum bookkeeping (e.g. a reaction wheel's exact axial balance).
+    Without joints this is the plain H⁺ = Exp(−ω·dt)(H + τ·dt) update.
+    First-order identical to ω += α·dt, so flat-craft behaviour shifts
+    only at O(dt²).
+
+    Returns `(new_om_mx, rate_overrides)` — the advanced body rate and
+    the momentum-form joint-rate overrides by full state name.
+    """
+    I_com_mx         = inertia["I_com_in_craft_mx"]
+    I_com_at_zero_np = inertia["I_com_at_zero"]
+    om_mx = ang_vel._mx
+    # Counter-rotation Exp(−ω·dt) via Rodrigues (branch-free at ω→0).
+    # The MIDPOINT rate (ω + ½α·dt) sets the rotation: a first-order
+    # (old-ω) rotation leaves an O(dt) phase error that pumps kinetic
+    # energy into nutation at λ ≈ Ω²·dt/2; the midpoint drops the pump
+    # to O(dt²) — negligible at any practical rate.
+    rv = -(om_mx + 0.5 * alpha._mx * dt_mx) * dt_mx
+    th2 = ca.dot(rv, rv)
+    th = ca.sqrt(th2 + NORM_EPS_SQ)
+    K = ca.skew(rv)
+    R_neg = (ca.MX.eye(3) + (ca.sin(th) / th) * K
+             + ((1.0 - ca.cos(th)) / (th2 + NORM_EPS_SQ)) * (K @ K))
+    rate_overrides: dict[str, Any] = {}
+    if js is None:
+        H_mx = I_com_mx @ om_mx
+        H_new_mx = R_neg @ (H_mx + tau_com._mx * dt_mx)
+        if np.linalg.det(I_com_at_zero_np) > DEGENERATE_INERTIA_EPS:
+            new_om_mx = ca.solve(I_com_mx, H_new_mx)
+        else:
+            new_om_mx = om_mx + alpha._mx * dt_mx
+    else:
+        p_mx = js["p"]
+        p_w_new = R_neg @ (p_mx[0:3] + tau_com._mx * dt_mx)
+        p_q_new = p_mx[3:] + (js["force_q"] + js["dTdq"]) * dt_mx
+        # Recover the new velocities from the ADVANCED configuration's
+        # mass matrix: next tick rebuilds p = A(q⁺)·u⁺, so solving with
+        # the advanced A makes the momentum flow consistent — solving
+        # with the stale A(q) silently drops the (∂A/∂q·q̇)·u drift and
+        # leaks angular momentum whenever the mass matrix is
+        # configuration-dependent (offset hinges, gimbals, sliders).
+        # Advance with q + q̇·dt (NOT the full q⁺ = q + q̇·dt + ½q̈·dt²):
+        # the ½q̈dt² term only changes A at O(dt²) per step — the same
+        # tier as the rest of the integrator — while substituting q̈ (the
+        # whole block-solve expression) into every entry of A would
+        # square the graph size and blow up code generation.
+        q_pos_syms, q_pos_adv = [], []
+        for j_part in js["joints"]:
+            pos_name, rate_name = j_part.dof_state_names()
+            pos_mx  = state_input_nodes[j_part][pos_name]._mx
+            rate_mx = state_input_nodes[j_part][rate_name]._mx
+            q_pos_syms.append(pos_mx)
+            q_pos_adv.append(pos_mx + rate_mx * dt_mx)
+        A_new = ca.substitute(js["A"],
+                              ca.vertcat(*q_pos_syms),
+                              ca.vertcat(*q_pos_adv))
+        u_new = ca.solve(A_new, ca.vertcat(p_w_new, p_q_new))
+        new_om_mx = u_new[0:3]
+        for jdx, j_part in enumerate(js["joints"]):
+            rate_overrides[prefix + f"{j_part.name}.rate"] = ir.Scalar(
+                u_new[3 + jdx])
+    return new_om_mx, rate_overrides
+
+
 def _emit_per_craft_dynamics(g_ctx, craft, pc, dt) -> None:
     """Newton-Euler + symplectic integration + emit state/sensor outputs
-    for one craft. Reads pc["net"] (which by this point includes any
-    coupling-injected wrenches) and pc["inertia"] (symbolic rollup)."""
+    for one craft, as a sequence of named phases. Reads pc["net"] (which
+    by this point includes any coupling-injected wrenches) and
+    pc["inertia"] (symbolic rollup)."""
     prefix = f"{craft.name}."
 
     position    = pc["position"]
@@ -628,23 +829,8 @@ def _emit_per_craft_dynamics(g_ctx, craft, pc, dt) -> None:
         for jdx, j_part in enumerate(js["joints"]):
             qdd_by_part[j_part] = acc_mx[3 + jdx]
 
-    # --- Central integration of the joint DOF states ----------------------
-    # Same semi-implicit scheme as the body integrator. Locked joints
-    # (zero generalized inertia) hold q̈ = 0. The rate output is later
-    # overridden by the momentum-form value for live joints.
-    dof_state_outputs: list[tuple[str, Any]] = []
-    for j_part in joint_accel_syms:
-        qdd_mx = qdd_by_part.get(j_part, ca.MX(0.0))
-        pos_name, rate_name = j_part.dof_state_names()
-        rate_mx = state_input_nodes[j_part][rate_name]._mx
-        pos_mx  = state_input_nodes[j_part][pos_name]._mx
-        new_pos_mx = (pos_mx + rate_mx * dt_mx
-                      + 0.5 * qdd_mx * dt_mx * dt_mx)
-        dof_state_outputs.append(
-            (prefix + f"{j_part.name}.{pos_name}", ir.Scalar(new_pos_mx)))
-        dof_state_outputs.append(
-            (prefix + f"{j_part.name}.{rate_name}",
-             ir.Scalar(rate_mx + qdd_mx * dt_mx)))
+    dof_state_outputs = _integrate_joint_dofs(
+        prefix, joint_accel_syms, qdd_by_part, state_input_nodes, dt_mx)
 
     r_OC = -r_com
     offset_term = alpha.cross(r_OC) + ang_vel.cross(ang_vel.cross(r_OC))
@@ -667,38 +853,10 @@ def _emit_per_craft_dynamics(g_ctx, craft, pc, dt) -> None:
     moving_term = ang_vel.cross(v_com_body) * (-2.0) - a_com_body
     a_origin_world = a_origin_world + orientation.apply(moving_term)
 
-    # --- Validate wrench independence from placeholder dynamics ----------
-    # Wrenches must be functions of state only: forbid dependence on the body
-    # a/α placeholders AND on any joint q̈ placeholder (each would otherwise
-    # leave an unresolved symbol in `net`, which we never substitute).
     a_world_sym = pc["a_world_sym"]
     alpha_sym    = pc["alpha_sym"]
-    joint_syms  = []
-    joint_reals = []
-    for j_part, sym in joint_accel_syms.items():
-        joint_syms.append(sym)
-        joint_reals.append(qdd_by_part.get(j_part, ca.MX(0.0)))
-    # The solved q̈ are pure functions of state by construction (A and the
-    # generalized forces contain no placeholders) — assert it, so a
-    # future feedback channel can't silently emit an unresolved symbol.
-    for real in joint_reals:
-        if (ca.depends_on(real, a_world_sym)
-                or ca.depends_on(real, alpha_sym)):
-            raise ValueError(
-                f"Craft '{craft.name}': a joint DOF acceleration depends "
-                f"on a body-dynamics placeholder — the joint-space solve "
-                f"must be a function of state only.")
-    checks = [("acceleration_world", a_world_sym),
-              ("acceleration_body", a_world_sym),
-              ("angular_acceleration", alpha_sym)]
-    checks += [("a joint's angular acceleration", s) for s in joint_syms]
-    for sym_name, sym_mx in checks:
-        if (ca.depends_on(net.force._mx, sym_mx)
-                or ca.depends_on(net.torque._mx, sym_mx)):
-            raise ValueError(
-                f"Craft '{craft.name}': a part's wrench or a coupling "
-                f"depends on ctx.{sym_name}. Wrenches must be a function "
-                f"of state only.")
+    joint_syms, joint_reals = _validate_state_only_dynamics(
+        craft, net, a_world_sym, alpha_sym, joint_accel_syms, qdd_by_part)
 
     # --- Substitute placeholders → real dynamics in emitted outputs -----
     # First resolve the joint θ̈ placeholders inside a_origin_world itself
@@ -709,98 +867,22 @@ def _emit_per_craft_dynamics(g_ctx, craft, pc, dt) -> None:
             ca.substitute(a_origin_world._mx,
                           ca.vertcat(*joint_syms),
                           ca.vertcat(*joint_reals)))
-    placeholders = ca.vertcat(a_world_sym, alpha_sym, *joint_syms)
-    real_values  = ca.vertcat(a_origin_world._mx, alpha._mx, *joint_reals)
-    from ..ir.types import _IRValue
+    resolve = _placeholder_resolver(
+        ca.vertcat(a_world_sym, alpha_sym, *joint_syms),
+        ca.vertcat(a_origin_world._mx, alpha._mx, *joint_reals))
 
-    def _resolve(val):
-        if not isinstance(val, _IRValue):
-            return val
-        new_mx = ca.substitute(val._mx, placeholders, real_values)
-        if isinstance(val, ir.Vec3):
-            return type(val)._from_mx(new_mx, frame=val._frame)
-        if isinstance(val, (ir.Mat3, ir.Quat)):
-            return type(val)._from_mx(new_mx,
-                                       from_frame=val._from_frame,
-                                       to_frame=val._to_frame)
-        return type(val)._from_mx(new_mx)
-
-    new_state_outputs = [(n, _resolve(v))
+    new_state_outputs = [(n, resolve(v))
                           for n, v in pc["new_state_outputs"]]
     new_state_outputs += dof_state_outputs   # solved q̈ — placeholder-free
-    sensor_outputs    = [(n, _resolve(v))
+    sensor_outputs    = [(n, resolve(v))
                           for n, v in pc["sensor_outputs"]]
 
     new_velocity = velocity + a_origin_world * dt
     new_position = position + velocity * dt + a_origin_world * (0.5 * dt * dt)
 
-    # --- Structure-preserving angular update ----------------------------
-    # Explicit Euler on ω (ω += α·dt) pumps energy into gyroscopic
-    # oscillations at λ ≈ Ω²·dt/2 (Ω = nutation rate) — fatal for fast
-    # rotors on precessing mounts, and a slow leak for any tumbling body.
-    # Instead, integrate the body-frame GENERALIZED momentum p = A·[ω; q̇]
-    # (p_ω is the total angular momentum about the COM, p_q the joint
-    # momenta):
-    #   p_ω⁺ = Exp(−ω·dt)·(p_ω + τ_com·dt)      (world-frame H exactly
-    #                                            conserved at zero torque)
-    #   p_q⁺ = p_q + (Q_q + ∂T/∂q)·dt           (Hamel joint-row impulse)
-    #   [ω⁺; q̇⁺] = A⁻¹·p⁺
-    # — the joint rates come from the SAME momentum solve; an Euler rate
-    # update alongside the momentum ω update would break the axial-
-    # momentum bookkeeping (e.g. a reaction wheel's exact axial balance).
-    # Without joints this is the plain H⁺ = Exp(−ω·dt)(H + τ·dt) update.
-    # First-order identical to ω += α·dt, so flat-craft behaviour shifts
-    # only at O(dt²).
-    om_mx = ang_vel._mx
-    # Counter-rotation Exp(−ω·dt) via Rodrigues (branch-free at ω→0).
-    # The MIDPOINT rate (ω + ½α·dt) sets the rotation: a first-order
-    # (old-ω) rotation leaves an O(dt) phase error that pumps kinetic
-    # energy into nutation at λ ≈ Ω²·dt/2; the midpoint drops the pump
-    # to O(dt²) — negligible at any practical rate.
-    rv = -(om_mx + 0.5 * alpha._mx * dt_mx) * dt_mx
-    th2 = ca.dot(rv, rv)
-    th = ca.sqrt(th2 + 1e-30)
-    K = ca.skew(rv)
-    R_neg = (ca.MX.eye(3) + (ca.sin(th) / th) * K
-             + ((1.0 - ca.cos(th)) / (th2 + 1e-30)) * (K @ K))
-    rate_overrides: dict[str, Any] = {}
-    if js is None:
-        H_mx = I_com_mx @ om_mx
-        H_new_mx = R_neg @ (H_mx + tau_com._mx * dt_mx)
-        if np.linalg.det(I_com_at_zero_np) > DEGENERATE_INERTIA_EPS:
-            new_om_mx = ca.solve(I_com_mx, H_new_mx)
-        else:
-            new_om_mx = om_mx + alpha._mx * dt_mx
-    else:
-        p_mx = js["p"]
-        p_w_new = R_neg @ (p_mx[0:3] + tau_com._mx * dt_mx)
-        p_q_new = p_mx[3:] + (js["force_q"] + js["dTdq"]) * dt_mx
-        # Recover the new velocities from the ADVANCED configuration's
-        # mass matrix: next tick rebuilds p = A(q⁺)·u⁺, so solving with
-        # the advanced A makes the momentum flow consistent — solving
-        # with the stale A(q) silently drops the (∂A/∂q·q̇)·u drift and
-        # leaks angular momentum whenever the mass matrix is
-        # configuration-dependent (offset hinges, gimbals, sliders).
-        # Advance with q + q̇·dt (NOT the full q⁺ = q + q̇·dt + ½q̈·dt²):
-        # the ½q̈dt² term only changes A at O(dt²) per step — the same
-        # tier as the rest of the integrator — while substituting q̈ (the
-        # whole block-solve expression) into every entry of A would
-        # square the graph size and blow up code generation.
-        q_pos_syms, q_pos_adv = [], []
-        for j_part in js["joints"]:
-            pos_name, rate_name = j_part.dof_state_names()
-            pos_mx  = state_input_nodes[j_part][pos_name]._mx
-            rate_mx = state_input_nodes[j_part][rate_name]._mx
-            q_pos_syms.append(pos_mx)
-            q_pos_adv.append(pos_mx + rate_mx * dt_mx)
-        A_new = ca.substitute(js["A"],
-                              ca.vertcat(*q_pos_syms),
-                              ca.vertcat(*q_pos_adv))
-        u_new = ca.solve(A_new, ca.vertcat(p_w_new, p_q_new))
-        new_om_mx = u_new[0:3]
-        for jdx, j_part in enumerate(js["joints"]):
-            rate_overrides[prefix + f"{j_part.name}.rate"] = ir.Scalar(
-                u_new[3 + jdx])
+    new_om_mx, rate_overrides = _integrate_angular_momentum(
+        prefix, js, inertia, ang_vel, alpha, tau_com, state_input_nodes,
+        dt_mx)
     new_ang_vel = ir.Vec3[CraftFrame].from_mx(new_om_mx)
     new_state_outputs = [(n, rate_overrides.get(n, v))
                          for n, v in new_state_outputs]

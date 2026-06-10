@@ -24,7 +24,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from math import prod
-from typing import Any
+from types import MappingProxyType
+from typing import Any, Mapping
 
 
 def entry_ident(name: str) -> str:
@@ -142,6 +143,14 @@ class Role(Enum):
     MATRIX = "matrix"
 
 
+#: Roles a Port may have when it appears as an EntryPoint ARGUMENT.
+#: OUTPUT ports are return-only (a recurrence's readout bundle). Every
+#: backend's argument dispatch must cover exactly this set — enforced by
+#: tests/test_role_dispatch.py, so growing the enum fails there instead
+#: of at a runtime fallback.
+ARG_ROLES = frozenset(Role) - {Role.OUTPUT}
+
+
 @dataclass(frozen=True)
 class PortField:
     """One named sub-component of a structured Port — a Part Input inside
@@ -210,20 +219,27 @@ class EntryPoint:
 # Module
 # ---------------------------------------------------------------------------
 
-@dataclass
+@dataclass(frozen=True)
 class Module:
     """A stateful unit = State + named Functions + typed methods.
 
     `functions` is the only thing a backend translates; `entry_points`
     describe the methods to expose over them — a backend lowers ALL of
     them, unconditionally.
+
+    Immutable like every other IR dataclass: `functions` is wrapped in a
+    read-only mapping view at construction.
     """
     name: str
     state: StateLayout
     ports: tuple[Port, ...]
-    functions: dict[str, Any]                 # {name: ca.Function}
+    functions: Mapping[str, Any]              # {name: ca.Function}
     entry_points: tuple[EntryPoint, ...]
     hosting: Hosting = Hosting.THREADED
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "functions",
+                           MappingProxyType(dict(self.functions)))
 
     def port(self, name: str) -> Port:
         for p in self.ports:

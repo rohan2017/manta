@@ -160,14 +160,14 @@ def test_model_Q_keeps_filter_alive_in_closed_loop():
 
     lqr = TargetNumpy(LQR(
         w, x_ref={"c": {"position": tuple(target), "velocity": (0, 0, 0)}},
-        u_ref={"tz.throttle": M * G}, track=["c.position", "c.velocity"],
+        u_ref={"tz.throttle": M * G}, regulate=["c.position", "c.velocity"],
         Q=np.diag([10, 10, 10, 1, 1, 1]), R=np.eye(3) * 0.1, dt=dt))
 
     wire(sim.out("c.gps.position"), ekf.meas("c.gps.position"))
     for nm in lqr.input_names:
         wire(lqr.command(nm), sim.command(nm))
         wire(lqr.command(nm), ekf.command(nm))
-    wire(ekf.estimate, lqr.estimate)
+    wire(ekf.estimate, lqr.estimate_in)
 
     for _ in range(500):
         lqr.compute()

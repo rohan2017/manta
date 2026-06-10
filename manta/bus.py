@@ -24,7 +24,7 @@ from typing import Any, Protocol
 
 import numpy as np
 
-from .linearized_system import resolve_suffix
+from .linearization import resolve_suffix
 from .signal import Signal
 
 
@@ -148,7 +148,7 @@ class MeasurementBus:
     def command(self, name: str) -> Signal:
         """Consumer port for a known control input (drives the predict).
         Latched / zero-order-hold, gated at the part's declared intake rate
-        (`ctx.hold`) so predict sees the same held command as truth."""
+        (`PartUpdate.rates`) so predict sees the same held command as truth."""
         full = resolve_suffix(name, self._input_names, label="input",
                               who="MeasurementBus.command")
         if full not in self._cmd_ports:

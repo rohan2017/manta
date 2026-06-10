@@ -35,6 +35,7 @@ import casadi as ca
 
 from ...fields import FluidField
 from ...ir.frames import PartFrame, WorldFrame
+from ...smoothing import NORM_EPS_SQ
 from ...ir.types import Vec3
 from ..base import Parameter, Part, PartUpdate, unit_axis
 from ...ir.wrench import Wrench
@@ -122,7 +123,7 @@ class Naca00xx(Part):
 
         # 2-D projected speed in the chord-normal plane. Softened sqrt
         # keeps Jacobians regular at v=0.
-        v2d_sq = v_chord_mx**2 + v_normal_mx**2 + 1e-30
+        v2d_sq = v_chord_mx**2 + v_normal_mx**2 + NORM_EPS_SQ
         v2d    = ca.sqrt(v2d_sq)
 
         # Angle of attack: positive when wind hits the +normal side of the

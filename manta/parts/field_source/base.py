@@ -4,7 +4,7 @@ A subclass declares which Field class it contributes to
 (`emits_field`) and how to build its craft-anchored `Disturbance`
 (`make_disturbance`). The world, at compile time, walks every craft for
 FieldSource parts and adds each one's disturbance to that field — see
-`World._register_field_sources`. A source does NOT provide the field: the
+`World.finalize()`. A source does NOT provide the field: the
 target field must already be registered on the world (a `GravitySource`
 requires a `GravityField`), else compilation raises. The disturbance
 follows the carrying craft's pose via the active trace, so no field

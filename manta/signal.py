@@ -61,7 +61,7 @@ class Signal:
         # alternative to shipping a nested dict.
         self.layout: "dict[str, tuple[int, int]] | None" = None
         # Rate gating (Hz). None ⇒ every tick. The part declares this via
-        # `ctx.sample()` / `ctx.hold()`; the runtime stamps it onto the
+        # `PartUpdate.rates`; the runtime stamps it onto the
         # port. `_last_fire_t` / `_held` are the gate's bookkeeping.
         self.rate    = rate
         self._last_fire_t: float | None = None

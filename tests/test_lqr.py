@@ -2,7 +2,7 @@
 
 The canonical controllable manta system here is a 3-axis-thruster
 free-flyer regulating position + velocity (the rigid-body attitude is
-uncontrolled, so it's frozen via `track=`). Underactuated full-state LQR
+uncontrolled, so it's frozen via `regulate=`). Underactuated full-state LQR
 is expected to fail (not stabilizable) — that's tested too.
 """
 
@@ -14,7 +14,7 @@ from manta import World, Craft, Sim, LQR, TargetNumpy
 from manta.fields import GravityField
 from manta.parts import Mass, Thruster
 from manta.ir.state_spec import StateSpec
-from manta.linearized_system import LinearizedSystem
+from manta.linearization import LinearizedSystem
 
 M, G = 2.0, 9.81
 
@@ -36,7 +36,7 @@ def _lqr(**kw):
     defaults = dict(
         x_ref={"c": {"position": (0, 0, 10), "velocity": (0, 0, 0)}},
         u_ref={"tz.throttle": M * G},
-        track=["c.position", "c.velocity"],
+        regulate=["c.position", "c.velocity"],
         Q=np.diag([10, 10, 10, 1, 1, 1]), R=np.eye(3) * 0.1, dt=0.02)
     defaults.update(kw)
     return LQR(w, **defaults), w
@@ -48,7 +48,7 @@ def _lqr(**kw):
 
 def test_control_jacobian_matches_finite_difference():
     w, c = _flyer()
-    lin = LinearizedSystem(w, close_track=False, control=True)
+    lin = LinearizedSystem(w, track_mode="verbatim", control=True)
     spec = lin.spec
     x0 = spec.pack({f"c.{k}": v for k, v in
                     c.initial_state(position=(0, 0, 10)).items()
@@ -73,7 +73,7 @@ def test_control_jacobian_matches_finite_difference():
 def test_control_jacobian_off_by_default():
     """The EKF doesn't pay for B — it's only built with control=True."""
     w, _ = _flyer()
-    lin = LinearizedSystem(w, close_track=False)
+    lin = LinearizedSystem(w, track_mode="verbatim")
     assert lin.B_sym is None and lin.B_fn is None
 
 
@@ -169,21 +169,21 @@ def test_underactuated_full_state_raises():
     w, _ = _flyer()
     with pytest.raises(RuntimeError, match="stabilizable"):
         LQR(w, x_ref={"c": {"position": (0, 0, 10)}},
-            u_ref={"tz.throttle": M * G}, dt=0.02)   # track=None → full
+            u_ref={"tz.throttle": M * G}, dt=0.02)   # regulate=None → full
 
 
 def test_unknown_track_slot_raises():
     w, _ = _flyer()
     with pytest.raises(KeyError, match="unknown slot"):
         LQR(w, x_ref={"c": {"position": (0, 0, 10)}},
-            track=["c.bogus"], dt=0.02)
+            regulate=["c.bogus"], dt=0.02)
 
 
 def test_bad_Q_shape_raises():
     w, _ = _flyer()
     with pytest.raises(ValueError, match="Q must be"):
         LQR(w, x_ref={"c": {"position": (0, 0, 10)}},
-            track=["c.position", "c.velocity"], Q=np.eye(3), dt=0.02)
+            regulate=["c.position", "c.velocity"], Q=np.eye(3), dt=0.02)
 
 
 def test_no_inputs_raises():

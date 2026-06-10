@@ -19,11 +19,10 @@ produce the correct torques on each craft automatically.
 
 from __future__ import annotations
 
-import casadi as ca
-
 from ..ir.frames import WorldFrame, CraftFrame
 from ..ir.types import Vec3
 from ..ir.wrench import Wrench
+from ..smoothing import soft_norm
 from .base import Coupling
 
 
@@ -63,6 +62,10 @@ class Tether(Coupling):
         self.stiffness = float(stiffness)
         self.damping   = float(damping)
         self.rest_length = float(rest_length)
+        # Resolve endpoints now — a bad name fails here, at the line that
+        # wrote it, not at compile. Add endpoint Parts before the Tether.
+        self.endpoint_a = self._find_endpoint(craft_a, self.endpoint_a_name)
+        self.endpoint_b = self._find_endpoint(craft_b, self.endpoint_b_name)
 
     @property
     def craft_a(self):
@@ -72,7 +75,8 @@ class Tether(Coupling):
     def craft_b(self):
         return self._craft_b
 
-    def _find_endpoint(self, craft, name: str):
+    @staticmethod
+    def _find_endpoint(craft, name: str):
         for p in craft.parts:
             if p.name == name:
                 return p
@@ -87,12 +91,9 @@ class Tether(Coupling):
         body origin (force-at-offset + lever-arm torque). The compile
         layer adds these directly to each craft's aggregate net wrench.
         """
-        ep_a = self._find_endpoint(self._craft_a, self.endpoint_a_name)
-        ep_b = self._find_endpoint(self._craft_b, self.endpoint_b_name)
-
         # Endpoint offsets in each body frame.
-        off_a_craft = Vec3[CraftFrame].constant(tuple(ep_a.transform))
-        off_b_craft = Vec3[CraftFrame].constant(tuple(ep_b.transform))
+        off_a_craft = Vec3[CraftFrame].constant(tuple(self.endpoint_a.transform))
+        off_b_craft = Vec3[CraftFrame].constant(tuple(self.endpoint_b.transform))
 
         # Endpoint positions in world frame. The coupling reads each craft's
         # root ctx (root frame = CraftFrame): orientation is
@@ -106,8 +107,7 @@ class Tether(Coupling):
         # Vector from A to B; instantaneous length with softened sqrt.
         r = p_b_anchor - p_a_anchor
         r_mx = r._mx
-        r_sq = ca.dot(r_mx, r_mx) + 1e-30
-        L    = ca.sqrt(r_sq)
+        L    = soft_norm(r_mx)
         r_hat_mx = r_mx / L
         r_hat = Vec3[WorldFrame].from_mx(r_hat_mx)
 

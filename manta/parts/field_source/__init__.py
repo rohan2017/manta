@@ -5,7 +5,7 @@ the GravityField). A *field source* is the dual: a part bolted to a craft
 that CONTRIBUTES a disturbance to a world field, so other craft feel /
 see it. The emitted disturbance rides the carrying craft (its pose tracks
 the body), built and registered onto the world's field at compile time by
-`World._register_field_sources` (idempotent, like planet registration).
+`World.finalize()` (once, at the first transform).
 
   * `GravitySource`  — a point-mass pull (simulate a massive body).
   * `MagneticSource` — a body-fixed dipole (motors, magnets).

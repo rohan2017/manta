@@ -45,7 +45,7 @@ def _gps_world():
 
 def test_sim_oracle_module_is_typed():
     w, _ = _flyer()
-    m = Sim(w).module(noise=True)
+    m = Sim(w).module()
     assert isinstance(m, Module) and m.hosting is Hosting.THREADED
     assert m.state.field("x").kind == "manifold"
     assert m.port("u").role is Role.CONTROL
@@ -58,7 +58,7 @@ def test_sim_oracle_module_is_typed():
 
 def test_sim_deploy_module_has_measures_and_jacobians():
     w, _ = _gps_world()
-    m = Sim(w).module(noise=False)
+    m = Sim(w).deploy_module()
     methods = {e.method for e in m.entry_points}
     assert {"predict", "predict_jacobian", "measure_c_gps_position",
             "measure_c_gps_position_jacobian"} <= methods
@@ -88,7 +88,7 @@ def test_ekf_module_is_typed():
 def test_lqr_module_is_typed():
     w, _ = _flyer()
     lqr = LQR(w, x_ref={"c": {"position": (0, 0, 10), "velocity": (0, 0, 0)}},
-              u_ref={"tz.throttle": M * G}, track=["c.position", "c.velocity"],
+              u_ref={"tz.throttle": M * G}, regulate=["c.position", "c.velocity"],
               Q=np.eye(6), R=np.eye(3) * 0.1, dt=0.02)
     m = lqr.module()
     assert m.state.fields == ()                  # stateless
@@ -103,7 +103,7 @@ def test_lqr_module_is_typed():
 def test_sim_predict_equals_noiseless_step():
     w, _ = _gps_world()
     sim = Sim(w)
-    oracle, deploy = sim.module(noise=True), sim.module(noise=False)
+    oracle, deploy = sim.module(), sim.deploy_module()
     a, b = TargetNumpy(oracle), TargetNumpy(deploy)
     for _ in range(20):
         a.step(0.01)                                   # oracle, zero noise

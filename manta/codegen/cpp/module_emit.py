@@ -169,7 +169,9 @@ def _param_for(port, decl: bool, ctx) -> str | None:
                 else f"const State& {_ident(port.name)}")
     if r is Role.MATRIX:
         return f"const {_mat_type(*port.shape)}& {_ident(port.name)}"
-    raise NotImplementedError(f"param for role {r}")          # pragma: no cover
+    raise NotImplementedError(
+        f"param for role {r} — update _param_for (and the ARG_ROLES "
+        f"contract in manta.ir.module) for the new Role.")
 
 
 def _params(ep, ctx, *, decl: bool) -> list[str]:
@@ -304,7 +306,9 @@ def _arg_expr(a, ctx) -> str:
                 else f"{_ident(port.name)}_in")
     if r is Role.MATRIX:
         return f"{_ident(port.name)}.data()"
-    raise NotImplementedError(f"arg for role {r}")            # pragma: no cover
+    raise NotImplementedError(
+        f"arg for role {r} — update _arg_expr (and the ARG_ROLES "
+        f"contract in manta.ir.module) for the new Role.")
 
 
 def _method_body(ep, ctx) -> list[str]:

@@ -31,6 +31,7 @@ from ..fields import (
     CollisionField, DipoleMag, GravityField, FluidField, J2Gravity,
     MagField, PointMassGravity,
 )
+from ..smoothing import soft_norm
 from .base import Planet
 from .disturbances import PlanetFrameFluid
 
@@ -67,6 +68,23 @@ class SeaWaves:
     wavelength: float
     direction: tuple = (1.0, 0.0, 0.0)
     speed: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.amplitude < 0.0:
+            raise ValueError(
+                f"SeaWaves: amplitude must be >= 0; got {self.amplitude!r}")
+        if self.wavelength <= 0.0:
+            raise ValueError(
+                f"SeaWaves: wavelength must be > 0; got {self.wavelength!r}")
+        if self.speed is not None and self.speed <= 0.0:
+            raise ValueError(
+                f"SeaWaves: speed must be > 0; got {self.speed!r}")
+        d = np.asarray(self.direction, dtype=float)
+        if d.shape != (3,) or not np.all(np.isfinite(d)) \
+                or np.linalg.norm(d) == 0.0:
+            raise ValueError(
+                f"SeaWaves: direction must be a finite nonzero 3-vector; "
+                f"got {self.direction!r}")
 
 
 class Earth(Planet):
@@ -203,8 +221,11 @@ class Earth(Planet):
             if waves.speed is not None:
                 c_wave = float(waves.speed)
             else:
-                g0 = (self.gravity_mu / R_planet**2
-                      if self.gravity_mu > 0.0 else 9.80665)
+                # Deep-water dispersion needs a surface gravity even when
+                # the gravity *force* is disabled (gravity_mu=0): fall
+                # back to the class default μ rather than a magic g.
+                mu = self.gravity_mu if self.gravity_mu > 0.0 else self.MU
+                g0 = mu / R_planet**2
                 c_wave = float(np.sqrt(g0 * waves.wavelength
                                        / (2.0 * np.pi)))
             omega_wave = k_wave * c_wave
@@ -213,7 +234,7 @@ class Earth(Planet):
         def _altitude(p_planet, t):
             """Signed height above the local (waving) sea surface, plus
             the mean-sea-level altitude (for depth-decay terms)."""
-            r = ca.sqrt(ca.dot(p_planet, p_planet) + 1e-30)
+            r = soft_norm(p_planet)
             alt_mean = r - R_planet
             if waves is None:
                 return alt_mean, alt_mean
@@ -249,7 +270,7 @@ class Earth(Planet):
                 # radius `amplitude·e^{k·z}`, in phase with the crest,
                 # gated to the wet side of the (waving) surface.
                 altitude, alt_mean = _altitude(p_planet, t)
-                r = ca.sqrt(ca.dot(p_planet, p_planet) + 1e-30)
+                r = soft_norm(p_planet)
                 up = p_planet / r
                 xi = ca.dot(p_planet, dir_dm)
                 phase = k_wave * xi - omega_wave * t

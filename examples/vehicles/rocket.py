@@ -180,7 +180,7 @@ def main() -> None:
     lqr_t = LQR(
         w, x_ref={"rocket": {"position": tuple(PAD_B)}},
         u_ref={"main.throttle": THR_BURN1},
-        track=["rocket.position", "rocket.velocity",
+        regulate=["rocket.position", "rocket.velocity",
                "rocket.orientation", "rocket.angular_velocity",
                "rocket.gimbal_x.angle", "rocket.gimbal_x.rate",
                "rocket.gimbal_y.angle", "rocket.gimbal_y.rate"],
