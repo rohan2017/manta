@@ -18,6 +18,12 @@ chosen HERE, at IR construction — lowering just lowers:
       predict(x; u, dt, t) -> x'           predict_jacobian -> F
       measure_<s>(x; u, t) -> reading      measure_<s>_jacobian -> H
 
+`Sim(world, parameters=[...])` promotes the named promotable Parameters
+(thruster gains, mounts, masses — see `parts.base.Parameter`) to a live
+`params` port threaded into every kernel above (`step(x; u, noise,
+params, dt, t)`, …). Passing the port's declared defaults reproduces
+the baked model exactly; `manta.fit` optimizes over it for system ID.
+
 The Module's state is THREADED (a kernel maps state in → state out; a
 C++ caller owns its `State` struct). The numpy view (`NumpySim`) holds
 the nested state dict for you::
@@ -53,15 +59,20 @@ class Sim:
     emitting oracle/deploy Modules."""
 
     def __init__(self, world: "World", *,
-                 discretization: str = "exact") -> None:
+                 discretization: str = "exact",
+                 parameters: list[str] | None = None) -> None:
         # Model validation (planet prep, requires_fields/requires_planet,
         # craft back-pointers) happens inside LinearizedSystem — the one
         # choke point every transform passes through. `discretization`
         # selects how predict_jacobian discretizes F ("exact" | "euler" —
         # see LinearizedSystem; "euler" trades an O(dt²) jacobian
         # difference for much smaller generated deploy code).
+        # `parameters` promotes the named promotable Parameters to a live
+        # `params` port on every emitted Module (system ID — `manta.fit`);
+        # passing the port's declared defaults reproduces the baked model
+        # bit-for-bit.
         self._sys = LinearizedSystem(           # full state, all sensors
-            world, discretization=discretization)
+            world, discretization=discretization, parameters=parameters)
         self.world = world
         self.crafts = self._sys.crafts
 
@@ -99,6 +110,18 @@ class Sim:
                       for full, s in sys.sensors.items()]
         return x_field, u_port, dtp, tp, meas_ports
 
+    def _param_port(self) -> Port | None:
+        """The promoted-parameter port, or None when nothing was promoted.
+        Field defaults are the DECLARED values — pass them through and
+        the kernel reproduces the baked-constant model exactly."""
+        sys = self._sys
+        if sys.n_param == 0:
+            return None
+        return Port("params", Role.PARAMETER, (sys.n_param,),
+                    fields=tuple(PortField(p.full, p.dim,
+                                           np.asarray(p.value, dtype=float))
+                                 for p in sys.param_specs))
+
     def module(self) -> Module:
         """The **oracle** Module (simulation truth): one `step` entry —
         the full forward tick, one live noise draw → state + readings."""
@@ -109,22 +132,30 @@ class Sim:
             "noise", Role.NOISE, (sys.n_noise,),
             fields=tuple(PortField(c.full, c.dim, 0.0, sigma=c.sigma)
                          for c in sys.noise_specs))
+        p_port = self._param_port()
+        kargs, kargn = [sys.x_sym, sys.u_sym, sys.n_sym], ["x", "u", "noise"]
+        eargs = [StateRef("x"), PortRef("u"), PortRef("noise")]
+        if p_port is not None:
+            kargs.append(sys.p_sym); kargn.append("params")
+            eargs.append(PortRef("params"))
+        kargs += [sys.dt_sym, sys.t_sym]; kargn += ["dt", "t"]
+        eargs += [PortRef("dt"), PortRef("t")]
         step_fn = ca.Function(
-            "step",
-            [sys.x_sym, sys.u_sym, sys.n_sym, sys.dt_sym, sys.t_sym],
+            "step", kargs,
             [sys.x_new_noisy] + [
                 ca.reshape(sys.sensors[f].h_noisy_sym,
                            sys.sensors[f].dim, 1) for f in sensor_fulls],
-            ["x", "u", "noise", "dt", "t"],
+            kargn,
             ["x_new"] + [entry_ident(f) for f in sensor_fulls])
+        ports = [u_port, noise_port, dtp, tp, *meas_ports]
+        if p_port is not None:
+            ports.insert(2, p_port)
         return Module(
             name=self.world.name, state=StateLayout((x_field,)),
-            ports=(u_port, noise_port, dtp, tp, *meas_ports),
+            ports=tuple(ports),
             functions={"step": step_fn},
             entry_points=(EntryPoint(
-                "step", "step",
-                (StateRef("x"), PortRef("u"), PortRef("noise"),
-                 PortRef("dt"), PortRef("t")),
+                "step", "step", tuple(eargs),
                 writes=("x",), returns=tuple(sensor_fulls)),),
             hosting=Hosting.THREADED)
 
@@ -139,18 +170,24 @@ class Sim:
         tan = spec.tangent_dim
         zero_dt = ca.MX.zeros(1, 1)
         functions = {"predict": sys.predict_fn, "predict_jacobian": sys.F_fn}
-        ports = [u_port, dtp, tp, *meas_ports,
+        p_port = self._param_port()
+        p_ref = () if p_port is None else (PortRef("params"),)
+        ports = [u_port, *((p_port,) if p_port is not None else ()),
+                 dtp, tp, *meas_ports,
                  Port("F", Role.MATRIX, (tan, tan))]
         entries = [
             EntryPoint("predict", "predict",
-                       (StateRef("x"), PortRef("u"), PortRef("dt"),
+                       (StateRef("x"), PortRef("u"), *p_ref, PortRef("dt"),
                         PortRef("t")), writes=("x",)),
             EntryPoint("predict_jacobian", "predict_jacobian",
-                       (StateRef("x"), PortRef("u"), PortRef("dt"),
+                       (StateRef("x"), PortRef("u"), *p_ref, PortRef("dt"),
                         PortRef("t")), returns=("F",)),
         ]
         margs = [sys.x_sym, sys.u_sym, sys.t_sym]
         margn = ["x", "u", "t"]
+        if p_port is not None:
+            margs.insert(2, sys.p_sym)
+            margn.insert(2, "p")
         for full, s in sys.sensors.items():
             ident = entry_ident(full)
             h = ca.substitute(s.h_sym, sys.dt_sym, zero_dt)
@@ -162,11 +199,11 @@ class Sim:
             ports.append(Port(f"H_{ident}", Role.MATRIX, (s.dim, tan)))
             entries.append(EntryPoint(
                 f"measure_{ident}", f"measure_{ident}",
-                (StateRef("x"), PortRef("u"), PortRef("t")),
+                (StateRef("x"), PortRef("u"), *p_ref, PortRef("t")),
                 returns=(full,)))
             entries.append(EntryPoint(
                 f"measure_{ident}_jacobian", f"measure_{ident}_jacobian",
-                (StateRef("x"), PortRef("u"), PortRef("t")),
+                (StateRef("x"), PortRef("u"), *p_ref, PortRef("t")),
                 returns=(f"H_{ident}",)))
         return Module(
             name=self.world.name, state=StateLayout((x_field,)),

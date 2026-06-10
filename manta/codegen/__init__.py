@@ -17,6 +17,7 @@ Each backend is a self-contained subpackage:
       target.py   as_module — the backend entry-point contract
       numpy/      TargetNumpy + the kernel engine + views + NoiseDriver
       cpp/        TargetCpp + module_emit (the generic emitter)
+      jax/        TargetJax + the SX→JAX translator (lazy: needs `jax`)
       <future>/   new languages slot in here
 
 Adding a backend = translate a `ca.Function` + one generic lowering of a
@@ -24,13 +25,21 @@ Adding a backend = translate a `ca.Function` + one generic lowering of a
 """
 
 from .cpp import TargetCpp
+
+
+def TargetJax(x):
+    """Lower a Module (or transform) to jitted JAX kernels — see
+    `manta.codegen.jax`. Lazy shim: `jax` is imported only when used,
+    so manta itself never requires it."""
+    from .jax import TargetJax as _TargetJax
+    return _TargetJax(x)
 from .numpy import (
     NoiseDriver, NumpyFilter, NumpyRecurrence, NumpyRegulator, NumpyRuntime,
     NumpySim, TargetNumpy,
 )
 
 __all__ = [
-    "TargetNumpy", "TargetCpp", "NoiseDriver",
+    "TargetNumpy", "TargetCpp", "TargetJax", "NoiseDriver",
     "NumpyRuntime", "NumpySim", "NumpyFilter", "NumpyRecurrence",
     "NumpyRegulator",
 ]

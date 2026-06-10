@@ -91,6 +91,32 @@ class _ParameterizedConstructor:
     def constant(self, value) -> Any:
         return self._cls._make_constant(value, **self._kwargs)
 
+    def coerce(self, value) -> Any:
+        """Accept `value` as-is when it is already an IR value of this type
+        (frame-checked), else build a constant from the Python value.
+
+        The idiom for consuming a promotable `Parameter` inside `update()`:
+        normally the attribute is a plain Python value (→ baked constant);
+        when promoted for system ID, the trace binds it to a typed graph
+        input and `coerce` passes it through.
+        """
+        if isinstance(value, self._cls):
+            want = self._kwargs.get("frame")
+            got = getattr(value, "_frame", None)
+            if want is not None and got is not want:
+                raise FrameError(
+                    f"{self._cls.__name__}.coerce",
+                    expected=f"value in {want.__name__}",
+                    got=f"frame={got.__name__ if got else None}",
+                    source=_capture_user_source(),
+                )
+            return value
+        if isinstance(value, _IRValue):
+            raise TypeError(
+                f"{self!r}.coerce: expected {self._cls.__name__} or a plain "
+                f"Python value, got {type(value).__name__}")
+        return self._cls._make_constant(value, **self._kwargs)
+
     def from_mx(self, mx) -> Any:
         return self._cls._from_mx(mx, **self._kwargs)
 
@@ -137,6 +163,18 @@ class Scalar(_IRValue):
 
     @classmethod
     def constant(cls, value) -> "Scalar":
+        return cls._make_constant(value)
+
+    @classmethod
+    def coerce(cls, value) -> "Scalar":
+        """`value` as-is when already a Scalar, else a constant — the
+        promotable-Parameter idiom (see _ParameterizedConstructor.coerce)."""
+        if isinstance(value, cls):
+            return value
+        if isinstance(value, _IRValue):
+            raise TypeError(
+                f"Scalar.coerce: expected Scalar or a plain number, got "
+                f"{type(value).__name__}")
         return cls._make_constant(value)
 
     # --- Arithmetic -------------------------------------------------------

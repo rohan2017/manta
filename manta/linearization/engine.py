@@ -63,14 +63,21 @@ class TickLinearizer:
                         flat noise-vector order.
         discretization — "exact" | "euler"; how F discretizes (see
                         `differentiate`).
+        param_specs   — the tick's promoted-parameter channels (name, dim,
+                        declared value), in the flat `p`-vector order.
+                        Empty unless the system was built with
+                        `parameters=[...]`; when present, every expression
+                        and convenience Function gains a `p` argument.
     """
 
     def __init__(self, cf, input_names, noise_specs,
-                 discretization: str) -> None:
+                 discretization: str, param_specs=()) -> None:
         self.cf = cf
         self.input_names = list(input_names)
         self.noise_specs = list(noise_specs)
         self.n_noise = sum(s.dim for s in self.noise_specs)
+        self.param_specs = list(param_specs)
+        self.n_param = sum(p.dim for p in self.param_specs)
         self.discretization = discretization
 
     # ---- entry points ---------------------------------------------------
@@ -104,7 +111,15 @@ class TickLinearizer:
         n = (ca.MX.sym("noise", self.n_noise, 1) if self.n_noise > 0
              else ca.MX.zeros(0, 1))
         zero_n = ca.MX.zeros(self.n_noise, 1)
-        args, argn = [x, u, dt, t], ["x", "u", "dt", "t"]
+        p = (ca.MX.sym("p", self.n_param, 1) if self.n_param > 0
+             else ca.MX.zeros(0, 1))
+        # The `p` argument exists only for parameter-promoted systems, so
+        # the convenience-Function signature stays (x, u, dt, t) for every
+        # existing consumer (filters, regulators, deploy kernels).
+        if self.n_param > 0:
+            args, argn = [x, u, p, dt, t], ["x", "u", "p", "dt", "t"]
+        else:
+            args, argn = [x, u, dt, t], ["x", "u", "dt", "t"]
 
         # The euler discretization needs the tick INLINED into open MX:
         # the dt→0 fold can then constant-propagate through the discrete
@@ -118,7 +133,7 @@ class TickLinearizer:
         euler = build_functions and self.discretization == "euler"
 
         # forward (noise live + zeroed)
-        outs_n = self._tick_outputs(spec, x, frozen, u, dt, t, n)
+        outs_n = self._tick_outputs(spec, x, frozen, u, dt, t, n, p_sym=p)
         x_new_n = self._gather_state(spec, outs_n)
         x_new_0 = ca.substitute(x_new_n, n, zero_n)
 
@@ -126,7 +141,7 @@ class TickLinearizer:
         delta_in = ca.MX.sym("delta_in", n_tangent, 1)
         outs_pert = self._tick_outputs(spec, spec.boxplus_sym(x, delta_in),
                                        frozen, u, dt, t, zero_n,
-                                       inline=euler)
+                                       p_sym=p, inline=euler)
         x_pert_new = self._gather_state(spec, outs_pert)
         if euler:
             # F = I + dt·M, M = ∂²δ_out/∂dt∂δ at (δ=0, dt=0): the
@@ -135,7 +150,7 @@ class TickLinearizer:
             # boxminus base point must be inlined too, or its dt-
             # dependence drags the full tick back in as a helper).
             outs_base = self._tick_outputs(spec, x, frozen, u, dt, t,
-                                           zero_n, inline=True)
+                                           zero_n, p_sym=p, inline=True)
             delta_out = spec.boxminus_sym(
                 x_pert_new, self._gather_state(spec, outs_base))
             ddt0 = ca.substitute(ca.jacobian(delta_out, dt),
@@ -154,7 +169,7 @@ class TickLinearizer:
         if control and n_u > 0:
             delta_u = ca.MX.sym("delta_u", n_u, 1)
             outs_pu = self._tick_outputs(spec, x, frozen, u + delta_u,
-                                         dt, t, zero_n)
+                                         dt, t, zero_n, p_sym=p)
             delta_out_u = spec.boxminus_sym(
                 self._gather_state(spec, outs_pu), x_new_0)
             B_sym = ca.substitute(ca.jacobian(delta_out_u, delta_u),
@@ -216,7 +231,7 @@ class TickLinearizer:
             blocks = partition_blocks(n_tangent, F_pattern, L_pattern,
                                       h_supports)
 
-        return {"x": x, "u": u, "n": n, "dt": dt, "t": t,
+        return {"x": x, "u": u, "n": n, "p": p, "dt": dt, "t": t,
                 "x_new": x_new_0, "x_new_noisy": x_new_n,
                 "F_sym": F_sym, "F_pattern": F_pattern, "B_sym": B_sym,
                 "L_sym": L_sym, "Sigma": Sigma, "sensors": sensors,
@@ -226,13 +241,14 @@ class TickLinearizer:
     # ---- tick evaluation --------------------------------------------------
 
     def _tick_outputs(self, spec, x_sym, frozen, u_sym, dt_sym, t_sym,
-                      n_sym, *, inline: bool = False) -> dict:
+                      n_sym, *, p_sym=None, inline: bool = False) -> dict:
         """Evaluate the compiled tick on flat symbolic inputs → {output
         name: MX}. Spec slots slice from `x_sym`; frozen entries bake as
-        constants; live inputs from `u_sym`; noise channels from `n_sym`.
-        With `inline=True` the tick's MX graph is spliced in open (no
-        call node) so downstream substitutions can constant-fold through
-        it — see the euler-discretization note in `_linearize`."""
+        constants; live inputs from `u_sym`; noise channels from `n_sym`;
+        promoted parameters from `p_sym`. With `inline=True` the tick's
+        MX graph is spliced in open (no call node) so downstream
+        substitutions can constant-fold through it — see the
+        euler-discretization note in `_linearize`."""
         cf = self.cf
         in_names = [cf.name_in(i) for i in range(cf.n_in())]
         out_names = [cf.name_out(i) for i in range(cf.n_out())]
@@ -242,6 +258,11 @@ class TickLinearizer:
         for ns in self.noise_specs:
             noise_off[ns.full] = (off, ns.dim)
             off += ns.dim
+        param_off: dict[str, tuple[int, int]] = {}
+        off = 0
+        for ps in self.param_specs:
+            param_off[ps.full] = (off, ps.dim)
+            off += ps.dim
 
         sliced: list = []
         for name in in_names:
@@ -262,6 +283,9 @@ class TickLinearizer:
             elif name in noise_off:
                 start, dim = noise_off[name]
                 sliced.append(n_sym[start:start + dim])
+            elif name in param_off:
+                start, dim = param_off[name]
+                sliced.append(p_sym[start:start + dim])
             else:
                 raise RuntimeError(
                     f"TickLinearizer: tick input {name!r} not handled.")

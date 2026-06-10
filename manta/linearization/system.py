@@ -25,6 +25,9 @@ What it exposes (everything a transform composes into kernels):
                `ref_flat`, `blocks` (independent tangent subsystems)
   routing      `input_names`, `u_defaults`, `input_defaults`,
                `noise_specs`, `sample_rates`
+  parameters   `p_sym`, `param_specs`, `param_names`, `n_param`,
+               `p_defaults` (promoted tunable Parameters; empty unless
+               built with `parameters=[...]`)
   convenience  `predict_fn / F_fn / B_fn` and per-sensor `h_fn / H_fn`
                (`(x,u,dt,t)`-signature `ca.Function`s for point evaluation)
 
@@ -65,6 +68,13 @@ class LinearizedSystem:
                       tracked slots couple to); "verbatim" takes it
                       exactly as given (a regulator deliberately freezes
                       the rest).
+        parameters  — promotable Parameter full-names (or suffixes) to
+                      promote from baked graph constants to a live
+                      parameter vector `p` (system ID). With any given,
+                      `x_new`/`h` expressions carry a `p_sym` and every
+                      convenience Function gains a `p` argument; see
+                      `param_specs` / `p_defaults`. `None` (default) —
+                      every parameter bakes as today.
         control     — also build `B_sym = ∂δ'/∂u`.
         ref         — operating-point overrides merged over the world's
                       initial state; the freeze reference.
@@ -90,7 +100,8 @@ class LinearizedSystem:
                  track_mode: str = "closure",
                  control: bool = False,
                  ref: dict | None = None,
-                 discretization: str = "exact") -> None:
+                 discretization: str = "exact",
+                 parameters: list[str] | None = None) -> None:
         if track_mode not in ("closure", "verbatim"):
             raise ValueError(
                 f"LinearizedSystem: track_mode must be 'closure' or "
@@ -116,12 +127,13 @@ class LinearizedSystem:
         self.full_spec = full_spec
 
         # --- compile the tick + classify its I/O ------------------------
-        self._compile_tick(world)
+        self._compile_tick(world, self._resolve_parameters(parameters))
 
         # --- live-input subset (excluded inputs freeze at default) ------
         frozen = self._choose_inputs(inputs)
         engine = TickLinearizer(self._cf, self.input_names,
-                                self.noise_specs, discretization)
+                                self.noise_specs, discretization,
+                                param_specs=self.param_specs)
 
         chosen_sensors = self._choose_sensors(sensors, track, track_mode)
 
@@ -142,6 +154,7 @@ class LinearizedSystem:
         d = engine.differentiate(self.spec, frozen, chosen_sensors,
                                  control=control)
         self.x_sym, self.u_sym, self.n_sym = d["x"], d["u"], d["n"]
+        self.p_sym = d["p"]
         self.dt_sym, self.t_sym = d["dt"], d["t"]
         self.x_new = d["x_new"]
         self.x_new_noisy = d["x_new_noisy"]
@@ -183,7 +196,18 @@ class LinearizedSystem:
                         f"{req_planet.__name__} planet but none is "
                         f"registered with this world.")
 
-    def _compile_tick(self, world) -> None:
+    def _resolve_parameters(self, parameters) -> set[str]:
+        """Resolve requested tunable-parameter names (full or suffix)
+        against the model's promotable Parameter declarations."""
+        if not parameters:
+            return set()
+        available = [f"{c.name}.{p.name}.{n}" for c in self.crafts
+                     for p in c.parts
+                     for n in p.promotable_parameter_declarations()]
+        return {resolve_suffix(k, available, label="parameter",
+                               who="LinearizedSystem") for k in parameters}
+
+    def _compile_tick(self, world, tunable_params: set[str]) -> None:
         """Compile the shared world tick and walk its signature."""
         from ..tick import compile_world_tick, walk_tick_signature
         from ..fields import (CollisionField, FluidField, GravityField,
@@ -195,6 +219,7 @@ class LinearizedSystem:
             mag_field=world.get_field(MagField),
             collision_field=world.get_field(CollisionField),
             world=world,
+            tunable_params=tunable_params,
         )
         self._cf = compiled.casadi_function
         self.tick = compiled
@@ -205,6 +230,12 @@ class LinearizedSystem:
         self.noise_specs = sig.noise
         self.n_noise = sum(s.dim for s in sig.noise)
         self.input_defaults = dict(sig.input_defaults)
+        # Promoted-parameter channels (cf-signature order = `p` layout).
+        self.param_specs = sig.params
+        self.param_names = sig.param_names
+        self.n_param = sum(p.dim for p in sig.params)
+        self.p_defaults = (np.concatenate([p.value for p in sig.params])
+                           if sig.params else np.zeros(0))
 
     def _choose_inputs(self, inputs) -> dict[str, Any]:
         """Resolve the live-input subset; excluded inputs freeze at their

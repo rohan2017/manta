@@ -143,9 +143,13 @@ def build_joint_space(craft, *,
     # ----- rotational kinetic energy in COM coordinates -----------------
     T = ca.MX(0.0)
     for part in craft.parts:
-        m = float(getattr(part, "mass", 0.0) or 0.0)
-        if m <= 0.0:
-            continue
+        m_attr = getattr(part, "mass", 0.0)
+        if hasattr(m_attr, "_mx"):
+            m = m_attr._mx          # promoted (tunable) mass — keep symbolic
+        else:
+            m = float(m_attr or 0.0)
+            if m <= 0.0:
+                continue
         kin = kin_states[part]
         rho = kin.r_in_craft - com_mx
         nu  = kin.velocity_rel_body - v_com_rel_mx

@@ -155,6 +155,8 @@ def _param_for(port, decl: bool, ctx) -> str | None:
         return f"const {S.eigen_vec_type(port.size)}& z"
     if r is Role.NOISE:
         return f"const {S.eigen_vec_type(max(port.size, 1))}& noise"
+    if r is Role.PARAMETER:
+        return f"const {S.eigen_vec_type(max(port.size, 1))}& params"
     if r is Role.TIMESTEP:
         return "double dt"
     if r is Role.TIME:
@@ -246,7 +248,7 @@ def _param_name(a, ctx) -> str:
     """The C++ parameter name `_param_for` gives one PortRef arg."""
     port = ctx.port(a.name)
     fixed = {Role.CONTROL: "u", Role.MEASUREMENT: "z", Role.NOISE: "noise",
-             Role.TIMESTEP: "dt", Role.TIME: "t"}
+             Role.PARAMETER: "params", Role.TIMESTEP: "dt", Role.TIME: "t"}
     if port.role in fixed:
         return fixed[port.role]
     return "x" if port is ctx.x_port else _ident(port.name)
@@ -297,6 +299,8 @@ def _arg_expr(a, ctx) -> str:
         return "&z" if port.size == 1 else "z.data()"
     if r is Role.NOISE:
         return "noise.data()"
+    if r is Role.PARAMETER:
+        return "params.data()"
     if r is Role.TIMESTEP:
         return "&dt"
     if r is Role.TIME:

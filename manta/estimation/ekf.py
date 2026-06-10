@@ -43,6 +43,7 @@ from __future__ import annotations
 import casadi as ca
 import numpy as np
 
+from ..ir._linalg import spd_solve
 from ..ir.module import (
     EntryPoint, Hosting, Module, Port, PortField, PortRef, Role, StateField,
     StateLayout, StateRef, entry_ident,
@@ -149,7 +150,7 @@ class EKF:
                     f"fold NaNs). Declare a nonzero noise σ on the sensor, or "
                     f"exclude it via sensors=[...].")
             S = H @ P @ H.T + R
-            K = ca.solve(S, (P @ H.T).T, "ldl").T      # P Hᵀ S⁻¹ (S SPD)
+            K = spd_solve(S, (P @ H.T).T).T            # P Hᵀ S⁻¹ (S SPD)
             x_upd = spec.boxplus_sym(x, K @ (z - h))
             IKH = eye - K @ H
             P_upd = _sym(IKH @ P @ IKH.T + K @ R @ K.T)

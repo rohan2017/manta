@@ -334,8 +334,11 @@ def _compute_child_state(parent_state: KinematicState, parent_part, child,
                          joint_angular_accels) -> KinematicState:
     from ..parts.articulation.joint import PrismaticJoint, RevoluteJoint
 
-    # Child's `transform` lives in parent's OUTPUT frame coords.
-    transform = ca.MX(list(child.transform))
+    # Child's `transform` lives in parent's OUTPUT frame coords. A promoted
+    # (tunable) transform reads as a trace-bound IR value — keep the symbol.
+    tr_attr = child.transform
+    transform = (tr_attr._mx if hasattr(tr_attr, "_mx")
+                 else ca.MX(list(tr_attr)))
 
     # ----- body-frame position composition ------------------------------
     # r_child_in_craft = r_parent_out_in_craft

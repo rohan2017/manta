@@ -53,10 +53,17 @@ class Thruster(Part):
                        torque, same frame and same role for attitude.
     """
 
-    force:       "tuple[float, float, float]" = Parameter((0.0, 0.0, 0.0))
-    force_quad:  "tuple[float, float, float]" = Parameter((0.0, 0.0, 0.0))
-    torque:      "tuple[float, float, float]" = Parameter((0.0, 0.0, 0.0))
-    torque_quad: "tuple[float, float, float]" = Parameter((0.0, 0.0, 0.0))
+    # All four coefficients are promotable (system-ID targets): a tunable
+    # transform constructed with `parameters=[...]` promotes them to live
+    # graph inputs; `coerce` below consumes either form.
+    force:       "tuple[float, float, float]" = Parameter(
+        (0.0, 0.0, 0.0), manifold="R3", frame=PartFrame)
+    force_quad:  "tuple[float, float, float]" = Parameter(
+        (0.0, 0.0, 0.0), manifold="R3", frame=PartFrame)
+    torque:      "tuple[float, float, float]" = Parameter(
+        (0.0, 0.0, 0.0), manifold="R3", frame=PartFrame)
+    torque_quad: "tuple[float, float, float]" = Parameter(
+        (0.0, 0.0, 0.0), manifold="R3", frame=PartFrame)
     throttle: float = Input(default=0.0)
 
     force_noise  = WhiteNoise("R3", frame=PartFrame, sigma=0.0)
@@ -66,10 +73,10 @@ class Thruster(Part):
         t  = self.throttle
         t2 = t * t
 
-        c1F = Vec3[PartFrame].constant(self.force)
-        c2F = Vec3[PartFrame].constant(self.force_quad)
-        c1τ = Vec3[PartFrame].constant(self.torque)
-        c2τ = Vec3[PartFrame].constant(self.torque_quad)
+        c1F = Vec3[PartFrame].coerce(self.force)
+        c2F = Vec3[PartFrame].coerce(self.force_quad)
+        c1τ = Vec3[PartFrame].coerce(self.torque)
+        c2τ = Vec3[PartFrame].coerce(self.torque_quad)
 
         return Wrench(
             force =c1F * t + c2F * t2 + self.force_noise,

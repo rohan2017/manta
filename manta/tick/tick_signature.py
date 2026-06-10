@@ -49,16 +49,28 @@ class SensorOutput:
 
 
 @dataclass(frozen=True)
+class ParameterChannel:
+    """A promoted (tunable) Parameter feeding the tick as a live input —
+    one block of the parameter vector `p` (system ID)."""
+    full:  str        # tick input name, "<craft>.<part>.<param>"
+    owner: Any        # the owning Part
+    name:  str        # the Parameter sub-name
+    dim:   int        # ambient dimension (1 scalar, 3 vec)
+    value: Any        # declared numeric value (np.ndarray, flat)
+
+
+@dataclass(frozen=True)
 class TickSignature:
     """The classified I/O of a compiled world tick.
 
-    `inputs` / `noise` are in cf-input-signature order; `sensors` in
-    `world.crafts → parts → outputs` order. The consumers
+    `inputs` / `noise` / `params` are in cf-input-signature order;
+    `sensors` in `world.crafts → parts → outputs` order. The consumers
     (`EKF`, the C++ extractor) build their `u` vector / noise layout /
-    sensor table from these in order."""
+    parameter vector / sensor table from these in order."""
     inputs:  list[InputChannel]
     noise:   list[NoiseChannel]
     sensors: list[SensorOutput]
+    params:  list[ParameterChannel]
 
     @property
     def input_names(self) -> list[str]:
@@ -71,6 +83,10 @@ class TickSignature:
     @property
     def sensor_names(self) -> list[str]:
         return [s.full for s in self.sensors]
+
+    @property
+    def param_names(self) -> list[str]:
+        return [p.full for p in self.params]
 
 
 def _dist_by_name(world) -> dict:
@@ -103,9 +119,12 @@ def walk_tick_signature(cf, world, spec) -> TickSignature:
     sensor. Raises if an input matches neither an Input nor a Noise
     channel, or references an unknown owner/part.
     """
+    import numpy as np
+
     dist_by_name = _dist_by_name(world)
     inputs: list[InputChannel] = []
     noise:  list[NoiseChannel] = []
+    params: list[ParameterChannel] = []
 
     for i in range(cf.n_in()):
         name = cf.name_in(i)
@@ -129,6 +148,14 @@ def walk_tick_signature(cf, world, spec) -> TickSignature:
                 inputs.append(InputChannel(
                     full=name, owner=part, name=sub,
                     default=float(getattr(part, sub))))
+                continue
+            pdecls = part.promotable_parameter_declarations()
+            if sub in pdecls:
+                params.append(ParameterChannel(
+                    full=name, owner=part, name=sub,
+                    dim=pdecls[sub].manifold.ambient_dim,
+                    value=np.atleast_1d(np.asarray(
+                        part.declared_value(sub), dtype=float)).ravel()))
                 continue
             owner, owner_label = part, f"craft '{craft.name}'"
         else:
@@ -159,4 +186,5 @@ def walk_tick_signature(cf, world, spec) -> TickSignature:
                     full=f"{craft.name}.{part.name}.{out_name}",
                     craft=craft, part=part, output_name=out_name))
 
-    return TickSignature(inputs=inputs, noise=noise, sensors=sensors)
+    return TickSignature(inputs=inputs, noise=noise, sensors=sensors,
+                         params=params)

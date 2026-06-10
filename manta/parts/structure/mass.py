@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from ...fields import GravityField
 from ...ir.frames import PartFrame, WorldFrame
-from ...ir.types import Vec3
+from ...ir.types import Scalar, Vec3
 from ..base import Part, Parameter
 from ...ir.wrench import Wrench
 
@@ -34,7 +34,7 @@ class Mass(Part):
     origin via parallel-axis lifts.
     """
 
-    mass: float                              = Parameter(1.0)
+    mass: float                              = Parameter(1.0, manifold="R1")
     moi:  "tuple[float, float, float]"       = Parameter((0.0, 0.0, 0.0))
 
     def __init__(self, name: str, **overrides) -> None:
@@ -60,7 +60,9 @@ class Mass(Part):
         g_world = ctx.field(GravityField).value_at_sym(
             ctx.position[WorldFrame], ctx.t)
         g_part  = ctx.orientation.conjugate().apply(g_world)
+        # `mass` is promotable — Scalar.coerce passes a promoted (tunable)
+        # symbol through and bakes the plain float otherwise.
         return Wrench(
-            force=g_part * self.mass,
+            force=g_part * Scalar.coerce(self.mass),
             torque=Vec3[PartFrame].constant((0.0, 0.0, 0.0)),
         )

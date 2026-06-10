@@ -132,6 +132,11 @@ class Role(Enum):
     * ``OUTPUT``      — a named readout bundle (a recurrence's outputs);
                         `fields` name the components.
     * ``MATRIX``      — a plain matrix value (a covariance `Q`, a Jacobian).
+    * ``PARAMETER``   — the tunable physical-parameter vector `p`; `fields`
+                        name each promoted Parameter (with its declared
+                        value as default), so a caller that doesn't fit
+                        anything can pass the defaults and recover the
+                        baked-constant model exactly.
     """
     CONTROL = "control"
     MEASUREMENT = "measurement"
@@ -141,6 +146,7 @@ class Role(Enum):
     STATE = "state"
     OUTPUT = "output"
     MATRIX = "matrix"
+    PARAMETER = "parameter"
 
 
 #: Roles a Port may have when it appears as an EntryPoint ARGUMENT.

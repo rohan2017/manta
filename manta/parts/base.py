@@ -106,6 +106,17 @@ def active_trace() -> "TraceBindings | None":
     return getattr(_trace_local, "active", None)
 
 
+def declared_attr(owner, name: str, default=None):
+    """`getattr(owner, name, default)` that bypasses any active trace
+    bindings — always the configured (numeric) instance value. For
+    compile-time numeric snapshots that must not pick up a promoted
+    parameter's symbol (rest-pose joint inertia, mass guards)."""
+    try:
+        return object.__getattribute__(owner, name)
+    except AttributeError:
+        return default
+
+
 def unit_axis(value, *, who: str, what: str) -> tuple:
     """Validate a length-3, nonzero axis parameter; return it normalized.
 
@@ -147,8 +158,36 @@ class Parameter(_Declaration):
     Concrete attribute types are deduced from the default value at __init__
     time — a `Parameter(1.0)` becomes a Python float; a
     `Parameter((1.0, 0.0, 0.0))` stays a tuple until the part's update()
-    promotes it to an IR vector via the Vec3.constant factory.
+    promotes it to an IR vector (`Vec3[F].constant` / `Vec3[F].coerce`).
+
+    Args:
+        manifold — optional `Manifold` instance or shortcut string
+                   (``"R1"``, ``"R3"``; same vocabulary as `Noise`).
+                   Declaring it makes the parameter *promotable*: a
+                   transform constructed with `parameters=[...]` (system
+                   identification — see `manta.fit`) can promote it from
+                   a baked graph constant to a live graph input named
+                   `<craft>.<part>.<param>`. Inside `update()` a promoted
+                   parameter reads as an IR value (the trace binds it),
+                   so parts consume promotable parameters through the
+                   `.coerce` factory, which accepts both forms.
+                   `None` (default) — a plain Python config value.
+        frame    — Frame tag, consumed when `manifold` is a shortcut
+                   resolving to a vector manifold. The promoted input's
+                   frame; must match what `update()` composes it with.
     """
+
+    __slots__ = ("manifold",)
+
+    def __init__(self, default: Any, *, manifold=None, frame=None) -> None:
+        super().__init__(default)
+        if manifold is None:
+            self.manifold = None
+        else:
+            from ..ir.manifold import Manifold, manifold_from_shortcut
+            self.manifold = (manifold if isinstance(manifold, Manifold)
+                             else manifold_from_shortcut(manifold,
+                                                         frame=frame))
 
 
 class Output(_Declaration):
@@ -613,6 +652,18 @@ class DeclarationHost:
         return {n: d for n, d in type(self)._declarations().items()
                 if isinstance(d, Noise)}
 
+    def promotable_parameter_declarations(self) -> dict[str, "Parameter"]:
+        """The Parameter entries that declared a manifold — the ones a
+        transform may promote to live graph inputs for system ID."""
+        return {n: d for n, d in type(self)._declarations().items()
+                if isinstance(d, Parameter) and d.manifold is not None}
+
+    def declared_value(self, name: str):
+        """The instance's configured (numeric) value for `name`, bypassing
+        any active trace bindings — compile-time framework code uses this
+        for numeric guards/snapshots while `name` is bound to a symbol."""
+        return object.__getattribute__(self, name)
+
 
 class Part(DeclarationHost):
     """Base class for all parts.
@@ -656,7 +707,12 @@ class Part(DeclarationHost):
     requires_planet: ClassVar[type | None] = None
 
     # Universal: every part has a static (parent → part) offset.
-    transform: "tuple[float, float, float]" = Parameter((0.0, 0.0, 0.0))
+    # Promotable (manifold="R3") — a mount position is a classic system-ID
+    # target (thruster torque arms, sensor lever arms). The bound symbol's
+    # coords are the parent's OUTPUT frame, exactly like the constant; the
+    # kinematic/inertia passes consume it raw.
+    transform: "tuple[float, float, float]" = Parameter((0.0, 0.0, 0.0),
+                                                        manifold="R3")
 
     def __init__(self, name: str, **overrides: Any) -> None:
         from ..ir.module import check_name

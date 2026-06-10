@@ -142,12 +142,30 @@ class NumpySim(NumpyRuntime):
                       for f in self._u_fields()])
         noise = self._noise_vec(flat)
         fn = self._step_n_fn(n)
-        U = ca.repmat(ca.DM(u.reshape(-1, 1)), 1, n) if u.size else ca.DM(0, n)
-        NO = (ca.repmat(ca.DM(noise.reshape(-1, 1)), 1, n) if noise.size
-              else ca.DM(0, n))
-        DT = ca.repmat(ca.DM(float(dt)), 1, n)
-        T = ca.DM(np.array([[t + k * dt for k in range(n)]]))
-        res = fn(x0, U, NO, DT, T)
+
+        def _held(vec: np.ndarray):
+            """A per-call vector held constant across the n substeps."""
+            return (ca.repmat(ca.DM(vec.reshape(-1, 1)), 1, n) if vec.size
+                    else ca.DM(0, n))
+
+        from ...ir.module import PortRef, Role
+        ep = self.module.entry("step")
+        call_args: list = []
+        for a in ep.args:
+            if not isinstance(a, PortRef):
+                call_args.append(x0)
+            elif a.name == "u":
+                call_args.append(_held(u))
+            elif a.name == "noise":
+                call_args.append(_held(noise))
+            elif self.module.port(a.name).role is Role.PARAMETER:
+                call_args.append(_held(self.param_vector()))
+            elif self.module.port(a.name).role is Role.TIMESTEP:
+                call_args.append(ca.repmat(ca.DM(float(dt)), 1, n))
+            else:                                  # TIME
+                call_args.append(
+                    ca.DM(np.array([[t + k * dt for k in range(n)]])))
+        res = fn(*call_args)
         outs = [res] if not isinstance(res, (list, tuple)) else list(res)
         self._state["x"] = np.asarray(outs[0])[:, -1].reshape(-1)
         new_state = spec.to_nested(self._state["x"])

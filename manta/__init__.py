@@ -59,12 +59,14 @@ from .estimation.mahony import Mahony
 from .ir.state_spec import ALL, POSE, TWIST, SlotSet
 from .control import LQR, PID
 from .recurrence import RecurrenceBlock
-from .codegen import NoiseDriver, TargetCpp, TargetNumpy
+from .codegen import NoiseDriver, TargetCpp, TargetJax, TargetNumpy
+from .fit import Fit, FitResult, NoiseFit, NoiseFitResult, Prior, Window
 from .signal import Signal, wire
 
 __all__ = [
     "ir", "Craft", "World", "Coupling", "Sim", "Planet", "EKF", "LQR", "PID",
     "Madgwick", "Mahony", "IMUIntegrator", "RecurrenceBlock",
-    "TargetNumpy", "TargetCpp", "NoiseDriver", "Signal", "wire",
+    "TargetNumpy", "TargetCpp", "TargetJax", "NoiseDriver", "Signal", "wire",
+    "Fit", "FitResult", "NoiseFit", "NoiseFitResult", "Prior", "Window",
     "SlotSet", "POSE", "TWIST", "ALL",
 ]

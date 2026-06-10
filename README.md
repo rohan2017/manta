@@ -190,6 +190,49 @@ state-bearing disturbance:
 Lower to `TargetNumpy(EKF(w))` for Python or `TargetCpp(EKF(w), ...)`
 for embedded.
 
+### System identification (Fit)
+
+`Fit(world, parameters={...})` fits a model's physical parameters to
+recorded data. Promotable `Parameter`s (those declared with a manifold:
+thruster gains, every part's `transform` mount, `Mass.mass`) are
+promoted from baked graph constants to a live parameter vector
+(`Sim(world, parameters=[...])` → a `params` port on every kernel), and
+the fit minimizes windowed prediction error against logged controls +
+sensor readings, MAP-regularized by per-parameter Gaussian priors:
+
+```python
+fit = Fit(world, parameters={
+    "body.mass":     Prior(sigma=0.05, log=True),   # weighed: ±5%
+    "t1.force_quad": Prior(sigma=4.0),              # datasheet: loose
+    "imu.transform": Prior(sigma=0.10),             # lever arm: ±10 cm
+})
+result = fit.solve(windows, weights={"imu.gyro": 1/σg**2,
+                                     "imu.accel": 1/σa**2})
+print(result.summary())     # fitted values + prior σ vs posterior σ
+result.apply()              # bake fitted values back into the model
+```
+
+Gradients are exact (the oracle `step` kernel folded over each window
+via `mapaccum`), IPOPT solves the NLP, and the Gauss-Newton posterior
+`(JᵀJ + Σ₀⁻¹)⁻¹` reports which parameters the data actually informed:
+`post/prior ≈ 1` means that number came from your prior, not the data,
+and `result.weak_directions()` names the unidentifiable parameter
+combinations (e.g. the thrust/mass scale). See
+`examples/vehicles/sysid_drone.py` for the full recoverability demo.
+
+Noise σ values are fit separately — a mean-prediction L2 loss has zero
+gradient in σ. `NoiseFit(world, noise={...})` runs a symbolic Kalman
+filter over the same `Window`s and minimizes the innovation
+negative-log-likelihood (σ enters through the filter's `Q = LΣLᵀ` and
+`R = L_hΣL_hᵀ`), fitting log-σ with relative priors:
+
+```python
+nres = NoiseFit(world, noise={"imu.gyro_noise": Prior(sigma=2.0),
+                              "imu.accel_noise": Prior(sigma=2.0)})\
+    .solve(windows)
+nres.apply()      # EKF(world) now auto-builds Q/R from the fitted σ
+```
+
 ### Backends
 
 The `manta.codegen` package houses the lowering. Every transform emits
@@ -201,8 +244,16 @@ of a Module — no per-transform code anywhere:
 |---|---|---|
 | `TargetNumpy(x)` | any Module / transform | `NumpyRuntime` — surface derived from the Module's shape (sim `step`/`outputs`, filter `predict`/`update`/`feed`/`step`, regulator `control`, recurrence `step`) |
 | `TargetCpp(x, out_dir, class_name)` | any Module / transform | C++ static lib: typed Eigen class over flat-C kernels (+ CMake) |
+| `TargetJax(x)` | any Module / transform (flat crafts) | `JaxModule` — every kernel as a jitted JAX function + a `lax.scan` rollout you can `jax.grad`/`jax.vmap` through (needs `pip install jax`; not a core dependency) |
 
-Adding a backend (torch, JAX, raw embedded C) = a way to run/translate
+`TargetJax` lowers by expanding each kernel to a CasADi SX instruction
+tape and emitting equivalent JAX source (one line per scalar op) —
+outputs match CasADi to machine precision, and `jax.grad` matches
+CasADi jacobians exactly. Limitation: kernels must SX-expand, so
+articulated (jointed) crafts — whose joint-space solve needs a
+runtime-pivoting Linsol — stay on numpy/C++.
+
+Adding a backend (torch, raw embedded C) = a way to run/translate
 a `ca.Function` plus one generic `Module` lowering. Adding a transform
 (a future `iLQR`/`MPC`) reuses the shared `LinearizedSystem` and gets
 every backend for free.
@@ -215,6 +266,7 @@ manta/                     library package
     craft.py               Craft + TickContext + inertial/wrench helpers
     world.py               World (the declarative model)
     sim.py                 Sim (forward-dynamics transform)
+    fit/                   Fit (MAP system ID) + NoiseFit (innovation-NLL σ fit)
     recurrence.py          RecurrenceBlock base (PID/Madgwick/Mahony/IMU)
     linearization/         LinearizedSystem (system) + TickLinearizer
                            (engine) + closure/partition + name helpers —
@@ -268,6 +320,9 @@ a self-running scripted fallback so they work unattended):
 .venv/bin/python -m examples.vehicles.airplane           # control surfaces on RevoluteJoint hinges
 .venv/bin/python -m examples.vehicles.submarine          # PointBuoy + DVL + EKF
 .venv/bin/python -m examples.vehicles.hydrofoil          # nested-RevoluteJoint laser gimbal (PID)
+
+# system identification — headless, no rerun needed
+.venv/bin/python -m examples.vehicles.sysid_drone        # Fit + NoiseFit: thrust/mass/mounts/σ from IMU logs
 ```
 
 Visualized demos need the rerun SDK (`.venv/bin/pip install rerun-sdk`); pass

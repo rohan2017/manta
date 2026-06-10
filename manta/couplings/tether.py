@@ -91,9 +91,19 @@ class Tether(Coupling):
         body origin (force-at-offset + lever-arm torque). The compile
         layer adds these directly to each craft's aggregate net wrench.
         """
-        # Endpoint offsets in each body frame.
-        off_a_craft = Vec3[CraftFrame].constant(tuple(self.endpoint_a.transform))
-        off_b_craft = Vec3[CraftFrame].constant(tuple(self.endpoint_b.transform))
+        # Endpoint offsets in each body frame. A promoted (tunable)
+        # endpoint transform reads as a trace-bound IR value — keep the
+        # symbol (the bound vector's tag is the generic PartFrame; an
+        # endpoint hangs directly off the root, so its coords ARE craft
+        # coords, same assumption the constant path makes).
+        def _off(ep):
+            tr = ep.transform
+            if hasattr(tr, "_mx"):
+                return Vec3[CraftFrame].from_mx(tr._mx)
+            return Vec3[CraftFrame].constant(tuple(tr))
+
+        off_a_craft = _off(self.endpoint_a)
+        off_b_craft = _off(self.endpoint_b)
 
         # Endpoint positions in world frame. The coupling reads each craft's
         # root ctx (root frame = CraftFrame): orientation is

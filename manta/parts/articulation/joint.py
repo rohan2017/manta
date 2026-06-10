@@ -50,7 +50,10 @@ import numpy as np
 
 from ...ir.frames import PartFrame
 from ...ir.types import Vec3
-from ..base import CompositePart, Input, Parameter, PartUpdate, State, unit_axis
+from ..base import (
+    CompositePart, Input, Parameter, PartUpdate, State, declared_attr,
+    unit_axis,
+)
 from ...ir.wrench import Wrench
 
 
@@ -73,7 +76,8 @@ def _offset_from(ancestor, descendant) -> np.ndarray:
         raise ValueError(
             f"_offset_from: '{descendant.name}' is not a descendant of "
             f"'{ancestor.name}'.")
-    return sum((np.asarray(p.transform, dtype=float) for p in chain),
+    return sum((np.asarray(declared_attr(p, "transform"), dtype=float)
+                for p in chain),
                start=np.zeros(3))
 
 
@@ -158,8 +162,8 @@ class ArticulatedJoint(CompositePart):
         for descendant in self.walk():
             if descendant is self:
                 continue
-            m = float(getattr(descendant, "mass", 0.0) or 0.0)
-            moi_diag = getattr(descendant, "moi", (0.0, 0.0, 0.0))
+            m = float(declared_attr(descendant, "mass", 0.0) or 0.0)
+            moi_diag = declared_attr(descendant, "moi", (0.0, 0.0, 0.0))
             I_own = np.diag([float(moi_diag[0]),
                              float(moi_diag[1]),
                              float(moi_diag[2])])
@@ -188,7 +192,7 @@ class ArticulatedJoint(CompositePart):
         for descendant in self.walk():
             if descendant is self:
                 continue
-            total += float(getattr(descendant, "mass", 0.0) or 0.0)
+            total += float(declared_attr(descendant, "mass", 0.0) or 0.0)
         return total
 
     # ----- update() --------------------------------------------------------

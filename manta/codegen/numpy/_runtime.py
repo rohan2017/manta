@@ -40,6 +40,9 @@ class NumpyRuntime:
         self._y_port = out[0] if out else None
         st = module.ports_by_role(Role.STATE)
         self._x_port = st[0] if st else None
+        par = module.ports_by_role(Role.PARAMETER)
+        self._param_port = par[0] if par else None
+        self._param_overrides: dict[str, np.ndarray] = {}
         self._methods = {e.method for e in module.entry_points}
 
         self._t = 0.0
@@ -72,6 +75,9 @@ class NumpyRuntime:
                     args.append(values[a.name])
                 elif m.port(a.name).role is Role.TIME:
                     args.append(0.0)
+                elif m.port(a.name).role is Role.PARAMETER:
+                    # Declared values, with any set_parameters overrides.
+                    args.append(self.param_vector())
                 else:
                     raise KeyError(
                         f"{m.name}.{ep.method}: missing value for port "
@@ -123,6 +129,40 @@ class NumpyRuntime:
                                       who=type(self).__name__)
                 out[idx[full]] = float(np.asarray(v).ravel()[0])
         return out
+
+    # ---- promoted parameters (PARAMETER port) --------------------------
+
+    def set_parameters(self, values: dict[str, Any]) -> None:
+        """Override promoted-parameter values (full or suffix names);
+        every subsequent kernel call uses them. Values not overridden
+        stay at the Module's declared defaults."""
+        if self._param_port is None:
+            raise ValueError(
+                f"{self.module.name}: module declares no parameter port — "
+                f"build the transform with parameters=[...] to promote "
+                f"tunable Parameters.")
+        names = [f.name for f in self._param_port.fields]
+        dims = {f.name: f.dim for f in self._param_port.fields}
+        for k, v in values.items():
+            full = resolve_suffix(k, names, label="parameter",
+                                  who=type(self).__name__)
+            arr = np.asarray(v, dtype=float).ravel()
+            if arr.size != dims[full]:
+                raise ValueError(
+                    f"set_parameters: {full!r} expects {dims[full]} "
+                    f"value(s), got {arr.size}.")
+            self._param_overrides[full] = arr
+
+    def param_vector(self) -> np.ndarray:
+        """The flat promoted-parameter vector: declared defaults merged
+        with `set_parameters` overrides, in port-field order."""
+        port = self._param_port
+        if port is None:
+            return np.zeros(0)
+        chunks = [self._param_overrides.get(
+                      f.name, np.asarray(f.default, dtype=float).ravel())
+                  for f in port.fields]
+        return np.concatenate(chunks) if chunks else np.zeros(0)
 
     @property
     def spec(self):

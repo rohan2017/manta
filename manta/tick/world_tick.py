@@ -38,6 +38,7 @@ from ..craft import (
 from .inertia import symbolic_inertia_rollup
 from .joint_space import DEGENERATE_INERTIA_EPS, build_joint_space
 from .kinematics import kinematic_pass
+from ..ir._linalg import spd_solve
 from ..ir.frames import WorldFrame, CraftFrame, PartFrame
 from ..ir.manifold import SO3Manifold
 from ..parts.base import CompositePart, Part, PartUpdate, TraceBindings
@@ -54,6 +55,7 @@ def compile_world_tick(crafts: list,
                        mag_field=None,
                        collision_field=None,
                        world=None,
+                       tunable_params=None,
                        ) -> "ir.graph.CompiledGraph":
     """Compile a CasADi-MX tick over multiple coupled crafts.
 
@@ -71,6 +73,11 @@ def compile_world_tick(crafts: list,
         world     — the owning World, if any; handed to each TickContext
                     so parts can introspect optional registrations
                     (`ctx.has_field`, `ctx.get_field`, `ctx.planet`).
+        tunable_params — optional set of full Parameter names
+                    (`<craft>.<part>.<param>`) to PROMOTE from baked
+                    graph constants to live graph inputs (system ID).
+                    Each must name a promotable Parameter (one declared
+                    with a manifold — see `parts.base.Parameter`).
 
     State layout (input + output):
         <craft_name>.position
@@ -154,11 +161,23 @@ def compile_world_tick(crafts: list,
         # Pass 1: per-craft trace. The rigid-body state symbols are
         # already created (Pass 0a); the per-craft helper picks them up
         # from the trace.
+        tunable = set(tunable_params or ())
+        promoted: set[str] = set()
         per_craft: dict[int, dict[str, Any]] = {}
         for craft in crafts:
             per_craft[id(craft)] = _trace_craft_pass1(
                 craft, gravity_field, fluid_field, mag_field, dt, t,
-                trace, collision_field=collision_field, world=world)
+                trace, collision_field=collision_field, world=world,
+                tunable_params=tunable, promoted=promoted)
+        unknown_params = tunable - promoted
+        if unknown_params:
+            available = sorted(
+                f"{c.name}.{p.name}.{n}" for c in crafts for p in c.parts
+                for n in p.promotable_parameter_declarations())
+            raise KeyError(
+                f"compile_world_tick: tunable parameter(s) "
+                f"{sorted(unknown_params)} don't name a promotable "
+                f"Parameter. Promotable: {available}")
 
         # Pass 2: coupling wrench injection.
         for cp in couplings:
@@ -264,6 +283,30 @@ def _typed_views(fv_raw: dict) -> dict:
     the tag is exactly the view's frame."""
     return {qty: {F: ir.Vec3[F].from_mx(mx) for F, mx in by_frame.items()}
             for qty, by_frame in fv_raw.items()}
+
+
+def _bind_part_parameters(craft, prefix, trace, tunable: set,
+                          promoted: set) -> list[tuple[Any, Any]]:
+    """Phase: promote each requested tunable Parameter to a graph input
+    named `<craft>.<part>.<param>`, bound on the trace so every read of
+    the attribute during this compile — a part's `update()`, the
+    kinematic pass (`transform`), the inertia rollup (`mass`) — sees the
+    symbol. Non-tunable parameters are untouched (instance reads, baked
+    constants). Returns `param_subs` — `(sym_mx, declared_value)` pairs
+    for numeric at-rest snapshots (the inertia singularity guard)."""
+    param_subs: list[tuple[Any, Any]] = []
+    for part in craft.parts:
+        for pname, pdecl in part.promotable_parameter_declarations().items():
+            full = prefix + f"{part.name}.{pname}"
+            if full not in tunable:
+                continue
+            declared = np.atleast_1d(np.asarray(
+                part.declared_value(pname), dtype=float)).reshape(-1, 1)
+            sym = pdecl.manifold.ir_input(full, default_frame=PartFrame)
+            trace.bind(part, pname, sym)
+            param_subs.append((sym._mx, ca.DM(declared)))
+            promoted.add(full)
+    return param_subs
 
 
 def _bind_part_states_inputs(craft, prefix, trace
@@ -474,9 +517,16 @@ def _com_relative_motion(craft, kin_states, m_total):
     v_com_rel_mx = ca.MX.zeros(3, 1)
     a_com_rel_mx = ca.MX.zeros(3, 1)
     for part in craft.parts:
-        m = float(getattr(part, "mass", 0.0) or 0.0)
-        if m <= 0.0:
-            continue
+        m_attr = getattr(part, "mass", 0.0)
+        if hasattr(m_attr, "_mx"):
+            # mass promoted to a tunable graph input — keep it symbolic
+            # (a part whose DECLARED mass is zero still contributes; the
+            # optimizer may move it).
+            m = m_attr._mx
+        else:
+            m = float(m_attr or 0.0)
+            if m <= 0.0:
+                continue
         kin = kin_states[part]
         v_com_rel_mx = v_com_rel_mx + m * kin.velocity_rel_body
         a_com_rel_mx = a_com_rel_mx + m * kin.acceleration_rel_body
@@ -491,7 +541,9 @@ def _trace_craft_pass1(craft,
                        t,
                        trace,
                        collision_field=None,
-                       world=None) -> dict[str, Any]:
+                       world=None,
+                       tunable_params: set | None = None,
+                       promoted: set | None = None) -> dict[str, Any]:
     """One craft's pass-1 trace, as a sequence of named phases: bind
     state/input/noise symbols, run the kinematic + inertia passes, run
     every part's update(), cascade wrenches, reduce COM-relative motion,
@@ -517,6 +569,12 @@ def _trace_craft_pass1(craft,
     if collision_field is None:
         from ..fields import CollisionField as _CF
         collision_field = _CF()
+
+    # Promote tunable parameters FIRST: the kinematic pass (transform)
+    # and the inertia rollup (mass) below must see the bound symbols.
+    param_subs = _bind_part_parameters(
+        craft, prefix, trace, tunable_params or set(),
+        promoted if promoted is not None else set())
 
     state_input_nodes = _bind_part_states_inputs(craft, prefix, trace)
     rw_bias_updates = _bind_part_noise(craft, prefix, dt, trace)
@@ -544,7 +602,7 @@ def _trace_craft_pass1(craft,
         body_acceleration_world=a_world_sym,
         body_angular_acceleration=alpha_sym,
         joint_angular_accels=joint_accel_syms)
-    inertia = symbolic_inertia_rollup(craft.root)
+    inertia = symbolic_inertia_rollup(craft.root, param_subs=param_subs)
 
     fields_tuple = (gravity_field, fluid_field, mag_field, collision_field)
 
@@ -734,13 +792,20 @@ def _integrate_angular_momentum(prefix, js, inertia, ang_vel, alpha,
         H_mx = I_com_mx @ om_mx
         H_new_mx = R_neg @ (H_mx + tau_com._mx * dt_mx)
         if np.linalg.det(I_com_at_zero_np) > DEGENERATE_INERTIA_EPS:
-            new_om_mx = ca.solve(I_com_mx, H_new_mx)
+            new_om_mx = spd_solve(I_com_mx, H_new_mx)
         else:
             new_om_mx = om_mx + alpha._mx * dt_mx
     else:
         p_mx = js["p"]
         p_w_new = R_neg @ (p_mx[0:3] + tau_com._mx * dt_mx)
         p_q_new = p_mx[3:] + (js["force_q"] + js["dTdq"]) * dt_mx
+        # NB: joint-space solves stay on the default (pivoting) Linsol,
+        # NOT the unrolled SPD solve used for I_com: A(q) is legitimately
+        # singular when a joint's subtree provides ALL the inertia along
+        # its axis (ω_axis and q̇ enter only as their sum) — runtime
+        # pivoting resolves the null space benignly, a fixed factorization
+        # does not. Cost: a jointed craft's tick has Linsol nodes and
+        # cannot SX-expand (TargetJax supports flat crafts only).
         # Recover the new velocities from the ADVANCED configuration's
         # mass matrix: next tick rebuilds p = A(q⁺)·u⁺, so solving with
         # the advanced A makes the momentum flow consistent — solving
@@ -818,7 +883,7 @@ def _emit_per_craft_dynamics(g_ctx, craft, pc, dt) -> None:
     qdd_by_part: dict[Any, Any] = {}
     if js is None:
         if np.linalg.det(I_com_at_zero_np) > DEGENERATE_INERTIA_EPS:
-            alpha_mx = ca.solve(I_com_mx, tau_eff._mx)
+            alpha_mx = spd_solve(I_com_mx, tau_eff._mx)
             alpha = ir.Vec3[CraftFrame].from_mx(alpha_mx)
         else:
             alpha = ir.Vec3[CraftFrame].constant((0.0, 0.0, 0.0))
