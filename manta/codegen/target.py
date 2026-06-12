@@ -16,6 +16,23 @@ from typing import Any, Callable
 from ..ir.module import Module, Role, StateRef
 
 
+def for_role(role: Role, handlers: dict, *, who: str):
+    """Dispatch on an EntryPoint-argument `Role`, raising the one canonical
+    `NotImplementedError` (naming the role + the `ARG_ROLES` contract) for
+    any uncovered Role.
+
+    `handlers` maps `Role → zero-arg callable` producing that role's value;
+    the matched callable is invoked and its result returned. Centralizes the
+    arg-dispatch ladder every interpreted/emitting backend would otherwise
+    re-write — growing `Role` surfaces here once, not in N copies."""
+    fn = handlers.get(role)
+    if fn is None:
+        raise NotImplementedError(
+            f"{who}: role {role.name} unhandled — update {who} (and the "
+            f"ARG_ROLES contract in manta.ir.module) for the new Role.")
+    return fn()
+
+
 def as_module(x, who: str) -> Module:
     """Return `x` as a `Module` (calling `x.module()` for a transform)."""
     if isinstance(x, Module):

@@ -26,26 +26,20 @@ import jax
 import jax.numpy as jnp
 
 from ...ir.module import PortRef, Role, StateRef
-from ..target import as_module, resolve_args
+from ..target import as_module, for_role, resolve_args
 from ._translate import translate
 
 
 def _rollout_port_arg(role: Role, *, u_k, n_k, params, dt, t_k):
     """The per-step `lax.scan` argument for one step-entry PortRef, by
     Role."""
-    if role is Role.CONTROL:
-        return u_k
-    if role is Role.NOISE:
-        return n_k
-    if role is Role.PARAMETER:
-        return params
-    if role is Role.TIMESTEP:
-        return dt
-    if role is Role.TIME:
-        return t_k
-    raise NotImplementedError(
-        f"rollout arg for role {role} — update _rollout_port_arg (and the "
-        f"ARG_ROLES contract in manta.ir.module) for the new Role.")
+    return for_role(role, {
+        Role.CONTROL: lambda: u_k,
+        Role.NOISE: lambda: n_k,
+        Role.PARAMETER: lambda: params,
+        Role.TIMESTEP: lambda: dt,
+        Role.TIME: lambda: t_k,
+    }, who="_rollout_port_arg")
 
 
 class JaxModule:

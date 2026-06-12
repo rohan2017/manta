@@ -21,6 +21,7 @@ lowers to a method, unconditionally.
 
 from __future__ import annotations
 
+from collections import namedtuple
 from dataclasses import replace
 from pathlib import Path
 
@@ -32,6 +33,7 @@ from ._casadi import emit_kernel_call as _call
 from .cmake import emit_cmakelists
 from .kernels import emit_kernel_list
 from .types import cpp_type_for
+from ..target import for_role
 from ...ir.module import Hosting, PortRef, Role, StateRef
 from ...ir.module import entry_ident as _ident
 
@@ -143,34 +145,56 @@ def _scatter_fields(fields, src, dst) -> list[str]:
 # Method signatures (typed, from the IR)
 # ---------------------------------------------------------------------------
 
+#: One PortRef argument's complete C++ ABI: how it is declared in a method
+#: signature (`decl`), the parameter's `name`, and the expression passed to
+#: the flat kernel (`arg`). One record per Role keeps all three in lockstep.
+_PortABI = namedtuple("_PortABI", ("decl", "name", "arg"))
+
+
+def _port_abi(port, ctx, *, decl: bool = False) -> _PortABI:
+    """The C++ ABI for one PortRef argument, by Role — its typed parameter
+    declaration, the parameter name, and the kernel-call expression — from
+    ONE source so the three never drift (a decl/name/arg mismatch would emit
+    uncompilable C++). `decl` only affects TIME's trailing default argument;
+    `name`/`arg` are decl-independent.
+
+    Secondary STATE ports (an LQR's movable `x_ref`) additionally get a
+    convenience overload omitting them (`_ref_overload`) — a plain default
+    argument can't be used, since it would need State's member initializers
+    before the enclosing class is complete."""
+    def scalar_or_data(name: str, size: int) -> str:
+        # a (buffered) size-1 port is a plain double — take its address;
+        # a vector hands over its contiguous storage.
+        return f"&{name}" if size == 1 else f"{name}.data()"
+
+    return for_role(port.role, {
+        Role.CONTROL: lambda: _PortABI("const Inputs& u", "u", "u_in"),
+        Role.MEASUREMENT: lambda: _PortABI(
+            f"const {S.eigen_vec_type(port.size)}& z", "z",
+            scalar_or_data("z", port.size)),
+        Role.NOISE: lambda: _PortABI(
+            f"const {S.eigen_vec_type(_buf_dim(port.size))}& noise", "noise",
+            scalar_or_data("noise", _buf_dim(port.size))),
+        Role.PARAMETER: lambda: _PortABI(
+            f"const {S.eigen_vec_type(_buf_dim(port.size))}& params", "params",
+            scalar_or_data("params", _buf_dim(port.size))),
+        Role.TIMESTEP: lambda: _PortABI("double dt", "dt", "&dt"),
+        Role.TIME: lambda: _PortABI(
+            "double t = 0.0" if decl else "double t", "t", "&t"),
+        Role.STATE: lambda: _PortABI(
+            "const State& x" if port is ctx.x_port
+            else f"const State& {_ident(port.name)}",
+            "x" if port is ctx.x_port else _ident(port.name),
+            "x_in" if port is ctx.x_port else f"{_ident(port.name)}_in"),
+        Role.MATRIX: lambda: _PortABI(
+            f"const {_mat_type(*port.shape)}& {_ident(port.name)}",
+            _ident(port.name), f"{_ident(port.name)}.data()"),
+    }, who="_port_abi")
+
+
 def _param_for(port, decl: bool, ctx) -> str | None:
-    """The typed C++ parameter for one PortRef, by Role."""
-    r = port.role
-    if r is Role.CONTROL:
-        return "const Inputs& u"
-    if r is Role.MEASUREMENT:
-        return f"const {S.eigen_vec_type(port.size)}& z"
-    if r is Role.NOISE:
-        return f"const {S.eigen_vec_type(_buf_dim(port.size))}& noise"
-    if r is Role.PARAMETER:
-        return f"const {S.eigen_vec_type(_buf_dim(port.size))}& params"
-    if r is Role.TIMESTEP:
-        return "double dt"
-    if r is Role.TIME:
-        return "double t = 0.0" if decl else "double t"
-    if r is Role.STATE:
-        # Named by port. Secondary STATE ports (e.g. an LQR's movable
-        # x_ref) additionally get a convenience overload omitting them
-        # (`_ref_overload`) — a plain default argument can't be used,
-        # since it would need State's member initializers before the
-        # enclosing class is complete.
-        return ("const State& x" if port is ctx.x_port
-                else f"const State& {_ident(port.name)}")
-    if r is Role.MATRIX:
-        return f"const {_mat_type(*port.shape)}& {_ident(port.name)}"
-    raise NotImplementedError(
-        f"param for role {r} — update _param_for (and the ARG_ROLES "
-        f"contract in manta.ir.module) for the new Role.")
+    """The typed C++ parameter declaration for one PortRef, by Role."""
+    return _port_abi(port, ctx, decl=decl).decl
 
 
 def _params(ep, ctx, *, decl: bool) -> list[str]:
@@ -265,12 +289,7 @@ def _method_def_head(ep, ctx, q: str) -> str:
 
 def _param_name(a, ctx) -> str:
     """The C++ parameter name `_param_for` gives one PortRef arg."""
-    port = ctx.port(a.name)
-    fixed = {Role.CONTROL: "u", Role.MEASUREMENT: "z", Role.NOISE: "noise",
-             Role.PARAMETER: "params", Role.TIMESTEP: "dt", Role.TIME: "t"}
-    if port.role in fixed:
-        return fixed[port.role]
-    return "x" if port is ctx.x_port else _ident(port.name)
+    return _port_abi(ctx.port(a.name), ctx).name
 
 
 def _ref_overload(ep, ctx) -> str | None:
@@ -310,30 +329,7 @@ def _arg_expr(a, ctx) -> str:
     if isinstance(a, StateRef):
         fld = ctx.m.state.field(a.name)
         return "x_in" if fld.kind == "manifold" else f"{a.name}.data()"
-    port = ctx.port(a.name)
-    r = port.role
-    if r is Role.CONTROL:
-        return "u_in"
-    if r is Role.MEASUREMENT:
-        return "&z" if port.size == 1 else "z.data()"
-    if r is Role.NOISE:
-        # `_param_for` declares a plain double for a (buffered) size-1
-        # port — take its address, like MEASUREMENT does for a scalar z.
-        return "&noise" if _buf_dim(port.size) == 1 else "noise.data()"
-    if r is Role.PARAMETER:
-        return "&params" if _buf_dim(port.size) == 1 else "params.data()"
-    if r is Role.TIMESTEP:
-        return "&dt"
-    if r is Role.TIME:
-        return "&t"
-    if r is Role.STATE:
-        return ("x_in" if port is ctx.x_port
-                else f"{_ident(port.name)}_in")
-    if r is Role.MATRIX:
-        return f"{_ident(port.name)}.data()"
-    raise NotImplementedError(
-        f"arg for role {r} — update _arg_expr (and the ARG_ROLES "
-        f"contract in manta.ir.module) for the new Role.")
+    return _port_abi(ctx.port(a.name), ctx).arg
 
 
 def _manifold_reads(ep, ctx) -> list[tuple[str, str]]:

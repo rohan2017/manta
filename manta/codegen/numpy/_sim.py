@@ -10,6 +10,7 @@ import numpy as np
 from ...ir.module import Role, StateRef
 from ...ir.state_spec import flatten_nested
 from ...linearization import resolve_suffix
+from ..target import for_role
 from ._noise import NoiseDriver
 from ._runtime import NumpyRuntime, _split, pack_fields
 
@@ -18,19 +19,13 @@ def _stepn_port_arg(role: Role, *, hold, u, noise, params, dt, t, n):
     """The folded `mapaccum` argument for one step-entry PortRef, by Role:
     per-call vectors (u, noise, params) held constant across the n substeps
     (via `hold`), dt repeated, t advancing per substep."""
-    if role is Role.CONTROL:
-        return hold(u)
-    if role is Role.NOISE:
-        return hold(noise)
-    if role is Role.PARAMETER:
-        return hold(params)
-    if role is Role.TIMESTEP:
-        return ca.repmat(ca.DM(float(dt)), 1, n)
-    if role is Role.TIME:
-        return ca.DM(np.array([[t + k * dt for k in range(n)]]))
-    raise NotImplementedError(
-        f"step_n arg for role {role} — update _stepn_port_arg (and the "
-        f"ARG_ROLES contract in manta.ir.module) for the new Role.")
+    return for_role(role, {
+        Role.CONTROL: lambda: hold(u),
+        Role.NOISE: lambda: hold(noise),
+        Role.PARAMETER: lambda: hold(params),
+        Role.TIMESTEP: lambda: ca.repmat(ca.DM(float(dt)), 1, n),
+        Role.TIME: lambda: ca.DM(np.array([[t + k * dt for k in range(n)]])),
+    }, who="_stepn_port_arg")
 
 
 class NumpySim(NumpyRuntime):
