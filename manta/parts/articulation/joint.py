@@ -50,10 +50,9 @@ import numpy as np
 
 from ...ir.frames import PartFrame
 from ...ir.types import Vec3
-from ..base import (
-    CompositePart, Input, Parameter, PartUpdate, State, declared_attr,
-    unit_axis,
-)
+from .._declarations import Input, Parameter, PartUpdate, State, unit_axis
+from .._trace import declared_attr, is_promoted
+from ..base import CompositePart
 from ...ir.wrench import Wrench
 
 
@@ -139,13 +138,13 @@ class ArticulatedJoint(CompositePart):
         coupling of the joint-space solve."""
         _, rate_name = self.dof_state_names()
         rate_attr = getattr(self, rate_name)
-        rate_mx = (rate_attr._mx if hasattr(rate_attr, "_mx")
+        rate_mx = (rate_attr._mx if is_promoted(rate_attr)
                    else ca.MX(float(rate_attr)))
         f = -float(self.damping) * rate_mx
         if self.mode == _SATURATING:
             stall = float(self._stall_limit())
             cmd = self._actuator_cmd()
-            cmd_mx = cmd._mx if hasattr(cmd, "_mx") else ca.MX(float(cmd))
+            cmd_mx = cmd._mx if is_promoted(cmd) else ca.MX(float(cmd))
             f = f + ca.fmin(ca.fmax(cmd_mx, -stall), stall)
         return f
 
@@ -160,7 +159,7 @@ class ArticulatedJoint(CompositePart):
         configuration-dependent mass matrix."""
         total = np.zeros((3, 3))
         for descendant in self.walk():
-            if descendant is self:
+            if descendant is self or not descendant.contributes_inertia:
                 continue
             m = float(declared_attr(descendant, "mass", 0.0) or 0.0)
             moi_diag = declared_attr(descendant, "moi", (0.0, 0.0, 0.0))
@@ -190,7 +189,7 @@ class ArticulatedJoint(CompositePart):
         with zero subtree mass is locked out of the joint-space solve."""
         total = 0.0
         for descendant in self.walk():
-            if descendant is self:
+            if descendant is self or not descendant.contributes_inertia:
                 continue
             total += float(declared_attr(descendant, "mass", 0.0) or 0.0)
         return total

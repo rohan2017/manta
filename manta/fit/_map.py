@@ -49,25 +49,29 @@ EKF-innovation-likelihood fitter — after applying this fit's result.
 
 from __future__ import annotations
 
+import warnings
+
 import casadi as ca
 import numpy as np
 
-from ..ir.module import Role
-from ..ir.state_spec import flatten_nested
+from ..ir.module import PortRef, Role
 from ..linearization import resolve_suffix
 from ..sim import Sim
-from ._common import Prior, Window
+from ._common import (
+    Prior, Window, _FitBlock, convergence_line, format_table, laplace_sigma,
+    pack_u_trace, pack_x0, prior_penalty, resolve_traces, solve_blocks_nlp,
+    solver_converged,
+)
 
 
 # ---------------------------------------------------------------------------
 # Internal: one decision-space block per promoted parameter
 # ---------------------------------------------------------------------------
 
-class _Block:
+class _Block(_FitBlock):
     """One parameter's slice of the decision vector `v` and its prior."""
 
-    __slots__ = ("full", "dim", "offset", "declared", "log",
-                 "v_init", "v_prior", "v_sigma")
+    __slots__ = ("full", "declared", "log")
 
     def __init__(self, full: str, dim: int, offset: int,
                  declared: np.ndarray, prior: Prior | None) -> None:
@@ -84,22 +88,20 @@ class _Block:
                 f"Prior for {full!r}: mean has {mean.size} component(s), "
                 f"parameter has {dim}.")
         if self.log:
-            if dim != 1:
+            # Elementwise log-reparam: every component rides as log(p_j),
+            # so a vector-positive parameter (e.g. `moi`) stays positive.
+            if np.any(declared <= 0.0) or np.any(mean <= 0.0):
                 raise ValueError(
-                    f"Prior for {full!r}: log=True needs a scalar "
-                    f"parameter (got dim={dim}).")
-            if declared[0] <= 0.0 or mean[0] <= 0.0:
-                raise ValueError(
-                    f"Prior for {full!r}: log=True needs a strictly "
-                    f"positive declared value and mean.")
-            self.v_init = np.log(declared)
-            self.v_prior = np.log(mean)
+                    f"Prior for {full!r}: log=True needs strictly "
+                    f"positive declared values and mean (elementwise).")
+            self.init = np.log(declared)
+            self.prior = np.log(mean)
         else:
-            self.v_init = declared.copy()
-            self.v_prior = mean.copy()
+            self.init = declared.copy()
+            self.prior = mean.copy()
 
         if prior is None or prior.sigma is None:
-            self.v_sigma = np.full(dim, np.inf)
+            self.sigma = np.full(dim, np.inf)
         else:
             sig = np.atleast_1d(np.asarray(prior.sigma, dtype=float)).ravel()
             if sig.size == 1:
@@ -108,7 +110,7 @@ class _Block:
                 raise ValueError(
                     f"Prior for {full!r}: sigma must be a positive scalar "
                     f"or length-{dim} sequence, got {prior.sigma!r}.")
-            self.v_sigma = sig
+            self.sigma = sig
 
     def p_of_v(self, v_blk: ca.MX) -> ca.MX:
         """Decision slice → parameter values (ambient)."""
@@ -145,6 +147,9 @@ class FitResult:
                           unidentifiable directions.
         objective       — final loss value.
         stats           — IPOPT return stats.
+        converged       — IPOPT's success flag; False ⇒ the values below
+                          are the failed solve's final iterate (a
+                          `RuntimeWarning` was emitted), not an optimum.
     """
 
     def __init__(self, blocks, v_opt, JtJ, objective, stats, world) -> None:
@@ -154,27 +159,25 @@ class FitResult:
         self.JtJ = JtJ
         self.objective = float(objective)
         self.stats = stats
+        self.converged = solver_converged(stats, who="Fit")
 
         self.values: dict[str, object] = {}
         self.labels: list[str] = []
         self.log_scale: list[bool] = []
-        prior_sig, post_var = [], None
+        prior_sig = []
         for b in blocks:
             theta = b.theta_of_v(self.v[b.offset:b.offset + b.dim])
             self.values[b.full] = float(theta[0]) if b.dim == 1 else theta
             self.labels += b.labels()
             self.log_scale += [b.log] * b.dim
-            prior_sig.append(b.v_sigma)
+            prior_sig.append(b.sigma)
         self.prior_sigma = np.concatenate(prior_sig)
 
         prior_prec = np.where(np.isinf(self.prior_sigma), 0.0,
                               1.0 / np.square(self.prior_sigma))
-        H = JtJ + np.diag(prior_prec)
-        try:
-            self.posterior_sigma = np.sqrt(np.diag(np.linalg.inv(H)))
-        except np.linalg.LinAlgError:
-            # Singular H: flat-prior components the data never touched.
-            self.posterior_sigma = np.full(len(self.labels), np.inf)
+        # eigh-based: flat-prior components the data never touched come
+        # back inf, without poisoning the identified ones.
+        self.posterior_sigma = laplace_sigma(JtJ + np.diag(prior_prec))
 
     def weak_directions(self, k: int = 3):
         """The `k` least-informed directions of the DATA alone: list of
@@ -194,6 +197,11 @@ class FitResult:
         """Write the fitted values back onto the world's Part instances.
         A transform built afterwards (`Sim(world)`, `EKF(world)`, a C++
         deploy) bakes them in as constants."""
+        if not self.converged:
+            warnings.warn(
+                "FitResult.apply: the solve did NOT converge — writing the "
+                "failed solve's final iterate onto the parts.",
+                RuntimeWarning, stacklevel=2)
         for b in self._blocks:
             craft_name, part_name, pname = b.full.split(".", 2)
             craft = next(c for c in self._world.crafts
@@ -223,15 +231,13 @@ class FitResult:
                               else f"{post:.3g}{unit}"),
                              ratio))
                 i += 1
-        widths = [max(len(r[c]) for r in rows) for c in range(5)]
-        lines = ["  ".join(r[c].ljust(widths[c]) for c in range(5))
-                 for r in rows]
-        lines.insert(1, "  ".join("-" * w for w in widths))
-        return "\n".join(lines)
+        return (convergence_line(self.converged, self.stats) + "\n"
+                + format_table(rows))
 
     def __repr__(self) -> str:
         return (f"<FitResult {len(self._blocks)} parameter(s), "
-                f"objective={self.objective:.6g}>")
+                f"objective={self.objective:.6g}, "
+                f"converged={self.converged}>")
 
 
 # ---------------------------------------------------------------------------
@@ -307,22 +313,11 @@ class Fit:
                 w, p, loss, residuals, w_by_full, meas_names)
 
         # MAP prior term (skipped for flat-prior components).
-        for b in self._blocks:
-            finite = np.isfinite(b.v_sigma)
-            if not finite.any():
-                continue
-            for j in np.flatnonzero(finite):
-                d = (v[b.offset + j] - float(b.v_prior[j])) \
-                    / float(b.v_sigma[j])
-                loss = loss + d * d
+        loss = loss + prior_penalty(v, self._blocks)
 
-        v0 = np.concatenate([b.v_init for b in self._blocks])
-        opts = {"ipopt.print_level": 5 if verbose else 0,
-                "print_time": verbose, "ipopt.sb": "yes"}
-        opts.update(ipopt_options or {})
-        solver = ca.nlpsol("fit", "ipopt", {"x": v, "f": loss}, opts)
-        sol = solver(x0=v0)
-        v_opt = np.asarray(sol["x"]).ravel()
+        v_opt, objective, stats = solve_blocks_nlp(
+            "fit", v, loss, self._blocks,
+            verbose=verbose, ipopt_options=ipopt_options)
 
         # Data-only Gauss-Newton information JᵀJ at the solution.
         r = ca.vertcat(*residuals) if residuals else ca.MX.zeros(0, 1)
@@ -330,8 +325,8 @@ class Fit:
         J = np.asarray(ca.DM(J_fn(v_opt)))
         JtJ = J.T @ J
 
-        return FitResult(self._blocks, v_opt, JtJ, sol["f"],
-                         solver.stats(), self.world)
+        return FitResult(self._blocks, v_opt, JtJ, objective,
+                         stats, self.world)
 
     # ------------------------------------------------------------------
 
@@ -351,48 +346,17 @@ class Fit:
         n_noise = self.module.port("noise").size
 
         # Window length from the measurement traces.
-        z_resolved: dict[str, np.ndarray] = {}
-        K = None
-        for k, arr in w.z.items():
-            full = resolve_suffix(k, meas_names, label="sensor", who="Fit")
-            dim = self.module.port(full).size
-            a = np.asarray(arr, dtype=float)
-            if a.ndim == 1:
-                a = a.reshape(-1, 1)
-            if a.shape[1] != dim:
-                raise ValueError(
-                    f"Window.z[{k!r}]: expected (K, {dim}), got {a.shape}.")
-            if K is None:
-                K = a.shape[0]
-            elif a.shape[0] != K:
-                raise ValueError(
-                    f"Window.z[{k!r}]: trace length {a.shape[0]} != {K}.")
-            z_resolved[full] = a
-        if not z_resolved:
-            raise ValueError("Window.z: needs at least one sensor trace.")
+        dims = {n: self.module.port(n).size for n in meas_names}
+        z_resolved, K = resolve_traces(w.z, meas_names, dims, who="Fit")
 
         # Initial state: window slots over the world's initial state.
-        flat = flatten_nested(self.world._initial_state_dict())
-        flat.update(flatten_nested(w.x0))
-        x0 = np.asarray(self._spec.pack_any(flat), dtype=float).reshape(-1, 1)
+        x0 = pack_x0(self.world, self._spec, w)
 
         # Control trace (n_u, K): recorded columns, defaults elsewhere.
-        u_names = [f.name for f in u_fields]
-        U = np.tile(np.array([[float(np.asarray(f.default).ravel()[0])]
-                              for f in u_fields]), (1, K)) \
-            if u_fields else np.zeros((0, K))
-        for k, val in w.u.items():
-            full = resolve_suffix(k, u_names, label="input", who="Fit")
-            row = u_names.index(full)
-            a = np.asarray(val, dtype=float).ravel()
-            if a.size == 1:
-                U[row, :] = a[0]
-            elif a.size == K:
-                U[row, :] = a
-            else:
-                raise ValueError(
-                    f"Window.u[{k!r}]: expected scalar or length-{K} "
-                    f"trace, got {a.size}.")
+        U = pack_u_trace(
+            w.u, [f.name for f in u_fields],
+            [float(np.asarray(f.default).ravel()[0]) for f in u_fields],
+            K, who="Fit")
 
         call_args = {"x": ca.DM(x0),
                      "u": ca.DM(U) if U.size else ca.DM(0, K),
@@ -402,11 +366,16 @@ class Fit:
                      "dt": ca.repmat(ca.DM(float(w.dt)), 1, K),
                      "t": ca.DM(np.array([[w.t0 + i * w.dt
                                            for i in range(K)]]))}
-        # ep.args: StateRef("x") then PortRefs by name — gather in order.
+        # ep.args: the StateRef maps to x; PortRefs by name. An entry arg
+        # this loop doesn't know is a contract break — raise, don't guess.
         ordered = []
         for a in ep.args:
-            key = getattr(a, "name", "x")
-            ordered.append(call_args[key if key in call_args else "x"])
+            key = a.name if isinstance(a, PortRef) else "x"
+            if key not in call_args:
+                raise KeyError(
+                    f"Fit: step entry takes unknown port arg {key!r} — "
+                    f"expected one of {sorted(call_args)}.")
+            ordered.append(call_args[key])
         res = self._stepk(K)(*ordered)
         outs = [res] if not isinstance(res, (list, tuple)) else list(res)
 

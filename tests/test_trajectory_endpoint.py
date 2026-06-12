@@ -115,3 +115,50 @@ def test_slews_to_reference_attitude():
     if q[0] < 0:
         q = -q
     assert np.allclose(q, np.array(q_ref), atol=1e-2)
+
+
+# ---------------------------------------------------------------------------
+# `mass` is a feedforward GAIN, not inertial mass
+# ---------------------------------------------------------------------------
+
+def test_endpoint_mass_does_not_double_count_inertia():
+    # Documented usage: Mass("body", mass=M) + TrajectoryEndpoint(mass=M).
+    # The endpoint's `mass` is a feedforward gain — it must NOT join the
+    # inertia walks (m_total = 2M would halve every acceleration).
+    M = 2.0
+    c = _ghost(hover((0, 0, 0)), mass=M)
+    assert c.total_mass == M
+    assert c.aggregate_inertials()["m_total"] == M
+
+
+def test_endpoint_spring_acceleration_uses_true_mass():
+    # Zero gravity, pure position spring: a = kp·err / m_total. With the
+    # endpoint's gain double-counted (m_total = 2M) the first-step
+    # velocity would come out at half this.
+    M, kp, dt = 2.0, 10.0, 1e-3
+    c = Craft("ghost")
+    c.add(Mass("body", mass=M))
+    c.add(TrajectoryEndpoint("slew", trajectory=hover((0.0, 0.0, 0.0)),
+                             mass=M, kp_pos=kp, kd_pos=0.0,
+                             kp_att=0.0, kd_att=0.0))
+    w = World()
+    w.add_craft(c, position=(1.0, 0.0, 0.0))
+    sim = TargetNumpy(Sim(w))
+    sim.step(dt)
+    v = np.asarray(sim.state["ghost"]["velocity"]).ravel()
+    # err = (0,0,0) − (1,0,0); a_x = −kp/M; one Euler step ⇒ v_x = a_x·dt.
+    assert v[0] == pytest.approx(-kp / M * dt, rel=1e-9)
+
+
+def test_nested_endpoint_rejected_at_compile():
+    from manta.parts import RevoluteJoint
+    c = Craft("ghost")
+    c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
+    j = c.add(RevoluteJoint("gim", axis=(0.0, 0.0, 1.0)))
+    j.add(Mass("rotor", mass=0.1, moi=(0.01, 0.01, 0.01),
+               transform=(0.1, 0.0, 0.0)))
+    j.add(TrajectoryEndpoint("slew", trajectory=hover((0.0, 0.0, 0.0))))
+    w = World()
+    w.add_craft(c)
+    with pytest.raises(ValueError, match="craft root"):
+        TargetNumpy(Sim(w))

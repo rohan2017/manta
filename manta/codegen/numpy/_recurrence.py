@@ -6,7 +6,7 @@ from typing import Any
 
 import numpy as np
 
-from ._runtime import NumpyRuntime
+from ._runtime import NumpyRuntime, pack_fields, unpack_fields
 
 
 class NumpyRecurrence(NumpyRuntime):
@@ -32,21 +32,7 @@ class NumpyRecurrence(NumpyRuntime):
     def step(self, dt: float, *, t: float | None = None,
              **inputs) -> dict[str, Any]:
         tt = self._t if t is None else t
-        u = np.zeros(self._u_port.size)
-        off = 0
-        for f in self._u_fields():
-            if f.name not in inputs:
-                raise KeyError(
-                    f"step: missing input {f.name!r}; required: "
-                    f"{self._input_names()}")
-            v = np.atleast_1d(np.asarray(inputs[f.name],
-                                         dtype=float)).reshape(-1)
-            if v.size != f.dim:
-                raise ValueError(
-                    f"step: input {f.name!r} expects dim {f.dim}, got "
-                    f"{v.size}.")
-            u[off:off + f.dim] = v
-            off += f.dim
+        u = pack_fields(self._u_fields(), inputs, required=True, who="step")
         ret = self._run(self.module.entry("step"),
                         {"u": u, "dt": dt, "t": tt})
         self._y = ret[self._y_port.name]
@@ -55,13 +41,7 @@ class NumpyRecurrence(NumpyRuntime):
 
     def readouts(self) -> dict[str, Any]:
         """Last-computed readouts by output-field name (scalars unwrapped)."""
-        out: dict[str, Any] = {}
-        off = 0
-        for f in self._y_port.fields:
-            seg = self._y[off:off + f.dim]
-            out[f.name] = float(seg[0]) if f.dim == 1 else seg.copy()
-            off += f.dim
-        return out
+        return unpack_fields(self._y_port.fields, self._y)
 
     # ---- ports -----------------------------------------------------------
 

@@ -158,3 +158,12 @@ def test_so3_boxplus_rejects_mismatched_delta_frame():
         d = ir.Vec3[CraftFrame].input("d")
         with pytest.raises(FrameError, match="SO3Manifold.boxplus"):
             SO3.boxplus(q, d)
+
+
+def test_so3_boxplus_num_renormalizes():
+    """boxplus_num is the single source of quaternion renormalization —
+    an off-unit input and a large tangent step still return ‖q‖ = 1."""
+    m = SO3Manifold()
+    q = np.array([1.0, 0.0, 0.0, 0.0]) * 1.001          # drifted off-unit
+    out = m.boxplus_num(q, np.array([0.3, -0.2, 0.5]))
+    assert np.isclose(np.linalg.norm(out), 1.0, atol=1e-12)

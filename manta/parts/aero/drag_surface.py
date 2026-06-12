@@ -51,7 +51,8 @@ import numpy as np
 from ...fields import FluidField
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3
-from ..base import Parameter, Part, PartUpdate
+from .._declarations import Parameter, PartUpdate
+from ..base import Part
 from ...ir.wrench import Wrench
 
 

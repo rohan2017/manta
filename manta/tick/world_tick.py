@@ -25,6 +25,7 @@ not special-cased — a single craft is just a one-element component.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field as dc_field, replace
 from typing import Any
 
 import casadi as ca
@@ -41,7 +42,9 @@ from .kinematics import kinematic_pass
 from ..ir._linalg import spd_solve
 from ..ir.frames import WorldFrame, CraftFrame, PartFrame
 from ..ir.manifold import SO3Manifold
-from ..parts.base import CompositePart, Part, PartUpdate, TraceBindings
+from ..parts._declarations import PartUpdate
+from ..parts._trace import TraceBindings
+from ..parts.base import CompositePart, Part
 from ..ir.types import _IRValue
 from ..ir.wrench import Wrench
 from ..smoothing import NORM_EPS_SQ
@@ -71,13 +74,12 @@ def compile_world_tick(crafts: list,
                     to its empty form (zero gravity / zero density /
                     zero B / zero penetration).
         world     — the owning World, if any; handed to each TickContext
-                    so parts can introspect optional registrations
-                    (`ctx.has_field`, `ctx.get_field`, `ctx.planet`).
+                    so `ctx.field(cls)` resolves world-registered fields.
         tunable_params — optional set of full Parameter names
                     (`<craft>.<part>.<param>`) to PROMOTE from baked
                     graph constants to live graph inputs (system ID).
                     Each must name a promotable Parameter (one declared
-                    with a manifold — see `parts.base.Parameter`).
+                    with a manifold — see `parts._declarations.Parameter`).
 
     State layout (input + output):
         <craft_name>.position
@@ -120,7 +122,7 @@ def compile_world_tick(crafts: list,
     # inside the ir.Graph block below — they pick up joint-angle
     # dependence when a joint reorients a rotor.
     for craft in crafts:
-        ai = _aggregate_inertials(craft.parts)
+        ai = _aggregate_inertials(craft.root)
         if ai["m_total"] <= 0.0:
             raise ValueError(
                 f"Craft '{craft.name}': total mass is "
@@ -163,7 +165,7 @@ def compile_world_tick(crafts: list,
         # from the trace.
         tunable = set(tunable_params or ())
         promoted: set[str] = set()
-        per_craft: dict[int, dict[str, Any]] = {}
+        per_craft: dict[int, CraftTrace] = {}
         for craft in crafts:
             per_craft[id(craft)] = _trace_craft_pass1(
                 craft, gravity_field, fluid_field, mag_field, dt, t,
@@ -179,13 +181,16 @@ def compile_world_tick(crafts: list,
                 f"{sorted(unknown_params)} don't name a promotable "
                 f"Parameter. Promotable: {available}")
 
-        # Pass 2: coupling wrench injection.
+        # Pass 2: coupling wrench injection. CraftTrace is frozen, so
+        # each injection swaps in a `replace`d trace (sequentially, so
+        # both wrenches land even if a coupling names one craft twice).
         for cp in couplings:
+            w_a, w_b = cp.compute_wrenches_sym(
+                per_craft[id(cp.craft_a)].ctx, per_craft[id(cp.craft_b)].ctx)
             pc_a = per_craft[id(cp.craft_a)]
+            per_craft[id(cp.craft_a)] = replace(pc_a, net=pc_a.net + w_a)
             pc_b = per_craft[id(cp.craft_b)]
-            w_a, w_b = cp.compute_wrenches_sym(pc_a["ctx"], pc_b["ctx"])
-            pc_a["net"] = pc_a["net"] + w_a
-            pc_b["net"] = pc_b["net"] + w_b
+            per_craft[id(cp.craft_b)] = replace(pc_b, net=pc_b.net + w_b)
 
         # Pass 3: finalize per-craft dynamics.
         for craft in crafts:
@@ -202,7 +207,7 @@ def compile_world_tick(crafts: list,
     # is unchanged; the Sim/EKF runtimes read it to gate their I/O ports.
     rates: dict[str, float] = {}
     for craft in crafts:
-        rates.update(per_craft[id(craft)].get("sample_rates", {}))
+        rates.update(per_craft[id(craft)].sample_rates)
     cg.sample_rates = rates
     return cg
 
@@ -336,9 +341,9 @@ def _bind_part_states_inputs(craft, prefix, trace
 
 def _bind_part_noise(craft, prefix, dt, trace) -> list[tuple[str, Any]]:
     """Phase: plumb each part's Noise declarations — synthesis is
-    polymorphic on the Noise subclass (see manta/parts/base.py). Binds
-    the returned symbol (via `trace`) and returns any synthesized state
-    updates (`(state_name, bias_next)` pairs, e.g. random-walk biases)."""
+    polymorphic on the Noise subclass (see manta/parts/_declarations.py).
+    Binds the returned symbol (via `trace`) and returns any synthesized
+    state updates (`(state_name, bias_next)` pairs, e.g. random-walk biases)."""
     rw_bias_updates: list[tuple[str, Any]] = []
     for part in craft.parts:
         for nname, ndecl in part.noise_declarations().items():
@@ -514,23 +519,54 @@ def _com_relative_motion(craft, kin_states, m_total):
     (same quantities a rotor-mounted sensor reads). Zero when no joint
     shifts the COM. Carries the θ̈/d̈ placeholders via a_rel; resolved in
     `_emit_per_craft_dynamics`. Returns `(v_com_rel_mx, a_com_rel_mx)`."""
+    from ..parts._trace import is_promoted
     v_com_rel_mx = ca.MX.zeros(3, 1)
     a_com_rel_mx = ca.MX.zeros(3, 1)
     for part in craft.parts:
-        m_attr = getattr(part, "mass", 0.0)
-        if hasattr(m_attr, "_mx"):
+        if not part.contributes_inertia:
+            continue
+        m_attr = part.mass
+        if is_promoted(m_attr):
             # mass promoted to a tunable graph input — keep it symbolic
             # (a part whose DECLARED mass is zero still contributes; the
             # optimizer may move it).
             m = m_attr._mx
         else:
-            m = float(m_attr or 0.0)
+            m = float(m_attr)
             if m <= 0.0:
                 continue
         kin = kin_states[part]
         v_com_rel_mx = v_com_rel_mx + m * kin.velocity_rel_body
         a_com_rel_mx = a_com_rel_mx + m * kin.acceleration_rel_body
     return v_com_rel_mx / m_total, a_com_rel_mx / m_total
+
+
+@dataclass(frozen=True)
+class CraftTrace:
+    """One craft's pass-1 trace artifacts — everything the later passes
+    (coupling injection, `_emit_per_craft_dynamics`, the sample-rate
+    rollup) read. Frozen: Pass 2 injects coupling wrenches via
+    `dataclasses.replace` on `net`, never by mutation."""
+
+    position: ir.Vec3                  # Vec3[WorldFrame] state input
+    orientation: ir.Quat               # Quat[WorldFrame, CraftFrame]
+    velocity: ir.Vec3                  # Vec3[WorldFrame]
+    ang_vel: ir.Vec3                   # Vec3[CraftFrame]
+    ctx: TickContext                   # root-view ctx (couplings read it)
+    net: Wrench                        # net external wrench, craft coords
+    inertia: dict[str, Any]            # symbolic_inertia_rollup() result
+    new_state_outputs: list[tuple[str, Any]]   # (full_name, value) queue
+    sensor_outputs: list[tuple[str, Any]]      # (full_name, value) queue
+    joint_space: dict[str, Any] | None   # build_joint_space() blocks
+    joint_accel_syms: dict[Part, ca.MX]  # per-joint q̈ placeholders
+    state_input_nodes: dict[Part, dict[str, Any]]
+    com_rel_motion: tuple[ca.MX, ca.MX]  # body-relative COM (v, a)
+    a_world_sym: ca.MX                 # body-acceleration placeholder
+    alpha_sym: ca.MX                   # body-α placeholder
+    # Genuinely optional — empty for a craft with no rate-declaring
+    # parts / no random-walk Noise channels.
+    sample_rates: dict[str, float] = dc_field(default_factory=dict)
+    rw_bias_updates: list[tuple[str, Any]] = dc_field(default_factory=list)
 
 
 def _trace_craft_pass1(craft,
@@ -543,11 +579,11 @@ def _trace_craft_pass1(craft,
                        collision_field=None,
                        world=None,
                        tunable_params: set | None = None,
-                       promoted: set | None = None) -> dict[str, Any]:
+                       promoted: set | None = None) -> CraftTrace:
     """One craft's pass-1 trace, as a sequence of named phases: bind
     state/input/noise symbols, run the kinematic + inertia passes, run
     every part's update(), cascade wrenches, reduce COM-relative motion,
-    and assemble the joint-space blocks. Returns a dict carrying
+    and assemble the joint-space blocks. Returns a `CraftTrace` carrying
     everything the later passes need."""
     prefix = f"{craft.name}."
 
@@ -652,25 +688,25 @@ def _trace_craft_pass1(craft,
         v_com_rel_mx=v_com_rel_mx,
         joint_accel_syms=joint_accel_syms)
 
-    return {
-        "position":          position,
-        "orientation":       orientation,
-        "velocity":          velocity,
-        "ang_vel":           ang_vel,
-        "ctx":               ctx,
-        "net":               net,
-        "inertia":           inertia,
-        "new_state_outputs": new_state_outputs,
-        "sensor_outputs":    sensor_outputs,
-        "sample_rates":      sample_rates,
-        "rw_bias_updates":   rw_bias_updates,
-        "joint_space":       joint_space,
-        "joint_accel_syms":  joint_accel_syms,
-        "state_input_nodes": state_input_nodes,
-        "com_rel_motion":    (v_com_rel_mx, a_com_rel_mx),
-        "a_world_sym":      a_world_sym,
-        "alpha_sym":         alpha_sym,
-    }
+    return CraftTrace(
+        position=position,
+        orientation=orientation,
+        velocity=velocity,
+        ang_vel=ang_vel,
+        ctx=ctx,
+        net=net,
+        inertia=inertia,
+        new_state_outputs=new_state_outputs,
+        sensor_outputs=sensor_outputs,
+        sample_rates=sample_rates,
+        rw_bias_updates=rw_bias_updates,
+        joint_space=joint_space,
+        joint_accel_syms=joint_accel_syms,
+        state_input_nodes=state_input_nodes,
+        com_rel_motion=(v_com_rel_mx, a_com_rel_mx),
+        a_world_sym=a_world_sym,
+        alpha_sym=alpha_sym,
+    )
 
 
 def _integrate_joint_dofs(prefix, joint_accel_syms, qdd_by_part,
@@ -830,24 +866,25 @@ def _integrate_angular_momentum(prefix, js, inertia, ang_vel, alpha,
         u_new = ca.solve(A_new, ca.vertcat(p_w_new, p_q_new))
         new_om_mx = u_new[0:3]
         for jdx, j_part in enumerate(js["joints"]):
-            rate_overrides[prefix + f"{j_part.name}.rate"] = ir.Scalar(
-                u_new[3 + jdx])
+            rate_name = j_part.dof_state_names()[1]
+            rate_overrides[prefix + f"{j_part.name}.{rate_name}"] = (
+                ir.Scalar(u_new[3 + jdx]))
     return new_om_mx, rate_overrides
 
 
-def _emit_per_craft_dynamics(g_ctx, craft, pc, dt) -> None:
+def _emit_per_craft_dynamics(g_ctx, craft, pc: CraftTrace, dt) -> None:
     """Newton-Euler + symplectic integration + emit state/sensor outputs
-    for one craft, as a sequence of named phases. Reads pc["net"] (which
+    for one craft, as a sequence of named phases. Reads `pc.net` (which
     by this point includes any coupling-injected wrenches) and
-    pc["inertia"] (symbolic rollup)."""
+    `pc.inertia` (symbolic rollup)."""
     prefix = f"{craft.name}."
 
-    position    = pc["position"]
-    orientation = pc["orientation"]
-    velocity    = pc["velocity"]
-    ang_vel     = pc["ang_vel"]
-    net         = pc["net"]
-    inertia     = pc["inertia"]
+    position    = pc.position
+    orientation = pc.orientation
+    velocity    = pc.velocity
+    ang_vel     = pc.ang_vel
+    net         = pc.net
+    inertia     = pc.inertia
 
     m_total          = inertia["m_total"]
     com_mx           = inertia["com_in_craft_mx"]
@@ -866,9 +903,9 @@ def _emit_per_craft_dynamics(g_ctx, craft, pc, dt) -> None:
     I_omega = I_com @ ang_vel
     tau_eff = tau_com - ang_vel.cross(I_omega)
 
-    js = pc["joint_space"]
-    joint_accel_syms  = pc["joint_accel_syms"]
-    state_input_nodes = pc["state_input_nodes"]
+    js = pc.joint_space
+    joint_accel_syms  = pc.joint_accel_syms
+    state_input_nodes = pc.state_input_nodes
     dt_mx = dt._mx
 
     # --- Coupled body ⊕ joint solve ---------------------------------------
@@ -912,14 +949,14 @@ def _emit_per_craft_dynamics(g_ctx, craft, pc, dt) -> None:
     # Identically zero when no joint shifts the COM (on-axis symmetric
     # rotors), and what keeps a free-floating articulated craft's system COM
     # from drifting (linear-momentum conservation).
-    v_com_rel_mx, a_com_rel_mx = pc["com_rel_motion"]
+    v_com_rel_mx, a_com_rel_mx = pc.com_rel_motion
     v_com_body = ir.Vec3[CraftFrame].from_mx(v_com_rel_mx)
     a_com_body = ir.Vec3[CraftFrame].from_mx(a_com_rel_mx)
     moving_term = ang_vel.cross(v_com_body) * (-2.0) - a_com_body
     a_origin_world = a_origin_world + orientation.apply(moving_term)
 
-    a_world_sym = pc["a_world_sym"]
-    alpha_sym    = pc["alpha_sym"]
+    a_world_sym = pc.a_world_sym
+    alpha_sym    = pc.alpha_sym
     joint_syms, joint_reals = _validate_state_only_dynamics(
         craft, net, a_world_sym, alpha_sym, joint_accel_syms, qdd_by_part)
 
@@ -937,10 +974,10 @@ def _emit_per_craft_dynamics(g_ctx, craft, pc, dt) -> None:
         ca.vertcat(a_origin_world._mx, alpha._mx, *joint_reals))
 
     new_state_outputs = [(n, resolve(v))
-                          for n, v in pc["new_state_outputs"]]
+                          for n, v in pc.new_state_outputs]
     new_state_outputs += dof_state_outputs   # solved q̈ — placeholder-free
     sensor_outputs    = [(n, resolve(v))
-                          for n, v in pc["sensor_outputs"]]
+                          for n, v in pc.sensor_outputs]
 
     new_velocity = velocity + a_origin_world * dt
     new_position = position + velocity * dt + a_origin_world * (0.5 * dt * dt)
@@ -962,7 +999,7 @@ def _emit_per_craft_dynamics(g_ctx, craft, pc, dt) -> None:
         g_ctx.output(out_val, out_name)
     # RW bias state outputs (per-craft prefix already baked into the
     # `input_name` recorded during pass-1 plumbing).
-    for bias_name, bias_next in pc.get("rw_bias_updates", []):
+    for bias_name, bias_next in pc.rw_bias_updates:
         g_ctx.output(bias_next, bias_name)
     for out_name, out_val in sensor_outputs:
         if not isinstance(out_val, _IRValue):

@@ -15,7 +15,7 @@ Disturbances may carry State / Noise declarations just like Parts —
 this is how `WindBias` and friends become estimable: the framework
 walks their declarations at compile time, rebinds their attributes
 to symbolic graph inputs, and exposes the slots to the EKF as state
-that gets estimated. See `manta.parts.base` for the
+that gets estimated. See `manta.parts._declarations` for the
 `State`/`Noise`/`Input`/`Parameter`/`Output` declaration sentinels —
 Disturbance reuses the same machinery.
 """
@@ -41,7 +41,7 @@ def anchored_pose(craft, offset_body):
     ``center`` a Vec3[WorldFrame], ``R`` a Mat3[WorldFrame, CraftFrame],
     ``quat`` the craft's Quat[WorldFrame, CraftFrame]. Only callable inside
     a world-tick compile."""
-    from ..parts.base import active_trace
+    from ..parts._trace import active_trace
     from ..ir.frames import CraftFrame
     tr = active_trace()
     if tr is None:

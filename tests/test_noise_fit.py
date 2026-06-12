@@ -119,3 +119,65 @@ def test_noise_fit_missing_trace_raises():
     nf = NoiseFit(_noisy_drone(), noise={"imu.gyro_noise": Prior(sigma=1.0)})
     with pytest.raises(ValueError, match="missing trace"):
         nf.solve(windows)
+
+
+def test_noise_fit_no_channels_raises():
+    with pytest.raises(ValueError, match="no noise channels"):
+        NoiseFit(_noisy_drone(), noise={})
+
+
+def test_noise_fit_validates_window_traces():
+    """Wrong-width z, mismatched trace lengths, and a wrong-length u trace
+    all raise before any solve — the same checks Fit applies."""
+    nf = NoiseFit(_noisy_drone(),
+                  noise={"imu.gyro_noise": Prior(sigma=1.0)})
+    x0 = TargetNumpy(Sim(_noisy_drone())).state
+    K = 10
+    zg, za = np.zeros((K, 3)), np.zeros((K, 3))
+    with pytest.raises(ValueError, match=r"expected \(K, 3\)"):
+        nf.solve([Window(x0=x0, z={"imu.gyro": np.zeros((K, 2)),
+                                   "imu.accel": za}, dt=DT)])
+    with pytest.raises(ValueError, match="trace length"):
+        nf.solve([Window(x0=x0, z={"imu.gyro": zg,
+                                   "imu.accel": np.zeros((K + 1, 3))},
+                         dt=DT)])
+    with pytest.raises(ValueError, match=r"scalar or length-10"):
+        nf.solve([Window(x0=x0, z={"imu.gyro": zg, "imu.accel": za},
+                         u={"t1.throttle": np.zeros(K + 5)}, dt=DT)])
+
+
+def test_noise_fit_unconverged_sets_flag_and_warns():
+    """A solve cut off by the iteration cap must say so: converged=False,
+    a RuntimeWarning at solve and at apply, and a loud summary header."""
+    windows = _record(_noisy_drone(), n_win=1, K=25, seed=9)
+    nf = NoiseFit(_noisy_drone(gyro=0.02, accel=0.01), noise={
+        "imu.gyro_noise": Prior(sigma=2.0),
+        "imu.accel_noise": Prior(sigma=2.0),
+    })
+    with pytest.warns(RuntimeWarning, match="did NOT converge"):
+        res = nf.solve(windows, ipopt_options={"ipopt.max_iter": 1})
+    assert res.converged is False
+    assert "NOT CONVERGED" in res.summary()
+    with pytest.warns(RuntimeWarning, match="did NOT converge"):
+        res.apply()
+
+
+def test_noise_fit_uninformed_channel_posterior_stays_at_prior():
+    """A process channel the data barely excites (tiny thruster force
+    noise under dominant measurement noise, short window): its Laplace
+    posterior must come back ≈ the prior — 'this σ is your prior
+    talking' — while the measurement channels are pinned down."""
+    windows = _record(_noisy_drone(), n_win=1, K=60, seed=11)
+    model = _noisy_drone()
+    t1 = next(p for p in model.crafts[0].parts if p.name == "t1")
+    t1.force_noise_sigma = 1e-4               # active but ~invisible
+    nf = NoiseFit(model, noise={
+        "imu.gyro_noise": Prior(sigma=2.0),
+        "imu.accel_noise": Prior(sigma=2.0),
+        "t1.force_noise": Prior(sigma=1.0),
+    })
+    res = nf.solve(windows)
+    i_f = res.labels.index("drone.t1.force_noise")
+    i_g = res.labels.index("drone.imu.gyro_noise")
+    assert res.posterior_sigma[i_f] > 0.5 * res.prior_sigma[i_f]
+    assert res.posterior_sigma[i_g] < 0.2 * res.prior_sigma[i_g]

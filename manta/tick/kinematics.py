@@ -67,6 +67,7 @@ from ..ir._rotation import (
     rotate_vec_by_quat,
 )
 from ..ir.frames import WorldFrame, CraftFrame, ParentFrame, PartFrame
+from ..parts._trace import is_promoted
 
 
 _ZERO3 = ca.MX.zeros(3, 1)
@@ -214,7 +215,7 @@ def _assemble_frame_views(*,
 def _attr_mx(value) -> ca.MX:
     """A Joint angle/rate attribute: a bound `Scalar` symbol during a
     trace, a plain float outside one."""
-    return value._mx if hasattr(value, "_mx") else ca.MX(float(value))
+    return value._mx if is_promoted(value) else ca.MX(float(value))
 
 
 # ---------------------------------------------------------------------------
@@ -337,7 +338,7 @@ def _compute_child_state(parent_state: KinematicState, parent_part, child,
     # Child's `transform` lives in parent's OUTPUT frame coords. A promoted
     # (tunable) transform reads as a trace-bound IR value — keep the symbol.
     tr_attr = child.transform
-    transform = (tr_attr._mx if hasattr(tr_attr, "_mx")
+    transform = (tr_attr._mx if is_promoted(tr_attr)
                  else ca.MX(list(tr_attr)))
 
     # ----- body-frame position composition ------------------------------
@@ -448,9 +449,9 @@ def _compute_child_state(parent_state: KinematicState, parent_part, child,
         disp   = _attr_mx(child.displacement)
         d_rate = _attr_mx(child.rate)
         d_acc  = joint_angular_accels.get(child, ca.MX(0.0))
-        axis_np = np.asarray(child.axis, dtype=float)
-        axis_np = axis_np / np.linalg.norm(axis_np)
-        axis_local = ca.DM(axis_np.reshape(3, 1))
+        # `axis` is unit by the joint constructor's unit_axis invariant.
+        axis_local = ca.DM(
+            np.asarray(child.axis, dtype=float).reshape(3, 1))
         axis_c = R_craft_from_input @ axis_local        # craft coords
         slide_c = disp * axis_c
         axis_w = rotate_vec_by_quat(q_world_from_input, axis_local)
@@ -498,9 +499,9 @@ def _compute_child_state(parent_state: KinematicState, parent_part, child,
         a_pf = (ca.cross(alpha_pf, r_pf)
                 + ca.cross(omega_pf, ca.cross(omega_pf, r_pf)))
     elif isinstance(parent_part, PrismaticJoint):
-        p_axis_np = np.asarray(parent_part.axis, dtype=float)
-        p_axis_np = p_axis_np / np.linalg.norm(p_axis_np)
-        p_axis = ca.DM(p_axis_np.reshape(3, 1))
+        # `axis` is unit by the joint constructor's unit_axis invariant.
+        p_axis = ca.DM(
+            np.asarray(parent_part.axis, dtype=float).reshape(3, 1))
         p_disp = _attr_mx(parent_part.displacement)
         p_rate = _attr_mx(parent_part.rate)
         p_accel = joint_angular_accels.get(parent_part, ca.MX(0.0))

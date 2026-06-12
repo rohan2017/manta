@@ -354,13 +354,10 @@ class World:
             if pos_planet is None and vel_planet is None:
                 continue
             # If one is PlanetState the other should be too (or default
-            # plain (0,0,0) interpreted in the same frame).
+            # plain (0,0,0) interpreted in the same frame). `planet` is
+            # pos_planet's planet whenever pos is wrapped, so only the
+            # velocity side can disagree.
             planet = (pos_planet or vel_planet).planet
-            if pos_planet is not None and pos_planet.planet is not planet:
-                raise ValueError(
-                    f"World '{self.name}': craft "
-                    f"{entry['craft'].name!r}: position and velocity "
-                    f"reference different planets; pick one frame")
             if vel_planet is not None and vel_planet.planet is not planet:
                 raise ValueError(
                     f"World '{self.name}': craft "

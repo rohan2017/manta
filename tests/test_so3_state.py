@@ -17,7 +17,7 @@ from manta.ir.manifold import SO3Manifold
 from manta.ir.types import Vec3
 from manta.ir.wrench import Wrench
 from manta.parts import Mass
-from manta.parts.base import Output, Part, PartUpdate, State
+from manta.parts import Output, Part, PartUpdate, State
 
 
 # ---------------------------------------------------------------------------

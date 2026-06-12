@@ -19,8 +19,8 @@ chosen HERE, at IR construction — lowering just lowers:
       measure_<s>(x; u, t) -> reading      measure_<s>_jacobian -> H
 
 `Sim(world, parameters=[...])` promotes the named promotable Parameters
-(thruster gains, mounts, masses — see `parts.base.Parameter`) to a live
-`params` port threaded into every kernel above (`step(x; u, noise,
+(thruster gains, mounts, masses — see `parts._declarations.Parameter`)
+to a live `params` port threaded into every kernel above (`step(x; u, noise,
 params, dt, t)`, …). Passing the port's declared defaults reproduces
 the baked model exactly; `manta.fit` optimizes over it for system ID.
 

@@ -15,7 +15,8 @@ from __future__ import annotations
 
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3
-from ..base import Output, Parameter, Part, PartUpdate, WhiteNoise
+from .._declarations import Output, Parameter, PartUpdate, WhiteNoise
+from ..base import Part
 from ...ir.wrench import Wrench
 
 

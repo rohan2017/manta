@@ -11,7 +11,7 @@ rotates with it.
 from __future__ import annotations
 
 from ...fields.mag import BodyDipoleMag, MagField
-from ..base import Parameter
+from .._declarations import Parameter
 from .base import FieldSource
 
 

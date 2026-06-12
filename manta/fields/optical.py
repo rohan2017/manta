@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import casadi as ca
 
+from ..ir._rotation import quat_to_rotmat
 from ..ir.frames import WorldFrame
 from ..ir.types import Vec3
 from .base import Disturbance, Field, anchored_pose
@@ -91,7 +92,7 @@ class SemanticEllipsoid(_EllipsoidBase):
         self.semi_axes = tuple(float(x) for x in semi_axes)
         self._Lambda = _diag_shape_mx(self.semi_axes)
         q = ca.DM([float(x) for x in orientation])
-        self._R = _quat_to_rotmat_mx(q / ca.norm_2(q))   # world ← body
+        self._R = quat_to_rotmat(q / ca.norm_2(q))       # world ← body
         self.label = int(label)
 
     def center_world(self) -> Vec3:
@@ -152,13 +153,3 @@ class OpticalField(Field):
         raise NotImplementedError(
             "OpticalField is not a superposition field; a camera enumerates "
             "OpticalField.ellipsoids and projects each quadric to a box.")
-
-
-def _quat_to_rotmat_mx(q: ca.MX) -> ca.MX:
-    """wxyz unit quaternion → 3×3 rotation matrix (world ← body)."""
-    w, x, y, z = q[0], q[1], q[2], q[3]
-    return ca.vertcat(
-        ca.horzcat(1 - 2*(y*y + z*z), 2*(x*y - w*z),     2*(x*z + w*y)),
-        ca.horzcat(2*(x*y + w*z),     1 - 2*(x*x + z*z), 2*(y*z - w*x)),
-        ca.horzcat(2*(x*z - w*y),     2*(y*z + w*x),     1 - 2*(x*x + y*y)),
-    )

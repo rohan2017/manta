@@ -95,13 +95,16 @@ class HalfSpace(Disturbance):
                  origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
                  normal: tuple[float, float, float] = (0.0, 0.0, 1.0),
                  *, name: str | None = None) -> None:
+        from ..parts._declarations import unit_axis
         super().__init__(name=name)
         self.origin = tuple(float(x) for x in origin)
-        self.normal = tuple(float(x) for x in normal)
-        if len(self.origin) != 3 or len(self.normal) != 3:
+        if len(self.origin) != 3:
             raise ValueError(
-                f"HalfSpace: origin and normal must be length-3; got "
-                f"origin={origin!r}, normal={normal!r}")
+                f"HalfSpace: origin must be length-3; got {origin!r}")
+        # The penetration math assumes a unit normal (a non-unit one
+        # would scale the response by |normal|²) — normalize at
+        # construction, same convention as part axes.
+        self.normal = unit_axis(normal, who="HalfSpace", what="normal")
 
     def contribute_at_sym(self, point, t):
         origin_v = _VEC3_ANCHOR.constant(self.origin)

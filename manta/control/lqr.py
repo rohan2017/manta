@@ -56,7 +56,9 @@ def _solve_dare(A, B, Q, R, *, max_iter: int = 10000, tol: float = 1e-12):
 
     Returns `(K, P)` with `K = (R + BᵀPB)⁻¹ BᵀPA`. Converges for a
     stabilizable `(A, B)` with detectable `(A, √Q)`; raises otherwise.
-    Dependency-free and run once at construction — not in the loop.
+    `tol` is RELATIVE — `‖ΔP‖ ≤ tol·max(1, ‖P‖)` — so huge cost scales
+    don't read as "not stabilizable". Dependency-free and run once at
+    construction — not in the loop.
     """
     P = np.array(Q, dtype=float)
     for _ in range(max_iter):
@@ -64,7 +66,8 @@ def _solve_dare(A, B, Q, R, *, max_iter: int = 10000, tol: float = 1e-12):
         K   = np.linalg.solve(R + BtP @ B, BtP @ A)
         P_next = Q + A.T @ P @ A - (A.T @ P @ B) @ K
         P_next = 0.5 * (P_next + P_next.T)
-        if np.max(np.abs(P_next - P)) < tol:
+        if np.linalg.norm(P_next - P) <= tol * max(1.0,
+                                                   np.linalg.norm(P_next)):
             P = P_next
             break
         P = P_next
@@ -96,6 +99,8 @@ class LQR:
                  `["c.position", "c.velocity"]`); the rest are frozen at
                  `x_ref`. `None` regulates the full state (fully-actuated
                  systems only).
+        tol, max_iter — Riccati-iteration convergence: relative fixpoint
+                 tolerance (`‖ΔP‖ ≤ tol·max(1, ‖P‖)`) and iteration cap.
 
     Attributes:
         spec (full), regulated (regulated slot names), input_names,
@@ -110,7 +115,9 @@ class LQR:
                  u_ref: dict | None = None,
                  Q=None, R=None,
                  dt: float = 0.01,
-                 regulate: list[str] | None = None) -> None:
+                 regulate: list[str] | None = None,
+                 tol: float = 1e-12,
+                 max_iter: int = 10000) -> None:
         if not world.crafts:
             raise ValueError("LQR: world has no crafts.")
 
@@ -162,8 +169,16 @@ class LQR:
         if Rm.shape != (n_u, n_u):
             raise ValueError(
                 f"LQR: R must be {n_u}×{n_u} (n_inputs), got {Rm.shape}.")
+        if not np.allclose(Rm, Rm.T):
+            raise ValueError("LQR: R must be symmetric.")
+        if np.min(np.linalg.eigvalsh(Rm)) <= 0.0:
+            raise ValueError(
+                "LQR: R must be positive-definite (its min eigenvalue is "
+                f"{np.min(np.linalg.eigvalsh(Rm)):.3g}) — every input "
+                "needs a positive cost.")
 
-        self.K, self.P = _solve_dare(A, B, Qm, Rm)
+        self.K, self.P = _solve_dare(A, B, Qm, Rm, tol=tol,
+                                     max_iter=max_iter)
 
         # --- baked control law: u = u_ref − K·(x_tracked ⊟ x_ref_tracked).
         # Takes the FULL ambient state AND the reference as arguments;

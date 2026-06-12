@@ -19,7 +19,8 @@ from __future__ import annotations
 from ...fields import MagField
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3
-from ..base import Output, Part, PartUpdate, WhiteNoise
+from .._declarations import Output, PartUpdate, WhiteNoise
+from ..base import Part
 from ...ir.wrench import Wrench
 
 

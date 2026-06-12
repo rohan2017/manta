@@ -26,7 +26,7 @@ import pytest
 from manta import Craft, EKF, Sim, TargetNumpy, World
 from manta.fields import GravityField
 from manta.parts import Mass
-from manta.parts.base import Output, Part, PartUpdate, RandomWalkNoise, WhiteNoise
+from manta.parts import Output, Part, PartUpdate, RandomWalkNoise, WhiteNoise
 from manta.ir.frames import PartFrame, WorldFrame
 from manta.ir.types import Vec3
 from manta.ir.wrench import Wrench
@@ -83,7 +83,7 @@ def test_noise_accepts_direct_signal_manifold_instance():
     directly so any future signal manifold (vec6, quat, custom) is
     proven reachable without needing a new shortcut string."""
     from manta.ir.manifold import R3Manifold
-    from manta.parts.base import WhiteNoise, RandomWalkNoise
+    from manta.parts import WhiteNoise, RandomWalkNoise
     n = WhiteNoise(R3Manifold(frame=PartFrame), sigma=0.5)
     assert n.signal_manifold.kind         == "vec"
     assert n.signal_manifold.ambient_dim  == 3

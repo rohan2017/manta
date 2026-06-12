@@ -11,7 +11,7 @@ the sim — the optical analogue of a transponder.
 from __future__ import annotations
 
 from ...fields.optical import BodySemanticEllipsoid, OpticalField
-from ..base import Parameter
+from .._declarations import Parameter
 from .base import FieldSource
 
 

@@ -24,7 +24,8 @@ import casadi as ca
 from ...fields import CollisionField
 from ...ir.frames import WorldFrame, PartFrame
 from ...ir.types import Vec3
-from ..base import Parameter, Part, PartUpdate
+from .._declarations import Parameter, PartUpdate
+from ..base import Part
 from ...ir.wrench import Wrench
 
 

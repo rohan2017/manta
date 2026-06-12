@@ -8,7 +8,7 @@ import numpy as np
 
 from ...ir.module import Role
 from ...linearization import resolve_suffix
-from ._runtime import NumpyRuntime
+from ._runtime import NumpyRuntime, unpack_fields
 
 
 class NumpyRegulator(NumpyRuntime):
@@ -54,14 +54,12 @@ class NumpyRegulator(NumpyRuntime):
             vals[self._ref_port.name] = self._x_ref
         return self.call("control", vals)["u"]
 
-    def control(self, state: dict) -> dict[str, float]:
+    def control(self, state: dict) -> dict[str, Any]:
         """Map a state estimate (nested or flat dict) → `{input: value}`,
         merged over the live reference point (unsupplied slots sit at
         the reference, i.e. zero error)."""
         x = self._x_port.manifold.pack_any(state, base=self._x_ref)
-        u_vec = self.u(x)
-        return {n: float(u_vec[i])
-                for i, n in enumerate(self._input_names())}
+        return unpack_fields(self._u_fields(), self.u(x))
 
     # ---- ports -----------------------------------------------------------
 
@@ -69,7 +67,8 @@ class NumpyRegulator(NumpyRuntime):
         """Producer port `compute()` publishes this command to."""
         full = resolve_suffix(name, self._input_names(), label="input",
                               who=type(self).__name__)
-        return self._ports.producer(full, dim=1)
+        f = next(f for f in self._u_fields() if f.name == full)
+        return self._ports.producer(full, dim=f.dim)
 
     @property
     def estimate_in(self):
@@ -96,9 +95,7 @@ class NumpyRegulator(NumpyRuntime):
             x_src = np.asarray(est, dtype=float).reshape(-1)
             for foff, dim, soff in self._gather:
                 x_full[foff:foff + dim] = x_src[soff:soff + dim]
-            u_vec = self.u(x_full)
-            u = {n: float(u_vec[i])
-                 for i, n in enumerate(self._input_names())}
+            u = unpack_fields(self._u_fields(), self.u(x_full))
         for full, v in u.items():
             self.command(full).set(v)
         return u

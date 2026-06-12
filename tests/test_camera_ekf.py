@@ -75,6 +75,18 @@ def test_four_noise_channels_per_target_when_sigma_positive():
         assert float(getattr(cam, f"{name}_sigma")) == pytest.approx(1.5)
 
 
+def test_noise_declarations_is_pure_read():
+    # The `<name>_sigma` attributes are materialized by set_targets()
+    # (the single mutation point); noise_declarations() never setattr's.
+    cam = _camera_of(_world(bbox_sigma=1.5))
+    for s in EDGES:
+        assert float(getattr(cam, f"tgt_hull_{s}_noise_sigma")) \
+            == pytest.approx(1.5)
+    delattr(cam, "tgt_hull_xmin_noise_sigma")
+    cam.noise_declarations()
+    assert not hasattr(cam, "tgt_hull_xmin_noise_sigma")
+
+
 def test_ekf_rejects_zero_noise_camera_edges():
     # bbox_sigma=0 ⇒ the edge outputs carry no noise ⇒ singular update.
     w = _world(bbox_sigma=0.0)

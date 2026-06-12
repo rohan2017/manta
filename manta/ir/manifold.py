@@ -323,7 +323,10 @@ class SO3Manifold(Manifold):
         return so3_log(quat_mul(a_mx, quat_conj(b_mx)))
 
     def boxplus_num(self, x, delta):
-        return quat_mul_np(so3_exp_np(delta), x)
+        # Renormalize defensively: the tangent step may be large, and float
+        # error drifts ‖q‖ off 1 over repeated numeric updates.
+        q = quat_mul_np(so3_exp_np(delta), x)
+        return q / np.linalg.norm(q)
 
     def default_value(self):
         return np.array([1.0, 0.0, 0.0, 0.0], dtype=float)

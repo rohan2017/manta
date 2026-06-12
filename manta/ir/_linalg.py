@@ -19,9 +19,20 @@ from __future__ import annotations
 import casadi as ca
 
 
-def chol_lower(A: ca.MX, n: int) -> list:
+def _square_dim(A: ca.MX, *, op: str) -> int:
+    """`A.shape[0]`, validated square — defaulting `n` from a non-square
+    `A` would silently factor a truncated block."""
+    if A.shape[0] != A.shape[1]:
+        raise ValueError(
+            f"{op}: A must be square, got shape {tuple(A.shape)}")
+    return A.shape[0]
+
+
+def chol_lower(A: ca.MX, n: int | None = None) -> "list[list[ca.MX]]":
     """Lower-triangular Cholesky factor of an n×n SPD `A`, as a list-of-
-    lists of scalar MX (row-major, j ≤ i)."""
+    lists of scalar MX (row-major, j ≤ i). `n` defaults to `A.shape[0]`."""
+    if n is None:
+        n = _square_dim(A, op="chol_lower")
     L = [[None] * n for _ in range(n)]
     for i in range(n):
         for j in range(i + 1):
@@ -58,7 +69,10 @@ def spd_solve(A: ca.MX, B: ca.MX) -> ca.MX:
     return ca.horzcat(*cols)
 
 
-def spd_logdet(A: ca.MX, n: int) -> ca.MX:
-    """`log det A` for a small SPD `A`: 2·Σ log diag(chol(A))."""
+def spd_logdet(A: ca.MX, n: int | None = None) -> ca.MX:
+    """`log det A` for a small SPD `A`: 2·Σ log diag(chol(A)). `n` defaults
+    to `A.shape[0]`."""
+    if n is None:
+        n = _square_dim(A, op="spd_logdet")
     L = chol_lower(A, n)
     return 2.0 * sum(ca.log(L[i][i]) for i in range(n))

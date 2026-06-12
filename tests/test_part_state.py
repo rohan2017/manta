@@ -210,7 +210,7 @@ def test_joint_doesnt_break_free_fall():
 
 def test_unknown_state_slot_raises():
     """Returning new_state with a key not declared as State should error."""
-    from manta.parts.base import Part
+    from manta.parts import Part
 
     class BadPart(Part):
         a = State(init=0.0)

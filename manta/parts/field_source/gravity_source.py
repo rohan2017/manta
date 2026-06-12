@@ -15,7 +15,7 @@ the eps softening keeps the self-pull at the center finite (~0).
 from __future__ import annotations
 
 from ...fields.gravity import BodyPointMassGravity, GravityField
-from ..base import Parameter
+from .._declarations import Parameter
 from .base import FieldSource
 
 

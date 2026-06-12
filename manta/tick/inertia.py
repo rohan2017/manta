@@ -80,6 +80,7 @@ def symbolic_inertia_rollup(root_part, *, param_subs=()) -> dict:
     Raises ValueError if total (declared) mass is zero.
     """
     from ..parts.articulation.joint import PrismaticJoint, RevoluteJoint
+    from ..parts._trace import is_promoted
     from ..parts.base import CompositePart
 
     # Accumulators (MX). com_sum is summed as m·r vectors; I_about_origin
@@ -99,7 +100,7 @@ def symbolic_inertia_rollup(root_part, *, param_subs=()) -> dict:
         # part.transform lives in parent's OUTPUT frame coords. A promoted
         # (tunable) transform reads as a bound IR value — keep the symbol.
         tr_attr = part.transform
-        transform_mx = (tr_attr._mx if hasattr(tr_attr, "_mx") else ca.MX(
+        transform_mx = (tr_attr._mx if is_promoted(tr_attr) else ca.MX(
             np.asarray(tr_attr, dtype=float).reshape(3, 1)))
         r_part_in_craft_mx = (r_parent_in_craft_mx
                               + ca.mtimes(R_craft_from_parent_output_mx,
@@ -113,7 +114,7 @@ def symbolic_inertia_rollup(root_part, *, param_subs=()) -> dict:
         if isinstance(part, RevoluteJoint):
             axis_mx = ca.MX(np.asarray(part.axis, dtype=float).reshape(3, 1))
             angle_attr = part.angle
-            angle_mx = (angle_attr._mx if hasattr(angle_attr, "_mx")
+            angle_mx = (angle_attr._mx if is_promoted(angle_attr)
                         else ca.MX(float(angle_attr)))
             R_in_from_out_mx = R_from_axis_angle(axis_mx, angle_mx)
             R_craft_from_output_mx = ca.mtimes(
@@ -121,11 +122,11 @@ def symbolic_inertia_rollup(root_part, *, param_subs=()) -> dict:
         elif isinstance(part, PrismaticJoint):
             # No rotation; the output origin (children's mount) slides by
             # `displacement · axis` within the input frame — COM and I_com
-            # pick up the displacement dependence here.
+            # pick up the displacement dependence here. The constructor
+            # normalized `axis` (unit_axis invariant).
             axis_np = np.asarray(part.axis, dtype=float)
-            axis_np = axis_np / np.linalg.norm(axis_np)
             disp_attr = part.displacement
-            disp_mx = (disp_attr._mx if hasattr(disp_attr, "_mx")
+            disp_mx = (disp_attr._mx if is_promoted(disp_attr)
                        else ca.MX(float(disp_attr)))
             R_craft_from_output_mx = R_craft_from_input_mx
             r_out_in_craft_mx = (
@@ -137,22 +138,28 @@ def symbolic_inertia_rollup(root_part, *, param_subs=()) -> dict:
 
         # ----- contribute this part's m, m·r, I_own_in_craft ---------------
         # A Mass is a leaf — its own frame = input frame = parent output.
-        # Joint itself has no mass attribute, so the `getattr` returns None.
+        # Only parts with the `contributes_inertia` trait are inertial —
+        # a bare `mass` attribute is not (TrajectoryEndpoint's is a gain).
         # A promoted (tunable) mass reads as a bound IR Scalar — contribute
         # it symbolically (regardless of its declared value; the optimizer
         # may move it), and use the declared value for the numeric totals.
-        mass_attr = getattr(part, "mass", None)
-        if mass_attr is not None:
-            symbolic_mass = hasattr(mass_attr, "_mx")
+        if part.contributes_inertia:
+            mass_attr = part.mass
+            symbolic_mass = is_promoted(mass_attr)
             m_decl = float(part.declared_value("mass") if symbolic_mass
                            else mass_attr)
             m = mass_attr._mx if symbolic_mass else m_decl
             if symbolic_mass or m_decl > 0.0:
+                # A promoted (tunable) moi reads as a bound IR Vec3 —
+                # keep the symbol, same as a promoted mass/transform.
                 moi_attr = getattr(part, "moi", (0.0, 0.0, 0.0))
-                I_diag_local_mx = ca.diag(ca.MX(np.asarray(
-                    [float(moi_attr[0]),
-                     float(moi_attr[1]),
-                     float(moi_attr[2])])))
+                if is_promoted(moi_attr):
+                    I_diag_local_mx = ca.diag(moi_attr._mx)
+                else:
+                    I_diag_local_mx = ca.diag(ca.MX(np.asarray(
+                        [float(moi_attr[0]),
+                         float(moi_attr[1]),
+                         float(moi_attr[2])])))
                 # The Mass rotates with whatever its parent rotor frame is.
                 R_mass_in_craft_mx = R_craft_from_input_mx
                 I_own_in_craft_mx = ca.mtimes(R_mass_in_craft_mx,
@@ -212,12 +219,13 @@ def _evaluate_at_zero(expr_mx, root_part, param_subs=()) -> np.ndarray:
     for compile-time singularity checks against the at-rest inertia tensor
     without spinning up a full CasADi Function."""
     from ..parts.articulation.joint import ArticulatedJoint
+    from ..parts._trace import is_promoted
 
     def collect_joint_syms(part, syms):
         if isinstance(part, ArticulatedJoint):
             for sname in part.dof_state_names():
                 attr = getattr(part, sname)
-                if hasattr(attr, "_mx"):
+                if is_promoted(attr):
                     syms.append(attr._mx)
         from ..parts.base import CompositePart
         if isinstance(part, CompositePart):

@@ -105,13 +105,64 @@ def test_sim_predict_equals_noiseless_step():
     sim = Sim(w)
     oracle, deploy = sim.module(), sim.deploy_module()
     a, b = TargetNumpy(oracle), TargetNumpy(deploy)
+    x = None                       # THREADED: the caller threads the state
     for _ in range(20):
         a.step(0.01)                                   # oracle, zero noise
-        b.call("predict", {"u": b.build_u(None),       # deploy, held x
-                           "dt": 0.01, "t": 0.0})
+        vals = {"u": b.build_u(None), "dt": 0.01, "t": 0.0}
+        if x is not None:
+            vals["x"] = x          # feed the returned write back in
+        x = b.call("predict", vals)["x"]   # first call: module's initial x
     np.testing.assert_allclose(
-        oracle.spec.pack_any(a.state),
-        b._state["x"], rtol=1e-12, atol=1e-12)
+        oracle.spec.pack_any(a.state), x, rtol=1e-12, atol=1e-12)
+
+
+def test_threaded_call_returns_writes_and_honors_supplied_state():
+    """The Hosting contract on the bare numpy engine: a THREADED module's
+    `call()` hands its state writes back to the caller, and a state field
+    supplied in `values` is used instead of the engine's hidden copy."""
+    w, _ = _gps_world()
+    deploy = Sim(w).deploy_module()
+    rt = TargetNumpy(deploy)
+    x0 = np.asarray(deploy.state.field("x").init, dtype=float).reshape(-1)
+    vals = {"u": rt.build_u(None), "dt": 0.01, "t": 0.0}
+    out = rt.call("predict", vals)
+    assert "x" in out and not np.allclose(out["x"], x0)
+    # Re-supplying x0 reproduces the first step exactly, even though the
+    # engine's internal copy has since advanced.
+    out2 = rt.call("predict", {"x": x0, **vals})
+    np.testing.assert_array_equal(out2["x"], out["x"])
+
+
+def test_held_call_keeps_writes_in_place():
+    """A HELD module's writes stay in the runtime — `call()` returns only
+    the entry's declared returns."""
+    w, _ = _gps_world()
+    rt = TargetNumpy(EKF(w))
+    x0, P0 = rt.x, rt.P
+    out = rt.call("predict", {"u": rt.build_u(None), "dt": 0.01, "t": 0.0})
+    assert out == {}
+    assert not np.allclose(rt.x, x0) and not np.allclose(rt.P, P0)
+
+
+def test_unknown_value_key_raises():
+    """A typo'd key in `values` must never be silently ignored."""
+    w, _ = _gps_world()
+    rt = TargetNumpy(Sim(w).deploy_module())
+    with pytest.raises(TypeError, match="noize"):
+        rt.call("predict", {"u": rt.build_u(None), "dt": 0.01,
+                            "t": 0.0, "noize": 1.0})
+
+
+def test_build_u_packs_vector_fields():
+    """`build_u` is dim-aware: a dim-3 input lands whole in the flat
+    control vector (the old scalar packer silently truncated it)."""
+    from manta import Madgwick
+    rt = TargetNumpy(Madgwick(beta=0.1))
+    g, a = np.array([0.1, -0.2, 0.3]), np.array([0.0, 0.0, 9.81])
+    u = rt.build_u({"gyro": g, "accel": a})
+    np.testing.assert_array_equal(u, np.concatenate([g, a]))
+    with pytest.raises(ValueError, match="dim 3"):
+        rt.build_u({"gyro": [1.0, 2.0]})
 
 
 def test_runtime_matches_direct_kernel():
@@ -162,3 +213,38 @@ def test_recurrence_module_runtime():
         x = np.asarray(xn).ravel()
         assert ref["command"] == pytest.approx(float(np.asarray(y).ravel()[0]),
                                                abs=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# Module structural queries
+# ---------------------------------------------------------------------------
+
+def test_sole_port_unique_missing_and_duplicate():
+    from manta.ir.module import Port, StateLayout
+    u = Port("u", Role.CONTROL, shape=(2,))
+    za = Port("a.s.za", Role.MEASUREMENT, shape=(3,))
+    zb = Port("a.s.zb", Role.MEASUREMENT, shape=(3,))
+    x = Port("x", Role.STATE, shape=(4,))
+    x_ref = Port("x_ref", Role.STATE, shape=(4,))
+    m = Module(name="m", state=StateLayout(), ports=(u, za, zb, x, x_ref),
+               functions={}, entry_points=())
+    assert m.sole_port(Role.CONTROL) is u
+    assert m.sole_port(Role.NOISE) is None
+    # per-channel roles refuse to pick one silently
+    with pytest.raises(ValueError, match="MEASUREMENT"):
+        m.sole_port(Role.MEASUREMENT)
+    # STATE may repeat by contract: primary first, reference after (LQR)
+    assert m.sole_port(Role.STATE) is x
+
+
+def test_initial_x_and_spec_fall_back_past_none_manifold_field():
+    """A manifold State field with init=None must not short-circuit the
+    STATE-port fallback (and the same for `spec`)."""
+    from manta.ir.module import Port, StateField, StateLayout
+    init = np.arange(4.0)
+    f = StateField("x", "manifold", (4,), init=None, manifold=None)
+    p = Port("x", Role.STATE, shape=(4,), manifold="the-spec", init=init)
+    m = Module(name="m", state=StateLayout((f,)), ports=(p,),
+               functions={}, entry_points=())
+    assert m.initial_x is init
+    assert m.spec == "the-spec"

@@ -8,6 +8,7 @@ are deterministic at a fixed seed.
 """
 
 import numpy as np
+import pytest
 
 from manta import Craft, World
 from manta.estimation import nees
@@ -38,6 +39,12 @@ def test_nees_report_structure():
     assert rep.lower < rep.upper
     assert rep.samples == rep.runs * (250 - 250 // 5)
     assert "ANEES" in rep.summary()
+
+
+def test_nees_unknown_sensor_raises():
+    """A typo'd sensor name must raise, not silently run without it."""
+    with pytest.raises(KeyError, match="unknown sensor"):
+        nees(_hover_world(), sensors=["gps.positio"], **_KW)
 
 
 def test_zero_process_noise_is_overconfident():

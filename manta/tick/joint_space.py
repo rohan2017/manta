@@ -56,8 +56,6 @@ of the body block, leaving the joint momentum rows exact.
 
 from __future__ import annotations
 
-from typing import Any
-
 import casadi as ca
 import numpy as np
 
@@ -141,13 +139,16 @@ def build_joint_space(craft, *,
     K       = len(joints)
 
     # ----- rotational kinetic energy in COM coordinates -----------------
+    from ..parts._trace import is_promoted
     T = ca.MX(0.0)
     for part in craft.parts:
-        m_attr = getattr(part, "mass", 0.0)
-        if hasattr(m_attr, "_mx"):
+        if not part.contributes_inertia:
+            continue
+        m_attr = part.mass
+        if is_promoted(m_attr):
             m = m_attr._mx          # promoted (tunable) mass — keep symbolic
         else:
-            m = float(m_attr or 0.0)
+            m = float(m_attr)
             if m <= 0.0:
                 continue
         kin = kin_states[part]
@@ -156,8 +157,11 @@ def build_joint_space(craft, *,
         v   = ca.cross(om_mx, rho) + nu
         T   = T + 0.5 * m * ca.dot(v, v)
         moi = getattr(part, "moi", (0.0, 0.0, 0.0))
-        I_loc = ca.DM(np.diag([float(moi[0]), float(moi[1]),
-                               float(moi[2])]))
+        if is_promoted(moi):
+            I_loc = ca.diag(moi._mx)    # promoted (tunable) moi — symbolic
+        else:
+            I_loc = ca.DM(np.diag([float(moi[0]), float(moi[1]),
+                                   float(moi[2])]))
         R = kin.R_craft_from_input
         w_abs = kin.omega_input
         T = T + 0.5 * ca.dot(w_abs, R @ (I_loc @ (R.T @ w_abs)))

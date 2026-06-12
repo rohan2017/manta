@@ -165,3 +165,28 @@ def test_offset_endpoint_produces_torque():
     # x and y components small (no torque about those axes by symmetry).
     assert abs(omega[0]) < 1e-9
     assert abs(omega[1]) < 1e-9
+
+
+def test_tether_rejects_nested_endpoint():
+    """An endpoint under a joint would get a silently wrong lever arm —
+    the Tether constructor rejects it."""
+    from manta.parts import RevoluteJoint
+
+    a = Craft("a")
+    a.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
+    j = a.add(RevoluteJoint("gim", axis=(0.0, 0.0, 1.0)))
+    j.add(TetherEndpoint("hook"))
+    b = _make_craft("b")
+    import pytest
+    with pytest.raises(ValueError, match="root"):
+        Tether(a, "hook", b, "hook", stiffness=10.0)
+
+
+def test_tether_endpoint_lookup_ignores_non_endpoints():
+    """A same-named non-TetherEndpoint part must not satisfy the lookup."""
+    a = Craft("a")
+    a.add(Mass("hook", mass=1.0))      # decoy — not a TetherEndpoint
+    b = _make_craft("b")
+    import pytest
+    with pytest.raises(ValueError, match="no TetherEndpoint"):
+        Tether(a, "hook", b, "hook", stiffness=10.0)

@@ -15,7 +15,8 @@ from __future__ import annotations
 
 from ...ir.frames import PartFrame
 from ...ir.types import Vec3
-from ..base import Part, PartUpdate
+from .._declarations import PartUpdate
+from ..base import Part
 from ...ir.wrench import Wrench
 
 

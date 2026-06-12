@@ -7,9 +7,11 @@ Public surface re-exports the part classes for ergonomic imports::
     from manta.parts import Part, Parameter, Mass
 """
 
-from .base import (
-    CompositePart, Input, Output, Parameter, Part, PartUpdate, RootPart, State,
+from ._declarations import (
+    Input, Noise, Output, Parameter, PartUpdate, RandomWalkNoise, State,
+    WhiteNoise, unit_axis,
 )
+from .base import CompositePart, Part, RootPart
 from ..ir.wrench import Wrench
 from .structure.mass import Mass
 from .structure.point_buoy import PointBuoy
@@ -35,6 +37,7 @@ from .field_source import (
 __all__ = [
     "Part", "CompositePart", "RootPart",
     "Parameter", "Input", "Output", "State", "PartUpdate",
+    "Noise", "WhiteNoise", "RandomWalkNoise", "unit_axis",
     "Wrench",
     "Mass", "PointBuoy", "Collider",
     "ArticulatedJoint", "PrismaticJoint", "RevoluteJoint",

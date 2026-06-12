@@ -33,7 +33,8 @@ import casadi as ca
 
 from ..ir.frames import WorldFrame
 from ..ir.types import Vec3
-from ..parts.base import RandomWalkNoise, active_trace
+from ..parts._declarations import RandomWalkNoise
+from ..parts._trace import active_trace, is_promoted
 from .base import Disturbance
 from .fluid import FluidState
 
@@ -100,7 +101,7 @@ class CraftWindBubble(Disturbance):
         d_sq      = ca.dot(delta_mx, delta_mx)
         in_bubble = ca.if_else(d_sq < self.radius ** 2,
                                ca.MX(1.0), ca.MX(0.0))
-        wind_mx = self.wind._mx if hasattr(self.wind, "_mx") else self.wind
+        wind_mx = self.wind._mx if is_promoted(self.wind) else self.wind
         return FluidState(
             density  = ca.MX(0.0),
             velocity = _VEC3_W.from_mx(in_bubble * wind_mx),

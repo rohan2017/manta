@@ -19,7 +19,7 @@ from manta.ir.frames import PartFrame
 from manta.ir.types import Vec3
 from manta.ir.wrench import Wrench
 from manta.parts import Mass, PositionSensor
-from manta.parts.base import Input, Parameter, Part, PartUpdate
+from manta.parts import Input, Parameter, Part, PartUpdate
 
 
 # ---------------------------------------------------------------------------

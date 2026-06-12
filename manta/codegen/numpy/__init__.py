@@ -62,19 +62,29 @@ def TargetNumpy(x, *, compile: bool = False) -> NumpyRuntime:
     `step_n` to fold substeps for a further amortization."""
     from ..target import as_module
     m = as_module(x, "TargetNumpy")
-    methods = {e.method for e in m.entry_points}
-    runtime: NumpyRuntime
-    if m.hosting is Hosting.HELD:
-        if "predict" in methods:
-            runtime = NumpyFilter(m)
-        elif m.ports_by_role(Role.OUTPUT):
-            runtime = NumpyRecurrence(m)
-        else:
-            runtime = NumpyRuntime(m)
-    elif "control" in methods:
-        runtime = NumpyRegulator(m)
-    elif "step" in methods:
-        runtime = NumpySim(m)
-    else:
-        runtime = NumpyRuntime(m)
+    runtime = _select_view(m)(m)
     return runtime._enable_compile() if compile else runtime
+
+
+def _select_view(m):
+    """Pick the matching view class from the Module's SHAPE — Hosting plus the
+    Role/field signature, never an entry-point name (the C++ emitter's
+    no-name-matching discipline, applied to view selection):
+
+      * HELD + a matrix State field (the EKF covariance `P`)  → NumpyFilter
+      * HELD + an OUTPUT port (a recurrence's readouts)       → NumpyRecurrence
+      * a NOISE port (the simulation oracle's live draw)      → NumpySim
+      * returns a CONTROL port (a control law's `u`)          → NumpyRegulator
+      * anything else (e.g. the Sim's noiseless deploy bundle) → the engine
+    """
+    if m.hosting is Hosting.HELD:
+        if m.matrix_fields:
+            return NumpyFilter
+        if m.sole_port(Role.OUTPUT) is not None:
+            return NumpyRecurrence
+        return NumpyRuntime
+    if m.sole_port(Role.NOISE) is not None:
+        return NumpySim
+    if m.returns_role(Role.CONTROL):
+        return NumpyRegulator
+    return NumpyRuntime

@@ -459,10 +459,5 @@ class StateSpec:
             d_chunk = d[slot.tangent_offset :
                         slot.tangent_offset + slot.tangent_dim]
             new_chunk = slot.manifold.boxplus_num(x_chunk, d_chunk)
-            # SO(3) quaternion: renormalize defensively (tangent step may
-            # be large). Detect via storage shape (4,) so we don't
-            # special-case the manifold here.
-            if slot.manifold.storage_shape == (4,):
-                new_chunk = new_chunk / np.linalg.norm(new_chunk)
             x[slot.ambient_offset : slot.ambient_offset + slot.ambient_dim] = new_chunk
         return x

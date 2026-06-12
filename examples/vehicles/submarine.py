@@ -35,8 +35,9 @@ from manta import Craft, EKF, NoiseDriver, Sim, TargetNumpy, World, wire
 from manta.fields import FluidField
 from manta.ir.frames import WorldFrame
 from manta.ir.types import Scalar
-from manta.parts import DVL, DragSurface, IMU, Mass, PointBuoy, PositionSensor, Thruster
-from manta.parts.base import Output
+from manta.parts import (
+    DVL, DragSurface, IMU, Mass, Output, PointBuoy, PositionSensor, Thruster,
+)
 from manta.planets import Earth, SeaWaves
 
 from .._control import Pacer, common_args, make_controller

@@ -18,7 +18,8 @@ import numpy as np
 from ...ir.frames import PartFrame
 from ...ir.types import Vec3
 from ...ir.wrench import Wrench
-from ..base import Part, PartUpdate, RootPart
+from .._declarations import PartUpdate
+from ..base import Part, RootPart
 
 
 def cumulative_offset(part) -> np.ndarray:

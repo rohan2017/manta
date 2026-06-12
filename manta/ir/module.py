@@ -128,7 +128,9 @@ class Role(Enum):
     * ``TIMESTEP``    — the integration step `dt` (always required).
     * ``STATE``       — a full ambient manifold state passed as data (the
                         LQR's input); `manifold` carries the StateSpec and
-                        `init` the reference/operating point.
+                        `init` the reference/operating point. May repeat:
+                        the primary state is declared first, a reference
+                        point after it (an LQR's `x`, `x_ref`).
     * ``OUTPUT``      — a named readout bundle (a recurrence's outputs);
                         `fields` name the components.
     * ``MATRIX``      — a plain matrix value (a covariance `Q`, a Jacobian).
@@ -202,9 +204,6 @@ class PortRef:
     name: str
 
 
-KernelArg = "StateRef | PortRef"
-
-
 @dataclass(frozen=True)
 class EntryPoint:
     """One typed method backed by exactly one `ca.Function`.
@@ -256,6 +255,27 @@ class Module:
     def ports_by_role(self, role: Role) -> tuple[Port, ...]:
         return tuple(p for p in self.ports if p.role is role)
 
+    def sole_port(self, role: Role) -> "Port | None":
+        """The single Port of `role`, or None when there is none. Raises on
+        duplicates rather than silently picking one (per-channel roles like
+        MEASUREMENT go through `ports_by_role`) — except STATE, where
+        repetition is part of the IR contract: the primary state is declared
+        first and a reference point may follow (an LQR's `x`, `x_ref`).
+        Backends key on the primary and treat the rest as data arguments."""
+        ps = self.ports_by_role(role)
+        if len(ps) > 1 and role is not Role.STATE:
+            raise ValueError(
+                f"Module {self.name!r}: {len(ps)} ports of role {role.name}; "
+                f"sole_port expects at most one — use ports_by_role.")
+        return ps[0] if ps else None
+
+    def returns_role(self, role: Role) -> bool:
+        """True if any entry point returns a Port of `role` (a structural
+        query backends classify Module shape with — e.g. an LQR returns a
+        CONTROL port, an oracle returns MEASUREMENTs)."""
+        return any(self.port(name).role is role
+                   for ep in self.entry_points for name in ep.returns)
+
     def entry(self, method: str) -> EntryPoint:
         for ep in self.entry_points:
             if ep.method == method:
@@ -263,16 +283,33 @@ class Module:
         raise KeyError(f"Module {self.name!r}: no entry point {method!r}.")
 
     @property
+    def matrix_fields(self) -> tuple[StateField, ...]:
+        """The Euclidean matrix State fields (an EKF's held covariance `P`)."""
+        return tuple(f for f in self.state.fields if f.kind == "matrix")
+
+    def _manifold_source(self, attr: str):
+        """First non-None `attr` off a manifold State field, else off a
+        STATE-role port — the shared scan behind `initial_x` and `spec`."""
+        for f in self.state.fields:
+            if f.kind == "manifold" and getattr(f, attr) is not None:
+                return getattr(f, attr)
+        for p in self.ports:
+            if p.role is Role.STATE and getattr(p, attr) is not None:
+                return getattr(p, attr)
+        return None
+
+    @property
+    def initial_x(self):
+        """The manifold state's packed init vector — a manifold State field's
+        `init`, else a STATE-role port's `init`, else None. The reference
+        point `spec` is built around; backends seed struct defaults from it."""
+        return self._manifold_source("init")
+
+    @property
     def spec(self):
         """The manifold StateSpec this Module's state/struct is built from —
         a manifold State field's, else a STATE-role port's, else None."""
-        for f in self.state.fields:
-            if f.kind == "manifold":
-                return f.manifold
-        for p in self.ports:
-            if p.role is Role.STATE and p.manifold is not None:
-                return p.manifold
-        return None
+        return self._manifold_source("manifold")
 
     def __repr__(self) -> str:
         return (f"<Module {self.name!r} state={list(self.state.names)} "

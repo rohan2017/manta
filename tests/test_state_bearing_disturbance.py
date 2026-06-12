@@ -23,7 +23,7 @@ from manta.fields import (
 from manta.ir.frames import WorldFrame
 from manta.ir.types import Vec3
 from manta.parts import Mass
-from manta.parts.base import RandomWalkNoise
+from manta.parts import RandomWalkNoise
 
 
 class WindBias(Disturbance):

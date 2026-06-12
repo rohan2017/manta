@@ -8,8 +8,8 @@ folded the force-at-offset into a torque about the craft origin.
 
 from __future__ import annotations
 
-from ..ir.frames import FrameError, _capture_user_source, _validate_frame
-from ..ir.types import Vec3
+from .frames import FrameError, _capture_user_source, _validate_frame
+from .types import Vec3
 
 
 class Wrench:

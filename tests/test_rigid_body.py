@@ -164,3 +164,42 @@ def test_quaternion_normalization_holds_over_long_run():
 
     q = sim.state["long_spin"]["orientation"]
     assert np.isclose(np.linalg.norm(q), 1.0, atol=1e-9)
+
+
+def test_aggregate_composes_nested_offsets():
+    """A Mass riding a joint: its craft-frame position is the joint's
+    transform composed with its own — not its bare `transform`."""
+    from manta.parts import RevoluteJoint
+
+    c = Craft("gimballed")
+    c.add(Mass("hub", mass=1.0))
+    j = c.add(RevoluteJoint("pan", axis=(0.0, 0.0, 1.0),
+                            transform=(1.0, 0.0, 0.0)))
+    j.add(Mass("rotor", mass=1.0, transform=(0.5, 0.0, 0.0)))
+
+    inertials = c.aggregate_inertials()
+    assert inertials["m_total"] == 2.0
+    # rotor sits at (1.5, 0, 0) in craft frame → COM at (0.75, 0, 0).
+    np.testing.assert_allclose(inertials["com"], (0.75, 0.0, 0.0))
+    np.testing.assert_allclose(
+        inertials["I_origin"], np.diag([0.0, 2.25, 2.25]))
+    np.testing.assert_allclose(
+        inertials["I_com"], np.diag([0.0, 1.125, 1.125]))
+
+
+def test_aggregate_composes_declared_joint_angle():
+    """The numpy snapshot honours the joint's configured rest angle: a
+    90° pan about z swings the rotor's offset from +x to +y."""
+    from manta.parts import RevoluteJoint
+
+    c = Craft("gimballed")
+    c.add(Mass("hub", mass=1.0))
+    j = c.add(RevoluteJoint("pan", axis=(0.0, 0.0, 1.0),
+                            transform=(1.0, 0.0, 0.0),
+                            angle=math.pi / 2))
+    j.add(Mass("rotor", mass=1.0, transform=(0.5, 0.0, 0.0)))
+
+    inertials = c.aggregate_inertials()
+    # rotor at (1.0, 0.5, 0.0) → COM at the mass-weighted midpoint.
+    np.testing.assert_allclose(inertials["com"], (0.5, 0.25, 0.0),
+                               atol=1e-12)

@@ -43,13 +43,13 @@ from __future__ import annotations
 import casadi as ca
 import numpy as np
 
-from ..ir._linalg import spd_solve
 from ..ir.module import (
     EntryPoint, Hosting, Module, Port, PortField, PortRef, Role, StateField,
     StateLayout, StateRef, entry_ident,
 )
 from ..ir.state_spec import StateSpec, flatten_nested
 from ..linearization import LinearizedSystem, resolve_suffix
+from ._kalman import joseph_update
 
 
 class EKF:
@@ -112,13 +112,13 @@ class EKF:
             [sys.x_new, _sym(F @ P @ F.T + Q)],
             ["x", "P", "Q", "u", "dt", "t"], ["x_new", "P_new"])
 
-        # per-sensor Joseph update. A measurement is dt-independent, so
+        # per-sensor Joseph update (the shared `joseph_update` kernel —
+        # see estimation/_kalman.py). A measurement is dt-independent, so
         # dt is eliminated here (substituted to 0) — the kernel honestly
         # takes only (x, P, z, u, t).
         init_flat = flatten_nested(world._initial_state_dict())
         x0 = spec.pack_any(init_flat)
         zero_dt = ca.MX.zeros(1, 1)
-        eye = ca.MX.eye(n_tan)
         updates: dict[str, ca.Function] = {}
         for full, s in sys.sensors.items():
             z = ca.MX.sym("z", s.dim)
@@ -149,11 +149,7 @@ class EKF:
                     f"baked R is zero and the update is singular (the second "
                     f"fold NaNs). Declare a nonzero noise σ on the sensor, or "
                     f"exclude it via sensors=[...].")
-            S = H @ P @ H.T + R
-            K = spd_solve(S, (P @ H.T).T).T            # P Hᵀ S⁻¹ (S SPD)
-            x_upd = spec.boxplus_sym(x, K @ (z - h))
-            IKH = eye - K @ H
-            P_upd = _sym(IKH @ P @ IKH.T + K @ R @ K.T)
+            x_upd, P_upd, _, _ = joseph_update(x, P, h, H, R, z, spec)
             updates[full] = ca.Function(
                 f"ekf_update_{entry_ident(full)}",
                 [x, P, z, u, t], [x_upd, P_upd],

@@ -136,8 +136,9 @@ class TickContext:
       default instance if none is registered. The empty default's
       `value_at_sym(p, t)` returns the zero contribution, so a part can
       call `ctx.field(GravityField).value_at_sym(p, t)` regardless of
-      whether a GravityField is attached to the world.
-      ctx.has_field(FieldCls) → True iff a matching field is registered.
+      whether a GravityField is attached to the world. Parts that need a
+      field present declare `requires_fields` (validated at transform
+      build) instead of probing at tick time.
 
     Note on the acceleration fields: these reflect the **current**
     tick's Newton-Euler output (`α`, `a_origin`) lifted to this part's
@@ -199,15 +200,6 @@ class TickContext:
             yield from self._world.fields
         yield from self._fields
 
-    def has_field(self, cls: type) -> bool:
-        """True iff a field of type `cls` (or a subclass) is registered.
-        Use this for parts whose behaviour is gated on a field's
-        presence (rather than just returning zero on a missing field)."""
-        for f in self._iter_fields():
-            if isinstance(f, cls):
-                return True
-        return False
-
     def field(self, cls: type):
         """Return the registered field of type `cls` (or subclass), or
         an empty default instance `cls()` if none is registered. Calling
@@ -220,63 +212,85 @@ class TickContext:
                 return f
         return cls()
 
-    def get_field(self, cls: type):
-        """Return the registered field of type `cls`, or None.
-        Symmetric to `World.get_field`. Use `field(cls)` instead when
-        you want a never-None lookup that falls back to an empty
-        default."""
-        for f in self._iter_fields():
-            if isinstance(f, cls):
-                return f
-        return None
-
-    def planet(self, cls: type):
-        """Return the registered planet of type `cls` (or subclass),
-        or None. Parts declaring `requires_planet = EarthClass` reach
-        for the concrete instance through this accessor."""
-        if self._world is None:
-            return None
-        for p in self._world.planets:
-            if isinstance(p, cls):
-                return p
-        return None
-
 
 # ---------------------------------------------------------------------------
 # Inertial aggregation (pure Python, runs at compile time)
 # ---------------------------------------------------------------------------
 
-def _aggregate_inertials(parts: list[Part]) -> dict[str, Any]:
-    """Compute total mass, COM offset, and MOI-about-craft-origin from
-    a list of parts. Returns concrete Python/numpy values — these are
-    constants in the traced graph, not symbolic nodes.
+def _np_axis_angle_rotation(axis, angle: float) -> np.ndarray:
+    """Numeric Rodrigues rotation about a unit `axis` by `angle` (rad) —
+    the numpy twin of `ir._rotation.R_from_axis_angle` for the at-rest
+    inertia snapshot. Joints normalize `axis` at construction."""
+    a = np.asarray(axis, dtype=float)
+    K = np.array([[0.0, -a[2], a[1]],
+                  [a[2], 0.0, -a[0]],
+                  [-a[1], a[0], 0.0]])
+    return np.eye(3) + np.sin(angle) * K + (1.0 - np.cos(angle)) * (K @ K)
 
-    Walks `part.mass`, `part.moi`, `part.transform` on every part. Parts
-    without `mass` (Thruster, sensors, drag surfaces, …) are skipped.
-    A joint has no `.mass` of its own — its rotor `Mass` children are
-    enumerated separately in the parts list, so the body sees the
-    rotor's inertia distribution via the same code path as a plain
-    `Mass`.
+
+def _aggregate_inertials(root_part: Part) -> dict[str, Any]:
+    """Compute total mass, COM offset, and MOI-about-craft-origin for
+    the part tree rooted at `root_part`. Returns concrete Python/numpy
+    values — these are constants in the traced graph, not symbolic
+    nodes; the dynamics use the symbolic `symbolic_inertia_rollup`.
+
+    Only parts carrying the `contributes_inertia` trait (`Mass` and
+    friends) are counted — a `mass` attribute alone is NOT inertial
+    (e.g. `TrajectoryEndpoint.mass` is a feedforward gain). Each
+    counted part's craft-frame position composes its `transform`
+    through the full parent chain — joints contribute their DECLARED
+    rest-pose rotation/slide (`angle` / `displacement` as configured at
+    construction) — so a Mass riding a gimbal lands at the right
+    craft-frame position, mirroring the symbolic rollup's geometry.
     """
+    from .parts.articulation.joint import PrismaticJoint, RevoluteJoint
+    from .parts._trace import declared_attr
+    from .parts.base import CompositePart
+
     m_total = 0.0
     com_sum = np.zeros(3)        # m_i · r_i, then divide
     I_about_origin = np.zeros((3, 3))
 
-    for part in parts:
-        m = float(getattr(part, "mass", 0.0))
-        if m <= 0.0:
-            continue
-        r = np.array(part.transform, dtype=float)
-        moi_diag = getattr(part, "moi", (0.0, 0.0, 0.0))
-        I_own = np.diag([float(moi_diag[0]),
-                          float(moi_diag[1]),
-                          float(moi_diag[2])])
+    def visit(part, r_parent_out: np.ndarray, R_parent_out: np.ndarray):
+        nonlocal m_total, com_sum, I_about_origin
+        # `transform` lives in the parent's OUTPUT frame coords; the
+        # mount doesn't rotate, so input frame = parent output frame.
+        tr = np.asarray(
+            declared_attr(part, "transform", (0.0, 0.0, 0.0)), dtype=float)
+        r = r_parent_out + R_parent_out @ tr
+        R_in = R_parent_out
 
-        m_total += m
-        com_sum += m * r
-        # Parallel-axis lift: I_about_origin += I_own + m·(|r|²·I − r·r^T).
-        I_about_origin += I_own + m * (
-            float(r @ r) * np.eye(3) - np.outer(r, r))
+        r_out, R_out = r, R_in
+        if isinstance(part, RevoluteJoint):
+            angle = float(declared_attr(part, "angle", 0.0))
+            R_out = R_in @ _np_axis_angle_rotation(part.axis, angle)
+        elif isinstance(part, PrismaticJoint):
+            disp = float(declared_attr(part, "displacement", 0.0))
+            r_out = r + R_in @ (disp * np.asarray(part.axis, dtype=float))
+
+        if part.contributes_inertia:
+            m = float(declared_attr(part, "mass", 0.0))
+            if m > 0.0:
+                moi_diag = declared_attr(part, "moi", (0.0, 0.0, 0.0))
+                I_own_local = np.diag([float(moi_diag[0]),
+                                       float(moi_diag[1]),
+                                       float(moi_diag[2])])
+                # The part's own (diagonal) MOI lives in its input frame.
+                I_own = R_in @ I_own_local @ R_in.T
+                m_total += m
+                com_sum += m * r
+                # Parallel-axis lift:
+                # I_about_origin += I_own + m·(|r|²·I − r·r^T).
+                I_about_origin += I_own + m * (
+                    float(r @ r) * np.eye(3) - np.outer(r, r))
+
+        if isinstance(part, CompositePart):
+            for child in part.children:
+                visit(child, r_out, R_out)
+
+    if isinstance(root_part, CompositePart):
+        for child in root_part.children:
+            visit(child, np.zeros(3), np.eye(3))
 
     if m_total <= 0.0:
         return {"m_total": 0.0, "com": np.zeros(3),
@@ -381,12 +395,16 @@ class Craft:
 
     @property
     def total_mass(self) -> float:
-        return sum(float(getattr(p, "mass", 0.0)) for p in self.parts)
+        """Sum of the declared `mass` of every genuinely inertial part
+        (`contributes_inertia` trait) — gain-like `mass` parameters
+        (e.g. TrajectoryEndpoint's feedforward) don't count."""
+        return sum(float(p.mass) for p in self.parts
+                   if p.contributes_inertia)
 
     def aggregate_inertials(self) -> dict[str, Any]:
         """Public-facing accessor: see `_aggregate_inertials`. Useful for
         external inspection and tests."""
-        return _aggregate_inertials(list(self.parts))
+        return _aggregate_inertials(self.root)
 
     # ----- Helpers --------------------------------------------------------
 

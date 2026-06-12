@@ -8,6 +8,7 @@ that at setup instead of as a silent estimate drift.
 """
 
 import numpy as np
+import pytest
 
 from manta import Craft, EKF, World
 from manta.estimation import observability
@@ -109,6 +110,15 @@ def test_no_sensors_is_fully_unobservable():
     rep = ekf.observability(sensors=[])
     assert rep.rank == 0
     assert not rep.observable
+
+
+def test_unknown_sensor_name_raises():
+    """A typo'd sensor name must raise, not silently analyze the rest."""
+    ekf = EKF(_sub_world())
+    with pytest.raises(KeyError, match="unknown sensor"):
+        ekf.observability(sensors=["imu.gyr0"])
+    with pytest.raises(KeyError, match="unknown sensor"):
+        ekf.sigma_horizon(horizon=0.1, sensors=["imu.gyr0"])
 
 
 def test_report_is_readable():

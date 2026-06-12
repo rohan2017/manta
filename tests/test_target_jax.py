@@ -144,7 +144,10 @@ def test_deploy_module_lowering():
                        np.array(ref).ravel(), atol=1e-12)
 
 
-def test_jointed_craft_raises_not_implemented():
+def test_jointed_craft_raises_on_first_kernel_use():
+    """Translation is lazy per kernel: lowering a jointed craft's Module
+    succeeds; the untranslatable (Linsol-bearing) kernel raises only when
+    it is first used."""
     c = Craft("spinner")
     c.add(Mass("body", mass=1.0, moi=(0.01, 0.01, 0.01)))
     j = c.add(RevoluteJoint("wheel", mode="passive"))
@@ -152,5 +155,22 @@ def test_jointed_craft_raises_not_implemented():
                transform=(0.05, 0.0, 0.0)))
     w = World().add_field(GravityField(g=(0, 0, -9.81)))
     w.add_craft(c, position=(0, 0, 10))
+    jm = JaxModule(Sim(w).module())          # construction is fine
     with pytest.raises(NotImplementedError, match="expand"):
-        JaxModule(Sim(w).module())
+        jm.kernel(jm.module.entry("step").fn)
+
+
+def test_call_unknown_value_key_raises():
+    mod, jm = _lowered()
+    x = np.asarray(jm.initial_state())
+    with pytest.raises(TypeError, match="unknown value key"):
+        jm.call("step", x=x, u=np.zeros(4),
+                noise=np.zeros(mod.port("noise").size), dt=DT, tt=0.0)
+
+
+def test_initial_state_on_stateless_module_raises():
+    from manta.ir.module import Module, StateLayout
+    m = Module(name="empty", state=StateLayout(), ports=(),
+               functions={}, entry_points=())
+    with pytest.raises(ValueError, match="manifold state"):
+        JaxModule(m).initial_state()

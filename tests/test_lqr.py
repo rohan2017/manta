@@ -186,6 +186,29 @@ def test_bad_Q_shape_raises():
             regulate=["c.position", "c.velocity"], Q=np.eye(3), dt=0.02)
 
 
+def test_R_must_be_symmetric_positive_definite():
+    asym = np.eye(3)
+    asym[0, 1] = 0.2
+    with pytest.raises(ValueError, match="symmetric"):
+        _lqr(R=asym)
+    with pytest.raises(ValueError, match="positive-definite"):
+        _lqr(R=np.diag([1.0, 1.0, 0.0]))
+
+
+def test_riccati_tolerance_is_scale_relative():
+    """A huge (but legitimate) cost scale still converges — an absolute
+    |ΔP| fixpoint test would misread it as 'not stabilizable'."""
+    big, _ = _lqr(Q=np.eye(6) * 1e9)
+    assert np.max(np.abs(big.closed_loop_eigs)) < 1.0
+
+
+def test_dare_tol_and_max_iter_are_exposed():
+    lqr, _ = _lqr(tol=1e-9, max_iter=20000)
+    assert np.max(np.abs(lqr.closed_loop_eigs)) < 1.0
+    with pytest.raises(RuntimeError, match="stabilizable"):
+        _lqr(max_iter=2)        # cap too low → must report, not hang
+
+
 def test_no_inputs_raises():
     c = Craft("c"); c.add(Mass("body", mass=1.0))
     w = World().add_field(GravityField(g=(0, 0, 0))); w.add_craft(c)

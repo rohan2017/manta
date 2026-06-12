@@ -49,6 +49,25 @@ def _as_mx(x) -> ca.MX:
     raise TypeError(f"_as_mx: cannot promote {type(x).__name__}")
 
 
+def _as_scalar_mx(x, *, op: str) -> ca.MX:
+    """`_as_mx` restricted to genuine scalars (int/float/Scalar/1×1 MX).
+
+    Vector/matrix scaling operators must reject non-Scalar IR values:
+    `_as_mx` duck-types on `_mx`, so without this guard `Vec3 * Vec3`
+    would silently build an elementwise product that bypasses every
+    frame check."""
+    if isinstance(x, _IRValue) and not isinstance(x, Scalar):
+        raise TypeError(
+            f"{op}: rhs must be a scalar, got {type(x).__name__}. "
+            f"Use .dot()/.cross() for vector products, @ for matrix "
+            f"application/composition.")
+    mx = _as_mx(x)
+    if mx.shape != (1, 1):
+        raise TypeError(
+            f"{op}: rhs must be a scalar, got MX of shape {tuple(mx.shape)}.")
+    return mx
+
+
 # ---------------------------------------------------------------------------
 # IRValue base
 # ---------------------------------------------------------------------------
@@ -101,15 +120,19 @@ class _ParameterizedConstructor:
         input and `coerce` passes it through.
         """
         if isinstance(value, self._cls):
-            want = self._kwargs.get("frame")
-            got = getattr(value, "_frame", None)
-            if want is not None and got is not want:
-                raise FrameError(
-                    f"{self._cls.__name__}.coerce",
-                    expected=f"value in {want.__name__}",
-                    got=f"frame={got.__name__ if got else None}",
-                    source=_capture_user_source(),
-                )
+            # Vec3 carries `frame`; Mat3/Quat carry `from_frame`/`to_frame`.
+            for kwarg, attr in (("frame", "_frame"),
+                                ("from_frame", "_from_frame"),
+                                ("to_frame", "_to_frame")):
+                want = self._kwargs.get(kwarg)
+                got = getattr(value, attr, None)
+                if want is not None and got is not want:
+                    raise FrameError(
+                        f"{self._cls.__name__}.coerce",
+                        expected=f"{kwarg}={want.__name__}",
+                        got=f"{kwarg}={got.__name__ if got else None}",
+                        source=_capture_user_source(),
+                    )
             return value
         if isinstance(value, _IRValue):
             raise TypeError(
@@ -121,6 +144,8 @@ class _ParameterizedConstructor:
         return self._cls._from_mx(mx, **self._kwargs)
 
     def __repr__(self) -> str:
+        if not self._kwargs:                 # an unparameterized type (Scalar)
+            return self._cls.__name__
         params = ", ".join(
             f"{k}={_format_frame(v) if _is_frame(v) else v!r}"
             for k, v in self._kwargs.items())
@@ -137,10 +162,8 @@ class Scalar(_IRValue):
     _mx_shape: ClassVar[tuple[int, int]] = (1, 1)
 
     def __init__(self, mx):
-        # Accept any 1×1 (or zero-D) MX. CasADi sometimes returns shape
-        # (1, 1) for scalars; we normalize.
         mx = _as_mx(mx)
-        if mx.shape not in ((1, 1), (1,)):
+        if mx.shape != (1, 1):
             raise ValueError(
                 f"Scalar: expected shape (1,1), got {tuple(mx.shape)}")
         self._mx = mx
@@ -153,29 +176,31 @@ class Scalar(_IRValue):
     def _make_constant(cls, value):
         return cls(ca.MX(float(value)))
 
+    # Scalar carries no type parameters, so its factories route through a
+    # zero-parameter `_ParameterizedConstructor` — the SAME input / constant
+    # / coerce / from_mx code path the frame-tagged Vec3/Mat3/Quat use, so the
+    # value-type construction API is uniform across every IR type.
+    @classmethod
+    def _ctor(cls) -> "_ParameterizedConstructor":
+        return _ParameterizedConstructor(cls)
+
     @classmethod
     def input(cls, name: str) -> "Scalar":
-        g = _current_graph()
-        mx = ca.MX.sym(name, 1, 1)
-        v = cls(mx)
-        g._register_input(name, v)
-        return v
+        return cls._ctor().input(name)
 
     @classmethod
     def constant(cls, value) -> "Scalar":
-        return cls._make_constant(value)
+        return cls._ctor().constant(value)
 
     @classmethod
     def coerce(cls, value) -> "Scalar":
         """`value` as-is when already a Scalar, else a constant — the
         promotable-Parameter idiom (see _ParameterizedConstructor.coerce)."""
-        if isinstance(value, cls):
-            return value
-        if isinstance(value, _IRValue):
-            raise TypeError(
-                f"Scalar.coerce: expected Scalar or a plain number, got "
-                f"{type(value).__name__}")
-        return cls._make_constant(value)
+        return cls._ctor().coerce(value)
+
+    @classmethod
+    def from_mx(cls, mx) -> "Scalar":
+        return cls._ctor().from_mx(mx)
 
     # --- Arithmetic -------------------------------------------------------
 
@@ -189,9 +214,14 @@ class Scalar(_IRValue):
         return _scalar_op(other, self, lambda a, b: a - b)
 
     def __mul__(self, other):
-        # Scalar * Vec3 / Mat3 / Quat: dispatch to that type's reverse op.
-        if isinstance(other, (Vec3, Mat3, Quat)):
+        # Scalar * Vec3 / Mat3: dispatch to that type's reverse op.
+        if isinstance(other, (Vec3, Mat3)):
             return other.__rmul__(self)
+        if isinstance(other, Quat):
+            raise TypeError(
+                "Scalar * Quat: scaling a unit quaternion is meaningless. "
+                "Compose rotations with *, or scale an axis-angle Vec3 and "
+                "boxplus it.")
         return _scalar_op(self, other, lambda a, b: a * b)
     __rmul__ = __mul__
 
@@ -285,11 +315,13 @@ class Vec3(_IRValue):
         return Vec3(-self._mx, frame=self._frame)
 
     def __mul__(self, scalar) -> "Vec3":
-        return Vec3(self._mx * _as_mx(scalar), frame=self._frame)
+        return Vec3(self._mx * _as_scalar_mx(scalar, op="Vec3 * scalar"),
+                    frame=self._frame)
     __rmul__ = __mul__
 
     def __truediv__(self, scalar) -> "Vec3":
-        return Vec3(self._mx / _as_mx(scalar), frame=self._frame)
+        return Vec3(self._mx / _as_scalar_mx(scalar, op="Vec3 / scalar"),
+                    frame=self._frame)
 
     # ---- Vector ops ------------------------------------------------------
 
@@ -416,7 +448,7 @@ class Mat3(_IRValue):
             f"Mat3 @ {type(other).__name__}: unsupported rhs.")
 
     def __mul__(self, scalar):
-        return Mat3(self._mx * _as_mx(scalar),
+        return Mat3(self._mx * _as_scalar_mx(scalar, op="Mat3 * scalar"),
                     from_frame=self._from_frame, to_frame=self._to_frame)
     __rmul__ = __mul__
 

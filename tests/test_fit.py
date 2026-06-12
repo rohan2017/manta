@@ -97,9 +97,13 @@ def test_unknown_parameter_raises():
 
 
 def test_non_promotable_parameter_raises():
-    # `moi` is a plain Parameter (no manifold) — not promotable.
+    # `force_tensors` is a plain Parameter (no manifold) — not promotable.
+    from manta.parts import DragSurface
+    world = _drone()
+    world.crafts[0].add(DragSurface.isotropic_quadratic(
+        "hull", area=0.05, drag_coefficient=1.0))
     with pytest.raises(KeyError):
-        Sim(_drone(), parameters=["body.moi"])
+        Sim(world, parameters=["hull.force_tensors"])
 
 
 def test_set_parameters_without_port_raises():
@@ -202,6 +206,26 @@ def test_prior_pins_unobservable_mass_accel_only():
     assert res.posterior_sigma[i_mass] > 0.5 * res.prior_sigma[i_mass]
 
 
+def test_fit_recovers_moi_from_gyro():
+    """`Mass.moi` is promotable: roll/pitch inertia is strongly observable
+    through the gyro under differential thrust; yaw inertia only sees the
+    (small) reaction torque, so its posterior must flag it as far less
+    identified than the other two axes."""
+    windows = _record_windows(_drone(), n_win=4, K=60, seed=6)
+    model = _drone()
+    body = next(p for p in model.crafts[0].parts if p.name == "body")
+    body.moi = (0.034, 0.011, 0.06)           # truth is (0.02, 0.02, 0.04)
+    fit = Fit(model, parameters={"body.moi": Prior(sigma=0.05)})
+    res = fit.solve(windows, weights={"imu.gyro": 1e6, "imu.accel": 1e4})
+    moi = res.values["drone.body.moi"]
+    assert np.allclose(moi[:2], [0.02, 0.02], atol=1e-3), moi
+    ix = res.labels.index("drone.body.moi[0]")
+    iz = res.labels.index("drone.body.moi[2]")
+    assert res.posterior_sigma[iz] > 5 * res.posterior_sigma[ix]
+    res.apply()
+    assert np.allclose(body.moi[:2], [0.02, 0.02], atol=1e-3)
+
+
 def test_fit_apply_bakes_fitted_values():
     windows = _record_windows(_drone(kf=11.0), n_win=2, K=40, seed=4)
     model = _drone(kf=9.0)
@@ -223,7 +247,9 @@ def test_fit_summary_and_weak_directions():
     windows = _record_windows(_drone(), n_win=2, K=30, seed=5)
     fit = Fit(_drone(), parameters={"body.mass": Prior(sigma=0.1, log=True)})
     res = fit.solve(windows)
+    assert res.converged is True
     s = res.summary()
+    assert "converged" in s
     assert "drone.body.mass" in s and "post/prior" in s
     dirs = res.weak_directions(1)
     assert len(dirs) == 1 and isinstance(dirs[0][0], float)
@@ -236,3 +262,62 @@ def test_fit_validates_windows():
     truth = TargetNumpy(Sim(_drone()))
     with pytest.raises(ValueError, match="at least one sensor"):
         fit.solve([Window(x0=truth.state, z={}, dt=DT)])
+
+
+def test_fit_validates_window_traces():
+    """Wrong-width z, mismatched trace lengths, and a wrong-length u trace
+    all raise before any solve."""
+    fit = Fit(_drone(), parameters={"body.mass": Prior(sigma=0.1)})
+    x0 = TargetNumpy(Sim(_drone())).state
+    K = 10
+    with pytest.raises(ValueError, match=r"expected \(K, 3\)"):
+        fit.solve([Window(x0=x0, z={"imu.gyro": np.zeros((K, 2))}, dt=DT)])
+    with pytest.raises(ValueError, match="trace length"):
+        fit.solve([Window(x0=x0, z={"imu.gyro": np.zeros((K, 3)),
+                                    "imu.accel": np.zeros((K + 2, 3))},
+                          dt=DT)])
+    with pytest.raises(ValueError, match=r"scalar or length-10"):
+        fit.solve([Window(x0=x0, z={"imu.gyro": np.zeros((K, 3))},
+                          u={"t1.throttle": np.zeros(K + 3)}, dt=DT)])
+
+
+def test_fit_unconverged_sets_flag_and_warns():
+    """A solve cut off by the iteration cap must say so: converged=False,
+    a RuntimeWarning at solve and at apply, and a loud summary header."""
+    windows = _record_windows(_drone(kf=11.0), n_win=1, K=10, seed=7)
+    fit = Fit(_drone(kf=9.0),
+              parameters={"t1.force_quad": Prior(sigma=4.0)})
+    with pytest.warns(RuntimeWarning, match="did NOT converge"):
+        res = fit.solve(windows, ipopt_options={"ipopt.max_iter": 1})
+    assert res.converged is False
+    assert "NOT CONVERGED" in res.summary()
+    with pytest.warns(RuntimeWarning, match="did NOT converge"):
+        res.apply()
+
+
+def test_log_prior_supports_vector_parameters():
+    """log=True is elementwise: a vector-positive parameter (moi) rides as
+    log(p_j) per component; a vector with a zero component is refused."""
+    fit = Fit(_drone(), parameters={"body.moi": Prior(sigma=0.1, log=True)})
+    b = next(blk for blk in fit._blocks if blk.full == "drone.body.moi")
+    assert b.log and b.dim == 3
+    assert np.allclose(b.init, np.log([0.02, 0.02, 0.04]))
+    assert np.allclose(b.theta_of_v(b.init), [0.02, 0.02, 0.04])
+    # t1.transform has a zero z-component — log-reparam is impossible.
+    with pytest.raises(ValueError, match="strictly positive"):
+        Fit(_drone(),
+            parameters={"t1.transform": Prior(sigma=0.1, log=True)})
+
+
+def test_fit_recovers_moi_with_vector_log_prior():
+    """End-to-end vector log=True: the observable roll/pitch inertias are
+    recovered through the log-reparam (staying positive throughout)."""
+    windows = _record_windows(_drone(), n_win=3, K=50, seed=8)
+    model = _drone()
+    body = next(p for p in model.crafts[0].parts if p.name == "body")
+    body.moi = (0.034, 0.011, 0.06)           # truth is (0.02, 0.02, 0.04)
+    fit = Fit(model, parameters={"body.moi": Prior(sigma=1.0, log=True)})
+    res = fit.solve(windows, weights={"imu.gyro": 1e6, "imu.accel": 1e4})
+    moi = res.values["drone.body.moi"]
+    assert np.all(moi > 0)
+    assert np.allclose(moi[:2], [0.02, 0.02], rtol=0.05), moi

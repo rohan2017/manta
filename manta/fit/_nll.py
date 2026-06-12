@@ -39,25 +39,33 @@ meaningful once the mean model is right.
 
 from __future__ import annotations
 
+import warnings
+
 import casadi as ca
 import numpy as np
 
+from ..estimation._kalman import joseph_update
 from ..ir._linalg import spd_logdet, spd_solve
 from ..ir.state_spec import flatten_nested
 from ..linearization import LinearizedSystem, resolve_suffix
-from ._common import Prior, Window
+from ._common import (
+    Prior, Window, _FitBlock, convergence_line, format_table, laplace_sigma,
+    pack_u_trace, pack_x0, prior_penalty, resolve_traces, solve_blocks_nlp,
+    solver_converged,
+)
 
 
-class _Channel:
-    """One fitted noise channel: its slice of the tick's noise vector,
-    its log-σ decision slot, and its prior."""
+class _Channel(_FitBlock):
+    """One fitted noise channel: its slot in the tick's noise vector, its
+    log-σ decision slot, and its prior. Always scalar (`dim == 1`), always
+    log-space."""
 
-    __slots__ = ("spec", "decl_name", "alias", "s_index",
-                 "s_init", "s_prior", "s_sigma")
+    __slots__ = ("spec", "decl_name", "alias")
 
-    def __init__(self, spec, s_index: int, prior: Prior | None) -> None:
+    def __init__(self, spec, offset: int, prior: Prior | None) -> None:
         self.spec = spec
-        self.s_index = s_index
+        self.offset = offset
+        self.dim = 1
         # The user-facing name is the DECLARATION name (`gyro_bias`),
         # not the driver-input name (`gyro_bias_driver`).
         self.decl_name = next(
@@ -77,11 +85,12 @@ class _Channel:
                 f"no positive Prior mean — there is no positive starting "
                 f"point for log-σ. Declare a nonzero σ or give "
                 f"Prior(mean=...).")
-        self.s_init = np.log(start)
-        self.s_prior = np.log(mean) if mean > 0.0 else self.s_init
-        self.s_sigma = (np.inf if prior is None or prior.sigma is None
-                        else float(prior.sigma))
-        if self.s_sigma <= 0.0:
+        # ndarray slots (length 1) — the shared-helper contract.
+        self.init = np.array([np.log(start)])
+        self.prior = np.array([np.log(mean)]) if mean > 0.0 else self.init
+        self.sigma = np.array([np.inf if prior is None or prior.sigma is None
+                               else float(prior.sigma)])
+        if self.sigma[0] <= 0.0:
             raise ValueError(
                 f"NoiseFit: Prior.sigma for {self.alias!r} must be "
                 f"positive (relative, log-space).")
@@ -91,7 +100,9 @@ class NoiseFitResult:
     """Fitted σ per channel + Laplace posterior diagnostics.
 
     `prior_sigma` / `posterior_sigma` are RELATIVE (log-space) widths;
-    posterior ≈ prior means the data didn't inform that σ."""
+    posterior ≈ prior means the data didn't inform that σ. `converged`
+    is IPOPT's success flag — False ⇒ the values are the failed solve's
+    final iterate (a `RuntimeWarning` was emitted), not an optimum."""
 
     def __init__(self, channels, s_opt, hessian, objective, stats,
                  world) -> None:
@@ -100,21 +111,25 @@ class NoiseFitResult:
         self.s = np.asarray(s_opt, dtype=float).ravel()
         self.objective = float(objective)
         self.stats = stats
-        self.values = {c.alias: float(np.exp(self.s[c.s_index]))
+        self.converged = solver_converged(stats, who="NoiseFit")
+        self.values = {c.alias: float(np.exp(self.s[c.offset]))
                        for c in channels}
         self.labels = [c.alias for c in channels]
-        self.prior_sigma = np.array([c.s_sigma for c in channels])
-        try:
-            cov = np.linalg.inv(hessian)
-            self.posterior_sigma = np.sqrt(np.maximum(np.diag(cov), 0.0))
-        except np.linalg.LinAlgError:
-            self.posterior_sigma = np.full(len(channels), np.inf)
+        self.prior_sigma = np.concatenate([c.sigma for c in channels])
+        # eigh-based: a non-PD direction (indefinite/near-singular Laplace
+        # Hessian) reports inf — never a fake "perfectly identified" 0.
+        self.posterior_sigma = laplace_sigma(hessian)
 
     def apply(self) -> None:
         """Write the fitted σ back onto the owning parts
         (`<channel>_sigma` attributes); transforms built afterwards
         (an `EKF(world)`'s auto-Q/R, a `NoiseDriver`d truth sim) use
         them."""
+        if not self.converged:
+            warnings.warn(
+                "NoiseFitResult.apply: the solve did NOT converge — "
+                "writing the failed solve's final iterate onto the parts.",
+                RuntimeWarning, stacklevel=2)
         for c in self._channels:
             setattr(c.spec.owner, f"{c.decl_name}_sigma",
                     self.values[c.alias])
@@ -130,15 +145,13 @@ class NoiseFitResult:
                          "inf" if np.isinf(pri) else f"{pri:.3g}",
                          "inf" if np.isinf(post) else f"{post:.3g}",
                          ratio))
-        widths = [max(len(r[c]) for r in rows) for c in range(5)]
-        lines = ["  ".join(r[c].ljust(widths[c]) for c in range(5))
-                 for r in rows]
-        lines.insert(1, "  ".join("-" * w for w in widths))
-        return "\n".join(lines)
+        return (convergence_line(self.converged, self.stats) + "\n"
+                + format_table(rows))
 
     def __repr__(self) -> str:
         return (f"<NoiseFitResult {len(self._channels)} channel(s), "
-                f"objective={self.objective:.6g}>")
+                f"objective={self.objective:.6g}, "
+                f"converged={self.converged}>")
 
 
 class NoiseFit:
@@ -174,6 +187,10 @@ class NoiseFit:
         self.channels = [
             _Channel(sys.noise_specs[idx], k, prior)
             for k, (idx, prior) in enumerate(sorted(chosen.items()))]
+        if not self.channels:
+            raise ValueError(
+                "NoiseFit: no noise channels selected — name at least one "
+                "channel in noise={...}.")
         self._chan_by_spec = {c.spec.full: c for c in self.channels}
         self.n_s = len(self.channels)
 
@@ -189,7 +206,7 @@ class NoiseFit:
         entries = []
         for spec in self.sys.noise_specs:
             c = self._chan_by_spec.get(spec.full)
-            var = (ca.exp(2.0 * s[c.s_index]) if c is not None
+            var = (ca.exp(2.0 * s[c.offset]) if c is not None
                    else ca.MX(float(spec.sigma) ** 2))
             entries += [var] * spec.dim
         return ca.diag(ca.vertcat(*entries))
@@ -220,10 +237,12 @@ class NoiseFit:
         P = ca.reshape(Pv, tan, tan)
         Sigma = self._sigma_diag(s)
         zero_dt = ca.MX.zeros(1, 1)
-        eye = ca.MX.eye(tan)
         nll = ca.MX(0.0)
 
         # ---- sequential measurement updates at x (pre-step state) ----
+        # The Joseph fold is the shared `joseph_update` kernel (R here is
+        # symbolic in σ — see estimation/_kalman.py); ν and S come back
+        # so the NLL increment reuses the update's own innovation stats.
         off = 0
         for full, sm in sys.sensors.items():
             zk = z[off:off + sm.dim]
@@ -237,14 +256,9 @@ class NoiseFit:
                 R = L_h @ Sigma @ L_h.T
             else:
                 R = ca.MX.zeros(sm.dim, sm.dim)
-            nu = zk - h
-            S = H @ P @ H.T + R
+            x, P, nu, S = joseph_update(x, P, h, H, R, zk, spec)
             nll = nll + 0.5 * (ca.dot(nu, spd_solve(S, nu))
-                               + spd_logdet(S, sm.dim))
-            K = spd_solve(S, (P @ H.T).T).T
-            x = spec.boxplus_sym(x, K @ nu)
-            IKH = eye - K @ H
-            P = IKH @ P @ IKH.T + K @ R @ K.T
+                               + spd_logdet(S))
 
         # ---- predict from the updated state ---------------------------
         sub = ca.vertcat(sys.x_sym, sys.u_sym, sys.dt_sym, sys.t_sym)
@@ -268,13 +282,15 @@ class NoiseFit:
     def _validate_R0(self) -> None:
         """Every chosen sensor needs S > 0 from the first update: with
         all its white channels at σ=0 (and unfitted), R is exactly zero
-        and a small P0 makes S singular. Probe at the starting σ."""
-        s0 = np.array([c.s_init for c in self.channels]).reshape(-1, 1)
+        and a small P0 makes S singular. Probe at the starting σ — and,
+        as in `EKF`, at a perturbed point too when R is state-dependent
+        (a sampled check, not a proof)."""
+        s0 = np.concatenate([c.init for c in self.channels]).reshape(-1, 1)
         # Direct numeric probe: evaluate each sensor's R at the start.
         sys = self.sys
         flat = flatten_nested(self.world._initial_state_dict())
         x0 = np.asarray(sys.spec.pack_any(flat), dtype=float)
-        s_sym = ca.MX.sym("s", max(self.n_s, 1), 1)
+        s_sym = ca.MX.sym("s", self.n_s, 1)
         for full, sm in sys.sensors.items():
             if sm.L_h_sym is None:
                 continue
@@ -284,10 +300,14 @@ class NoiseFit:
                     sm.L_h_sym, sys.dt_sym, ca.MX.zeros(1, 1)).T
             R_fn = ca.Function("R", [sys.x_sym, sys.u_sym, sys.t_sym,
                                      s_sym], [R])
-            R0 = np.asarray(ca.DM(R_fn(
-                x0, sys.u_defaults, 0.0,
-                s0 if self.n_s else np.zeros((1, 1)))))
-            if not np.any(np.abs(np.diag(R0)) > 0.0):
+            probes = [(x0, sys.u_defaults, 0.0)]
+            if ca.depends_on(R, ca.vertcat(sys.x_sym, sys.u_sym,
+                                           sys.t_sym)):
+                x1 = sys.spec.boxplus_num(
+                    x0.reshape(-1), 1e-3 * np.ones(sys.spec.tangent_dim))
+                probes.append((x1, sys.u_defaults + 1e-3, 1.0))
+            if all(not np.any(np.abs(np.diag(np.asarray(
+                    ca.DM(R_fn(*p, s0))))) > 0.0) for p in probes):
                 raise ValueError(
                     f"NoiseFit: sensor {full!r} has zero measurement "
                     f"noise at the starting σ — its first update is "
@@ -335,24 +355,18 @@ class NoiseFit:
                                         for i in range(K)]])))
             total = total + ca.sum2(res[2])
 
-        for c in self.channels:                    # ½‖(s − s̄)/σ‖² prior
-            if np.isfinite(c.s_sigma):
-                d = (s[c.s_index] - float(c.s_prior)) / float(c.s_sigma)
-                total = total + 0.5 * d * d
+        # ½‖(s − s̄)/σ‖² prior (skipped for flat-prior channels).
+        total = total + prior_penalty(s, self.channels, weight=0.5)
 
-        s0 = np.array([c.s_init for c in self.channels])
-        opts = {"ipopt.print_level": 5 if verbose else 0,
-                "print_time": verbose, "ipopt.sb": "yes"}
-        opts.update(ipopt_options or {})
-        solver = ca.nlpsol("noise_fit", "ipopt", {"x": s, "f": total}, opts)
-        sol = solver(x0=s0)
-        s_opt = np.asarray(sol["x"]).ravel()
+        s_opt, objective, stats = solve_blocks_nlp(
+            "noise_fit", s, total, self.channels,
+            verbose=verbose, ipopt_options=ipopt_options)
 
         H_fn = ca.Function("H", [s], [ca.hessian(total, s)[0]])
         hessian = np.asarray(ca.DM(H_fn(s_opt)))
 
-        return NoiseFitResult(self.channels, s_opt, hessian, sol["f"],
-                              solver.stats(), self.world)
+        return NoiseFitResult(self.channels, s_opt, hessian, objective,
+                              stats, self.world)
 
     # ------------------------------------------------------------------
 
@@ -360,42 +374,16 @@ class NoiseFit:
         """Pack one window: x0 (ambient), U (n_u,K), Z (Σdims,K)."""
         sys = self.sys
         sensor_fulls = list(sys.sensors)
-        K = None
-        traces = {}
-        for key, arr in w.z.items():
-            full = resolve_suffix(key, sensor_fulls, label="sensor",
-                                  who="NoiseFit")
-            a = np.asarray(arr, dtype=float)
-            if a.ndim == 1:
-                a = a.reshape(-1, 1)
-            if K is None:
-                K = a.shape[0]
-            traces[full] = a
+        dims = {full: sm.dim for full, sm in sys.sensors.items()}
+        traces, K = resolve_traces(w.z, sensor_fulls, dims, who="NoiseFit")
         missing = set(sensor_fulls) - set(traces)
         if missing:
             raise ValueError(
                 f"NoiseFit: window is missing trace(s) for "
                 f"{sorted(missing)} — every chosen sensor needs a trace "
                 f"(restrict with sensors=[...]).")
-        for full, a in traces.items():
-            dim = sys.sensors[full].dim
-            if a.shape != (K, dim):
-                raise ValueError(
-                    f"NoiseFit: z[{full!r}] expected ({K}, {dim}), got "
-                    f"{a.shape}.")
         Z = np.vstack([traces[f].T for f in sensor_fulls])
-
-        flat = flatten_nested(self.world._initial_state_dict())
-        flat.update(flatten_nested(w.x0))
-        x0 = np.asarray(sys.spec.pack_any(flat),
-                        dtype=float).reshape(-1, 1)
-
-        U = np.tile(sys.u_defaults.reshape(-1, 1), (1, K)) \
-            if sys.input_names else np.zeros((0, K))
-        for key, val in w.u.items():
-            full = resolve_suffix(key, sys.input_names, label="input",
-                                  who="NoiseFit")
-            row = sys.input_names.index(full)
-            a = np.asarray(val, dtype=float).ravel()
-            U[row, :] = a[0] if a.size == 1 else a
+        x0 = pack_x0(self.world, sys.spec, w)
+        U = pack_u_trace(w.u, sys.input_names, sys.u_defaults, K,
+                         who="NoiseFit")
         return x0, U, Z, K

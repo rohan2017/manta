@@ -52,11 +52,12 @@ there is weakly observable, with the convergence time read off directly.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Callable
 
 import numpy as np
 
 from ..ir.module import entry_ident
+from ..linearization import resolve_suffix
 
 
 @dataclass
@@ -124,17 +125,18 @@ def _operating_point(ekf, state) -> np.ndarray:
     return ekf.spec.pack_any(state, base=ekf.world._initial_state_dict())
 
 
-def _select_sensors(ekf, sensors):
+def _select_sensors(ekf, sensors, *, who: str):
     """Pick the `(H_fn, full_name)` pairs to analyze. `sensors=None` uses
-    every registered sensor; otherwise each entry matches a sensor whose
-    full name equals it or ends with `.<entry>`."""
-    out = []
-    for key, spec_o in ekf._sensors.items():
-        full = spec_o["full"]
-        if sensors is None or full in sensors or any(
-                full == s or full.endswith("." + s) for s in sensors):
-            out.append((spec_o["H_fn"], full))
-    return out
+    every registered sensor; otherwise each entry resolves like everywhere
+    else (full name or unique `.<suffix>`) — an unknown or ambiguous name
+    raises instead of silently dropping a typo."""
+    fulls = list(ekf._sensors)
+    if sensors is None:
+        chosen = set(fulls)
+    else:
+        chosen = {resolve_suffix(s, fulls, label="sensor", who=who)
+                  for s in sensors}
+    return [(ekf._sensors[f]["H_fn"], f) for f in fulls if f in chosen]
 
 
 def observability(ekf, *, state=None, inputs=None, sensors=None,
@@ -163,7 +165,7 @@ def observability(ekf, *, state=None, inputs=None, sensors=None,
     x = _operating_point(ir, state)
     u = ir._build_u(inputs)
 
-    pairs = _select_sensors(ir, sensors)
+    pairs = _select_sensors(ir, sensors, who="observability")
     names = [full for _, full in pairs]
     if not pairs:
         return ObservabilityReport(n, 0, [], [(s.name, 1.0) for s in spec.slots],
@@ -240,7 +242,7 @@ def observability_trajectory(world, *, dt: float, steps: int,
     n = spec.tangent_dim
     sim = TargetNumpy(sim_ir)
 
-    pairs = _select_sensors(ekf_ir, sensors)
+    pairs = _select_sensors(ekf_ir, sensors, who="observability_trajectory")
     names = [full for _, full in pairs]
     if not pairs:
         return ObservabilityReport(n, 0, [], [(s.name, 1.0) for s in spec.slots],
@@ -395,7 +397,7 @@ def sigma_horizon(ekf, *, horizon: float, dt: float = 0.02,
     x_s, u_s, dt_s, t_s = sys.x_sym, sys.u_sym, sys.dt_sym, sys.t_sym
     zero_dt = ca.MX.zeros(1, 1)
     chosen = []                                  # (full, H_fn, R_fn, period)
-    for H_fn, full in _select_sensors(ir, sensors):
+    for H_fn, full in _select_sensors(ir, sensors, who="sigma_horizon"):
         s = sys.sensors[full]
         if s.L_h_sym is not None and sys.Sigma is not None:
             L_h = ca.substitute(s.L_h_sym, dt_s, zero_dt)
@@ -464,6 +466,10 @@ def sigma_horizon(ekf, *, horizon: float, dt: float = 0.02,
         for H, R, period in HRs:
             if i % period:
                 continue
+            # Numeric (numpy) twin of the symbolic Joseph update — the
+            # shared `joseph_update` in estimation/_kalman.py is the
+            # reference implementation. Kept separate: this loop is plain
+            # numpy over a horizon, not a baked CasADi kernel.
             S = H @ P @ H.T + R
             K = np.linalg.solve(S, H @ P).T      # P Hᵀ S⁻¹ (S SPD)
             IKH = eye - K @ H

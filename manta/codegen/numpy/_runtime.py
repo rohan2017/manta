@@ -7,14 +7,58 @@ from typing import Any
 import numpy as np
 
 from ...bus import PortSet
-from ...ir.module import Module, PortRef, Role, StateRef
+from ...ir.module import Hosting, Module, Role
 from ...linearization import resolve_suffix
+from ..target import resolve_args
 from ._compile import _compiled_functions
 
 
 def _split(full: str) -> tuple[str, str]:
     owner, rest = full.split(".", 1)
     return owner, rest
+
+
+def pack_fields(fields, source, *, default=0.0, required: bool = False,
+                who: str = "pack") -> np.ndarray:
+    """Flat vector over `fields` (in order), each filled from
+    `source[field.name]` when present, validated against the field's dim.
+    A missing field falls back to `default` — a constant or a callable
+    `default(field)` (scalar defaults broadcast across a vector field) —
+    unless `required`, which raises. The one place the numpy views pack a
+    named-field dict (controls, params, noise, recurrence inputs) into the
+    flat kernel vector."""
+    chunks = []
+    for f in fields:
+        if f.name in source:
+            v = np.atleast_1d(np.asarray(source[f.name], dtype=float)).ravel()
+            if v.size != f.dim:
+                raise ValueError(
+                    f"{who}: {f.name!r} expects dim {f.dim}, got {v.size}.")
+        elif required:
+            raise KeyError(
+                f"{who}: missing {f.name!r}; required: "
+                f"{[g.name for g in fields]}")
+        else:
+            d = default(f) if callable(default) else default
+            v = np.atleast_1d(np.asarray(d, dtype=float)).ravel()
+            if v.size == 1 and f.dim > 1:
+                v = np.full(f.dim, v[0])
+        chunks.append(v)
+    return np.concatenate(chunks) if chunks else np.zeros(0)
+
+
+def unpack_fields(fields, vec) -> dict[str, Any]:
+    """Inverse of `pack_fields`: split a flat vector over `fields` (in
+    order) into `{field name: value}` — scalar fields unwrapped to float,
+    vector fields as owned copies."""
+    v = np.asarray(vec, dtype=float).reshape(-1)
+    out: dict[str, Any] = {}
+    off = 0
+    for f in fields:
+        seg = v[off:off + f.dim]
+        out[f.name] = float(seg[0]) if f.dim == 1 else seg.copy()
+        off += f.dim
+    return out
 
 
 class NumpyRuntime:
@@ -31,19 +75,13 @@ class NumpyRuntime:
             self._state[f.name] = (a.reshape(f.shape) if f.kind == "matrix"
                                    else a.reshape(-1).copy())
 
-        ctrl = module.ports_by_role(Role.CONTROL)
-        self._u_port = ctrl[0] if ctrl else None
-        noi = module.ports_by_role(Role.NOISE)
-        self._noise_port = noi[0] if noi else None
+        self._u_port = module.sole_port(Role.CONTROL)
+        self._noise_port = module.sole_port(Role.NOISE)
         self._meas_ports_ir = module.ports_by_role(Role.MEASUREMENT)
-        out = module.ports_by_role(Role.OUTPUT)
-        self._y_port = out[0] if out else None
-        st = module.ports_by_role(Role.STATE)
-        self._x_port = st[0] if st else None
-        par = module.ports_by_role(Role.PARAMETER)
-        self._param_port = par[0] if par else None
+        self._y_port = module.sole_port(Role.OUTPUT)
+        self._x_port = module.sole_port(Role.STATE)
+        self._param_port = module.sole_port(Role.PARAMETER)
         self._param_overrides: dict[str, np.ndarray] = {}
-        self._methods = {e.method for e in module.entry_points}
 
         self._t = 0.0
         self._ports = PortSet()
@@ -58,32 +96,24 @@ class NumpyRuntime:
 
     def call(self, method: str, values: dict[str, Any] | None = None,
              **kw) -> dict[str, np.ndarray]:
-        """Run one entry point. `values`/kwargs are keyed by port name
-        (use the dict for dotted names); TIME ports default to 0."""
+        """Run one entry point. `values`/kwargs are keyed by port or state
+        name (use the dict for dotted names); TIME ports default to 0.
+
+        The Hosting contract: a THREADED module's state is the caller's —
+        supply state fields by name in `values` (unsupplied ones fall back
+        to the engine's last-written copy) and read the fresh writes from
+        the returned dict alongside the entry's returns. A HELD module's
+        state lives in the runtime and is read/written in place; only the
+        entry's returns come back."""
         vals = dict(values or {})
         vals.update(kw)
         return self._run(self.module.entry(method), vals)
 
     def _run(self, ep, values: dict[str, Any]) -> dict[str, np.ndarray]:
         m = self.module
-        args = []
-        for a in ep.args:
-            if isinstance(a, StateRef):
-                args.append(self._state[a.name])
-            elif isinstance(a, PortRef):
-                if a.name in values:
-                    args.append(values[a.name])
-                elif m.port(a.name).role is Role.TIME:
-                    args.append(0.0)
-                elif m.port(a.name).role is Role.PARAMETER:
-                    # Declared values, with any set_parameters overrides.
-                    args.append(self.param_vector())
-                else:
-                    raise KeyError(
-                        f"{m.name}.{ep.method}: missing value for port "
-                        f"{a.name!r}.")
-            else:                                  # pragma: no cover
-                raise TypeError(f"unknown kernel arg {a!r}")
+        args = resolve_args(m, ep, values,
+                            state_lookup=lambda n: self._state[n],
+                            param_default=self.param_vector)
         fn = self._functions[ep.fn]
         res = fn(*args)
         outs = [res] if fn.n_out() == 1 else list(res)
@@ -94,12 +124,16 @@ class NumpyRuntime:
                 f"{len(outs)} outputs but the entry point declares "
                 f"{len(ep.writes)} writes + {len(ep.returns)} returns "
                 f"= {expected}.")
+        threaded = m.hosting is Hosting.THREADED
+        ret: dict[str, np.ndarray] = {}
         for i, w in enumerate(ep.writes):
             fld = m.state.field(w)
             arr = np.asarray(outs[i], dtype=float)
-            self._state[w] = (arr.reshape(fld.shape) if fld.kind == "matrix"
-                              else arr.reshape(-1))
-        ret: dict[str, np.ndarray] = {}
+            val = (arr.reshape(fld.shape) if fld.kind == "matrix"
+                   else arr.reshape(-1))
+            self._state[w] = val
+            if threaded:                  # THREADED: writes go to the caller
+                ret[w] = val
         for name, o in zip(ep.returns, outs[len(ep.writes):]):
             port = m.port(name)
             a = np.asarray(o, dtype=float)
@@ -118,17 +152,12 @@ class NumpyRuntime:
     def build_u(self, u: dict[str, Any] | None) -> np.ndarray:
         """Resolve a `{name: value}` dict (full or suffix names) to the
         flat control vector over the Module's declared defaults."""
-        fields = self._u_fields()
-        out = np.array([float(np.asarray(f.default).ravel()[0])
-                        for f in fields])
-        if u:
-            names = self._input_names()
-            idx = {n: i for i, n in enumerate(names)}
-            for k, v in u.items():
-                full = resolve_suffix(k, names, label="input",
-                                      who=type(self).__name__)
-                out[idx[full]] = float(np.asarray(v).ravel()[0])
-        return out
+        names = self._input_names()
+        source = {resolve_suffix(k, names, label="input",
+                                 who=type(self).__name__): v
+                  for k, v in (u or {}).items()}
+        return pack_fields(self._u_fields(), source,
+                           default=lambda f: f.default, who="build_u")
 
     # ---- promoted parameters (PARAMETER port) --------------------------
 
@@ -159,10 +188,8 @@ class NumpyRuntime:
         port = self._param_port
         if port is None:
             return np.zeros(0)
-        chunks = [self._param_overrides.get(
-                      f.name, np.asarray(f.default, dtype=float).ravel())
-                  for f in port.fields]
-        return np.concatenate(chunks) if chunks else np.zeros(0)
+        return pack_fields(port.fields, self._param_overrides,
+                           default=lambda f: f.default, who="param_vector")
 
     @property
     def spec(self):

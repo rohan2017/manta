@@ -48,20 +48,11 @@ class _Ctx:
         self.amb = self.spec.ambient_dim if self.spec else 0
         self.tan = self.spec.tangent_dim if self.spec else 0
         self.held = module.hosting is Hosting.HELD
-        self.mats = [f for f in module.state.fields if f.kind == "matrix"]
-        ctl = module.ports_by_role(Role.CONTROL)
-        self.u_port = ctl[0] if ctl else None
-        out = module.ports_by_role(Role.OUTPUT)
-        self.y_port = out[0] if out else None
-        st = module.ports_by_role(Role.STATE)
-        self.x_port = st[0] if st else None
-        # the manifold state's init vector (struct defaults)
-        self.x_init = None
-        for f in module.state.fields:
-            if f.kind == "manifold":
-                self.x_init = f.init
-        if self.x_init is None and self.x_port is not None:
-            self.x_init = self.x_port.init
+        self.mats = module.matrix_fields
+        self.u_port = module.sole_port(Role.CONTROL)
+        self.y_port = module.sole_port(Role.OUTPUT)
+        self.x_port = module.sole_port(Role.STATE)
+        self.x_init = module.initial_x      # manifold init → struct defaults
 
     def port(self, name):
         return self.m.port(name)
@@ -73,6 +64,12 @@ class _Ctx:
 
 def _mat_type(r: int, c: int) -> str:
     return f"Eigen::Matrix<double, {r}, {c}>"
+
+
+def _buf_dim(n: int) -> int:
+    """A C scratch buffer (or Eigen vector type) needs ≥1 element even for a
+    zero-width port — a control-free craft still declares `double u_in[1]`."""
+    return max(int(n), 1)
 
 
 # ---------------------------------------------------------------------------
@@ -154,9 +151,9 @@ def _param_for(port, decl: bool, ctx) -> str | None:
     if r is Role.MEASUREMENT:
         return f"const {S.eigen_vec_type(port.size)}& z"
     if r is Role.NOISE:
-        return f"const {S.eigen_vec_type(max(port.size, 1))}& noise"
+        return f"const {S.eigen_vec_type(_buf_dim(port.size))}& noise"
     if r is Role.PARAMETER:
-        return f"const {S.eigen_vec_type(max(port.size, 1))}& params"
+        return f"const {S.eigen_vec_type(_buf_dim(port.size))}& params"
     if r is Role.TIMESTEP:
         return "double dt"
     if r is Role.TIME:
@@ -189,12 +186,34 @@ def _params(ep, ctx, *, decl: bool) -> list[str]:
     return out
 
 
+def _manifold_writes(ep, ctx) -> list[str]:
+    """The manifold State fields `ep` writes (kind-based, never by name)."""
+    return [w for w in ep.writes if ctx.m.state.field(w).kind == "manifold"]
+
+
+def _matrix_writes(ep, ctx) -> list[str]:
+    """The matrix State fields `ep` writes (an EKF's covariance)."""
+    return [w for w in ep.writes if ctx.m.state.field(w).kind == "matrix"]
+
+
+def _n_out(ep, ctx) -> int:
+    """How many values the method hands back: a written THREADED manifold
+    state counts (it is returned fresh) plus every declared return."""
+    writes_state = bool(_manifold_writes(ep, ctx)) and not ctx.held
+    return (1 if writes_state else 0) + len(ep.returns)
+
+
+def _is_composite(ep, ctx) -> bool:
+    """Composite return (→ the emitted `<Method>Result` struct)."""
+    return _n_out(ep, ctx) > 1
+
+
 def _ret_type(ep, ctx, q: str | None = None) -> str:
     """Return type. Composite (a written THREADED state plus returns, or
     multiple returns) → the emitted `<Method>Result` struct."""
     pre = f"{q}::" if q else ""
-    writes_state = "x" in ep.writes and not ctx.held
-    n_out = (1 if writes_state else 0) + len(ep.returns)
+    writes_state = bool(_manifold_writes(ep, ctx)) and not ctx.held
+    n_out = _n_out(ep, ctx)
     if n_out == 0:
         return "void"
     if n_out > 1:
@@ -218,7 +237,7 @@ def _result_struct_name(ep) -> str:
 def _result_struct(ep, ctx) -> list[str]:
     """Composite-return struct: the fresh State + each returned port."""
     out = [f"    struct {_result_struct_name(ep)} {{"]
-    if "x" in ep.writes and not ctx.held:
+    if _manifold_writes(ep, ctx) and not ctx.held:
         out.append("        State x;")
     for name in ep.returns:
         port = ctx.port(name)
@@ -298,9 +317,11 @@ def _arg_expr(a, ctx) -> str:
     if r is Role.MEASUREMENT:
         return "&z" if port.size == 1 else "z.data()"
     if r is Role.NOISE:
-        return "noise.data()"
+        # `_param_for` declares a plain double for a (buffered) size-1
+        # port — take its address, like MEASUREMENT does for a scalar z.
+        return "&noise" if _buf_dim(port.size) == 1 else "noise.data()"
     if r is Role.PARAMETER:
-        return "params.data()"
+        return "&params" if _buf_dim(port.size) == 1 else "params.data()"
     if r is Role.TIMESTEP:
         return "&dt"
     if r is Role.TIME:
@@ -315,11 +336,10 @@ def _arg_expr(a, ctx) -> str:
         f"contract in manta.ir.module) for the new Role.")
 
 
-def _method_body(ep, ctx) -> list[str]:
-    L: list[str] = []
-    # Manifold reads: (param/member name, kernel buffer) — the held/
-    # threaded state plus any secondary STATE-role port (e.g. x_ref).
-    manifold_reads: list[tuple[str, str]] = []
+def _manifold_reads(ep, ctx) -> list[tuple[str, str]]:
+    """(member/param name, kernel buffer) for each manifold state read: the
+    held/threaded state plus any secondary STATE-role port (an LQR's x_ref)."""
+    reads: list[tuple[str, str]] = []
     for a in ep.args:
         if isinstance(a, StateRef) \
                 and ctx.m.state.field(a.name).kind == "manifold":
@@ -331,34 +351,40 @@ def _method_body(ep, ctx) -> list[str]:
                     else (_ident(port.name), f"{_ident(port.name)}_in"))
         else:
             continue
-        if pair not in manifold_reads:
-            manifold_reads.append(pair)
-    writes_manifold = "x" in ep.writes
-    composite = _ret_type(ep, ctx).endswith("Result")
+        if pair not in reads:
+            reads.append(pair)
+    return reads
 
-    # buffers
-    for _, buf in manifold_reads:
+
+def _has_control_arg(ep, ctx) -> bool:
+    return any(isinstance(a, PortRef) and ctx.port(a.name).role is Role.CONTROL
+               for a in ep.args)
+
+
+def _body_buffers(ep, ctx, reads, writes_manifold, matrix_writes):
+    """Local scratch declarations; returns `(lines, ret_bufs)` where each
+    `ret_buf` is `(port name, buffer expr passed to the kernel)`."""
+    L: list[str] = []
+    for _, buf in reads:
         L.append(f"    double {buf}[{ctx.amb}];")
     if writes_manifold:
         L.append(f"    double x_out[{ctx.amb}];")
-    if any(isinstance(a, PortRef) and ctx.port(a.name).role is Role.CONTROL
-           for a in ep.args):
+    if _has_control_arg(ep, ctx):
         n = ctx.n_u()
-        L.append(f"    double u_in[{max(n, 1)}];"
+        L.append(f"    double u_in[{_buf_dim(n)}];"
                  + ("" if n else "   // no inputs"))
-    matrix_writes = [w for w in ep.writes if w != "x"]
     for w in matrix_writes:
         L.append(f"    Cov {w}_out;")
-    ret_bufs: list[tuple[str, str]] = []      # (port name, buffer expr)
+    ret_bufs: list[tuple[str, str]] = []
     for name in ep.returns:
         port = ctx.port(name)
         buf = f"r_{_ident(name)}"
         if port.role is Role.CONTROL:
-            L.append(f"    double {buf}[{max(ctx.n_u(), 1)}];")
+            L.append(f"    double {buf}[{_buf_dim(ctx.n_u())}];")
             ret_bufs.append((name, buf))
         elif port.role is Role.OUTPUT:
             ydim = sum(f.dim for f in port.fields)
-            L.append(f"    double {buf}[{max(ydim, 1)}];")
+            L.append(f"    double {buf}[{_buf_dim(ydim)}];")
             ret_bufs.append((name, buf))
         elif len(port.shape) == 2:
             L.append(f"    Eigen::Matrix<double, {port.shape[0]}, "
@@ -371,27 +397,33 @@ def _method_body(ep, ctx) -> list[str]:
             tp = S.eigen_vec_type(port.size)
             L.append(f"    {tp} {buf} = {tp}::Zero();")
             ret_bufs.append((name, f"{buf}.data()"))
+    return L, ret_bufs
 
-    # pack
-    for name, buf in manifold_reads:
-        L.append(f"    pack_state({name}, {buf});")
-    if any(isinstance(a, PortRef) and ctx.port(a.name).role is Role.CONTROL
-           for a in ep.args):
+
+def _body_pack(ep, ctx, reads) -> list[str]:
+    L = [f"    pack_state({name}, {buf});" for name, buf in reads]
+    if _has_control_arg(ep, ctx):
         L.append("    pack_inputs(u, u_in);")
+    return L
 
-    # kernel call
+
+def _body_call(ep, ctx, ret_bufs) -> list[str]:
+    manifold = set(_manifold_writes(ep, ctx))
     results: list[tuple[int, str]] = []
     oi = 0
     for w in ep.writes:
-        results.append((oi, "x_out" if w == "x" else f"{w}_out.data()"))
+        results.append((oi, "x_out" if w in manifold else f"{w}_out.data()"))
         oi += 1
     for (_, buf) in ret_bufs:
         results.append((oi, buf))
         oi += 1
-    L += _call(ctx.kname[ep.fn], [_arg_expr(a, ctx) for a in ep.args],
-               results)
+    return _call(ctx.kname[ep.fn], [_arg_expr(a, ctx) for a in ep.args],
+                 results)
 
-    # scatter / return
+
+def _body_return(ep, ctx, reads, writes_manifold, composite, ret_bufs,
+                 matrix_writes) -> list[str]:
+    L: list[str] = []
     if ctx.held and writes_manifold:
         L.append("    unpack_state(x_out, x);")
     for w in matrix_writes:
@@ -410,9 +442,8 @@ def _method_body(ep, ctx) -> list[str]:
         L.append("    return out;")
         return L
     if writes_manifold and not ctx.held:
-        L += ["    State out;", "    unpack_state(x_out, out);",
-              "    return out;"]
-        return L
+        return L + ["    State out;", "    unpack_state(x_out, out);",
+                    "    return out;"]
     name = ep.returns[0]
     port = ctx.port(name)
     if port.role is Role.CONTROL:
@@ -425,6 +456,21 @@ def _method_body(ep, ctx) -> list[str]:
         L.append("    return out;")
     else:
         L.append(f"    return r_{_ident(name)};")
+    return L
+
+
+def _method_body(ep, ctx) -> list[str]:
+    """The four phases — declare scratch buffers, pack typed args in, call the
+    flat-C kernel, scatter/return — each rendered by a helper above."""
+    reads = _manifold_reads(ep, ctx)
+    writes_manifold = bool(_manifold_writes(ep, ctx))
+    composite = _is_composite(ep, ctx)
+    matrix_writes = _matrix_writes(ep, ctx)
+    L, ret_bufs = _body_buffers(ep, ctx, reads, writes_manifold, matrix_writes)
+    L += _body_pack(ep, ctx, reads)
+    L += _body_call(ep, ctx, ret_bufs)
+    L += _body_return(ep, ctx, reads, writes_manifold, composite, ret_bufs,
+                      matrix_writes)
     return L
 
 
@@ -473,7 +519,7 @@ def emit_module_cpp(module, out_dir, *, class_name: str,
         H += _fields_struct("Outputs", ctx.y_port.fields,
                             with_init=False) + [""]
     for ep in entries:
-        if _ret_type(ep, ctx).endswith("Result"):
+        if _is_composite(ep, ctx):
             H += _result_struct(ep, ctx) + [""]
     if ctx.held:
         H.append("    State x;")

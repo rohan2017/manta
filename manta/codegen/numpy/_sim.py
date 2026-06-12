@@ -7,10 +7,30 @@ from typing import Any
 import casadi as ca
 import numpy as np
 
+from ...ir.module import Role, StateRef
 from ...ir.state_spec import flatten_nested
 from ...linearization import resolve_suffix
 from ._noise import NoiseDriver
-from ._runtime import NumpyRuntime, _split
+from ._runtime import NumpyRuntime, _split, pack_fields
+
+
+def _stepn_port_arg(role: Role, *, hold, u, noise, params, dt, t, n):
+    """The folded `mapaccum` argument for one step-entry PortRef, by Role:
+    per-call vectors (u, noise, params) held constant across the n substeps
+    (via `hold`), dt repeated, t advancing per substep."""
+    if role is Role.CONTROL:
+        return hold(u)
+    if role is Role.NOISE:
+        return hold(noise)
+    if role is Role.PARAMETER:
+        return hold(params)
+    if role is Role.TIMESTEP:
+        return ca.repmat(ca.DM(float(dt)), 1, n)
+    if role is Role.TIME:
+        return ca.DM(np.array([[t + k * dt for k in range(n)]]))
+    raise NotImplementedError(
+        f"step_n arg for role {role} — update _stepn_port_arg (and the "
+        f"ARG_ROLES contract in manta.ir.module) for the new Role.")
 
 
 class NumpySim(NumpyRuntime):
@@ -24,6 +44,7 @@ class NumpySim(NumpyRuntime):
         self._driver: NoiseDriver | None = None
         self._outputs: dict[str, dict[str, Any]] = {}
         self._sim_state: dict | None = None
+        self._stepn_cache: dict[int, Any] = {}   # n → folded step kernel
 
     # ---- held state ----------------------------------------------------
 
@@ -78,27 +99,31 @@ class NumpySim(NumpyRuntime):
         return self._sim_state
 
     def _advance(self, state: dict, dt: float, t: float) -> dict:
-        spec = self._spec
         flat = flatten_nested(state)
-        self._state["x"] = spec.pack_any(flat)
-        u = np.array([float(np.asarray(flat.get(f.name, f.default)).ravel()[0])
-                      for f in self._u_fields()])
-        readings = self._run(self.module.entry("step"),
-                             {"u": u, "noise": self._noise_vec(flat),
-                              "dt": dt, "t": t})
-        new_state = spec.to_nested(self._state["x"])
-        # Preserve input-only entries (commands, noise placeholders); the
-        # sensor readings deliberately stay OUT of the state dict.
-        for owner, slots in state.items():
-            new_state.setdefault(owner, {})
-            for slot, val in slots.items():
-                if slot not in new_state[owner]:
-                    new_state[owner][slot] = val
+        self._state["x"] = self._spec.pack_any(flat)
+        u = pack_fields(self._u_fields(), flat,
+                        default=lambda f: f.default, who="step")
+        ep = self.module.entry("step")
+        res = self._run(ep, {"u": u, "noise": self._noise_vec(flat),
+                             "dt": dt, "t": t})
+        readings = {name: res[name] for name in ep.returns}
+        return self._commit_step(state, readings)
+
+    def _commit_step(self, prev_state: dict, readings: dict) -> dict:
+        """Write the freshly packed `self._state['x']` back into `prev_state`
+        IN PLACE — manifold slots get this step's values; input-only entries
+        (commands, noise placeholders — sensor readings deliberately stay OUT
+        of the state dict) are untouched. Mutating in place keeps every dict
+        reference a caller may hold (`st = sim.state['craft']`) live across
+        steps. This step's `{full sensor name: reading}` is scattered into
+        `self._outputs`."""
+        for owner, slots in self._spec.to_nested(self._state["x"]).items():
+            prev_state.setdefault(owner, {}).update(slots)
         self._outputs = {}
         for full, reading in readings.items():
             owner, slot = _split(full)
             self._outputs.setdefault(owner, {})[slot] = reading
-        return new_state
+        return prev_state
 
     def step_n(self, dt: float, n: int, *, t: float | None = None
                ) -> dict[str, dict[str, Any]]:
@@ -126,20 +151,19 @@ class NumpySim(NumpyRuntime):
         return self._sim_state
 
     def _step_n_fn(self, n: int):
-        cache = self.__dict__.setdefault("_stepn_cache", {})
-        if n not in cache:
+        if n not in self._stepn_cache:
             # accumulate output 0 (x_new) -> input 0 (x); u/noise/dt/t are
             # per-substep parameters.
-            cache[n] = self._functions["step"].mapaccum(f"step_x{n}", n,
-                                                        [0], [0])
-        return cache[n]
+            self._stepn_cache[n] = self._functions["step"].mapaccum(
+                f"step_x{n}", n, [0], [0])
+        return self._stepn_cache[n]
 
     def _advance_n(self, state: dict, dt: float, n: int, t: float) -> dict:
-        spec = self._spec
         flat = flatten_nested(state)
-        x0 = np.asarray(spec.pack_any(flat), dtype=float).reshape(-1, 1)
-        u = np.array([float(np.asarray(flat.get(f.name, f.default)).ravel()[0])
-                      for f in self._u_fields()])
+        x0 = np.asarray(self._spec.pack_any(flat),
+                        dtype=float).reshape(-1, 1)
+        u = pack_fields(self._u_fields(), flat,
+                        default=lambda f: f.default, who="step")
         noise = self._noise_vec(flat)
         fn = self._step_n_fn(n)
 
@@ -148,39 +172,23 @@ class NumpySim(NumpyRuntime):
             return (ca.repmat(ca.DM(vec.reshape(-1, 1)), 1, n) if vec.size
                     else ca.DM(0, n))
 
-        from ...ir.module import PortRef, Role
         ep = self.module.entry("step")
+        params = self.param_vector()
         call_args: list = []
         for a in ep.args:
-            if not isinstance(a, PortRef):
+            if isinstance(a, StateRef):
                 call_args.append(x0)
-            elif a.name == "u":
-                call_args.append(_held(u))
-            elif a.name == "noise":
-                call_args.append(_held(noise))
-            elif self.module.port(a.name).role is Role.PARAMETER:
-                call_args.append(_held(self.param_vector()))
-            elif self.module.port(a.name).role is Role.TIMESTEP:
-                call_args.append(ca.repmat(ca.DM(float(dt)), 1, n))
-            else:                                  # TIME
-                call_args.append(
-                    ca.DM(np.array([[t + k * dt for k in range(n)]])))
+                continue
+            call_args.append(_stepn_port_arg(
+                self.module.port(a.name).role, hold=_held, u=u, noise=noise,
+                params=params, dt=dt, t=t, n=n))
         res = fn(*call_args)
         outs = [res] if not isinstance(res, (list, tuple)) else list(res)
         self._state["x"] = np.asarray(outs[0])[:, -1].reshape(-1)
-        new_state = spec.to_nested(self._state["x"])
-        for owner, slots in state.items():
-            new_state.setdefault(owner, {})
-            for slot, val in slots.items():
-                if slot not in new_state[owner]:
-                    new_state[owner][slot] = val
-        ep = self.module.entry("step")
-        self._outputs = {}
-        for i, name in enumerate(ep.returns):
-            owner, slot = _split(name)
-            self._outputs.setdefault(owner, {})[slot] = (
-                np.asarray(outs[len(ep.writes) + i])[:, -1].reshape(-1))
-        return new_state
+        readings = {
+            name: np.asarray(outs[len(ep.writes) + i])[:, -1].reshape(-1)
+            for i, name in enumerate(ep.returns)}
+        return self._commit_step(state, readings)
 
     def _noise_vec(self, flat: dict | None = None) -> np.ndarray:
         """The flat noise draw, in port-field order: a `NoiseDriver` sample
@@ -189,16 +197,10 @@ class NumpySim(NumpyRuntime):
         port = self._noise_port
         if port is None:
             return np.zeros(0)
-        vec = np.zeros(port.size)
-        samples = self._driver.sample() if self._driver is not None else {}
-        off = 0
-        for f in port.fields:
-            if f.name in samples:
-                vec[off:off + f.dim] = np.asarray(samples[f.name]).ravel()
-            elif flat is not None and f.name in flat:
-                vec[off:off + f.dim] = np.asarray(flat[f.name]).ravel()
-            off += f.dim
-        return vec
+        source = dict(flat) if flat is not None else {}
+        if self._driver is not None:
+            source.update(self._driver.sample())   # a draw wins over the dict
+        return pack_fields(port.fields, source, default=0.0, who="noise")
 
     def outputs(self) -> dict[str, dict[str, Any]]:
         """Sensor readings from the most recent step (nested, realized

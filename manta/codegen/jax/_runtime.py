@@ -14,7 +14,8 @@ pure function, and (for a sim oracle) a `lax.scan` rollout you can
 
 Limitations: kernels must SX-expand — flat (joint-free) crafts only;
 a jointed craft's joint-space solve keeps a runtime-pivoting Linsol
-node and raises at lowering.
+node and raises when that kernel is first used (translation is lazy
+per kernel, so the rest of the Module stays usable).
 """
 
 from __future__ import annotations
@@ -24,31 +25,50 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
-from ...ir.module import Module, PortRef, Role, StateRef
+from ...ir.module import PortRef, Role, StateRef
+from ..target import as_module, resolve_args
 from ._translate import translate
 
 
+def _rollout_port_arg(role: Role, *, u_k, n_k, params, dt, t_k):
+    """The per-step `lax.scan` argument for one step-entry PortRef, by
+    Role."""
+    if role is Role.CONTROL:
+        return u_k
+    if role is Role.NOISE:
+        return n_k
+    if role is Role.PARAMETER:
+        return params
+    if role is Role.TIMESTEP:
+        return dt
+    if role is Role.TIME:
+        return t_k
+    raise NotImplementedError(
+        f"rollout arg for role {role} — update _rollout_port_arg (and the "
+        f"ARG_ROLES contract in manta.ir.module) for the new Role.")
+
+
 class JaxModule:
-    """Lowered Module: jitted kernels by name + rollout builder."""
+    """Lowered Module: jitted kernels by name (translated lazily, cached
+    on first use) + rollout builder."""
 
     def __init__(self, x) -> None:
-        module = x if isinstance(x, Module) else x.module()
-        if not isinstance(module, Module):
-            raise TypeError(
-                f"TargetJax: expected a Module or a transform with "
-                f".module(), got {type(x).__name__}")
+        module = as_module(x, "TargetJax")
         self.module = module
-        self._kernels = {name: translate(fn)
-                         for name, fn in module.functions.items()}
+        self._kernels: dict = {}        # name → jitted fn, on first use
 
     def kernel(self, name: str):
-        """The jitted kernel, positional args in the CasADi signature
-        order, returning a tuple of dense arrays."""
-        if name not in self._kernels:
-            raise KeyError(
-                f"{self.module.name}: no kernel {name!r} "
-                f"(have {sorted(self._kernels)}).")
-        return self._kernels[name]
+        """The jitted kernel (translated and cached on first use),
+        positional args in the CasADi signature order, returning a tuple
+        of dense arrays."""
+        fn = self._kernels.get(name)
+        if fn is None:
+            if name not in self.module.functions:
+                raise KeyError(
+                    f"{self.module.name}: no kernel {name!r} "
+                    f"(have {sorted(self.module.functions)}).")
+            fn = self._kernels[name] = translate(self.module.functions[name])
+        return fn
 
     def call(self, method: str, **values):
         """Run one entry point with named values (state fields and ports
@@ -56,22 +76,15 @@ class JaxModule:
         Functional: returns `(writes_dict, returns_dict)` — nothing is
         held."""
         ep = self.module.entry(method)
-        args = []
-        for a in ep.args:
-            if isinstance(a, StateRef):
-                if a.name not in values:
-                    raise KeyError(f"{method}: missing state {a.name!r}.")
-                args.append(values[a.name])
-            else:
-                port = self.module.port(a.name)
-                if a.name in values:
-                    args.append(values[a.name])
-                elif port.role is Role.TIME:
-                    args.append(0.0)
-                elif port.role is Role.PARAMETER:
-                    args.append(self.param_defaults())
-                else:
-                    raise KeyError(f"{method}: missing port {a.name!r}.")
+
+        def _state(name):
+            if name not in values:
+                raise KeyError(
+                    f"{self.module.name}.{method}: missing state {name!r}.")
+            return values[name]
+
+        args = resolve_args(self.module, ep, values, state_lookup=_state,
+                            param_default=self.param_defaults)
         outs = self.kernel(ep.fn)(*args)
         writes = {w: outs[i] for i, w in enumerate(ep.writes)}
         rets = {r: outs[len(ep.writes) + i]
@@ -81,9 +94,13 @@ class JaxModule:
     # ---- convenience vectors -------------------------------------------
 
     def initial_state(self) -> jnp.ndarray:
-        """The Module's packed initial state field `x`."""
-        return jnp.asarray(
-            np.asarray(self.module.state.field("x").init, dtype=float))
+        """The Module's packed initial manifold state."""
+        x0 = self.module.initial_x
+        if x0 is None:
+            raise ValueError(
+                f"{self.module.name}: module carries no manifold state — "
+                f"initial_state() is undefined.")
+        return jnp.asarray(np.asarray(x0, dtype=float))
 
     def param_defaults(self) -> jnp.ndarray:
         """The PARAMETER port's declared values (empty if none)."""
@@ -131,26 +148,17 @@ class JaxModule:
 
             def body(x, per):
                 u_k, n_k, t_k = per
-                args = []
-                for a, role in zip(ep.args, roles):
-                    if role == "x":
-                        args.append(x)
-                    elif role is Role.CONTROL:
-                        args.append(u_k)
-                    elif role is Role.NOISE:
-                        args.append(n_k)
-                    elif role is Role.PARAMETER:
-                        args.append(params)
-                    elif role is Role.TIMESTEP:
-                        args.append(dt)
-                    else:                          # TIME
-                        args.append(t_k)
+                args = [x if role == "x" else
+                        _rollout_port_arg(role, u_k=u_k, n_k=n_k,
+                                          params=params, dt=dt, t_k=t_k)
+                        for role in roles]
                 outs = step(*args)
                 return outs[0][:, 0], outs   # carry 1-D; kernel returns (n,1)
 
             _, traj = jax.lax.scan(body, x0, (u_seq, noise_seq, ts))
+            n_w = len(ep.writes)
             x_traj = traj[0][..., 0]               # (K, amb, 1) → (K, amb)
-            readings = {name: traj[1 + i][..., 0]
+            readings = {name: traj[n_w + i][..., 0]
                         for i, name in enumerate(sensor_names)}
             return x_traj, readings
 
@@ -158,4 +166,4 @@ class JaxModule:
 
     def __repr__(self) -> str:
         return (f"<JaxModule over {self.module!r} "
-                f"kernels={sorted(self._kernels)}>")
+                f"kernels={sorted(self.module.functions)}>")

@@ -8,7 +8,8 @@ from __future__ import annotations
 from ...fields import GravityField
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Scalar, Vec3
-from ..base import Part, Parameter
+from .._declarations import Parameter
+from ..base import Part
 from ...ir.wrench import Wrench
 
 
@@ -16,10 +17,13 @@ class Mass(Part):
     """A lump of mass with diagonal inertia tensor.
 
     Parameters:
-        mass — kilograms.
+        mass — kilograms. Promotable (system-ID target).
         moi  — 3-tuple, diagonal MOI tensor (Ixx, Iyy, Izz) about the
                part's own COM, in part frame. Defaults to zero (point
-               mass).
+               mass). Promotable, like `mass`: a tunable transform
+               (`Sim(world, parameters=[...])` / `Fit`) promotes it to
+               a live R3 input and the inertia rollup keeps it
+               symbolic.
 
     Gravity contribution is applied automatically whenever a
     `GravityField` is registered on the world: `F = m · g(p_world)`,
@@ -34,8 +38,12 @@ class Mass(Part):
     origin via parallel-axis lifts.
     """
 
+    # Genuinely inertial — the inertia walks enumerate this part.
+    contributes_inertia = True
+
     mass: float                              = Parameter(1.0, manifold="R1")
-    moi:  "tuple[float, float, float]"       = Parameter((0.0, 0.0, 0.0))
+    moi:  "tuple[float, float, float]"       = Parameter(
+        (0.0, 0.0, 0.0), manifold="R3", frame=PartFrame)
 
     def __init__(self, name: str, **overrides) -> None:
         super().__init__(name, **overrides)

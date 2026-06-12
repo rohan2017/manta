@@ -11,7 +11,7 @@ import numpy as np
 from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField
 from manta.parts import RevoluteJoint, Mass
-from manta.parts.base import Output, Part, PartUpdate
+from manta.parts import Output, Part, PartUpdate
 from manta.ir.frames import WorldFrame, CraftFrame, ParentFrame, PartFrame
 from manta.ir.types import Vec3
 from manta.ir.wrench import Wrench

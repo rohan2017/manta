@@ -77,8 +77,20 @@ class Tether(Coupling):
 
     @staticmethod
     def _find_endpoint(craft, name: str):
+        from ..parts.attachment.tether_endpoint import TetherEndpoint
         for p in craft.parts:
-            if p.name == name:
+            if isinstance(p, TetherEndpoint) and p.name == name:
+                # The wrench math below treats `endpoint.transform` as a
+                # craft-frame offset — only true for a root-mounted
+                # endpoint. A nested endpoint (under a joint/composite)
+                # would get a silently wrong attachment point.
+                if p.parent is not craft.root:
+                    raise ValueError(
+                        f"Tether: TetherEndpoint '{name}' on craft "
+                        f"'{craft.name}' is attached to "
+                        f"'{p.parent.name}', not the craft root. Tether "
+                        f"endpoints must hang directly off the root so "
+                        f"their transform is a craft-frame offset.")
                 return p
         raise ValueError(
             f"Tether: craft '{craft.name}' has no TetherEndpoint named "
@@ -97,8 +109,9 @@ class Tether(Coupling):
         # endpoint hangs directly off the root, so its coords ARE craft
         # coords, same assumption the constant path makes).
         def _off(ep):
+            from ..parts._trace import is_promoted
             tr = ep.transform
-            if hasattr(tr, "_mx"):
+            if is_promoted(tr):
                 return Vec3[CraftFrame].from_mx(tr._mx)
             return Vec3[CraftFrame].constant(tuple(tr))
 

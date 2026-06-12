@@ -285,3 +285,19 @@ def test_collider_friction_damps_tangential_slide():
 
     assert slide(0.0) > 0.99            # frictionless: keeps sliding
     assert abs(slide(5.0)) < 0.05       # viscous grip: ~stopped in 1 s
+
+
+def test_halfspace_normalizes_normal():
+    """A non-unit `normal` is normalized at construction, so the
+    penetration response doesn't scale with |normal|²."""
+    hs = HalfSpace(origin=(0, 0, 0), normal=(0, 0, 2.0))
+    np.testing.assert_allclose(hs.normal, (0.0, 0.0, 1.0))
+    cf = CollisionField().add(hs)
+    pen = _eval_pen_at(cf, (0, 0, -0.5))
+    np.testing.assert_allclose(pen, (0.0, 0.0, 0.5), atol=1e-6)
+
+
+def test_halfspace_rejects_zero_normal():
+    import pytest
+    with pytest.raises(ValueError, match="normal"):
+        HalfSpace(origin=(0, 0, 0), normal=(0, 0, 0))

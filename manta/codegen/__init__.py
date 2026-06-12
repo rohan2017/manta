@@ -25,18 +25,20 @@ Adding a backend = translate a `ca.Function` + one generic lowering of a
 """
 
 from .cpp import TargetCpp
-
-
-def TargetJax(x):
-    """Lower a Module (or transform) to jitted JAX kernels — see
-    `manta.codegen.jax`. Lazy shim: `jax` is imported only when used,
-    so manta itself never requires it."""
-    from .jax import TargetJax as _TargetJax
-    return _TargetJax(x)
 from .numpy import (
     NoiseDriver, NumpyFilter, NumpyRecurrence, NumpyRegulator, NumpyRuntime,
     NumpySim, TargetNumpy,
 )
+
+
+def TargetJax(x):
+    """Lower a Module (or any transform exposing `.module()`) to jitted
+    JAX kernels by name + a `lax.scan` rollout builder — the functional
+    artifacts a training loop wants (see `manta.codegen.jax.JaxModule`).
+    `jax` is imported only when this is called, so manta itself never
+    requires it."""
+    from .jax import TargetJax as _TargetJax
+    return _TargetJax(x)
 
 __all__ = [
     "TargetNumpy", "TargetCpp", "TargetJax", "NoiseDriver",

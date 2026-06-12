@@ -21,7 +21,8 @@ from __future__ import annotations
 
 from ...ir.frames import PartFrame
 from ...ir.types import Vec3
-from ..base import Input, Parameter, Part, WhiteNoise
+from .._declarations import Input, Parameter, WhiteNoise
+from ..base import Part
 from ...ir.wrench import Wrench
 
 

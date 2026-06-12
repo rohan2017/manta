@@ -41,7 +41,8 @@ from ...fields.optical import OpticalField
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Scalar, Vec3
 from ...ir.wrench import Wrench
-from ..base import Output, Parameter, Part, PartUpdate, WhiteNoise
+from .._declarations import Output, Parameter, PartUpdate, WhiteNoise
+from ..base import Part
 
 
 class ProjectiveCamera(Part):
@@ -97,8 +98,18 @@ class ProjectiveCamera(Part):
     def set_targets(self, targets) -> None:
         """Point the camera: fix the compile-time set of ellipsoids it
         measures. Called once by `World.finalize()` before
-        the tick is traced; the output/noise declarations follow it."""
+        the tick is traced; the output/noise declarations follow it.
+
+        Also materializes the per-channel `<name>_sigma` attributes the
+        framework reads off the instance (`Noise.is_active`, the tick-
+        signature walk, `Craft.sample_noise`) — this is the one mutation
+        point; `noise_declarations()` stays a pure read."""
         self._targets = tuple(targets)
+        sigma = float(self.noise_sigma)
+        if sigma > 0.0:
+            for e in self._targets:
+                for suffix in self._COMPONENTS:
+                    setattr(self, f"{e.name}_{suffix}_noise_sigma", sigma)
 
     # The output set is per-instance (one detection per visible source), so
     # we override the class-level declaration walk with a dynamic one.
@@ -112,6 +123,8 @@ class ProjectiveCamera(Part):
     # Per-instance noise: one independent white-noise channel per measurement
     # component per target, so the EKF can build a nonzero R. Mirrors
     # `output_declarations`; inert (byte-identical) when noise_sigma == 0.
+    # Pure read — the matching `<name>_sigma` instance attributes are
+    # materialized in `set_targets()`.
     def noise_declarations(self) -> dict:
         sigma = float(self.noise_sigma)
         if sigma <= 0.0 or not self._targets:
@@ -119,10 +132,8 @@ class ProjectiveCamera(Part):
         decls: dict = {}
         for e in self._targets:
             for suffix in self._COMPONENTS:
-                name = f"{e.name}_{suffix}_noise"
-                decls[name] = WhiteNoise("R1", sigma=sigma)
-                # The tick-signature walk reads `<name>_sigma` off the owner.
-                setattr(self, f"{name}_sigma", sigma)
+                decls[f"{e.name}_{suffix}_noise"] = WhiteNoise(
+                    "R1", sigma=sigma)
         return decls
 
     def _camera_matrix(self, ctx):
