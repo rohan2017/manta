@@ -65,7 +65,6 @@ class Planet:
             raise ValueError("Planet: rotation_axis must be nonzero.")
         self.axis = axis / n
         self.omega = float(omega)
-        self._world = None   # set by World.add_planet
 
     # ------------------------------------------------------------------
     # Numpy transforms (numeric, eager)
@@ -150,8 +149,8 @@ class Planet:
         return I + s * K + (1.0 - c) * (K @ K)
 
     # ------------------------------------------------------------------
-    # Initial-state factories (Phase D — populated when frame-carrying
-    # init lands; stubbed here for forward use).
+    # Initial-state factories — PlanetFrame position/velocity seeds for
+    # World.add_craft(position= / velocity=).
     # ------------------------------------------------------------------
 
     def position(self,
@@ -173,8 +172,7 @@ class Planet:
         """Shorthand for `planet.velocity(0, 0, 0)` — sets the WorldFrame
         velocity such that the craft sits at rest in PlanetFrame
         (i.e., co-rotates with the planet)."""
-        from .state import PlanetState
-        return PlanetState(self, "velocity", (0.0, 0.0, 0.0))
+        return self.velocity(0.0, 0.0, 0.0)
 
     # ------------------------------------------------------------------
     # Disturbance registration (subclass override hook)

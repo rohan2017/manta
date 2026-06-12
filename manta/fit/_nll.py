@@ -90,7 +90,7 @@ class _Channel(_FitBlock):
                 f"Prior(mean=...).")
         # ndarray slots (length 1) — the shared-helper contract.
         self.init = np.array([np.log(start)])
-        self.prior = np.array([np.log(mean)]) if mean > 0.0 else self.init
+        self.prior_mean = np.array([np.log(mean)]) if mean > 0.0 else self.init
         self.sigma = np.array([np.inf if prior is None or prior.sigma is None
                                else float(prior.sigma)])
         if self.sigma[0] <= 0.0:

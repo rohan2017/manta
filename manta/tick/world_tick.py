@@ -622,7 +622,7 @@ def _trace_craft_pass1(craft,
         ang_vel._mx,
         body_acceleration_world=a_world_sym,
         body_angular_acceleration=alpha_sym,
-        joint_angular_accels=joint_accel_syms)
+        joint_dof_accels=joint_accel_syms)
     inertia = symbolic_inertia_rollup(craft.root, param_subs=param_subs)
 
     fields_tuple = (gravity_field, fluid_field, mag_field, collision_field)
@@ -881,8 +881,7 @@ def _emit_per_craft_dynamics(g_ctx, craft, pc: CraftTrace, dt) -> None:
     r_com = ir.Vec3[CraftFrame].from_mx(com_mx)
     tau_com = tau_origin - r_com.cross(F_craft)
 
-    f_world = orientation.apply(F_craft / m_total)
-    a_com_world = f_world
+    a_com_world = orientation.apply(F_craft / m_total)
 
     I_com   = ir.Mat3[CraftFrame, CraftFrame].from_mx(I_com_mx)
     I_omega = I_com @ ang_vel

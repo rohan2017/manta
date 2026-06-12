@@ -56,9 +56,10 @@ class FluidField(SuperposedField):
     atmosphere) are added as Disturbance subclasses to one FluidField
     instance.
 
-    Builder methods (`add_uniform`, `add_current`) return self for
-    chaining. The constructor accepts `density=` for the common
-    single-uniform case (no flow) — equivalent to one `add_uniform`.
+    The `add_uniform` builder returns self for chaining; other
+    disturbances attach via `field.add(CurrentFlow(...))`. The constructor
+    accepts `density=` for the common single-uniform case (no flow) —
+    equivalent to one `add_uniform`.
     """
 
     # Sentinel for the type-check in Field.add — any disturbance whose
@@ -105,11 +106,6 @@ class FluidField(SuperposedField):
                     ) -> "FluidField":
         """Attach a uniform density (+ optional flow). Returns self."""
         return self.add(UniformFluid(density, velocity))
-
-    def add_current(self,
-                    velocity: tuple[float, float, float]) -> "FluidField":
-        """Attach a flow contribution at zero density. Returns self."""
-        return self.add(CurrentFlow(velocity))
 
 
 # ---------------------------------------------------------------------------

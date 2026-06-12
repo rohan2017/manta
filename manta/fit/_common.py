@@ -76,7 +76,7 @@ class _FitBlock:
     slots below — using ONE naming scheme across both fitters — plus their own
     mapping back to ambient values, labels, and metadata."""
 
-    __slots__ = ("offset", "dim", "init", "prior", "sigma")
+    __slots__ = ("offset", "dim", "init", "prior_mean", "sigma")
 
 
 def prior_penalty(v: ca.MX, blocks: list, *, weight: float = 1.0) -> ca.MX:
@@ -87,7 +87,7 @@ def prior_penalty(v: ca.MX, blocks: list, *, weight: float = 1.0) -> ca.MX:
     term = ca.MX(0.0)
     for b in blocks:
         for j in np.flatnonzero(np.isfinite(b.sigma)):
-            d = (v[b.offset + j] - float(b.prior[j])) / float(b.sigma[j])
+            d = (v[b.offset + j] - float(b.prior_mean[j])) / float(b.sigma[j])
             term = term + weight * d * d
     return term
 

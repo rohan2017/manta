@@ -101,8 +101,6 @@ def build_joint_space(craft, *,
     Returns None when the craft has no live articulated DOF; otherwise a
     dict with (all raw MX unless noted):
         joints      — ordered list of live ArticulatedJoint parts
-        locked      — joints excluded for zero generalized inertia
-        u           — (3+K,1) stacked [ω; q̇] symbols
         A           — (3+K)×(3+K) generalized mass matrix (function of q)
         p           — (3+K,1) generalized momentum ∂T/∂u
         bias        — (3+K,1) Hamel bias; the solve is
@@ -117,12 +115,11 @@ def build_joint_space(craft, *,
     """
     from ..parts.articulation.joint import ArticulatedJoint
 
-    joints, locked = [], []
-    for part in craft.parts:
-        if not isinstance(part, ArticulatedJoint):
-            continue
-        (joints if _generalized_inertia(part) > DEGENERATE_INERTIA_EPS
-         else locked).append(part)
+    # Live joints only — a degenerate (massless-stator) joint is locked
+    # (q̈ = 0) and handled on the flat path, never entering this block.
+    joints = [part for part in craft.parts
+              if isinstance(part, ArticulatedJoint)
+              and _generalized_inertia(part) > DEGENERATE_INERTIA_EPS]
     if not joints:
         return None
 
@@ -212,8 +209,6 @@ def build_joint_space(craft, *,
 
     return {
         "joints":  joints,
-        "locked":  locked,
-        "u":       u,
         "A":       A_used,
         "p":       p,
         "bias":    bias,

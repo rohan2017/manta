@@ -95,10 +95,10 @@ class _Block(_FitBlock):
                     f"Prior for {full!r}: log=True needs strictly "
                     f"positive declared values and mean (elementwise).")
             self.init = np.log(declared)
-            self.prior = np.log(mean)
+            self.prior_mean = np.log(mean)
         else:
             self.init = declared.copy()
-            self.prior = mean.copy()
+            self.prior_mean = mean.copy()
 
         if prior is None or prior.sigma is None:
             self.sigma = np.full(dim, np.inf)

@@ -230,7 +230,7 @@ def kinematic_pass(root_part,
                    *,
                    body_acceleration_world,
                    body_angular_acceleration,
-                   joint_angular_accels=None) -> dict:
+                   joint_dof_accels=None) -> dict:
     """Walk `root_part`'s subtree, returning `{part: KinematicState}`.
 
     All arguments are raw MX: positions/velocities (3,1), the body
@@ -238,7 +238,7 @@ def kinematic_pass(root_part,
     read directly off each Joint instance via `joint.angle` / `joint.rate`
     — assumes an active trace has bound the State attributes to symbols.
     A Joint's angular acceleration θ̈ is NOT a state slot, so it is
-    supplied separately via `joint_angular_accels` (`{joint: MX scalar}`);
+    supplied separately via `joint_dof_accels` (`{joint: MX scalar}`);
     like the body's a/α these are compile-time placeholders that the
     caller substitutes with the real `(new_rate − rate)/dt` after
     `Joint.update()` runs. Joints absent from the dict take θ̈ = 0 — fine
@@ -259,8 +259,8 @@ def kinematic_pass(root_part,
     """
     from ..parts.base import CompositePart
 
-    if joint_angular_accels is None:
-        joint_angular_accels = {}
+    if joint_dof_accels is None:
+        joint_dof_accels = {}
 
     eye3 = ca.MX.eye(3)
 
@@ -318,7 +318,7 @@ def kinematic_pass(root_part,
                 body_acceleration_world=body_acceleration_world,
                 body_angular_acceleration=body_angular_acceleration,
                 body_angular_velocity=body_angular_velocity,
-                joint_angular_accels=joint_angular_accels)
+                joint_dof_accels=joint_dof_accels)
             states[child] = child_state
             visit_children(child, child_state)
 
@@ -332,7 +332,7 @@ def _compute_child_state(parent_state: KinematicState, parent_part, child,
                          body_acceleration_world,
                          body_angular_acceleration,
                          body_angular_velocity,
-                         joint_angular_accels) -> KinematicState:
+                         joint_dof_accels) -> KinematicState:
     from ..parts.articulation.joint import PrismaticJoint, RevoluteJoint
 
     # Child's `transform` lives in parent's OUTPUT frame coords. A promoted
@@ -376,7 +376,7 @@ def _compute_child_state(parent_state: KinematicState, parent_part, child,
     if isinstance(child, RevoluteJoint):
         angle = _attr_mx(child.angle)
         rate  = _attr_mx(child.rate)
-        accel = joint_angular_accels.get(child, ca.MX(0.0))
+        accel = joint_dof_accels.get(child, ca.MX(0.0))
         axis_local = ca.MX(list(child.axis))
 
         q_world_from_output = quat_mul(
@@ -448,7 +448,7 @@ def _compute_child_state(parent_state: KinematicState, parent_part, child,
     if isinstance(child, PrismaticJoint):
         disp   = _attr_mx(child.displacement)
         d_rate = _attr_mx(child.rate)
-        d_acc  = joint_angular_accels.get(child, ca.MX(0.0))
+        d_acc  = joint_dof_accels.get(child, ca.MX(0.0))
         # `axis` is unit by the joint constructor's unit_axis invariant.
         axis_local = ca.DM(
             np.asarray(child.axis, dtype=float).reshape(3, 1))
@@ -489,7 +489,7 @@ def _compute_child_state(parent_state: KinematicState, parent_part, child,
         p_axis  = ca.MX(list(parent_part.axis))
         p_angle = _attr_mx(parent_part.angle)
         p_rate  = _attr_mx(parent_part.rate)
-        p_accel = joint_angular_accels.get(parent_part, ca.MX(0.0))
+        p_accel = joint_dof_accels.get(parent_part, ca.MX(0.0))
         # transform is in the parent's OUTPUT coords; express in the
         # parent's INPUT (= ParentFrame) coords via the joint rotation.
         r_pf = R_from_axis_angle(p_axis, p_angle) @ transform
@@ -504,7 +504,7 @@ def _compute_child_state(parent_state: KinematicState, parent_part, child,
             np.asarray(parent_part.axis, dtype=float).reshape(3, 1))
         p_disp = _attr_mx(parent_part.displacement)
         p_rate = _attr_mx(parent_part.rate)
-        p_accel = joint_angular_accels.get(parent_part, ca.MX(0.0))
+        p_accel = joint_dof_accels.get(parent_part, ca.MX(0.0))
         # Output coords = input coords (no rotation); the child rode out
         # along the slide, so it translates within the ParentFrame.
         r_pf = transform + p_disp * p_axis

@@ -28,8 +28,8 @@ class GravityField(SuperposedField):
     `value_at_sym(point)` returns Vec3[WorldFrame] giving the
     acceleration a free-falling test mass would experience at `point`.
 
-    Builder methods (`add_uniform`, `add_point_mass`) return self for
-    chaining: `GravityField().add_uniform((0,0,-9.81))`. As a
+    The `add_uniform` builder returns self for chaining:
+    `GravityField().add_uniform((0,0,-9.81))`. As a
     convenience, the constructor accepts `g=(gx,gy,gz)` for the common
     single-uniform case — equivalent to one `add_uniform` call.
     """
@@ -45,15 +45,11 @@ class GravityField(SuperposedField):
         return _VEC3_ANCHOR.constant((0.0, 0.0, 0.0))
 
     def add_uniform(self, g_vec: tuple[float, float, float]) -> "GravityField":
-        """Attach a position-independent gravity vector. Returns self."""
-        return self.add(UniformGravity(g_vec))
+        """Attach a position-independent gravity vector. Returns self.
 
-    def add_point_mass(self,
-                       GM: float,
-                       position: tuple[float, float, float] = (0.0, 0.0, 0.0),
-                       eps: float = 1.0) -> "GravityField":
-        """Attach a Newtonian point-mass gravity source. Returns self."""
-        return self.add(PointMassGravity(position=position, GM=GM, eps=eps))
+        Other disturbances (point-mass, J2, …) attach via the generic
+        `field.add(PointMassGravity(...))`."""
+        return self.add(UniformGravity(g_vec))
 
 
 class UniformGravity(Disturbance):

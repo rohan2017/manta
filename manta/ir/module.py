@@ -73,10 +73,6 @@ class StateField:
     init: Any = None
     manifold: Any = None       # StateSpec for kind == "manifold"
 
-    @property
-    def size(self) -> int:
-        return int(prod(self.shape)) if self.shape else 1
-
 
 @dataclass(frozen=True)
 class StateLayout:

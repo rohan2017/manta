@@ -25,9 +25,8 @@ What it exposes (everything a transform composes into kernels):
                `ref_flat`, `blocks` (independent tangent subsystems)
   routing      `input_names`, `u_defaults`, `input_defaults`,
                `noise_specs`, `sample_rates`
-  parameters   `p_sym`, `param_specs`, `param_names`, `n_param`,
-               `p_defaults` (promoted tunable Parameters; empty unless
-               built with `parameters=[...]`)
+  parameters   `p_sym`, `param_specs`, `n_param` (promoted tunable
+               Parameters; empty unless built with `parameters=[...]`)
   convenience  `predict_fn / F_fn / B_fn` and per-sensor `h_fn / H_fn`
                (`(x,u,dt,t)`-signature `ca.Function`s for point evaluation)
 
@@ -223,10 +222,7 @@ class LinearizedSystem:
         self.input_defaults = dict(sig.input_defaults)
         # Promoted-parameter channels (cf-signature order = `p` layout).
         self.param_specs = sig.params
-        self.param_names = sig.param_names
         self.n_param = sum(p.dim for p in sig.params)
-        self.p_defaults = (np.concatenate([p.value for p in sig.params])
-                           if sig.params else np.zeros(0))
 
     def _choose_inputs(self, inputs) -> dict[str, Any]:
         """Resolve the live-input subset; excluded inputs freeze at their

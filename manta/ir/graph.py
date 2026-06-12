@@ -177,10 +177,6 @@ class _RawMatrix:
         self._mx = mx
 
     @property
-    def _frame(self):
-        return None
-
-    @property
     def shape(self):
         return self._mx.shape
 
