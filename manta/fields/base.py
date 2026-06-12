@@ -37,10 +37,10 @@ def anchored_pose(craft, offset_body):
     craft: its world position is ``craft_pos + R·offset`` and it inherits
     the craft's orientation. The craft's symbolic state is read from the
     active `TraceBindings` (the same channel `CraftWindBubble` uses), so
-    nothing is stashed on the craft. Returns ``(center, R, quat)`` —
-    ``center`` a Vec3[WorldFrame], ``R`` a Mat3[WorldFrame, CraftFrame],
-    ``quat`` the craft's Quat[WorldFrame, CraftFrame]. Only callable inside
-    a world-tick compile."""
+    nothing is stashed on the craft. Returns ``(center, quat)`` —
+    ``center`` a Vec3[WorldFrame], ``quat`` the craft's Quat[WorldFrame,
+    CraftFrame] (call ``quat.to_rotmat()`` for the rotation if you need
+    it). Only callable inside a world-tick compile."""
     from ..parts._trace import active_trace
     from ..ir.frames import CraftFrame
     tr = active_trace()
@@ -51,7 +51,7 @@ def anchored_pose(craft, offset_body):
     st = tr.craft_sym_state(craft)
     pos, quat = st["position"], st["orientation"]
     off = Vec3[CraftFrame].constant(tuple(float(x) for x in offset_body))
-    return pos + quat.apply(off), quat.to_rotmat(), quat
+    return pos + quat.apply(off), quat
 
 
 # Global counter for default disturbance names. Disturbances participate

@@ -80,6 +80,20 @@ class UniformMag(Disturbance):
         return f"<UniformMag B_vec={self.B_vec}>"
 
 
+def _dipole_B(point, center, moment_mx, eps: float):
+    """B(p) = μ₀/4π·[3(m·r)·r/r⁵ − m/r³], eps-softened, for an
+    already-resolved world-frame source center and moment (MX). Shared by
+    the fixed and body-anchored dipole disturbances."""
+    r_mx = (point - center)._mx
+    r_sq = ca.dot(r_mx, r_mx) + eps**2
+    r_mag = ca.sqrt(r_sq)
+    r_cubed = r_sq * r_mag                         # |r|³
+    m_dot_r = ca.dot(moment_mx, r_mx)
+    B_mx = _MU0_OVER_4PI * (
+        (3.0 * m_dot_r / (r_cubed * r_sq)) * r_mx - moment_mx / r_cubed)
+    return _VEC3_ANCHOR.from_mx(B_mx)
+
+
 class DipoleMag(Disturbance):
     """Point magnetic dipole.
 
@@ -108,22 +122,8 @@ class DipoleMag(Disturbance):
         self.eps      = float(eps)
 
     def contribute_at_sym(self, point, t):
-        r_src = _VEC3_ANCHOR.constant(self.position)
-        m     = _VEC3_ANCHOR.constant(self.moment)
-        r     = point - r_src
-        r_mx  = r._mx
-        m_mx  = m._mx
-        r_sq  = ca.dot(r_mx, r_mx) + self.eps**2
-        r_mag = ca.sqrt(r_sq)
-        r_cubed = r_sq * r_mag                    # |r|³
-        m_dot_r = ca.dot(m_mx, r_mx)
-        # B = μ₀/(4π) · [3·(m·r)·r / r⁵ − m / r³]
-        # Note: 3(m·r̂)r̂ / r³ = 3(m·r)·r / r⁵
-        B_mx = _MU0_OVER_4PI * (
-            (3.0 * m_dot_r / (r_cubed * r_sq)) * r_mx
-            - m_mx / r_cubed
-        )
-        return _VEC3_ANCHOR.from_mx(B_mx)
+        return _dipole_B(point, _VEC3_ANCHOR.constant(self.position),
+                         _VEC3_ANCHOR.constant(self.moment)._mx, self.eps)
 
     def __repr__(self) -> str:
         return (f"<DipoleMag position={self.position} moment={self.moment}>")
@@ -163,18 +163,10 @@ class BodyDipoleMag(Disturbance):
     def contribute_at_sym(self, point, t):
         from .base import anchored_pose
         from ..ir.frames import CraftFrame
-        center, _R, quat = anchored_pose(self.craft, self.offset_body)
+        center, quat = anchored_pose(self.craft, self.offset_body)
         # Moment is body-fixed → rotate into world with the craft attitude.
         m_world = quat.apply(Vec3[CraftFrame].constant(self.moment_body))
-        r = point - center
-        r_mx, m_mx = r._mx, m_world._mx
-        r_sq = ca.dot(r_mx, r_mx) + self.eps**2
-        r_mag = ca.sqrt(r_sq)
-        r_cubed = r_sq * r_mag
-        m_dot_r = ca.dot(m_mx, r_mx)
-        B_mx = _MU0_OVER_4PI * (
-            (3.0 * m_dot_r / (r_cubed * r_sq)) * r_mx - m_mx / r_cubed)
-        return _VEC3_ANCHOR.from_mx(B_mx)
+        return _dipole_B(point, center, m_world._mx, self.eps)
 
     def __repr__(self) -> str:
         return (f"<BodyDipoleMag craft={self.craft.name!r} "

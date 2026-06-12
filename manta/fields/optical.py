@@ -119,12 +119,12 @@ class BodySemanticEllipsoid(_EllipsoidBase):
         self.label = int(label)
 
     def center_world(self) -> Vec3:
-        center, _R, _q = anchored_pose(self.source_craft, self.offset_body)
+        center, _q = anchored_pose(self.source_craft, self.offset_body)
         return center
 
     def shape_world_mx(self) -> ca.MX:
-        _center, R, _q = anchored_pose(self.source_craft, self.offset_body)
-        Rm = R._mx                                   # Mat3[World, Craft] → MX
+        _center, quat = anchored_pose(self.source_craft, self.offset_body)
+        Rm = quat.to_rotmat()._mx                    # Mat3[World, Craft] → MX
         return Rm @ self._Lambda @ Rm.T
 
 

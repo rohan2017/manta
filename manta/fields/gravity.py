@@ -81,6 +81,16 @@ class UniformGravity(Disturbance):
         return f"<UniformGravity g_vec={self.g_vec}>"
 
 
+def _point_mass_accel(point, center, GM: float, eps: float):
+    """g(p) = −GM·(p−c)/|p−c|³, eps-softened, for an already-resolved
+    world-frame source center. Shared by the fixed and body-anchored
+    point-mass disturbances."""
+    r_mx = (point - center)._mx
+    r_sq = ca.dot(r_mx, r_mx) + eps**2
+    r_mag = ca.sqrt(r_sq)
+    return _VEC3_ANCHOR.from_mx((-GM / (r_sq * r_mag)) * r_mx)
+
+
 class PointMassGravity(Disturbance):
     """Newtonian gravity from a point mass at a fixed anchor position.
 
@@ -114,16 +124,8 @@ class PointMassGravity(Disturbance):
                 f"PointMassGravity: eps must be >= 0, got {eps!r}")
 
     def contribute_at_sym(self, point, t):
-        r_src = _VEC3_ANCHOR.constant(self.position)
-        # r = point − r_src   (Vec3 supports operator-)
-        r = point - r_src
-        # |r|² with softening floor → avoid /0 at the source.
-        r_mx  = r._mx                      # underlying MX
-        r_sq  = ca.dot(r_mx, r_mx) + self.eps**2
-        r_mag = ca.sqrt(r_sq)
-        # g = -GM · r / |r|³
-        g_mx = (-self.GM / (r_sq * r_mag)) * r_mx
-        return _VEC3_ANCHOR.from_mx(g_mx)
+        return _point_mass_accel(
+            point, _VEC3_ANCHOR.constant(self.position), self.GM, self.eps)
 
     def __repr__(self) -> str:
         return (f"<PointMassGravity position={self.position} GM={self.GM:.3e}>")
@@ -159,13 +161,8 @@ class BodyPointMassGravity(Disturbance):
 
     def contribute_at_sym(self, point, t):
         from .base import anchored_pose
-        center, _R, _q = anchored_pose(self.craft, self.offset_body)
-        r = point - center
-        r_mx = r._mx
-        r_sq = ca.dot(r_mx, r_mx) + self.eps**2
-        r_mag = ca.sqrt(r_sq)
-        g_mx = (-self.GM / (r_sq * r_mag)) * r_mx
-        return _VEC3_ANCHOR.from_mx(g_mx)
+        center, _q = anchored_pose(self.craft, self.offset_body)
+        return _point_mass_accel(point, center, self.GM, self.eps)
 
     def __repr__(self) -> str:
         return (f"<BodyPointMassGravity craft={self.craft.name!r} "

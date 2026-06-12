@@ -126,18 +126,23 @@ def _operating_point(ekf, state) -> np.ndarray:
     return ekf.spec.pack_any(state, base=ekf.world._initial_state_dict())
 
 
-def _select_sensors(ekf, sensors, *, who: str):
-    """Pick the `(H_fn, full_name)` pairs to analyze. `sensors=None` uses
-    every registered sensor; otherwise each entry resolves like everywhere
-    else (full name or unique `.<suffix>`) — an unknown or ambiguous name
-    raises instead of silently dropping a typo."""
+def resolve_sensor_set(ekf, sensors, *, who: str) -> list[str]:
+    """The chosen sensor full-names. `sensors=None` keeps every registered
+    sensor; otherwise each entry resolves like everywhere else (full name or
+    unique `.<suffix>`) — an unknown or ambiguous name raises instead of
+    silently dropping a typo. Shared by observability and `nees`."""
     fulls = list(ekf.sys.sensors)
     if sensors is None:
-        chosen = set(fulls)
-    else:
-        chosen = {resolve_suffix(s, fulls, label="sensor", who=who)
-                  for s in sensors}
-    return [(ekf.sys.sensors[f].H_fn, f) for f in fulls if f in chosen]
+        return fulls
+    chosen = {resolve_suffix(s, fulls, label="sensor", who=who)
+              for s in sensors}
+    return [f for f in fulls if f in chosen]
+
+
+def _select_sensors(ekf, sensors, *, who: str):
+    """The `(H_fn, full_name)` pairs to analyze, over the chosen set."""
+    return [(ekf.sys.sensors[f].H_fn, f)
+            for f in resolve_sensor_set(ekf, sensors, who=who)]
 
 
 def observability(ekf, *, state=None, inputs=None, sensors=None,

@@ -170,10 +170,10 @@ def nees(world, *, dt: float, steps: int,
     """
     import casadi as ca
     from ..codegen.numpy import NoiseDriver, TargetNumpy
-    from ..ir._names import resolve_suffix
     from ..signal import wire
     from ..sim import Sim
     from .ekf import EKF
+    from .observability import resolve_sensor_set
 
     sim_ir, ekf_ir = Sim(world), EKF(world)
     spec = ekf_ir.spec
@@ -189,13 +189,7 @@ def nees(world, *, dt: float, steps: int,
 
     # Sensor selection resolves like everywhere else — unknown/ambiguous
     # names raise instead of silently dropping a typo.
-    fulls = list(ekf_ir.sys.sensors)
-    if sensors is None:
-        names = fulls
-    else:
-        chosen = {resolve_suffix(sn, fulls, label="sensor", who="nees")
-                  for sn in sensors}
-        names = [f for f in fulls if f in chosen]
+    names = resolve_sensor_set(ekf_ir, sensors, who="nees")
 
     def truth_vec(world_rt) -> np.ndarray:
         return spec.pack_any(world_rt.state)
