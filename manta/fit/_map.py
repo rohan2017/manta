@@ -55,7 +55,7 @@ import casadi as ca
 import numpy as np
 
 from ..ir.module import PortRef, Role
-from ..linearization import resolve_suffix
+from ..ir._names import resolve_suffix
 from ..sim import Sim
 from ._common import (
     Prior, Window, _FitBlock, convergence_line, format_table, laplace_sigma,

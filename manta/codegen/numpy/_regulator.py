@@ -7,7 +7,7 @@ from typing import Any
 import numpy as np
 
 from ...ir.module import Role
-from ...linearization import resolve_suffix
+from ...ir._names import resolve_suffix
 from ._runtime import NumpyRuntime, unpack_fields
 
 

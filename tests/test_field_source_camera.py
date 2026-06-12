@@ -210,7 +210,12 @@ def test_source_requires_its_field_registered():
         Sim(w)
 
 
-def test_optical_field_value_at_sym_forbidden():
+def test_optical_field_is_not_a_superposition():
+    # OpticalField is an enumerated field, not a SuperposedField: it
+    # carries its ellipsoids for the camera to project, and has no
+    # summed value_at_sym at all.
+    from manta.fields.base import SuperposedField
     f = OpticalField().add_ellipsoid((0, 0, 1), (1, 1, 1))
-    with pytest.raises(NotImplementedError):
-        f.value_at_sym(None, None)
+    assert not isinstance(f, SuperposedField)
+    assert not hasattr(f, "value_at_sym")
+    assert len(f.ellipsoids) == 1

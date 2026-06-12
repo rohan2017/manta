@@ -22,7 +22,7 @@ import casadi as ca
 
 from ..ir.frames import WorldFrame
 from ..ir.types import Vec3
-from .base import Disturbance, Field
+from .base import Disturbance, SuperposedField
 
 
 _VEC3_ANCHOR = Vec3[WorldFrame]
@@ -31,7 +31,7 @@ _VEC3_ANCHOR = Vec3[WorldFrame]
 _MU0_OVER_4PI = 1.0e-7
 
 
-class MagField(Field):
+class MagField(SuperposedField):
     """Magnetic flux density field, Vec3[WorldFrame] in Tesla.
 
     Builder methods (`add_uniform`, `add_dipole`) return self for

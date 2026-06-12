@@ -24,7 +24,7 @@ from typing import Any, Protocol
 
 import numpy as np
 
-from .linearization import resolve_suffix
+from .ir._names import resolve_suffix
 from .signal import Signal
 
 

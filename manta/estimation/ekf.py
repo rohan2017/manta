@@ -48,7 +48,8 @@ from ..ir.module import (
     StateLayout, StateRef, entry_ident,
 )
 from ..ir.state_spec import StateSpec, flatten_nested
-from ..linearization import LinearizedSystem, resolve_suffix
+from ..ir._names import resolve_suffix
+from ..linearization import LinearizedSystem
 from ._kalman import (
     joseph_update, lin_cov, require_active_R, symmetrize,
 )
@@ -82,11 +83,6 @@ class EKF:
         self.world = world
         self.crafts = sys.crafts
         self.spec: StateSpec = sys.spec
-        self._blocks = sys.blocks
-        self._F_fn = sys.F_fn                      # for observability
-        self._sensors = {full: {"full": full, "dim": s.dim,
-                                "h_fn": s.h_fn, "H_fn": s.H_fn}
-                         for full, s in sys.sensors.items()}
 
         # ---- the Kalman recursion, symbolically, once -------------------
         spec, n_tan = sys.spec, sys.spec.tangent_dim
@@ -192,7 +188,7 @@ class EKF:
     @property
     def n_blocks(self) -> int:
         """Independent tangent subsystems (block-diagonal predict)."""
-        return len(self._blocks)
+        return len(self.sys.blocks)
 
     def _build_u(self, u: dict[str, float] | None) -> np.ndarray:
         """Resolve `u` to a flat input vector (full or suffix names)."""
@@ -220,7 +216,7 @@ class EKF:
 
     def __repr__(self) -> str:
         return (f"<EKF tangent={self.spec.tangent_dim} "
-                f"sensors={list(self._sensors)} n_blocks={self.n_blocks}>")
+                f"sensors={list(self.sys.sensors)} n_blocks={self.n_blocks}>")
 
 
 # ---------------------------------------------------------------------------

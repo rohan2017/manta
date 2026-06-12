@@ -9,7 +9,7 @@ import numpy as np
 
 from ...ir.module import Role, StateRef
 from ...ir.state_spec import flatten_nested
-from ...linearization import resolve_suffix
+from ...ir._names import resolve_suffix
 from ..target import for_role
 from ._noise import NoiseDriver
 from ._runtime import NumpyRuntime, _split, pack_fields

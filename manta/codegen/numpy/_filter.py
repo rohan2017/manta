@@ -10,7 +10,7 @@ import numpy as np
 from ...bus import MeasurementBus
 from ...estimation._kalman import joseph_update_np
 from ...ir.module import entry_ident
-from ...linearization import resolve_suffix
+from ...ir._names import resolve_suffix
 from ._runtime import NumpyRuntime
 
 

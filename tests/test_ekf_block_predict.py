@@ -44,7 +44,7 @@ def test_independent_crafts_split_into_blocks():
     ekf = EKF(w)
     assert ekf.n_blocks == 3
     # Every block is exactly one craft's 12 tangent dims.
-    assert sorted(len(b) for b in ekf._blocks) == [12, 12, 12]
+    assert sorted(len(b) for b in ekf.sys.blocks) == [12, 12, 12]
 
 
 # ---------------------------------------------------------------------------
@@ -89,7 +89,7 @@ def test_block_predict_matches_dense():
     rng = np.random.default_rng(3)
     n = ir.spec.tangent_dim
     P0 = np.zeros((n, n))
-    for blk in ir._blocks:
+    for blk in ir.sys.blocks:
         M = rng.normal(size=(len(blk), len(blk)))
         P0[np.ix_(blk, blk)] = M @ M.T + np.eye(len(blk))
     rt.reset(P=P0)
@@ -102,7 +102,7 @@ def test_block_predict_matches_dense():
 
         # Dense reference from the same pre-step state.
         u_vec = ir._build_u(None)
-        F = np.asarray(ir._F_fn(x_before, u_vec, dt, t))
+        F = np.asarray(ir.sys.F_fn(x_before, u_vec, dt, t))
         L = np.asarray(ir.sys.L_fn(x_before, u_vec, dt, t))
         Q = L @ ir.sys.Sigma @ L.T
         P_dense = F @ P_before @ F.T + Q
@@ -112,5 +112,5 @@ def test_block_predict_matches_dense():
         t += dt
 
     # Cross-block covariance must remain exactly zero.
-    a_idx, b_idx = ir._blocks
+    a_idx, b_idx = ir.sys.blocks
     assert np.all(rt.P[np.ix_(a_idx, b_idx)] == 0.0)

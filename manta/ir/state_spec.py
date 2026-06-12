@@ -42,6 +42,7 @@ from typing import Any
 import casadi as ca
 import numpy as np
 
+from ._names import resolve_suffix
 from .manifold import Manifold, R3Manifold, SO3Manifold
 
 
@@ -312,20 +313,11 @@ class StateSpec:
         Exact match wins. As a convenience for single-craft worlds, a
         suffix match also works — `spec.slot("position")` finds
         `"drone.position"` when there's exactly one such slot. The
-        suffix match raises if ambiguous.
-        """
-        if name in self._slot_by_name:
-            return self._slot_by_name[name]
-        candidates = [s for s in self._slots
-                      if s.name.endswith("." + name)]
-        if len(candidates) == 1:
-            return candidates[0]
-        if len(candidates) > 1:
-            raise KeyError(
-                f"StateSpec.slot: ambiguous slot name {name!r}; "
-                f"matches {[c.name for c in candidates]}. Use the "
-                f"fully-qualified form.")
-        raise KeyError(name)
+        suffix match raises if ambiguous (the shared `resolve_suffix`
+        rule)."""
+        full = resolve_suffix(name, self._slot_by_name,
+                              label="slot", who="StateSpec.slot")
+        return self._slot_by_name[full]
 
     def __contains__(self, name: str) -> bool:
         return name in self._slot_by_name

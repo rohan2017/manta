@@ -133,18 +133,21 @@ class Disturbance(DeclarationHost, ABC):
         raise NotImplementedError
 
 
-class Field(ABC):
-    """Base for a typed physical field.
+class Field:
+    """Base for a typed physical field — a host that CARRIES disturbances.
 
-    Subclasses fix:
-      * `value_shape` — the CasADi-MX type returned by `value_at_sym`
-        (e.g. Vec3[WorldFrame] for GravityField).
-      * `_zero_value()` — the additive identity for the field at any
-        point. Used as the seed of the disturbance sum and as the
-        return value when no disturbances are registered.
+    A Field fixes `value_shape` (the CasADi-MX type its disturbances
+    produce) and registers compatible disturbances via `add()`. Two kinds
+    of field extend it:
 
-    Concrete fields don't need to override `value_at_sym` itself — the
-    base sum-over-disturbances implementation suffices.
+      * `SuperposedField` — the disturbances SUM into one
+        `value_at_sym(point, t)` (gravity, B-field, fluid, collision).
+      * `OpticalField` (an enumerated field) — the disturbances are kept
+        SEPARATE and enumerated, never summed (a camera draws one box per
+        ellipsoid). It has no `value_at_sym`.
+
+    `Field` itself is the shared host (the registry + the value-shape
+    contract); it is not meant to be instantiated directly.
     """
 
     #: The CasADi-wrapped type the field's value has. Subclasses set this.
@@ -171,6 +174,25 @@ class Field(ABC):
                 f"{self.value_shape!r}")
         self._disturbances.append(disturbance)
         return self
+
+    def __repr__(self) -> str:
+        return (f"<{type(self).__name__} "
+                f"{len(self._disturbances)} disturbance(s)>")
+
+
+class SuperposedField(Field, ABC):
+    """A `Field` whose disturbances SUM into one value at each point.
+
+    Subclasses fix:
+      * `value_shape` — the CasADi-MX type returned by `value_at_sym`
+        (e.g. Vec3[WorldFrame] for GravityField).
+      * `_zero_value()` — the additive identity for the field at any
+        point. Used as the seed of the disturbance sum and as the
+        return value when no disturbances are registered.
+
+    Concrete fields don't override `value_at_sym` itself — the base
+    sum-over-disturbances implementation suffices.
+    """
 
     @abstractmethod
     def _zero_value(self):
@@ -250,7 +272,3 @@ class Field(ABC):
         proj_clip   = ca.fmax(0.0, proj_scalar)
         residual    = c_mx - proj_clip * r_mx
         return _Vec3[running._frame].from_mx(r_mx + residual)
-
-    def __repr__(self) -> str:
-        return (f"<{type(self).__name__} "
-                f"{len(self._disturbances)} disturbance(s)>")

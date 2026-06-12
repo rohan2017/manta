@@ -33,7 +33,7 @@ import casadi as ca
 from ..ir.frames import WorldFrame
 from ..ir.types import Vec3
 from ..smoothing import smooth_max0, soft_norm
-from .base import Disturbance, Field
+from .base import Disturbance, SuperposedField
 
 
 _VEC3_ANCHOR = Vec3[WorldFrame]
@@ -46,7 +46,7 @@ _VEC3_ANCHOR = Vec3[WorldFrame]
 _SMOOTH_EPS_SQ = 1.0e-12
 
 
-class CollisionField(Field):
+class CollisionField(SuperposedField):
     """Outward-penetration vector field for contact detection.
 
     Per the Field-base pattern, every registered Disturbance is an

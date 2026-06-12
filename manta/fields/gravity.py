@@ -16,13 +16,13 @@ import casadi as ca
 
 from ..ir.frames import WorldFrame
 from ..ir.types import Vec3
-from .base import Disturbance, Field
+from .base import Disturbance, SuperposedField
 
 
 _VEC3_ANCHOR = Vec3[WorldFrame]
 
 
-class GravityField(Field):
+class GravityField(SuperposedField):
     """Gravitational acceleration `g(point)` in the WorldFrame.
 
     `value_at_sym(point)` returns Vec3[WorldFrame] giving the

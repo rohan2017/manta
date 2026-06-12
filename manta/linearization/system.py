@@ -42,9 +42,10 @@ from typing import Any
 
 import numpy as np
 
+from ..ir._names import resolve_suffix
 from ..ir.state_spec import StateSpec, flatten_nested, resolve_slotset
 from .engine import SensorModel, TickLinearizer
-from .names import freeze_complement, resolve_suffix, slot_of_tangent_index
+from .names import freeze_complement, slot_of_tangent_index
 from .partition import dependency_closure
 
 
@@ -210,17 +211,7 @@ class LinearizedSystem:
     def _compile_tick(self, world, tunable_params: set[str]) -> None:
         """Compile the shared world tick and walk its signature."""
         from ..tick import compile_world_tick, walk_tick_signature
-        from ..fields import (CollisionField, FluidField, GravityField,
-                              MagField)
-        compiled = compile_world_tick(
-            list(self.crafts), list(world._couplings),
-            gravity_field=world.get_field(GravityField),
-            fluid_field=world.get_field(FluidField),
-            mag_field=world.get_field(MagField),
-            collision_field=world.get_field(CollisionField),
-            world=world,
-            tunable_params=tunable_params,
-        )
+        compiled = compile_world_tick(world, tunable_params=tunable_params)
         self._cf = compiled.casadi_function
         self.tick = compiled
         self.sample_rates = getattr(compiled, "sample_rates", {})

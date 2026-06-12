@@ -57,7 +57,7 @@ from typing import Callable
 import numpy as np
 
 from ..ir.module import entry_ident
-from ..linearization import resolve_suffix
+from ..ir._names import resolve_suffix
 from ._kalman import joseph_update_np, lin_cov, symmetrize
 
 
@@ -131,13 +131,13 @@ def _select_sensors(ekf, sensors, *, who: str):
     every registered sensor; otherwise each entry resolves like everywhere
     else (full name or unique `.<suffix>`) — an unknown or ambiguous name
     raises instead of silently dropping a typo."""
-    fulls = list(ekf._sensors)
+    fulls = list(ekf.sys.sensors)
     if sensors is None:
         chosen = set(fulls)
     else:
         chosen = {resolve_suffix(s, fulls, label="sensor", who=who)
                   for s in sensors}
-    return [(ekf._sensors[f]["H_fn"], f) for f in fulls if f in chosen]
+    return [(ekf.sys.sensors[f].H_fn, f) for f in fulls if f in chosen]
 
 
 def observability(ekf, *, state=None, inputs=None, sensors=None,
@@ -178,7 +178,7 @@ def _local_O(ir, x, u, dt, t, pairs, n) -> np.ndarray:
     """Local discrete observability matrix at one point: `[H; H·F; …;
     H·F^(n-1)]`. `F^p` stays bounded (F ≈ I + A·dt), so this is well
     conditioned — unlike `H·F^k` propagated from a trajectory start."""
-    F = np.asarray(ir._F_fn(x, u, dt, t), dtype=float).reshape(n, n)
+    F = np.asarray(ir.sys.F_fn(x, u, dt, t), dtype=float).reshape(n, n)
     H = np.vstack([np.asarray(h(x, u, dt, t), dtype=float).reshape(-1, n)
                    for h, _ in pairs])
     blocks, Fp = [], np.eye(n)

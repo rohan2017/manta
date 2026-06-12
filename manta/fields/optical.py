@@ -59,8 +59,10 @@ class _EllipsoidBase(Disturbance):
     label: int = 0
 
     def contribute_at_sym(self, point, t):
-        # Optical disturbances are never summed (the camera enumerates
-        # them); the base Field.value_at_sym is overridden to forbid it.
+        # Optical disturbances are never summed: OpticalField is an
+        # enumerated field (no value_at_sym) — a camera enumerates
+        # `ellipsoids` and projects each quadric. `Disturbance` mandates
+        # this method, so it stays as an explicit "not summable" marker.
         raise NotImplementedError(
             "OpticalField disturbances are not summed — a camera enumerates "
             "OpticalField.ellipsoids and projects each quadric.")
@@ -144,12 +146,3 @@ class OpticalField(Field):
         """Attach a fixed scenery ellipsoid. Returns self for chaining."""
         return self.add(SemanticEllipsoid(
             center, semi_axes, orientation=orientation, label=label))
-
-    def _zero_value(self):
-        raise NotImplementedError(
-            "OpticalField has no summed value — enumerate `ellipsoids`.")
-
-    def value_at_sym(self, point, t):
-        raise NotImplementedError(
-            "OpticalField is not a superposition field; a camera enumerates "
-            "OpticalField.ellipsoids and projects each quadric to a box.")

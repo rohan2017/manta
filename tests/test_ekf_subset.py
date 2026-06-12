@@ -81,7 +81,7 @@ def test_track_drops_independent_craft():
                     "a.velocity", "a.angular_velocity"]
     assert ekf.spec.tangent_dim == 12          # not 24
     # Only craft a's sensor is registered (default sensors follow track).
-    assert all(v["full"].startswith("a.") for v in ekf._sensors.values())
+    assert all(v.full.startswith("a.") for v in ekf.sys.sensors.values())
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +153,7 @@ def test_opt_in_sensor_exclusion():
     w.add_craft(c)
 
     e = EKF(w, sensors=["drone.gps.position"])
-    fulls = {v["full"] for v in e._sensors.values()}
+    fulls = {v.full for v in e.sys.sensors.values()}
     assert fulls == {"drone.gps.position"}
 
     rt = TargetNumpy(e)

@@ -49,7 +49,8 @@ from ..estimation._kalman import (
 )
 from ..ir._linalg import spd_logdet, spd_solve
 from ..ir.state_spec import flatten_nested
-from ..linearization import LinearizedSystem, resolve_suffix
+from ..ir._names import resolve_suffix
+from ..linearization import LinearizedSystem
 from ._common import (
     Prior, Window, _FitBlock, convergence_line, format_table, laplace_sigma,
     pack_u_trace, pack_x0, prior_penalty, resolve_traces, solve_blocks_nlp,

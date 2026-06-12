@@ -20,7 +20,7 @@ import casadi as ca
 
 from ..ir.frames import WorldFrame
 from ..ir.types import Vec3
-from .base import Disturbance, Field
+from .base import Disturbance, SuperposedField
 
 
 _VEC3_ANCHOR = Vec3[WorldFrame]
@@ -48,7 +48,7 @@ class FluidState:
         )
 
 
-class FluidField(Field):
+class FluidField(SuperposedField):
     """Fluid density + bulk velocity over the world frame.
 
     The field value at a point is a `FluidState`. Concrete sources

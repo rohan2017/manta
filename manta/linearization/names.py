@@ -1,29 +1,12 @@
-"""Name resolution + freeze helpers shared by the transforms."""
+"""Freeze helpers shared by the transforms.
+
+(Suffix name resolution lives in `manta.ir._names.resolve_suffix` — a low
+module that `bus`/`state_spec` and the transforms all reach.)
+"""
 
 from __future__ import annotations
 
 import numpy as np
-
-
-def resolve_suffix(key: str, candidates, *, label: str, who: str) -> str:
-    """Resolve one user-supplied name against `candidates`.
-
-    Accepts an exact match, else a unique `.<suffix>` match (craft-relative
-    shorthand like ``"t.throttle"`` for ``"drone.t.throttle"``). Raises
-    `KeyError` on an unknown or ambiguous key.
-    """
-    cands = list(candidates)
-    if key in cands:
-        return key
-    matches = [n for n in cands if n.endswith("." + key)]
-    if len(matches) == 1:
-        return matches[0]
-    if len(matches) > 1:
-        raise KeyError(
-            f"{who}: ambiguous {label} name {key!r}; matches {matches}. "
-            f"Use the fully-qualified form.")
-    raise KeyError(
-        f"{who}: unknown {label} name {key!r}. Available: {sorted(cands)}")
 
 
 def freeze_complement(full_spec, kept, init_flat: dict,

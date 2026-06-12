@@ -109,6 +109,8 @@ def test_add_coupling_rejects_unregistered_craft():
         def craft_a(self): return self._a
         @property
         def craft_b(self): return self._b
+        def compute_wrenches_sym(self, ctx_a, ctx_b):
+            raise NotImplementedError   # add_coupling rejects before this
 
     with pytest.raises(ValueError, match="not registered"):
         w.add_coupling(FakeCoupling(a, b))

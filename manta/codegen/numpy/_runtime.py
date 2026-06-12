@@ -8,7 +8,7 @@ import numpy as np
 
 from ...bus import PortSet
 from ...ir.module import Hosting, Module, Role
-from ...linearization import resolve_suffix
+from ...ir._names import resolve_suffix
 from ..target import resolve_args
 from ._compile import _compiled_functions
 

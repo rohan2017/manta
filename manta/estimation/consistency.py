@@ -170,7 +170,7 @@ def nees(world, *, dt: float, steps: int,
     """
     import casadi as ca
     from ..codegen.numpy import NoiseDriver, TargetNumpy
-    from ..linearization import resolve_suffix
+    from ..ir._names import resolve_suffix
     from ..signal import wire
     from ..sim import Sim
     from .ekf import EKF
@@ -189,7 +189,7 @@ def nees(world, *, dt: float, steps: int,
 
     # Sensor selection resolves like everywhere else — unknown/ambiguous
     # names raise instead of silently dropping a typo.
-    fulls = [s["full"] for s in ekf_ir._sensors.values()]
+    fulls = list(ekf_ir.sys.sensors)
     if sensors is None:
         names = fulls
     else:

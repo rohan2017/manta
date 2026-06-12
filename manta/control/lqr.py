@@ -48,7 +48,8 @@ import numpy as np
 from ..ir.module import (
     EntryPoint, Hosting, Module, Port, PortField, PortRef, Role, StateLayout,
 )
-from ..linearization import LinearizedSystem, resolve_suffix
+from ..ir._names import resolve_suffix
+from ..linearization import LinearizedSystem
 
 
 def _solve_dare(A, B, Q, R, *, max_iter: int = 10000, tol: float = 1e-12):

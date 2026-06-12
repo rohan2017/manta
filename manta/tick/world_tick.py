@@ -50,31 +50,24 @@ from ..ir.wrench import Wrench
 from ..smoothing import NORM_EPS_SQ
 
 
-def compile_world_tick(crafts: list,
-                       couplings: list,
+def compile_world_tick(world,
                        *,
-                       gravity_field=None,
-                       fluid_field=None,
-                       mag_field=None,
-                       collision_field=None,
-                       world=None,
+                       crafts=None,
                        tunable_params=None,
                        ) -> "ir.graph.CompiledGraph":
-    """Compile a CasADi-MX tick over multiple coupled crafts.
+    """Compile a CasADi-MX tick over a World's coupled crafts.
+
+    The World is the single source of truth: its crafts, couplings, and
+    shared fields are read off it here (each unset field defaults to its
+    empty form — zero gravity / density / B / penetration). It is also
+    handed to each TickContext so `ctx.field(cls)` resolves
+    world-registered fields.
 
     Args:
-        crafts    — list of Craft instances. Must contain every craft
-                    referenced by `couplings`.
-        couplings — list of Coupling instances (subclasses with
-                    compute_wrenches_sym(ctx_a, ctx_b) → (Wrench, Wrench)).
-        gravity_field, fluid_field, mag_field, collision_field —
-                    the world's shared fields, queried per craft.
-                    Shared across all crafts in this component. Any
-                    unset field defaults
-                    to its empty form (zero gravity / zero density /
-                    zero B / zero penetration).
-        world     — the owning World, if any; handed to each TickContext
-                    so `ctx.field(cls)` resolves world-registered fields.
+        world     — the World to compile.
+        crafts    — optional subset of `world.crafts` to compile as one
+                    component (must contain every craft referenced by a
+                    coupling). `None` compiles every craft.
         tunable_params — optional set of full Parameter names
                     (`<craft>.<part>.<param>`) to PROMOTE from baked
                     graph constants to live graph inputs (system ID).
@@ -90,21 +83,13 @@ def compile_world_tick(crafts: list,
         <craft_name>.<part>.<input>      (per-part Input slots, input-only)
     Plus a shared `dt` input. Sensor outputs use the same prefix.
     """
-    # Resolve field defaults.
-    from ..fields import (
-        CollisionField as _CollisionField,
-        FluidField as _FluidField,
-        GravityField as _GravityField,
-        MagField as _MagField,
-    )
-    if gravity_field is None:
-        gravity_field = _GravityField()
-    if fluid_field is None:
-        fluid_field = _FluidField()
-    if mag_field is None:
-        mag_field = _MagField()
-    if collision_field is None:
-        collision_field = _CollisionField()
+    from ..fields import (CollisionField, FluidField, GravityField, MagField)
+    crafts = list(world.crafts) if crafts is None else list(crafts)
+    couplings = list(world._couplings)
+    gravity_field = world.get_field(GravityField) or GravityField()
+    fluid_field = world.get_field(FluidField) or FluidField()
+    mag_field = world.get_field(MagField) or MagField()
+    collision_field = world.get_field(CollisionField) or CollisionField()
 
     if not crafts:
         raise ValueError("compile_world_tick: needs at least one craft.")
