@@ -8,6 +8,7 @@ import casadi as ca
 import numpy as np
 
 from ...bus import MeasurementBus
+from ...estimation._kalman import joseph_update_np
 from ...ir.module import entry_ident
 from ...linearization import resolve_suffix
 from ._runtime import NumpyRuntime
@@ -146,13 +147,11 @@ class NumpyFilter(NumpyRuntime):
         if h_x.size != z.size:
             raise ValueError(
                 f"update: h(x) size {h_x.size} doesn't match z size {z.size}")
-        P = self._state["P"]
-        S = H @ P @ H.T + R
-        K = np.linalg.solve(S.T, (P @ H.T).T).T
-        self._state["x"] = spec.boxplus_num(x_now, K @ (z - h_x))
-        IKH = np.eye(spec.tangent_dim) - K @ H
-        P = IKH @ P @ IKH.T + K @ R @ K.T
-        self._state["P"] = 0.5 * (P + P.T)
+        x_new, P_new, _, _ = joseph_update_np(
+            self._state["P"], H, R,
+            x=x_now, z=z, h=h_x, boxplus=spec.boxplus_num)
+        self._state["x"] = x_new
+        self._state["P"] = P_new
 
     # ---- the measurement bus ----------------------------------------------
 

@@ -49,7 +49,9 @@ from ..ir.module import (
 )
 from ..ir.state_spec import StateSpec, flatten_nested
 from ..linearization import LinearizedSystem, resolve_suffix
-from ._kalman import joseph_update
+from ._kalman import (
+    joseph_update, lin_cov, require_active_R, symmetrize,
+)
 
 
 class EKF:
@@ -94,22 +96,18 @@ class EKF:
         Q = ca.MX.sym("Q", n_tan, n_tan)
         F = sys.F_sym
 
-        def _sym(M):                              # keep P symmetric
-            return 0.5 * (M + M.T)
-
         # predict: auto process noise Q = L Σ Lᵀ baked into the kernel
         # (zero when the model declares none) + an explicit-Q override.
-        if sys.L_sym is not None:
-            Q_auto = sys.L_sym @ ca.DM(sys.Sigma) @ sys.L_sym.T
-        else:
-            Q_auto = ca.MX.zeros(n_tan, n_tan)
+        Q_auto = lin_cov(sys.L_sym,
+                         ca.DM(sys.Sigma) if sys.L_sym is not None else None,
+                         n_tan)
         predict_fn = ca.Function(
             "ekf_predict", [x, P, u, dt, t],
-            [sys.x_new, _sym(F @ P @ F.T + Q_auto)],
+            [sys.x_new, symmetrize(F @ P @ F.T + Q_auto)],
             ["x", "P", "u", "dt", "t"], ["x_new", "P_new"])
         predict_q_fn = ca.Function(
             "ekf_predict_with_Q", [x, P, Q, u, dt, t],
-            [sys.x_new, _sym(F @ P @ F.T + Q)],
+            [sys.x_new, symmetrize(F @ P @ F.T + Q)],
             ["x", "P", "Q", "u", "dt", "t"], ["x_new", "P_new"])
 
         # per-sensor Joseph update (the shared `joseph_update` kernel —
@@ -124,31 +122,16 @@ class EKF:
             z = ca.MX.sym("z", s.dim)
             h = ca.substitute(s.h_sym, dt, zero_dt)
             H = ca.substitute(s.H_sym, dt, zero_dt)
-            if s.L_h_sym is not None and sys.Sigma is not None:
-                L_h = ca.substitute(s.L_h_sym, dt, zero_dt)
-                R = L_h @ ca.DM(sys.Sigma) @ L_h.T
-            else:
-                R = ca.MX.zeros(s.dim, s.dim)
-            # A σ=0 sensor bakes R = 0: the first update collapses its
-            # covariance block to exactly zero, the second meets a singular
-            # S and NaNs silently. Refuse at construction. R can be
-            # state-dependent (L_h varying with x), so probe a perturbed
-            # point too — this is a sampled check, not a proof; an R that
-            # vanishes only away from both probes still slips through.
+            L_h = (ca.substitute(s.L_h_sym, dt, zero_dt)
+                   if s.L_h_sym is not None and sys.Sigma is not None
+                   else None)
+            R = lin_cov(L_h, ca.DM(sys.Sigma) if L_h is not None else None,
+                        s.dim)
+            # Refuse a σ=0 sensor (R ≡ 0 → singular S on the second fold).
             R_fn = ca.Function("R0", [x, u, t], [R])
-            probes = [(x0, sys.u_defaults, 0.0)]
-            if ca.depends_on(R, ca.vertcat(x, u, t)):
-                x1 = spec.boxplus_num(
-                    np.asarray(x0, dtype=float).reshape(-1),
-                    1e-3 * np.ones(n_tan))
-                probes.append((x1, sys.u_defaults + 1e-3, 1.0))
-            if all(not np.any(np.abs(np.asarray(R_fn(*p))) > 0.0)
-                   for p in probes):
-                raise ValueError(
-                    f"EKF: sensor {full!r} has no active noise channel — its "
-                    f"baked R is zero and the update is singular (the second "
-                    f"fold NaNs). Declare a nonzero noise σ on the sensor, or "
-                    f"exclude it via sensors=[...].")
+            require_active_R(R, R_fn, ca.vertcat(x, u, t),
+                             x0=x0, u_defaults=sys.u_defaults, spec=spec,
+                             full=full, who="EKF")
             x_upd, P_upd, _, _ = joseph_update(x, P, h, H, R, z, spec)
             updates[full] = ca.Function(
                 f"ekf_update_{entry_ident(full)}",

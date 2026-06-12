@@ -103,7 +103,7 @@ def test_noise_fit_singular_sensor_raises():
     # declare it active so the channel synthesizes.
     t1 = next(p for p in model.crafts[0].parts if p.name == "t1")
     t1.force_noise_sigma = 0.1
-    with pytest.raises(ValueError, match="zero measurement noise"):
+    with pytest.raises(ValueError, match="no active noise channel"):
         NoiseFit(model, noise={"t1.force_noise": Prior(sigma=1.0)})
 
 

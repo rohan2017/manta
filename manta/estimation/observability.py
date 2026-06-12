@@ -58,6 +58,7 @@ import numpy as np
 
 from ..ir.module import entry_ident
 from ..linearization import resolve_suffix
+from ._kalman import joseph_update_np, lin_cov, symmetrize
 
 
 @dataclass
@@ -399,11 +400,10 @@ def sigma_horizon(ekf, *, horizon: float, dt: float = 0.02,
     chosen = []                                  # (full, H_fn, R_fn, period)
     for H_fn, full in _select_sensors(ir, sensors, who="sigma_horizon"):
         s = sys.sensors[full]
-        if s.L_h_sym is not None and sys.Sigma is not None:
-            L_h = ca.substitute(s.L_h_sym, dt_s, zero_dt)
-            R_expr = L_h @ ca.DM(sys.Sigma) @ L_h.T
-        else:
-            R_expr = ca.DM.zeros(s.dim, s.dim)
+        L_h = (ca.substitute(s.L_h_sym, dt_s, zero_dt)
+               if s.L_h_sym is not None and sys.Sigma is not None else None)
+        R_expr = lin_cov(L_h, ca.DM(sys.Sigma) if L_h is not None else None,
+                         s.dim)
         R_fn = ca.Function(f"R_{entry_ident(full)}",
                            [x_s, u_s, t_s], [R_expr])
         rate = sys.sample_rates.get(full)
@@ -417,14 +417,13 @@ def sigma_horizon(ekf, *, horizon: float, dt: float = 0.02,
         Q_const = np.asarray(Q, dtype=float)
     elif sys.L_sym is not None:
         Q_fn = ca.Function("Q_auto", [x_s, u_s, dt_s, t_s],
-                           [sys.L_sym @ ca.DM(sys.Sigma) @ sys.L_sym.T])
+                           [lin_cov(sys.L_sym, ca.DM(sys.Sigma), n)])
         Q_const = None
     else:
         Q_const = np.zeros((n, n))
 
     # --- the recursion -----------------------------------------------------
     x = _operating_point(ir, state)
-    eye = np.eye(n)
     refresh = max(1, steps // max(1, samples))
     rec_every = max(1, steps // max(1, record))
     slots = [(s.name, s.tangent_offset, s.tangent_offset + s.tangent_dim)
@@ -466,15 +465,8 @@ def sigma_horizon(ekf, *, horizon: float, dt: float = 0.02,
         for H, R, period in HRs:
             if i % period:
                 continue
-            # Numeric (numpy) twin of the symbolic Joseph update — the
-            # shared `joseph_update` in estimation/_kalman.py is the
-            # reference implementation. Kept separate: this loop is plain
-            # numpy over a horizon, not a baked CasADi kernel.
-            S = H @ P @ H.T + R
-            K = np.linalg.solve(S, H @ P).T      # P Hᵀ S⁻¹ (S SPD)
-            IKH = eye - K @ H
-            P = IKH @ P @ IKH.T + K @ R @ K.T    # Joseph
-        P = 0.5 * (P + P.T)
+            _, P, _, _ = joseph_update_np(P, H, R)   # covariance-only fold
+        P = symmetrize(P)
         if (i + 1) % rec_every == 0 or i == steps - 1:
             record_point(t0 + (i + 1) * dt)
 

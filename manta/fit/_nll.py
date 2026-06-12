@@ -44,7 +44,9 @@ import warnings
 import casadi as ca
 import numpy as np
 
-from ..estimation._kalman import joseph_update
+from ..estimation._kalman import (
+    joseph_update, lin_cov, require_active_R, symmetrize,
+)
 from ..ir._linalg import spd_logdet, spd_solve
 from ..ir.state_spec import flatten_nested
 from ..linearization import LinearizedSystem, resolve_suffix
@@ -251,11 +253,9 @@ class NoiseFit:
             vals = ca.vertcat(x, u, zero_dt, t)
             h = ca.substitute(ca.reshape(sm.h_sym, sm.dim, 1), sub, vals)
             H = ca.substitute(sm.H_sym, sub, vals)
-            if sm.L_h_sym is not None:
-                L_h = ca.substitute(sm.L_h_sym, sub, vals)
-                R = L_h @ Sigma @ L_h.T
-            else:
-                R = ca.MX.zeros(sm.dim, sm.dim)
+            L_h = (ca.substitute(sm.L_h_sym, sub, vals)
+                   if sm.L_h_sym is not None else None)
+            R = lin_cov(L_h, Sigma, sm.dim)
             x, P, nu, S = joseph_update(x, P, h, H, R, zk, spec)
             nll = nll + 0.5 * (ca.dot(nu, spd_solve(S, nu))
                                + spd_logdet(S))
@@ -265,13 +265,10 @@ class NoiseFit:
         vals = ca.vertcat(x, u, dt, t)
         x_new = ca.substitute(sys.x_new, sub, vals)
         F = ca.substitute(sys.F_sym, sub, vals)
-        if sys.L_sym is not None:
-            L = ca.substitute(sys.L_sym, sub, vals)
-            Q = L @ Sigma @ L.T
-        else:
-            Q = ca.MX.zeros(tan, tan)
-        P = F @ P @ F.T + Q
-        P = 0.5 * (P + P.T)
+        L = ca.substitute(sys.L_sym, sub, vals) if sys.L_sym is not None \
+            else None
+        Q = lin_cov(L, Sigma, tan)
+        P = symmetrize(F @ P @ F.T + Q)
 
         return ca.Function(
             "nll_step", [x_in, Pv, u, z, s, dt, t],
@@ -280,39 +277,28 @@ class NoiseFit:
             ["x_new", "Pv_new", "nll"])
 
     def _validate_R0(self) -> None:
-        """Every chosen sensor needs S > 0 from the first update: with
-        all its white channels at σ=0 (and unfitted), R is exactly zero
-        and a small P0 makes S singular. Probe at the starting σ — and,
-        as in `EKF`, at a perturbed point too when R is state-dependent
-        (a sampled check, not a proof)."""
+        """Every chosen sensor needs S > 0 from the first update: with all
+        its white channels at σ=0 (and unfitted), R is exactly zero and a
+        small P0 makes S singular. Probe each sensor's R at the starting σ
+        via the shared `require_active_R` guard (diagonal check — a fitted
+        R is diagonal in σ)."""
         s0 = np.concatenate([c.init for c in self.channels]).reshape(-1, 1)
-        # Direct numeric probe: evaluate each sensor's R at the start.
         sys = self.sys
         flat = flatten_nested(self.world._initial_state_dict())
         x0 = np.asarray(sys.spec.pack_any(flat), dtype=float)
         s_sym = ca.MX.sym("s", self.n_s, 1)
+        zero_dt = ca.MX.zeros(1, 1)
         for full, sm in sys.sensors.items():
             if sm.L_h_sym is None:
                 continue
-            R = ca.substitute(
-                sm.L_h_sym, sys.dt_sym, ca.MX.zeros(1, 1)) \
-                @ self._sigma_diag(s_sym) @ ca.substitute(
-                    sm.L_h_sym, sys.dt_sym, ca.MX.zeros(1, 1)).T
+            L_h = ca.substitute(sm.L_h_sym, sys.dt_sym, zero_dt)
+            R = lin_cov(L_h, self._sigma_diag(s_sym), sm.dim)
             R_fn = ca.Function("R", [sys.x_sym, sys.u_sym, sys.t_sym,
                                      s_sym], [R])
-            probes = [(x0, sys.u_defaults, 0.0)]
-            if ca.depends_on(R, ca.vertcat(sys.x_sym, sys.u_sym,
-                                           sys.t_sym)):
-                x1 = sys.spec.boxplus_num(
-                    x0.reshape(-1), 1e-3 * np.ones(sys.spec.tangent_dim))
-                probes.append((x1, sys.u_defaults + 1e-3, 1.0))
-            if all(not np.any(np.abs(np.diag(np.asarray(
-                    ca.DM(R_fn(*p, s0))))) > 0.0) for p in probes):
-                raise ValueError(
-                    f"NoiseFit: sensor {full!r} has zero measurement "
-                    f"noise at the starting σ — its first update is "
-                    f"singular. Declare/fit a nonzero white-noise σ on "
-                    f"it, or exclude it via sensors=[...].")
+            require_active_R(
+                R, R_fn, ca.vertcat(sys.x_sym, sys.u_sym, sys.t_sym),
+                x0=x0, u_defaults=sys.u_defaults, spec=sys.spec,
+                full=full, who="NoiseFit", extra=(s0,), diag=True)
 
     # ------------------------------------------------------------------
 
