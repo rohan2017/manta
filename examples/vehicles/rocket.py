@@ -21,9 +21,9 @@ The flight is two burns with a coast between — no continuous burn down:
                thrust sized at ignition would stop metres high), so the
                rocket settles onto its legs instead of dropping.
 
-A command port IS the curve sampler: the loop just writes
-``throttle = F/MAXT`` each tick (the `Thruster` is linear), no model
-change. The slam DURATION is set by WHERE it ignites: triggering at the
+The command IS the curve sampler: the loop just passes
+``throttle = F/MAXT`` to ``step`` each tick (the `Thruster` is linear), no
+model change. The slam DURATION is set by WHERE it ignites: triggering at the
 constant-decel stopping distance ``h = v·T_slam/2`` makes the burn last
 about ``T_slam``.
 
@@ -302,10 +302,9 @@ def main() -> None:
                 u = dict(u0)
             u["rocket.main.throttle"] = thr
 
-            for name_u, val in u.items():
-                sim.command(name_u).set(float(val))
+            u = {k: float(v) for k, v in u.items()}
             for _ in range(SUBSTEPS):              # contact physics @ 500 Hz
-                sim.step(DT_SIM)
+                sim.step(DT_SIM, u=u)
 
             gx = float(np.asarray(st["gimbal_x.angle"]).ravel()[0])
             gy = float(np.asarray(st["gimbal_y.angle"]).ravel()[0])

@@ -1,8 +1,9 @@
-"""EKF measurement bus + step() — freshness-gated, multi-rate updates.
+"""EKF predict / update — the uniform kernel surface, driven by hand.
 
-`feed()` drops a reading into a mailbox; `step()` predicts then folds in
-every fresh measurement (clearing the flag) and drops stale ones. Inputs
-latch (zero-order hold) and drive the predict.
+The filter exposes only the pure kernels: `update(name, z)` folds one
+measurement at the current state, `predict(dt)` propagates. The loop owns
+the order (fold each fresh measurement, then predict) and the rate gating
+— identically to a C++ driving loop. `u` (latched commands) drives predict.
 """
 
 import numpy as np
@@ -35,10 +36,10 @@ def _est_ekf():
 
 
 # ---------------------------------------------------------------------------
-# Multi-rate: GPS slower than the filter; step() predicts between fixes
+# Multi-rate: GPS slower than the filter; predict between fixes
 # ---------------------------------------------------------------------------
 
-def test_step_multi_rate_tracks_truth():
+def test_multi_rate_tracks_truth():
     sim = _truth_sim()
     rt = _est_ekf()
     rt.reset(state={"drone": {"position": [5.0, 0.0, 105.0]}}, P=np.eye(12))
@@ -47,13 +48,12 @@ def test_step_multi_rate_tracks_truth():
     dt = 0.02
     for i in range(200):
         # A measurement sampled at i·dt is the truth at the *start* of the
-        # interval; step() folds it (update-then-predict) before propagating
-        # over [i·dt, (i+1)·dt], so feed it before advancing the truth.
+        # interval: fold it (update-then-predict) before propagating over
+        # [i·dt, (i+1)·dt], so update before advancing the truth.
         truth = np.asarray(sim.state["drone"]["position"])
-        # GPS arrives at 1/4 the filter rate.
-        if i % 4 == 0:
-            rt.feed("gps.position", truth + rng.normal(0, 0.1, 3), t=i * dt)
-        rt.step(dt, t=i * dt)
+        if i % 4 == 0:                              # GPS at 1/4 the filter rate
+            rt.update("gps.position", truth + rng.normal(0, 0.1, 3), t=i * dt)
+        rt.predict(dt, t=i * dt)
         sim.step(dt, t=i * dt)
 
     est = np.asarray(rt.state_dict()["drone"]["position"])
@@ -62,52 +62,25 @@ def test_step_multi_rate_tracks_truth():
 
 
 # ---------------------------------------------------------------------------
-# A fed measurement is consumed exactly once
+# update folds information (shrinks P); predict-only grows it
 # ---------------------------------------------------------------------------
 
-def test_step_consumes_measurement_once():
+def test_update_folds_predict_grows():
     rt = _est_ekf()
     rt.reset(state={"drone": {"position": [10.0, 0.0, 100.0]}}, P=np.eye(12))
-    rt.feed("gps.position", np.array([0.0, 0.0, 100.0]))
-    sig = rt._bus._meas["drone.gps.position"]
-    assert sig.version > rt._bus._seen_meas.get(sig.name, 0)   # pending
 
-    rt.step(0.02)                                   # applies the fix
-    assert rt._bus._seen_meas[sig.name] == sig.version          # consumed
+    rt.update("gps.position", np.array([0.0, 0.0, 100.0]))
     P_after_update = np.trace(rt.P)
 
-    rt.step(0.02)                                   # no feed → predict only
-    # A predict-only step GROWS covariance (no information added) — proof
-    # the consumed measurement was not silently reapplied (an update would
-    # have shrunk trace(P) instead).
+    rt.predict(0.02)                # no information added → covariance grows
     assert np.trace(rt.P) > P_after_update
-
-
-# ---------------------------------------------------------------------------
-# Stale (old-timestamp) measurements are dropped
-# ---------------------------------------------------------------------------
-
-def test_step_drops_stale_measurement():
-    rt = _est_ekf()
-    rt.reset(state={"drone": {"position": [0.0, 0.0, 100.0]}}, P=np.eye(12))
-    # Advance the filter clock to t=1.0.
-    for i in range(50):
-        rt.step(0.02, t=i * 0.02)
-    pos_before = rt.x[:3].copy()
-    # A measurement timestamped far in the past must be ignored.
-    rt.feed("gps.position", np.array([999.0, 999.0, 999.0]), t=-100.0)
-    rt.step(0.02, t=1.0)
-    # Position must not have jumped toward the bogus reading.
-    assert np.linalg.norm(rt.x[:2] - pos_before[:2]) < 1.0
-    sig = rt._bus._meas["drone.gps.position"]
-    assert rt._bus._seen_meas[sig.name] == sig.version          # consumed
 
 
 # ---------------------------------------------------------------------------
 # Latched inputs drive the predict
 # ---------------------------------------------------------------------------
 
-def test_step_latched_inputs_drive_predict():
+def test_inputs_drive_predict():
     from manta.parts.actuation.thruster import Thruster
 
     def craft():
@@ -120,9 +93,9 @@ def test_step_latched_inputs_drive_predict():
     w.add_craft(craft())
     rt = TargetNumpy(EKF(w))
 
-    rt.inputs["t.throttle"] = 10.0      # latched control
     for _ in range(10):
-        rt.step(0.05)
+        rt.predict(0.05, u={"t.throttle": 10.0})
+
     vz = rt.state_dict()["rocket"]["velocity"][2]
     # 10 N for 0.5 s on 1 kg ⇒ ~5 m/s upward.
     assert vz > 1.0

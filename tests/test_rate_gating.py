@@ -2,17 +2,18 @@
 
 A part declares a rate inside `update()`; the value is returned
 unchanged (the compiled kernel stays a pure function), and the rate is
-recorded as metadata on the tick. The Sim/EKF runtimes read it and gate
-the matching *port*: a sensor output publishes a fresh sample once per
-1/rate window (sample-and-hold), and an actuator command latches once
-per window (zero-order-hold). The estimator/controller linearization
-never sees the gate.
+recorded as metadata on the tick. Gating is the loop's job, uniform across
+backends: `sim.rate_gate(name)` / `sim.command_latch()` build a `RateGate`
+/ `CommandLatch` pre-configured from those declared rates, which the user
+applies — fold a sensor once per 1/rate window, hold an actuator command
+between windows (ZOH). The estimator/controller linearization never sees
+the gate.
 """
 
 import numpy as np
 
 from manta import (
-    Craft, EKF, NoiseDriver, Sim, TargetNumpy, World, wire,
+    Craft, EKF, Sim, TargetNumpy, World,
 )
 from manta.fields import GravityField
 from manta.ir.frames import PartFrame
@@ -65,7 +66,7 @@ def test_no_rate_means_empty_map():
 
 
 # ---------------------------------------------------------------------------
-# Sensor output: sample-and-hold at the declared rate
+# Sensor output: the loop gates folding with a model-configured RateGate
 # ---------------------------------------------------------------------------
 
 def _gps_world(rate):
@@ -77,40 +78,36 @@ def _gps_world(rate):
     return w
 
 
-def test_output_port_bumps_version_per_window():
-    # 10 Hz sensor at a 50 Hz sim ⇒ a new sample every 5 ticks.
+def test_rate_gate_due_per_window():
+    # 10 Hz sensor at a 50 Hz sim ⇒ the gate fires once every 5 ticks.
     sim = TargetNumpy(Sim(_gps_world(10.0)))
-    gps = sim.out("c.gps.position")
-    vers = []
-    for _ in range(15):
+    gate = sim.rate_gate("c.gps.position")     # configured from the model
+    due = []
+    for i in range(15):
         sim.step(0.02)
-        vers.append(gps.version)
-    assert vers == [1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3]
+        due.append(gate.due(i * 0.02))
+    assert due == [True, False, False, False, False] * 3
 
 
-def test_output_holds_value_between_samples():
+def test_reading_is_live_not_held():
+    # The kernel is pure: `reading()` tracks truth every step — holding
+    # between samples is the loop's job (gate the *fold*, not the read).
     sim = TargetNumpy(Sim(_gps_world(10.0)))
-    gps = sim.out("c.gps.position")
     sim.step(0.02)
-    held = gps.read().copy()              # captured at the first sample
-    # Move truth during the hold window; the port must not change.
-    for _ in range(3):
-        sim.state["c"]["position"] = sim.state["c"]["position"] + 1.0
-        sim.step(0.02)
-        np.testing.assert_array_equal(gps.read(), held)
+    first = np.asarray(sim.reading("c.gps.position")).copy()
+    sim.state["c"]["position"] = sim.state["c"]["position"] + 1.0
+    sim.step(0.02)
+    moved = np.asarray(sim.reading("c.gps.position"))
+    assert np.linalg.norm(moved - first) > 0.9
 
 
-def test_default_rate_publishes_every_tick():
+def test_default_rate_gate_fires_every_tick():
     sim = TargetNumpy(Sim(_gps_world(None)))
-    gps = sim.out("c.gps.position")
-    for _ in range(5):
+    gate = sim.rate_gate("c.gps.position")
+    for i in range(5):
         sim.step(0.02)
-    assert gps.version == 5
+        assert gate.due(i * 0.02)
 
-
-# ---------------------------------------------------------------------------
-# EKF folds a slow measurement exactly once per window
-# ---------------------------------------------------------------------------
 
 def test_ekf_folds_once_per_window():
     c = Craft("c")
@@ -123,25 +120,28 @@ def test_ekf_folds_once_per_window():
     ekf = TargetNumpy(EKF(w))
     ekf.reset(P=np.eye(ekf.spec.tangent_dim))
     ekf.Q = np.eye(ekf.spec.tangent_dim) * 1e-3
-    wire(sim.out("c.gps.position"), ekf.meas("c.gps.position"))
+    gps = sim.rate_gate("c.gps.position")
 
     folds = 0
-    for _ in range(15):
+    for i in range(15):
+        t = i * 0.02
         sim.step(0.02)
-        before = np.trace(ekf.P)
-        ekf.step(0.02)               # update shrinks P; predict-only grows it
+        before = np.trace(ekf.P)     # before the update+predict cycle
+        if gps.due(t):               # fold only on a fresh window
+            ekf.update("c.gps.position", sim.reading("c.gps.position"))
+        ekf.predict(0.02)            # a fold's shrink beats predict's growth
         if np.trace(ekf.P) < before - 1e-9:
             folds += 1
     assert folds == 3                # one per 10 Hz window over 0.3 s
 
 
 # ---------------------------------------------------------------------------
-# Actuator: PartUpdate.rates gates the command (ZOH) on both sim and EKF
+# Actuator: a CommandLatch (ZOH) applied in the loop holds the command
 # ---------------------------------------------------------------------------
 
-def test_command_zoh_holds_between_intake_windows():
-    """A 10 Hz actuator at a 50 Hz sim sees only the command latched at
-    each window boundary; commands written mid-window are ignored until
+def test_command_latch_holds_between_intake_windows():
+    """A 10 Hz actuator: the loop's `command_latch()` holds the command
+    written at each window boundary; mid-window writes are ignored until
     the next boundary."""
     c = Craft("c")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
@@ -150,23 +150,21 @@ def test_command_zoh_holds_between_intake_windows():
     w.add_craft(c, position=(0, 0, 0))
 
     sim = TargetNumpy(Sim(w))
-    from manta import Signal
-    src = Signal("u", dim=1, latched=True)
-    wire(src, sim.command("c.th.throttle"))
+    latch = sim.command_latch()      # configured from the actuator's rate
 
     dt = 0.02
     # Window 0 [t=0..0.1): latch 1 N. Velocity gain = (1/1)·0.1 = 0.1 m/s.
-    src.set(np.array([1.0]))
-    for _ in range(5):
-        sim.step(dt)
-        # Change the source mid-window — must be ignored until next window.
-        src.set(np.array([100.0]))
+    val = 1.0
+    for i in range(5):
+        u = latch.latch({"c.th.throttle": val}, i * dt)
+        sim.step(dt, u=u)
+        val = 100.0                  # mid-window write, ignored until t=0.1
     vz = np.asarray(sim.state["c"]["velocity"]).ravel()[2]
     # Only the 1 N latched at t=0 acted for the whole window: a=1, 0.1 s.
     assert abs(vz - 0.1) < 1e-6
 
 
-def test_command_default_rate_applies_every_tick():
+def test_command_latch_default_rate_passes_through():
     c = Craft("c")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(GatedThruster("th", gain=1.0))     # rate=None
@@ -174,11 +172,8 @@ def test_command_default_rate_applies_every_tick():
     w.add_craft(c, position=(0, 0, 0))
 
     sim = TargetNumpy(Sim(w))
-    from manta import Signal
-    src = Signal("u", dim=1, latched=True)
-    wire(src, sim.command("c.th.throttle"))
-    src.set(np.array([2.0]))
-    for _ in range(50):
-        sim.step(0.02)
+    latch = sim.command_latch()              # no gated inputs → identity
+    for i in range(50):
+        sim.step(0.02, u=latch.latch({"c.th.throttle": 2.0}, i * 0.02))
     vz = np.asarray(sim.state["c"]["velocity"]).ravel()[2]
     assert abs(vz - 2.0) < 1e-6     # 2 N · 1 kg⁻¹ · 1 s

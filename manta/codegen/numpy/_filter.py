@@ -7,7 +7,6 @@ from typing import Any, Callable
 import casadi as ca
 import numpy as np
 
-from ...bus import MeasurementBus
 from ...estimation._kalman import joseph_update_np
 from ...ir.module import entry_ident
 from ...ir._names import resolve_suffix
@@ -15,22 +14,24 @@ from ._runtime import NumpyRuntime
 
 
 class NumpyFilter(NumpyRuntime):
-    """A predict/update filter. Held `x`/`P`; baked per-sensor updates by
-    NAME; the measurement bus (`feed` + `step`, wired `meas`/`command`/
-    `estimate` ports) on top."""
+    """A predict/update filter over a held `x`/`P`, with baked per-sensor
+    update kernels — the same surface every backend emits.
+
+    You own the loop, identically in numpy and C++: fold each fresh
+    measurement at the pre-predict state, then predict.
+
+        for nm in sensors:
+            if gate[nm].due(t):
+                ekf.update(nm, sim.reading(nm), u=u)   # update-then-...
+        ekf.predict(dt, u=u)                           # ...-predict
+
+    The update-then-predict order is yours to keep: a reading sampled at the
+    interval start belongs against the current (pre-predict) state.
+    """
 
     def __init__(self, module) -> None:
         super().__init__(module)
-        self._bus = MeasurementBus(
-            self,
-            sensors={p.name: {"dim": p.size, "key": p.name}
-                     for p in self._meas_ports_ir},
-            input_names=self._input_names(),
-            sample_rates={f.name: f.rate for f in self._u_fields()
-                          if f.rate is not None},
-            estimate_dim=self._spec.ambient_dim,
-            estimate_layout={s.name: (s.ambient_offset, s.ambient_dim)
-                             for s in self._spec.slots})
+        self._Q: np.ndarray | None = None        # default process noise
 
     # ---- estimate access -------------------------------------------------
 
@@ -72,27 +73,32 @@ class NumpyFilter(NumpyRuntime):
                     f"reset: P shape {P.shape} doesn't match tangent dim "
                     f"{expected}")
             self._state["P"] = P.copy()
-        self._bus.publish_estimate()
 
-    # ---- predict / update ------------------------------------------------
+    @property
+    def Q(self):
+        """Default process noise for `predict` (overridden per-call by
+        `predict(dt, Q=...)`; `None` uses the model's baked `L Σ Lᵀ`)."""
+        return self._Q
+
+    @Q.setter
+    def Q(self, value) -> None:
+        self._Q = value
+
+    # ---- predict / update (the uniform kernel surface) -------------------
 
     def predict(self, dt: float, *, t: float = 0.0,
                 u: dict[str, Any] | None = None,
                 Q: np.ndarray | None = None) -> None:
-        """Advance the estimate by `dt`. Process noise: the model's baked
-        `L Σ Lᵀ` unless an explicit `Q` overrides it."""
-        u_vec = self.build_u(u)
-        if Q is None:
-            self._run(self.module.entry("predict"),
-                      {"u": u_vec, "dt": dt, "t": t})
-        else:
-            self._run(self.module.entry("predict_with_Q"),
-                      {"Q": np.asarray(Q, dtype=float), "u": u_vec,
-                       "dt": dt, "t": t})
+        """Advance the estimate by `dt`. Process noise: an explicit `Q`, else
+        `self.Q`, else the model's baked `L Σ Lᵀ`. `u` is `{input: value}`
+        (unset inputs fall to the Module's declared defaults); pass the same
+        held `u` truth ran on."""
+        self._predict_kernel(dt, t, self.build_u(u),
+                             Q if Q is not None else self._Q)
 
     def update(self, target, z=None, R=None, *, t: float = 0.0,
                u: dict[str, Any] | None = None) -> None:
-        """Fold one measurement.
+        """Fold one measurement at the current state.
 
         * `update("gps.position", z)` — by sensor name (full or suffix),
           through the baked Joseph-update kernel.
@@ -102,19 +108,29 @@ class NumpyFilter(NumpyRuntime):
         if callable(target):
             if z is None or R is None:
                 raise TypeError("update(h_sym, z, R=...): z and R required")
-            return self._update_low_level(target, z, R)
-        self.fold(self._resolve_sensor(target),
-                  z, self.build_u(u if u is not None else
-                                  (self.inputs if self.inputs else None)),
-                  t=t)
+            return self._update_custom(target, z, R)
+        self._fold_sensor(self._resolve_sensor(target), z,
+                          self.build_u(u), t=t)
+
+    # ---- kernels ---------------------------------------------------------
+
+    def _predict_kernel(self, dt: float, t: float, u_vec: np.ndarray,
+                        Q: np.ndarray | None) -> None:
+        if Q is None:
+            self._run(self.module.entry("predict"),
+                      {"u": u_vec, "dt": dt, "t": t})
+        else:
+            self._run(self.module.entry("predict_with_Q"),
+                      {"Q": np.asarray(Q, dtype=float), "u": u_vec,
+                       "dt": dt, "t": t})
 
     def _resolve_sensor(self, name: str) -> str:
         return resolve_suffix(name, [p.name for p in self._meas_ports_ir],
                               label="sensor", who=type(self).__name__)
 
-    def fold(self, full: str, z, u_vec: np.ndarray, *,
-             t: float = 0.0) -> None:
-        """Fold one measurement (full sensor name) — the bus's hook."""
+    def _fold_sensor(self, full: str, z, u_vec: np.ndarray, *,
+                     t: float = 0.0) -> None:
+        """Fold one measurement (full sensor name) through its baked kernel."""
         port = self.module.port(full)
         z_arr = np.atleast_1d(np.asarray(z, dtype=float)).reshape(-1)
         if z_arr.size != port.size:
@@ -124,7 +140,7 @@ class NumpyFilter(NumpyRuntime):
         self._run(self.module.entry(f"update_{entry_ident(full)}"),
                   {full: z_arr, "u": u_vec, "t": t})
 
-    def _update_low_level(self, h_sym: Callable, z, R) -> None:
+    def _update_custom(self, h_sym: Callable, z, R) -> None:
         """Joseph update for a caller-supplied `h(x)` — built on the spec's
         manifold ops; the one genuinely runtime-defined measurement."""
         spec = self._spec
@@ -152,40 +168,3 @@ class NumpyFilter(NumpyRuntime):
             x=x_now, z=z, h=h_x, boxplus=spec.boxplus_num)
         self._state["x"] = x_new
         self._state["P"] = P_new
-
-    # ---- the measurement bus ----------------------------------------------
-
-    def step(self, dt: float, *, t: float | None = None,
-             Q: np.ndarray | None = None) -> None:
-        """Fold fresh measurements (interval start), then predict by `dt`."""
-        return self._bus.step(dt, t=t, Q=Q)
-
-    def feed(self, name: str, z, *, t: float | None = None) -> None:
-        self._bus.feed(name, z, t=t)
-
-    def meas(self, name: str):
-        return self._bus.meas(name)
-
-    def command(self, name: str):
-        return self._bus.command(name)
-
-    @property
-    def estimate(self):
-        """Producer port: the estimate as a flat ambient vector."""
-        return self._bus.estimate
-
-    @property
-    def inputs(self) -> dict:
-        return self._bus.inputs
-
-    @inputs.setter
-    def inputs(self, value: dict) -> None:
-        self._bus.inputs = value
-
-    @property
-    def Q(self):
-        return self._bus.Q
-
-    @Q.setter
-    def Q(self, value) -> None:
-        self._bus.Q = value

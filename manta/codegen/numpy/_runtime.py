@@ -6,7 +6,6 @@ from typing import Any
 
 import numpy as np
 
-from ...bus import PortSet
 from ...ir.module import Hosting, Module, Role
 from ...ir._names import resolve_suffix
 from ..target import resolve_args
@@ -84,7 +83,6 @@ class NumpyRuntime:
         self._param_overrides: dict[str, np.ndarray] = {}
 
         self._t = 0.0
-        self._ports = PortSet()
 
     def _enable_compile(self) -> "NumpyRuntime":
         """Replace the interpreted CasADi functions with `cc`-compiled

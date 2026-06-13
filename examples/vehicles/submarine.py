@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from manta import Craft, EKF, NoiseDriver, Sim, TargetNumpy, World, wire
+from manta import Craft, EKF, NoiseDriver, Sim, TargetNumpy, World
 from manta.fields import FluidField
 from manta.ir.frames import WorldFrame
 from manta.ir.types import Scalar
@@ -194,10 +194,9 @@ def main() -> None:
     ekf.reset(state={"sub": c.initial_state(
                   position=(0.0, 0.0, -0.2), angular_velocity=tuple(OMEGA_EARTH))},
               P=np.eye(ekf.spec.tangent_dim) * 0.1)
-    # Always-on inertial sensors + the thruster commands ride the bus; the two
-    # GPS are folded by hand, only when their antenna is out of the water.
-    wire(sim.out("sub.imu.gyro"), ekf.meas("sub.imu.gyro"))
-    wire(sim.out("sub.dvl.velocity"), ekf.meas("sub.dvl.velocity"))
+    # Always-on inertial sensors fed every step; the two GPS are folded by
+    # hand, only when their antenna is out of the water.
+    INERTIAL = ["sub.imu.gyro", "sub.dvl.velocity"]
 
     full = ekf_ir.observability()
     dr = ekf_ir.observability(sensors=["sub.imu.gyro", "sub.dvl.velocity"])
@@ -248,20 +247,17 @@ def main() -> None:
                       sway=ctrl.held("e") - ctrl.held("q"),
                       heave=heave,
                       yaw=ctrl.held("a") - ctrl.held("d"), pitch=0.0)
-            for name, val in cmd.items():
-                sim.command(name).set(val)
-                ekf.command(name).set(val)
-
-            sim.step(dt)
+            sim.step(dt, u=cmd)
             out = sim.outputs()["sub"]
+            for nm in INERTIAL:               # always-on inertial sensors
+                ekf.update(nm, sim.reading(nm), u=cmd)
             # Gated GPS: fold each fix only while its antenna is dry.
-            surfaced = False
             surfaced = False
             for g in ("gps_fore", "gps_aft"):
                 if float(np.asarray(out[f"{g}.wet"]).ravel()[0]) < 0.5:
-                    ekf.update(f"sub.{g}.position", out[f"{g}.position"])
+                    ekf.update(f"sub.{g}.position", out[f"{g}.position"], u=cmd)
                     surfaced = True
-            ekf.step(dt)              # fold gyro + DVL, predict forward
+            ekf.predict(dt, u=cmd)   # then predict forward (you own the order)
 
             tp = np.asarray(sim.state["sub"]["position"]).ravel()
             tq = np.asarray(sim.state["sub"]["orientation"]).ravel()

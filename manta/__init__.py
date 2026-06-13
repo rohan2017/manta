@@ -15,8 +15,9 @@ Three layers:
 
   3. **Target** — lower a Module to a backend. `TargetNumpy(x)` returns
      the matching native-Python view over the one kernel engine (sim
-     `.step()`/`.outputs()`, filter `.predict()`/`.update()`/`.feed()`,
-     …); `TargetCpp(x, …)` emits a typed C++ library for embedded use.
+     `.step(dt, u=…)`/`.reading()`, filter `.update()`/`.predict()`, …);
+     `TargetCpp(x, …)` emits a typed C++ library for embedded use. You own
+     the driving loop — the same shape in every backend.
 
 Standard usage::
 
@@ -37,8 +38,9 @@ Standard usage::
 
     for _ in range(N):
         sim.step(dt, t=t)                    # sim holds `sim.state`
-        ekf.predict(dt=dt, t=t)
-        ekf.update("imu.gyro", sim.outputs()["drone"]["imu.gyro"])
+        ekf.update("drone.imu.gyro",         # fold the reading...
+                   sim.reading("drone.imu.gyro"))
+        ekf.predict(dt, t=t)                 # ...then predict (you own order)
         t += dt
 
 The low-level IR (`manta.ir`) is still exported for advanced use
@@ -61,12 +63,13 @@ from .control import LQR, PID
 from .recurrence import RecurrenceBlock
 from .codegen import NoiseDriver, TargetCpp, TargetJax, TargetNumpy
 from .fit import Fit, FitResult, NoiseFit, NoiseFitResult, Prior, Window
-from .signal import Signal, wire
+from .rates import CommandLatch, RateGate
 
 __all__ = [
     "ir", "Craft", "World", "Coupling", "Sim", "Planet", "EKF", "LQR", "PID",
     "Madgwick", "Mahony", "IMUIntegrator", "RecurrenceBlock",
-    "TargetNumpy", "TargetCpp", "TargetJax", "NoiseDriver", "Signal", "wire",
+    "TargetNumpy", "TargetCpp", "TargetJax", "NoiseDriver",
     "Fit", "FitResult", "NoiseFit", "NoiseFitResult", "Prior", "Window",
+    "RateGate", "CommandLatch",
     "SlotSet", "POSE", "TWIST", "ALL",
 ]

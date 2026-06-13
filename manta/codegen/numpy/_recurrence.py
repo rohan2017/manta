@@ -42,29 +42,3 @@ class NumpyRecurrence(NumpyRuntime):
     def readouts(self) -> dict[str, Any]:
         """Last-computed readouts by output-field name (scalars unwrapped)."""
         return unpack_fields(self._y_port.fields, self._y)
-
-    # ---- ports -----------------------------------------------------------
-
-    def input(self, name: str):
-        """Consumer port for a recurrence input (latched / ZOH)."""
-        names = self._input_names()
-        if name not in names:
-            raise KeyError(f"unknown input port {name!r}. Available: {names}")
-        f = next(f for f in self._u_fields() if f.name == name)
-        return self._ports.consumer(name, dim=f.dim)
-
-    def output(self, name: str):
-        """Producer port for a recurrence readout."""
-        names = [f.name for f in self._y_port.fields]
-        if name not in names:
-            raise KeyError(f"unknown output port {name!r}. Available: {names}")
-        f = next(f for f in self._y_port.fields if f.name == name)
-        return self._ports.producer(name, dim=f.dim)
-
-    def compute(self, dt: float, *, t: float | None = None) -> dict[str, Any]:
-        """Pull wired input ports, `step(dt)`, publish readouts (stamped
-        at start-of-step)."""
-        tt = self._t if t is None else t
-        out = self.step(dt, t=tt, **self._ports.pull(tt))
-        self._ports.publish(out, t=tt)
-        return out

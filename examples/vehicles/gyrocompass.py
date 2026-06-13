@@ -44,7 +44,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from manta import Craft, EKF, NoiseDriver, Sim, TargetNumpy, World, wire
+from manta import Craft, EKF, NoiseDriver, Sim, TargetNumpy, World
 from manta.parts import DragSurface, IMU, Mass, PointBuoy, ProcessNoise
 from manta.planets import Earth, SeaWaves
 
@@ -121,8 +121,7 @@ def main() -> None:
                   angular_velocity=tuple(OMEGA),
                   orientation=(1.0, 0.0, 0.0, 0.0))},
               P=P0)
-    wire(sim.out("gyro.imu.gyro"), ekf.meas("gyro.imu.gyro"))
-    wire(sim.out("gyro.imu.accel"), ekf.meas("gyro.imu.accel"))
+    IMU_SENSORS = ["gyro.imu.gyro", "gyro.imu.accel"]
 
     # The rank test calls heading unobservable — the Earth-rate channel is
     # 5 orders below its threshold. The σ-horizon recursion resolves it.
@@ -152,7 +151,9 @@ def main() -> None:
         if pacer is not None:
             pacer.pace(t)
         sim.step(dt)
-        ekf.step(dt)
+        for nm in IMU_SENSORS:
+            ekf.update(nm, sim.reading(nm))
+        ekf.predict(dt)
 
         eq = np.asarray(ekf.state_dict()["gyro"]["orientation"]).ravel()
         est_heading = _heading(eq)

@@ -21,8 +21,8 @@ World        →   Sim(world)       →   TargetNumpy(sim) →  NumpyRuntime
                   (linearized tick)                        .step() / .outputs()
 
 World        →   EKF(world)       →   TargetNumpy(ekf) →  NumpyRuntime
-                  (Kalman recursion,                       .predict() / .update()
-                   baked kernels)                          .feed() / .step()
+                  (Kalman recursion,                       .update() / .predict()
+                   baked kernels)                          (you own the loop)
 
 World        →   LQR(world, …)    →   TargetNumpy(lqr) →  NumpyRuntime
                   (Riccati → gain K,                       .control(state) → {input: u}
@@ -272,8 +272,7 @@ manta/                     library package
                            (engine) + closure/partition + name helpers —
                            the shared seam every transform reads
     smoothing.py           Shared softened-norm / smooth-max primitives
-    bus.py                 MeasurementBus + PortSet (backend-agnostic bus)
-    signal.py              Signal value-channel + wire()
+    rates.py               RateGate + CommandLatch (loop-level rate gating)
     tick/                  World-tick compile + kinematics/inertia/signature
     ir/                    Frames, types, Graph, Manifold, Wrench, Module
     parts/                 Part base + stock parts (sensor/actuation/aero/…)
@@ -287,7 +286,7 @@ manta/                     library package
         numpy/             TargetNumpy + NumpyRuntime engine + the four
                            views (_sim/_filter/_recurrence/_regulator)
         cpp/               TargetCpp + the generic module_emit emitter
-tests/                     498 tests
+tests/                     567 tests
 examples/                  quickstart + physics/ + vehicles/
     _viz.py                rerun visualization helpers
     _control.py            keyboard (pynput) + scripted-fallback control

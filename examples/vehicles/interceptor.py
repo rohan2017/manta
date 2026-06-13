@@ -411,12 +411,10 @@ def main() -> None:
         bodyz = _R(np.asarray(rk["orientation"]).ravel()) @ [0, 0, 1.0]
         u = {"interceptor.main.throttle":
              float(np.clip(np.dot(F, bodyz) / MAXT, 0.05, 1.0)), **autopilot(rk, q_ref)}
-        for name, val in u.items():
-            truth.command(name).set(float(val))
 
         if viz is not None and viz.due(t):
             _viz_step(viz, t, truth, tgt_est, vis, aim)
-        truth.step_n(DT_SIM, SUBSTEPS)
+        truth.step_n(DT_SIM, SUBSTEPS, u=u)
 
         if i % int(2.0 / DT) == 0 and phase == "track":
             print(f"{t:6.1f} {nvis:4d} {errs[-1]:9.1f} {rk_phase:>9} "

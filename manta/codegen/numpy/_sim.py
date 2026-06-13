@@ -10,6 +10,7 @@ import numpy as np
 from ...ir.module import Role, StateRef
 from ...ir.state_spec import flatten_nested
 from ...ir._names import resolve_suffix
+from ...rates import CommandLatch, RateGate
 from ..target import for_role
 from ._noise import NoiseDriver
 from ._runtime import NumpyRuntime, _split, pack_fields
@@ -30,9 +31,12 @@ def _stepn_port_arg(role: Role, *, hold, u, noise, params, dt, t, n):
 
 class NumpySim(NumpyRuntime):
     """The simulation oracle. The runtime holds the nested state dict
-    (`sim.state`); `step(dt)` advances it and realizes that step's sensor
-    readings (`outputs()`), pulling wired command ports first and
-    publishing readings to wired output ports after."""
+    (`sim.state`); `step(dt, u={...})` applies the commands and advances it,
+    realizing that step's sensor readings. The kernel is pure: rate gating is
+    the loop's job — build a `rate_gate(...)` / `command_latch()` from the
+    model's declared rates and apply them yourself (uniform across backends).
+    Read sensors with `outputs()` (raw nested) or `reading(name)` (one, by
+    name)."""
 
     def __init__(self, module) -> None:
         super().__init__(module)
@@ -72,32 +76,39 @@ class NumpySim(NumpyRuntime):
 
     # ---- step ----------------------------------------------------------
 
-    def step(self, dt: float, *, t: float | None = None
+    def step(self, dt: float, *, t: float | None = None,
+             u: dict[str, Any] | None = None
              ) -> dict[str, dict[str, Any]]:
-        """Advance the held state by `dt`: pull wired command ports (ZOH),
-        run the oracle kernel (one noise draw), publish this step's
-        readings to wired output ports. Returns the new state dict."""
+        """Advance the held state by `dt`. `u` is `{input: value}` (full or
+        suffix names) applied this step over the held `sim.state` inputs.
+        Runs the oracle kernel (one noise draw) and returns the new state
+        dict. Rate-gated actuators: pass a `command_latch()`-held `u`."""
         if isinstance(dt, dict):
             raise TypeError(
                 "NumpySim.step: the functional step(state, dt) form was "
-                "removed — mutate `sim.state` and call step(dt).")
+                "removed — pass commands as step(dt, u={...}).")
         t0 = self._t if t is None else t
-        st = self.state
-        for full, v in self._ports.pull(t0).items():
-            owner, rest = _split(full)
-            st.setdefault(owner, {})[rest] = v
-        self._sim_state = self._advance(st, float(dt), t0)
+        self._sim_state = self._advance(self.state, float(dt), t0, u)
         self._t = t0 + float(dt)
-        readings = {f"{o}.{s}": v for o, slots in self._outputs.items()
-                    for s, v in slots.items()}
-        self._ports.publish(readings, t0)
         return self._sim_state
 
-    def _advance(self, state: dict, dt: float, t: float) -> dict:
+    def _pack_u(self, flat: dict, u: dict[str, Any] | None) -> np.ndarray:
+        """The flat control vector: the held `sim.state` inputs overlaid with
+        this step's `u` (suffix names resolved)."""
+        fields = self._u_fields()
+        named = {f.name: (flat[f.name] if f.name in flat else f.default)
+                 for f in fields}
+        for k, v in (u or {}).items():
+            named[resolve_suffix(k, self._input_names(), label="input",
+                                 who=type(self).__name__)] = v
+        return pack_fields(fields, named, default=lambda f: f.default,
+                           who="step")
+
+    def _advance(self, state: dict, dt: float, t: float,
+                 u: dict[str, Any] | None = None) -> dict:
         flat = flatten_nested(state)
         self._state["x"] = self._spec.pack_any(flat)
-        u = pack_fields(self._u_fields(), flat,
-                        default=lambda f: f.default, who="step")
+        u = self._pack_u(flat, u)
         ep = self.module.entry("step")
         res = self._run(ep, {"u": u, "noise": self._noise_vec(flat),
                              "dt": dt, "t": t})
@@ -120,29 +131,24 @@ class NumpySim(NumpyRuntime):
             self._outputs.setdefault(owner, {})[slot] = reading
         return prev_state
 
-    def step_n(self, dt: float, n: int, *, t: float | None = None
+    def step_n(self, dt: float, n: int, *, t: float | None = None,
+               u: dict[str, Any] | None = None
                ) -> dict[str, dict[str, Any]]:
-        """Advance `n` substeps of `dt` in ONE folded call — commands held
-        (ZOH), state chained through a `mapaccum` of the step kernel. Output
-        readings + state are bit-identical to `n` sequential `step(dt)` calls;
-        compiled (`_enable_compile`) it runs the whole inner loop in C.
+        """Advance `n` substeps of `dt` in ONE folded call — `u` commands held
+        (ZOH) for the block, state chained through a `mapaccum` of the step
+        kernel. Output readings + state are bit-identical to `n` sequential
+        `step(dt, u=u)` calls; compiled (`_enable_compile`) it runs the whole
+        inner loop in C.
 
         Falls back to sequential stepping when a `NoiseDriver` is attached (a
         fresh stochastic draw per substep cannot be folded)."""
         if n <= 1 or self._driver is not None:
             for k in range(int(n)):
-                self.step(dt, t=None if t is None else t + k * dt)
+                self.step(dt, t=None if t is None else t + k * dt, u=u)
             return self._sim_state
         t0 = self._t if t is None else t
-        st = self.state
-        for full, v in self._ports.pull(t0).items():
-            owner, rest = _split(full)
-            st.setdefault(owner, {})[rest] = v
-        self._sim_state = self._advance_n(st, float(dt), int(n), t0)
+        self._sim_state = self._advance_n(self.state, float(dt), int(n), t0, u)
         self._t = t0 + n * float(dt)
-        readings = {f"{o}.{s}": v for o, slots in self._outputs.items()
-                    for s, v in slots.items()}
-        self._ports.publish(readings, t0)
         return self._sim_state
 
     def _step_n_fn(self, n: int):
@@ -153,12 +159,12 @@ class NumpySim(NumpyRuntime):
                 f"step_x{n}", n, [0], [0])
         return self._stepn_cache[n]
 
-    def _advance_n(self, state: dict, dt: float, n: int, t: float) -> dict:
+    def _advance_n(self, state: dict, dt: float, n: int, t: float,
+                   u: dict[str, Any] | None = None) -> dict:
         flat = flatten_nested(state)
         x0 = np.asarray(self._spec.pack_any(flat),
                         dtype=float).reshape(-1, 1)
-        u = pack_fields(self._u_fields(), flat,
-                        default=lambda f: f.default, who="step")
+        u = self._pack_u(flat, u)
         noise = self._noise_vec(flat)
         fn = self._step_n_fn(n)
 
@@ -220,23 +226,31 @@ class NumpySim(NumpyRuntime):
     def driver(self) -> NoiseDriver | None:
         return self._driver
 
-    # ---- ports -----------------------------------------------------------
+    # ---- reading sensors + rate tools ------------------------------------
 
-    def out(self, name: str):
-        """Producer port for a sensor reading (rate-gated sample-and-hold;
-        published each step)."""
+    def reading(self, name: str) -> Any:
+        """The latest raw reading for a sensor (full or suffix name) from the
+        most recent step. Readings are realized every step; gate feeding
+        yourself with a `rate_gate(name)` if the sensor is rate-limited."""
         full = resolve_suffix(name, [p.name for p in self._meas_ports_ir],
                               label="output", who=type(self).__name__)
-        port = self.module.port(full)
-        return self._ports.producer(full, dim=port.size, rate=port.rate)
+        owner, slot = _split(full)
+        return self._outputs.get(owner, {}).get(slot)
 
-    def command(self, name: str):
-        """Latched (ZOH) consumer port for a control input, pulled before
-        each step."""
-        full = resolve_suffix(name, self._input_names(), label="input",
-                              who=type(self).__name__)
-        f = next(f for f in self._u_fields() if f.name == full)
-        return self._ports.consumer(full, dim=f.dim, rate=f.rate)
+    def rate_gate(self, name: str) -> RateGate:
+        """A `RateGate` at sensor `name`'s declared rate (fires every step if
+        the sensor has none). Apply it in your loop:
+        `if g.due(t): ekf.update(name, sim.reading(name), u=u)`."""
+        full = resolve_suffix(name, [p.name for p in self._meas_ports_ir],
+                              label="output", who=type(self).__name__)
+        return RateGate(self.module.port(full).rate)
+
+    def command_latch(self) -> CommandLatch:
+        """A `CommandLatch` over the actuators' declared intake rates (ZOH).
+        Apply it once per step and pass the held `u` to BOTH `sim.step` and
+        `ekf.predict`, so the filter predicts on the command truth acted on."""
+        return CommandLatch({f.name: f.rate for f in self._u_fields()
+                             if f.rate is not None})
 
     def __repr__(self) -> str:
         drv = "" if self._driver is None else f" +{self._driver!r}"

@@ -11,7 +11,7 @@ truth). Same machinery, both covariances model-derived.
 import numpy as np
 
 from manta import (
-    Craft, EKF, LQR, NoiseDriver, Sim, TargetNumpy, World, wire,
+    Craft, EKF, LQR, NoiseDriver, Sim, TargetNumpy, World,
 )
 from manta.fields import GravityField
 from manta.parts import Mass, PositionSensor, ProcessNoise, Thruster
@@ -163,16 +163,11 @@ def test_model_Q_keeps_filter_alive_in_closed_loop():
         u_ref={"tz.throttle": M * G}, regulate=["c.position", "c.velocity"],
         Q=np.diag([10, 10, 10, 1, 1, 1]), R=np.eye(3) * 0.1, dt=dt))
 
-    wire(sim.out("c.gps.position"), ekf.meas("c.gps.position"))
-    for nm in lqr.input_names:
-        wire(lqr.command(nm), sim.command(nm))
-        wire(lqr.command(nm), ekf.command(nm))
-    wire(ekf.estimate, lqr.estimate_in)
-
     for _ in range(500):
-        lqr.compute()
-        sim.step(dt)
-        ekf.step(dt)
+        u = lqr.control(ekf.state_dict())
+        sim.step(dt, u=u)
+        ekf.update("c.gps.position", sim.reading("c.gps.position"), u=u)
+        ekf.predict(dt, u=u)
 
     final = np.asarray(sim.state["c"]["position"]).ravel()
     est = ekf.state_dict()["c"]["position"].ravel()

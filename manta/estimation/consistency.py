@@ -170,7 +170,6 @@ def nees(world, *, dt: float, steps: int,
     """
     import casadi as ca
     from ..codegen.numpy import NoiseDriver, TargetNumpy
-    from ..signal import wire
     from ..sim import Sim
     from .ekf import EKF
     from .observability import resolve_sensor_set
@@ -206,16 +205,16 @@ def nees(world, *, dt: float, steps: int,
         x_est0 = spec.boxplus_num(x_truth0, L0 @ rng.standard_normal(n))
         ekf.reset(state=x_est0, P=P0)
         ekf.Q = Q
-        for full in names:
-            wire(sim.out(full), ekf.meas(full))
+        gates = {full: sim.rate_gate(full) for full in names}
 
         for i in range(steps):
             t = i * dt
-            for nm, v in _controls_at(control, t).items():
-                sim.command(nm).set(v)
-                ekf.command(nm).set(v)
-            sim.step(dt)
-            ekf.step(dt)
+            u = _controls_at(control, t)
+            sim.step(dt, u=u)
+            for full in names:
+                if gates[full].due(t):
+                    ekf.update(full, sim.reading(full), u=u, t=t)
+            ekf.predict(dt, u=u, t=t)
             if i >= warmup:
                 e = np.asarray(boxminus(truth_vec(sim), ekf.x)).reshape(-1)
                 P = ekf.P

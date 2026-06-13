@@ -262,12 +262,10 @@ def observability_trajectory(world, *, dt: float, steps: int,
     for i in range(steps):
         t = i * dt
         u_dict = control(t) if callable(control) else (control or {})
-        for nm, v in u_dict.items():
-            sim.command(nm).set(v)
         if i % every == 0:
             blocks.append(_local_O(ekf_ir, truth_vec(),
                                    ekf_ir._build_u(u_dict or None), dt, t, pairs, n))
-        sim.step(dt)
+        sim.step(dt, u=u_dict)
     return _report_from_O(np.vstack(blocks), spec, names, rtol)
 
 

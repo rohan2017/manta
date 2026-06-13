@@ -2,7 +2,7 @@
 
 This is the payoff demo for manta's sibling-transform architecture. One
 model is consumed by three transforms that snap together over the shared
-`Linearization` seam and the `Signal` bus:
+`Linearization` seam:
 
     Sim(world)   — truth: a 4-rotor quad integrated forward, with process
                    noise (thruster `force_noise`) jittering the real motion
@@ -10,10 +10,12 @@ model is consumed by three transforms that snap together over the shared
                    the IMU gyro bias) from a noisy GPS fix + gyro
     LQR(world)   — a full-state hover regulator; feedback on the *estimate*
 
-`wire(producer, consumer)` connects the runtimes over typed ports: the
-sim's noisy GPS + gyro flow to the EKF, the commands flow to both the sim
-(truth) and the EKF (known input). The control loop is then just
-``control → step → step``.
+The runtimes are plumbed by hand in the loop: the sim's noisy GPS + gyro
+``reading``s are folded into the EKF with ``update``, the LQR's ``control``
+commands are passed to ``step(dt, u=...)`` on the sim (truth) and to
+``predict`` on the EKF (known input). The control loop is then just
+``control → step → update → predict`` — you own the order, the same shape
+in every backend.
 
 Both noise covariances are **model-derived** from one σ each: GPS
 `position_noise` → the EKF's R; thruster `force_noise` → the process noise
@@ -41,7 +43,7 @@ from __future__ import annotations
 import numpy as np
 
 from manta import (
-    Craft, EKF, LQR, NoiseDriver, Sim, TargetNumpy, World, wire,
+    Craft, EKF, LQR, NoiseDriver, Sim, TargetNumpy, World,
 )
 from manta.fields import GravityField
 from manta.parts import IMU, Mass, PositionSensor, Thruster
@@ -170,13 +172,11 @@ def main() -> None:
     print(f"closed-loop |eig|max = "
           f"{np.max(np.abs(lqr_t.closed_loop_eigs)):.4f}  (stable < 1)")
 
-    # Wire the sensor + command bus: GPS + gyro + accel → EKF; commands →
-    # truth + EKF. The accelerometer sees the gravity direction, which is
-    # what makes the quad's roll/pitch observable (GPS + gyro alone leave
-    # attitude weakly observable, and a full-state regulator needs it).
-    wire(sim.out("quad.gps.position"), ekf.meas("quad.gps.position"))
-    wire(sim.out("quad.imu.gyro"), ekf.meas("quad.imu.gyro"))
-    wire(sim.out("quad.imu.accel"), ekf.meas("quad.imu.accel"))
+    # GPS + gyro + accel feed the EKF each step (gated on freshness). The
+    # accelerometer sees the gravity direction, which is what makes the
+    # quad's roll/pitch observable (GPS + gyro alone leave attitude weakly
+    # observable, and a full-state regulator needs it).
+    EKF_SENSORS = ["quad.gps.position", "quad.imu.gyro", "quad.imu.accel"]
 
     # Keyboard: WASD = horizontal, space/shift = up/down. Without it the
     # demo flies an autonomous waypoint tour: a `ramp_traj` leg to each of
@@ -280,11 +280,11 @@ def main() -> None:
             coll = float(np.clip(coll, -diff.min(), THR_LIM - diff.max()))
             for r, val in zip(ROTORS, coll + diff):
                 u[f"quad.{r}.throttle"] = float(val)   # viz shows the mixed u
-                sim.command(f"quad.{r}.throttle").set(float(val))
-                ekf.command(f"quad.{r}.throttle").set(float(val))
 
-            sim.step(dt)                   # apply commands; publish GPS+gyro
-            ekf.step(dt)                   # predict on commands; fold sensors
+            sim.step(dt, u=u)              # apply commands; realize GPS+gyro
+            for nm in EKF_SENSORS:         # fold each reading (all ungated)...
+                ekf.update(nm, sim.reading(nm), u=u)
+            ekf.predict(dt, u=u)           # ...then predict (you own the order)
 
             if viz is not None and viz.due(t):   # throttle to ~30 Hz
                 tp = np.asarray(sim.state["quad"]["position"]).ravel()

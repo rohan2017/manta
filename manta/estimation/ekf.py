@@ -28,8 +28,8 @@ Lower the Module to a backend to run::
                           sensors=["chaser.imu.gyro", "chaser.gps.position"],
                           inputs=["chaser.thruster.throttle"]))
     for t in ts:
-        ekf.feed("chaser.imu.gyro", gyro_z, t=t)
-        ekf.step(dt, t=t)            # fold fresh measurements, then predict
+        ekf.update("chaser.imu.gyro", gyro_z, t=t)   # fold, then...
+        ekf.predict(dt, t=t)                          # ...predict (you order)
 
 `track` is a *lower bound*: the system expands it (and whatever the chosen
 sensors observe) to a set closed under the dynamics and freezes the rest —

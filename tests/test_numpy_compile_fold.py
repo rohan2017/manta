@@ -30,13 +30,13 @@ def _world():
 
 def _drive(sim, *, fold, nsub=8, nctrl=40):
     for i in range(nctrl):
-        sim.command("c.t.throttle").set(0.4 + 0.2 * np.sin(i * 0.3))
-        sim.command("c.gim.torque_cmd").set(3.0 * np.cos(i * 0.2))
+        u = {"c.t.throttle": 0.4 + 0.2 * np.sin(i * 0.3),
+             "c.gim.torque_cmd": 3.0 * np.cos(i * 0.2)}
         if fold:
-            sim.step_n(0.001, nsub)
+            sim.step_n(0.001, nsub, u=u)
         else:
             for _ in range(nsub):
-                sim.step(0.001)
+                sim.step(0.001, u=u)
     return (np.asarray(sim.state["c"]["position"]).ravel(),
             np.asarray(sim.state["c"]["velocity"]).ravel())
 
