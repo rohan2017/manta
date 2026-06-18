@@ -36,7 +36,8 @@ from manta.fields import FluidField
 from manta.ir.frames import WorldFrame
 from manta.ir.types import Scalar
 from manta.parts import (
-    DVL, DragSurface, IMU, Mass, Output, PointBuoy, PositionSensor, Thruster,
+    DragSurface, IMU, Mass, Output, PointBuoy, PositionSensor, Thruster,
+    VelocitySensor,
 )
 from manta.planets import Earth, SeaWaves
 
@@ -130,9 +131,10 @@ def build_world():
     sub.add(Thruster("v_aft", force=(0, 0, 1), transform=(-1.0, 0, 0)))
 
     # Sensors: IMU (gyro carries the body's inertial rate, so on the spinning
-    # Earth it reads Ω) + DVL (dead-reckoning) + two water-gated GPS (fore/aft).
+    # Earth it reads Ω) + DVL (dead-reckoning, modeled with the simple
+    # VelocitySensor) + two water-gated GPS (fore/aft).
     sub.add(IMU("imu", gyro_noise_sigma=0.01, gyro_bias_sigma=5e-4))
-    sub.add(DVL("dvl", velocity_noise_sigma=0.05))
+    sub.add(VelocitySensor("dvl", velocity_noise_sigma=0.05))
     sub.add(SurfaceGPS("gps_fore", position_noise_sigma=0.1, transform=(1.0, 0, DECK_Z)))
     sub.add(SurfaceGPS("gps_aft", position_noise_sigma=0.1, transform=(-1.0, 0, DECK_Z)))
 

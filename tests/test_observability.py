@@ -14,8 +14,8 @@ from manta import Craft, EKF, World
 from manta.estimation import observability
 from manta.fields import FluidField, GravityField, MagField
 from manta.parts import (
-    DVL, DragSurface, IMU, Magnetometer, Mass, PointBuoy, PositionSensor,
-    Thruster,
+    DragSurface, IMU, Magnetometer, Mass, PointBuoy, PositionSensor,
+    Thruster, VelocitySensor,
 )
 
 
@@ -33,7 +33,7 @@ def _sub_world():
     s.add(Thruster("prop", force=(1, 0, 0), transform=(-1, 0, 0)))
     s.add(Thruster("yaw", torque=(0, 0, 1)))
     s.add(IMU("imu", gyro_noise_sigma=0.01, accel_noise_sigma=0.05))
-    s.add(DVL("dvl", velocity_noise_sigma=0.01))
+    s.add(VelocitySensor("dvl", velocity_noise_sigma=0.01))
     s.add(PositionSensor("gps", position_noise_sigma=0.1))
     s.add(Magnetometer("mag", B_noise_sigma=1e-6))
     w = (World()

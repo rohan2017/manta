@@ -168,11 +168,11 @@ def test_joint_accepts_any_part_child():
     """Any Part rides a rotor — the framework expresses each child's ctx in
     its spinning frame and rotates its wrench back to the body, so no part
     needs special handling. There is no longer an allowlist."""
-    from manta.parts import IMU, Thruster, DVL, Magnetometer, DragSurface
+    from manta.parts import IMU, Thruster, VelocitySensor, Magnetometer, DragSurface
     from manta.parts import PointBuoy, Collider, PositionSensor
     j = RevoluteJoint("axle", mode="passive")
     for part in (Mass("rotor", mass=0.1), IMU("imu"), Thruster("jet"),
-                 DVL("dvl"), Magnetometer("mag"), DragSurface("fin"),
+                 VelocitySensor("vel"), Magnetometer("mag"), DragSurface("fin"),
                  PointBuoy("buoy"), Collider("foot"), PositionSensor("gps"),
                  RevoluteJoint("inner")):
         j.add(part)

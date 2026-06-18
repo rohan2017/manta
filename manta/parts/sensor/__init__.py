@@ -1,6 +1,6 @@
-from .dvl import DVL
 from .imu import IMU
 from .magnetometer import Magnetometer
 from .position_sensor import PositionSensor
+from .velocity_sensor import VelocitySensor
 
-__all__ = ["IMU", "DVL", "Magnetometer", "PositionSensor"]
+__all__ = ["IMU", "VelocitySensor", "Magnetometer", "PositionSensor"]

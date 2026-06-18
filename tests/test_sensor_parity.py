@@ -1,9 +1,9 @@
-"""DVL + Magnetometer + MagField parity tests.
+"""VelocitySensor + Magnetometer + MagField parity tests.
 
 The point: with the standard Field + Disturbance machinery and the
-established sensor-Output pattern, three new pieces (DVL, MagField,
-Magnetometer) drop in with no special-case code. These tests verify
-they actually work.
+established sensor-Output pattern, three new pieces (VelocitySensor,
+MagField, Magnetometer) drop in with no special-case code. These tests
+verify they actually work.
 """
 
 import casadi as ca
@@ -13,39 +13,39 @@ from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import DipoleMag, MagField, UniformMag, GravityField
 from manta.ir.frames import WorldFrame
 from manta.ir.types import Vec3
-from manta.parts import DVL, Magnetometer, Mass
+from manta.parts import VelocitySensor, Magnetometer, Mass
 
 
 # ---------------------------------------------------------------------------
-# DVL
+# VelocitySensor
 # ---------------------------------------------------------------------------
 
-def test_dvl_stationary_craft_reads_zero():
-    c = Craft("dvl_test")
+def test_velocity_sensor_stationary_craft_reads_zero():
+    c = Craft("vel_test")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
-    c.add(DVL("d"))
+    c.add(VelocitySensor("d"))
     w = World().add_field(GravityField(g=(0, 0, 0)))
     w.add_craft(c)
     sim = TargetNumpy(Sim(w))
     sim.step(0.001)
-    np.testing.assert_allclose(np.array(sim.outputs()["dvl_test"]["d.velocity"]).ravel(),
+    np.testing.assert_allclose(np.array(sim.outputs()["vel_test"]["d.velocity"]).ravel(),
                                np.zeros(3), atol=1e-12)
 
 
-def test_dvl_moving_craft_reads_anchor_velocity_when_unrotated():
+def test_velocity_sensor_moving_craft_reads_anchor_velocity_when_unrotated():
     """Identity orientation: body velocity = anchor velocity."""
-    c = Craft("dvl_move")
+    c = Craft("vel_move")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
-    c.add(DVL("d"))
+    c.add(VelocitySensor("d"))
     w = World().add_field(GravityField(g=(0, 0, 0)))
     w.add_craft(c, velocity=np.array([1.5, -0.3, 2.0]))
     sim = TargetNumpy(Sim(w))
     sim.step(0.001)
-    np.testing.assert_allclose(np.array(sim.outputs()["dvl_move"]["d.velocity"]).ravel(),
+    np.testing.assert_allclose(np.array(sim.outputs()["vel_move"]["d.velocity"]).ravel(),
                                (1.5, -0.3, 2.0), atol=1e-12)
 
 
-def test_dvl_rotated_craft_reads_rotated_velocity():
+def test_velocity_sensor_rotated_craft_reads_rotated_velocity():
     """Craft rotated 90° about z: anchor +x velocity reads as body +y
     velocity (since body +x points to anchor -y under that rotation,
     inverse rotation maps anchor +x to body -y... actually let me work
@@ -59,9 +59,9 @@ def test_dvl_rotated_craft_reads_rotated_velocity():
     R^T · anchor_+x = body_−y. Velocity along anchor +x reads as -1 in
     body +y direction.
     """
-    c = Craft("dvl_rot")
+    c = Craft("vel_rot")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
-    c.add(DVL("d"))
+    c.add(VelocitySensor("d"))
     w = World().add_field(GravityField(g=(0, 0, 0)))
     w.add_craft(c,
                 orientation=np.array([np.cos(np.pi/4), 0, 0, np.sin(np.pi/4)]),
@@ -71,7 +71,7 @@ def test_dvl_rotated_craft_reads_rotated_velocity():
     # body velocity = R^T · anchor velocity.
     # R^T · (1,0,0) for +90° about z: R = [[0,-1,0],[1,0,0],[0,0,1]]
     # so R^T = [[0,1,0],[-1,0,0],[0,0,1]] and R^T·(1,0,0) = (0, -1, 0).
-    np.testing.assert_allclose(np.array(sim.outputs()["dvl_rot"]["d.velocity"]).ravel(),
+    np.testing.assert_allclose(np.array(sim.outputs()["vel_rot"]["d.velocity"]).ravel(),
                                (0.0, -1.0, 0.0), atol=1e-9)
 
 

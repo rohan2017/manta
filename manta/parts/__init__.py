@@ -17,10 +17,10 @@ from .structure.mass import Mass
 from .structure.point_buoy import PointBuoy
 from .structure.collider import Collider
 from .articulation.joint import ArticulatedJoint, PrismaticJoint, RevoluteJoint
-from .sensor.dvl import DVL
 from .sensor.imu import IMU
 from .sensor.magnetometer import Magnetometer
 from .sensor.position_sensor import PositionSensor
+from .sensor.velocity_sensor import VelocitySensor
 from .sensor.camera import BBoxCamera, CentroidCamera, ProjectiveCamera
 from .actuation.thruster import Thruster
 from .aero.drag_surface import DragSurface
@@ -41,7 +41,7 @@ __all__ = [
     "Wrench",
     "Mass", "PointBuoy", "Collider",
     "ArticulatedJoint", "PrismaticJoint", "RevoluteJoint",
-    "IMU", "DVL", "Magnetometer", "PositionSensor",
+    "IMU", "VelocitySensor", "Magnetometer", "PositionSensor",
     "ProjectiveCamera", "BBoxCamera", "CentroidCamera",
     "Thruster",
     "DragSurface", "Naca00xx",
