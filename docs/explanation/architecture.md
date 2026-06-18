@@ -79,5 +79,6 @@ lower the same graph to C.
 ## See also
 
 - [Parts and the declaration model](parts.md)
+- [Articulation vs coupling — connecting bodies](articulation-vs-coupling.md)
 - [State estimation (error-state EKF)](estimation.md)
 - [Codegen and backends](codegen.md)

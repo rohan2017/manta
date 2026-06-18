@@ -65,6 +65,7 @@ nav:
   - Explanation:
       - The three-layer pipeline: explanation/architecture.md
       - Parts and the declaration model: explanation/parts.md
+      - Articulation vs coupling: explanation/articulation-vs-coupling.md
       - Fields and disturbances: explanation/fields.md
       - Planets: explanation/planets.md
       - State estimation (error-state EKF): explanation/estimation.md
