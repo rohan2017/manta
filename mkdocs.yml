@@ -3,7 +3,7 @@ site_description: >-
   Python-first, CasADi-backed rigid-body simulation, state estimation
   (EKF), and control synthesis (LQR) for small vehicles.
 # Served as a subpath of the manta homepage (keep the trailing /docs/).
-site_url: https://manta.rohanbandaru.net/docs/
+site_url: https://mantapilot.org/docs/
 repo_url: https://github.com/rohan2017/manta
 docs_dir: docs
 # Build into the homepage's web/ tree so one assets-only Worker serves

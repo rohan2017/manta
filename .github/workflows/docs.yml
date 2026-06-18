@@ -1,6 +1,6 @@
 name: Deploy site
 
-# Keeps manta.rohanbandaru.net up to date with origin: on every push to main that
+# Keeps mantapilot.org up to date with origin: on every push to main that
 # touches the homepage, the docs, or the source they're generated from,
 # rebuild the MkDocs site and deploy the assets-only Worker.
 on:
