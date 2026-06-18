@@ -34,6 +34,9 @@ ARCHITECTURE_AUDIT.md
 ARCHITECTURE_TARGET.md
 REFACTOR_PLAN.md
 
+# In-repo working notes — not for the remote
+memory/
+
 # Codegen output is committed (lives in examples/<ex>/generated/) so these
 # stay tracked. Do NOT add them here.
 *:Zone.Identifier
