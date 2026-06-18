@@ -1,0 +1,27 @@
+{
+  // Standalone, assets-only Worker for the manta site — a sibling of the
+  // rohanbandaru-net Worker, on the same (already-active) zone. One
+  // directory (`./web`) holds the homepage at the root and the built
+  // MkDocs site under `docs/`, so:
+  //     manta.rohanbandaru.net/         -> web/index.html      (homepage)
+  //     manta.rohanbandaru.net/docs/    -> web/docs/index.html (MkDocs)
+  // No Worker script (`main`) is needed — Cloudflare serves the assets
+  // directly. Build the docs first with `mkdocs build` (outputs web/docs).
+  "name": "manta-docs",
+  "compatibility_date": "2026-06-17",
+
+  "assets": {
+    "directory": "./web",
+    // Serve web/404.html on unknown paths.
+    "not_found_handling": "404-page",
+    // MkDocs uses directory URLs (/docs/page/ -> /docs/page/index.html).
+    "html_handling": "auto-trailing-slash"
+  },
+
+  // Serve on the subdomain. The rohanbandaru.net zone is already active in
+  // this Cloudflare account, so `wrangler deploy` provisions the DNS record
+  // and TLS automatically. The host must match site_url in mkdocs.yml.
+  "routes": [
+    { "pattern": "manta.rohanbandaru.net", "custom_domain": true }
+  ]
+}

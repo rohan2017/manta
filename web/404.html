@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>404 — manta</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@1&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    min-height: 100vh; display: grid; place-items: center; text-align: center;
+    font-family: "JetBrains Mono", monospace; color: #e8efed; padding: 32px;
+    background:
+      radial-gradient(800px 500px at 50% -10%, rgba(45,212,191,.12), transparent 60%),
+      linear-gradient(rgba(94,234,212,.05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(94,234,212,.05) 1px, transparent 1px),
+      #080b0c;
+    background-size: 100% 100%, 24px 24px, 24px 24px;
+  }
+  .code { font-size: 13px; letter-spacing: .26em; text-transform: uppercase; color: #2dd4bf; }
+  h1 { font-family: "Instrument Serif", serif; font-style: italic; font-weight: 400;
+       font-size: clamp(40px, 9vw, 76px); margin: 18px 0 10px; color: #5eead4; line-height: 1; }
+  p { color: #93a39f; font-size: 14px; margin-bottom: 30px; }
+  .links { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+  a { text-decoration: none; font-size: 13px; padding: 11px 20px; border-radius: 9px; }
+  .primary { background: #2dd4bf; color: #04100e; font-weight: 700; }
+  .ghost { color: #e8efed; border: 1px solid rgba(143,170,165,.18); }
+  a:hover.ghost { border-color: #1c8478; color: #5eead4; }
+</style>
+</head>
+<body>
+  <div>
+    <div class="code">error · 404</div>
+    <h1>off the trajectory</h1>
+    <p>That state isn't observable. The page you asked for doesn't exist.</p>
+    <div class="links">
+      <a class="primary" href="/">← home</a>
+      <a class="ghost" href="/docs/">read the docs</a>
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>manta — rigid-body sim, EKF & LQR for small vehicles</title>
+<meta name="description" content="A Python-first, CasADi-backed framework for drones, rockets, underwater vehicles, and satellites — simulation, state estimation, and control synthesis over one declarative model.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Hanken+Grotesk:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:       #080b0c;
+    --bg-2:     #0c1213;
+    --panel:    #0e1617;
+    --ink:      #e8efed;
+    --muted:    #8597941a;
+    --text-dim: #93a39f;
+    --teal:     #2dd4bf;
+    --teal-br:  #5eead4;
+    --teal-dim: #1c8478;
+    --amber:    #f5b461;
+    --line:     rgba(94,234,212,.10);
+    --line-2:   rgba(94,234,212,.045);
+    --hair:     rgba(143,170,165,.16);
+    --radius:   14px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    font-family: "Hanken Grotesk", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+    position: relative;
+  }
+
+  /* layered atmosphere: coordinate grid + radial signal glow */
+  body::before {
+    content: "";
+    position: fixed; inset: 0; z-index: -2;
+    background:
+      radial-gradient(900px 600px at 78% -8%, rgba(45,212,191,.13), transparent 60%),
+      radial-gradient(700px 500px at 0% 100%, rgba(45,212,191,.06), transparent 55%),
+      linear-gradient(var(--line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--line) 1px, transparent 1px),
+      linear-gradient(var(--line-2) 1px, transparent 1px),
+      linear-gradient(90deg, var(--line-2) 1px, transparent 1px),
+      var(--bg);
+    background-size:
+      100% 100%, 100% 100%,
+      96px 96px, 96px 96px,
+      24px 24px, 24px 24px;
+  }
+  /* grain overlay */
+  body::after {
+    content: "";
+    position: fixed; inset: 0; z-index: -1; pointer-events: none;
+    opacity: .035;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 28px; }
+
+  /* ---- nav ---- */
+  header {
+    position: sticky; top: 0; z-index: 10;
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--hair);
+    background: rgba(8,11,12,.66);
+  }
+  nav { display: flex; align-items: center; justify-content: space-between; height: 64px; }
+  .brand { display: flex; align-items: baseline; gap: 11px; text-decoration: none; color: var(--ink); }
+  .brand .mark {
+    font-family: "Instrument Serif", Georgia, serif;
+    font-size: 28px; letter-spacing: .5px; line-height: 1;
+  }
+  .brand .ver {
+    font-family: "JetBrains Mono", monospace; font-size: 11px;
+    color: var(--teal); border: 1px solid var(--teal-dim);
+    padding: 2px 6px; border-radius: 5px; letter-spacing: .04em;
+  }
+  .nav-links { display: flex; align-items: center; gap: 26px; }
+  .nav-links a {
+    font-family: "JetBrains Mono", monospace; font-size: 13px;
+    color: var(--text-dim); text-decoration: none; letter-spacing: .02em;
+    transition: color .18s ease;
+  }
+  .nav-links a:hover { color: var(--teal-br); }
+
+  /* ---- hero ---- */
+  .hero { position: relative; padding: 104px 0 76px; }
+  .eyebrow {
+    font-family: "JetBrains Mono", monospace; font-size: 12.5px;
+    letter-spacing: .28em; text-transform: uppercase;
+    color: var(--teal); margin-bottom: 26px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .eyebrow::before {
+    content: ""; width: 30px; height: 1px; background: var(--teal-dim);
+  }
+  h1 {
+    font-family: "Instrument Serif", Georgia, serif;
+    font-weight: 400; font-size: clamp(44px, 7.4vw, 88px);
+    line-height: 1.02; letter-spacing: -.5px;
+    max-width: 14ch;
+  }
+  h1 em { font-style: italic; color: var(--teal-br); }
+  .lede {
+    margin-top: 28px; max-width: 60ch; font-size: clamp(16px, 1.9vw, 19px);
+    color: #c2cecb;
+  }
+  .lede b { color: var(--ink); font-weight: 600; }
+
+  .cta-row { margin-top: 40px; display: flex; flex-wrap: wrap; gap: 14px; }
+  .btn {
+    font-family: "JetBrains Mono", monospace; font-size: 14px; font-weight: 500;
+    text-decoration: none; padding: 13px 22px; border-radius: 10px;
+    display: inline-flex; align-items: center; gap: 9px;
+    transition: transform .16s ease, box-shadow .2s ease, background .2s ease, border-color .2s ease;
+  }
+  .btn-primary {
+    background: var(--teal); color: #04100e; font-weight: 700;
+    box-shadow: 0 0 0 1px var(--teal), 0 8px 30px -10px rgba(45,212,191,.6);
+  }
+  .btn-primary:hover { background: var(--teal-br); transform: translateY(-2px); box-shadow: 0 0 0 1px var(--teal-br), 0 14px 38px -12px rgba(94,234,212,.7); }
+  .btn-ghost { color: var(--ink); border: 1px solid var(--hair); background: rgba(255,255,255,.012); }
+  .btn-ghost:hover { border-color: var(--teal-dim); color: var(--teal-br); transform: translateY(-2px); }
+
+  /* decorative trajectory: estimate (ringed) tracks truth (solid) */
+  .traj {
+    position: absolute; top: 36px; right: -40px; width: min(46vw, 520px);
+    z-index: -1; opacity: .9; pointer-events: none;
+  }
+  .traj .path { fill: none; stroke: var(--line); stroke-width: 1; }
+  .traj .truth-path { fill: none; stroke: rgba(94,234,212,.32); stroke-width: 1.5; stroke-dasharray: 2 5; stroke-linecap: round; }
+  .dot-truth { fill: var(--teal-br); filter: drop-shadow(0 0 6px var(--teal)); }
+  .dot-est   { fill: none; stroke: var(--amber); stroke-width: 2; opacity: .9; }
+
+  /* ---- code card ---- */
+  .code-card {
+    margin-top: 76px; border: 1px solid var(--hair); border-radius: var(--radius);
+    background: linear-gradient(180deg, var(--panel), #0a1011);
+    overflow: hidden; box-shadow: 0 30px 80px -40px rgba(0,0,0,.8);
+  }
+  .code-head {
+    display: flex; align-items: center; gap: 14px;
+    padding: 13px 18px; border-bottom: 1px solid var(--hair);
+    font-family: "JetBrains Mono", monospace; font-size: 12.5px; color: var(--text-dim);
+  }
+  .lights { display: flex; gap: 7px; }
+  .lights i { width: 11px; height: 11px; border-radius: 50%; display: block; opacity: .8; }
+  .lights i:nth-child(1){ background:#e06c75;} .lights i:nth-child(2){ background:#e5c07b;} .lights i:nth-child(3){ background:var(--teal);}
+  .code-head .cap { margin-left: auto; color: var(--teal-dim); }
+  pre {
+    margin: 0; padding: 24px 26px; overflow-x: auto;
+    font-family: "JetBrains Mono", monospace; font-size: 13.5px; line-height: 1.78;
+    color: var(--ink);
+  }
+  .c-kw { color: var(--teal-br); }
+  .c-mod { color: #cfe8e2; }
+  .c-str { color: #a8d8b9; }
+  .c-num { color: #7fd4e8; }
+  .c-com { color: #566663; font-style: italic; }
+  .c-fn  { color: #e8efed; }
+  .c-pm  { color: var(--text-dim); }
+
+  /* ---- features ---- */
+  .features { padding: 92px 0 40px; }
+  .sec-label {
+    font-family: "JetBrains Mono", monospace; font-size: 12px; letter-spacing: .26em;
+    text-transform: uppercase; color: var(--text-dim); margin-bottom: 34px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .sec-label::after { content: ""; flex: 1; height: 1px; background: var(--hair); }
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px; background: var(--hair); border: 1px solid var(--hair); border-radius: var(--radius); overflow: hidden; }
+  .cell {
+    background: var(--bg-2); padding: 30px 28px; position: relative;
+    transition: background .2s ease;
+  }
+  .cell:hover { background: #0f1819; }
+  .cell .tag {
+    font-family: "JetBrains Mono", monospace; font-size: 12.5px; color: var(--teal);
+    letter-spacing: .02em;
+  }
+  .cell h3 {
+    font-family: "Instrument Serif", Georgia, serif; font-weight: 400;
+    font-size: 26px; margin: 12px 0 8px; letter-spacing: .2px;
+  }
+  .cell p { color: var(--text-dim); font-size: 15px; }
+
+  /* ---- pipeline strip ---- */
+  .pipe {
+    margin-top: 44px; display: flex; flex-wrap: wrap; align-items: center; gap: 14px;
+    font-family: "JetBrains Mono", monospace; font-size: 13px; color: var(--text-dim);
+    padding: 20px 24px; border: 1px dashed var(--hair); border-radius: var(--radius);
+  }
+  .pipe b { color: var(--teal-br); font-weight: 500; }
+  .pipe .arw { color: var(--teal-dim); }
+
+  /* ---- footer ---- */
+  footer {
+    margin-top: 92px; border-top: 1px solid var(--hair);
+    padding: 34px 0 60px;
+  }
+  .foot { display: flex; flex-wrap: wrap; gap: 18px; align-items: center; justify-content: space-between;
+    font-family: "JetBrains Mono", monospace; font-size: 12.5px; color: var(--text-dim); }
+  .foot a { color: var(--text-dim); text-decoration: none; }
+  .foot a:hover { color: var(--teal-br); }
+  .foot .dot { color: var(--teal-dim); margin: 0 4px; }
+
+  /* ---- entrance choreography ---- */
+  .reveal { opacity: 0; transform: translateY(16px); animation: rise .8s cubic-bezier(.2,.7,.2,1) forwards; }
+  .d1 { animation-delay: .05s; } .d2 { animation-delay: .15s; } .d3 { animation-delay: .25s; }
+  .d4 { animation-delay: .35s; } .d5 { animation-delay: .5s; } .d6 { animation-delay: .62s; }
+  @keyframes rise { to { opacity: 1; transform: none; } }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+    .reveal { opacity: 1; transform: none; }
+    .dot-truth, .dot-est { display: none; }
+    html { scroll-behavior: auto; }
+  }
+
+  @media (max-width: 720px) {
+    .traj { display: none; }
+    .nav-links a.hide-sm { display: none; }
+    .grid { grid-template-columns: 1fr; }
+    .hero { padding: 72px 0 56px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <nav class="wrap">
+    <a class="brand" href="/">
+      <span class="mark">manta</span>
+      <span class="ver">v0.1.0</span>
+    </a>
+    <div class="nav-links">
+      <a href="/docs/" class="hide-sm">docs</a>
+      <a href="/docs/reference/" class="hide-sm">api</a>
+      <a href="https://github.com/rohan2017/manta">github ↗</a>
+    </div>
+  </nav>
+</header>
+
+<main class="wrap">
+  <section class="hero">
+    <svg class="traj" viewBox="0 0 520 360" aria-hidden="true"
+         xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+      <path id="traj" class="path" d="M20,210 C90,60 200,40 270,150 S430,330 500,150"/>
+      <path class="truth-path" d="M20,210 C90,60 200,40 270,150 S430,330 500,150"/>
+      <circle class="dot-truth" r="4.5">
+        <animateMotion dur="9s" repeatCount="indefinite" keyPoints="0;1;0" keyTimes="0;0.5;1"
+          calcMode="spline" keySplines="0.45 0.05 0.55 0.95;0.45 0.05 0.55 0.95">
+          <mpath href="#traj" xlink:href="#traj"/>
+        </animateMotion>
+      </circle>
+      <circle class="dot-est" r="8">
+        <animateMotion dur="9s" begin="0.45s" repeatCount="indefinite" keyPoints="0;1;0" keyTimes="0;0.5;1"
+          calcMode="spline" keySplines="0.45 0.05 0.55 0.95;0.45 0.05 0.55 0.95">
+          <mpath href="#traj" xlink:href="#traj"/>
+        </animateMotion>
+      </circle>
+    </svg>
+
+    <div class="eyebrow reveal d1">rigid-body sim · EKF · LQR</div>
+    <h1 class="reveal d2">Declare the craft.<br><em>manta</em> writes the math.</h1>
+    <p class="lede reveal d3">
+      A Python-first, CasADi-backed framework for drones, rockets, underwater
+      vehicles, and satellites. <b>Simulation, state estimation, and control
+      synthesis</b> over a single declarative model — run it natively in
+      Python, then lower the exact same model to embedded C++.
+    </p>
+    <div class="cta-row reveal d4">
+      <a class="btn btn-primary" href="/docs/">Read the docs →</a>
+      <a class="btn btn-ghost" href="https://github.com/rohan2017/manta">View on GitHub ↗</a>
+    </div>
+
+    <div class="code-card reveal d5">
+      <div class="code-head">
+        <span class="lights"><i></i><i></i><i></i></span>
+        <span>quickstart.py</span>
+        <span class="cap">truth + estimator over one world</span>
+      </div>
+<pre><span class="c-kw">from</span> <span class="c-mod">manta</span> <span class="c-kw">import</span> World, Craft, Sim, EKF, TargetNumpy
+<span class="c-kw">from</span> <span class="c-mod">manta.fields</span> <span class="c-kw">import</span> GravityField
+<span class="c-kw">from</span> <span class="c-mod">manta.parts</span> <span class="c-kw">import</span> IMU, Mass, Thruster
+
+drone = <span class="c-fn">Craft</span>(<span class="c-str">"drone"</span>)
+drone.<span class="c-fn">add</span>(<span class="c-fn">Mass</span>(<span class="c-str">"body"</span>, mass=<span class="c-num">1.5</span>, moi=(<span class="c-num">.05</span>, <span class="c-num">.05</span>, <span class="c-num">.08</span>)))
+drone.<span class="c-fn">add</span>(<span class="c-fn">Thruster</span>(<span class="c-str">"t"</span>, force=(<span class="c-num">0</span>, <span class="c-num">0</span>, <span class="c-num">1</span>)))
+drone.<span class="c-fn">add</span>(<span class="c-fn">IMU</span>(<span class="c-str">"imu"</span>, gyro_noise_sigma=<span class="c-num">.005</span>))
+
+w = <span class="c-fn">World</span>().<span class="c-fn">add_field</span>(<span class="c-fn">GravityField</span>(g=(<span class="c-num">0</span>, <span class="c-num">0</span>, <span class="c-num">-9.81</span>)))
+w.<span class="c-fn">add_craft</span>(drone, position=(<span class="c-num">0</span>, <span class="c-num">0</span>, <span class="c-num">5</span>))
+
+sim = <span class="c-fn">TargetNumpy</span>(<span class="c-fn">Sim</span>(w))     <span class="c-com"># truth model</span>
+ekf = <span class="c-fn">TargetNumpy</span>(<span class="c-fn">EKF</span>(w))     <span class="c-com"># estimator over the same world</span></pre>
+    </div>
+  </section>
+
+  <section class="features">
+    <div class="sec-label reveal d1">why manta</div>
+    <div class="grid reveal d2">
+      <div class="cell">
+        <div class="tag">model → transform → target</div>
+        <h3>Three siblings, one model</h3>
+        <p>Declare a World once. <code>Sim</code>, <code>EKF</code>, and
+          <code>LQR</code> are siblings over it — each owns its math and emits a
+          typed Module a backend lowers.</p>
+      </div>
+      <div class="cell">
+        <div class="tag">error-state · SO(3)</div>
+        <h3>Manifold-aware EKF</h3>
+        <p>Orientation stays on the quaternion sheet. Process and measurement
+          noise are auto-assembled by autodiff from the noise channels you
+          declared.</p>
+      </div>
+      <div class="cell">
+        <div class="tag">python → c++</div>
+        <h3>Develop here, deploy embedded</h3>
+        <p>Debug in native Python, then lower the identical model to a typed
+          Eigen C++ class over flat-C kernels — the same loop, both backends.</p>
+      </div>
+      <div class="cell">
+        <div class="tag">system id · MAP</div>
+        <h3>Fit to real flights</h3>
+        <p>Promote physical parameters — masses, thruster gains, mounts — and
+          recover them from logged controls and measurements.</p>
+      </div>
+    </div>
+
+    <div class="pipe reveal d3">
+      <span>World</span><span class="arw">→</span>
+      <b>Sim / EKF / LQR</b><span class="arw">→</span>
+      <span>Module IR</span><span class="arw">→</span>
+      <b>TargetNumpy · TargetCpp · TargetJax</b>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap foot">
+    <div>manta <span class="dot">·</span> MIT licensed</div>
+    <div>
+      <a href="/docs/">docs</a><span class="dot">·</span>
+      <a href="/docs/reference/">api reference</a><span class="dot">·</span>
+      <a href="https://github.com/rohan2017/manta">github</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

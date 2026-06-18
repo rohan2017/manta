@@ -16,6 +16,10 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 
+# MkDocs build output (homepage web/index.html + web/404.html stay tracked)
+web/docs/
+site/
+
 # Editor / IDE
 .vscode/
 .idea/

@@ -1,0 +1,41 @@
+name: Deploy site
+
+# Keeps manta.rohanbandaru.net up to date with origin: on every push to main that
+# touches the homepage, the docs, or the source they're generated from,
+# rebuild the MkDocs site and deploy the assets-only Worker.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+      - "docs/**"
+      - "mkdocs.yml"
+      - "manta/**" # API reference is generated from the source
+      - "pyproject.toml"
+      - "wrangler.jsonc"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install docs toolchain
+        run: pip install -e ".[docs]"
+
+      - name: Build docs (-> web/docs)
+        run: mkdocs build --strict
+
+      - name: Deploy to Cloudflare Workers
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy

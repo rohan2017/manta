@@ -1,0 +1,95 @@
+site_name: manta
+site_description: >-
+  Python-first, CasADi-backed rigid-body simulation, state estimation
+  (EKF), and control synthesis (LQR) for small vehicles.
+# Served as a subpath of the manta homepage (keep the trailing /docs/).
+site_url: https://manta.rohanbandaru.net/docs/
+repo_url: https://github.com/rohan2017/manta
+docs_dir: docs
+# Build into the homepage's web/ tree so one assets-only Worker serves
+# the homepage at / and the docs at /docs/.
+site_dir: web/docs
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - content.code.copy
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [.]
+          options:
+            # manta's docstrings are freeform prose with em-dash-aligned
+            # parameter lists, not Google/Numpy sections — render verbatim.
+            docstring_style: null
+            show_source: true
+            show_root_heading: true
+            show_if_no_docstring: false
+            members_order: source
+            separate_signature: true
+            merge_init_into_class: true
+            filters: ["!^_"]
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Explanation:
+      - The three-layer pipeline: explanation/architecture.md
+      - Parts and the declaration model: explanation/parts.md
+      - Fields and disturbances: explanation/fields.md
+      - Planets: explanation/planets.md
+      - State estimation (error-state EKF): explanation/estimation.md
+      - Control synthesis (LQR): explanation/control.md
+      - Codegen and backends: explanation/codegen.md
+  - Tutorials:
+      - Overview: tutorials/index.md
+      - Quickstart — a hovering drone: tutorials/quickstart.md
+      - Closed-loop control — quadcopter: tutorials/quadcopter.md
+      - Estimation — camera interceptor: tutorials/interceptor.md
+      - System identification — drone: tutorials/sysid-drone.md
+  - How-to:
+      - Overview: how-to/index.md
+      - Deploy a model to C++: how-to/deploy-cpp.md
+      - Fit parameters from a log: how-to/fit-parameters.md
+      - Write a custom Part: how-to/custom-part.md
+      - Write a custom Field or Disturbance: how-to/custom-field.md
+  - API reference:
+      - Overview: reference/index.md
+      - Model — World, Craft, Coupling: reference/model.md
+      - Parts: reference/parts.md
+      - Fields: reference/fields.md
+      - Planets: reference/planets.md
+      - Transforms — Sim, EKF, LQR: reference/transforms.md
+      - Estimation filters and analysis: reference/estimation.md
+      - System identification: reference/fit.md
+      - Targets and runtimes: reference/targets.md
+      - IR primitives: reference/ir.md

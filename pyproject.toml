@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "manta"
+version = "0.1.0"
+description = "Python-first, CasADi-backed rigid-body sim, state estimation, and control synthesis for small vehicles."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { file = "LICENSE" }
+authors = [{ name = "Rohan" }]
+dependencies = [
+    "numpy>=2.0",
+    "casadi>=3.7",
+]
+
+[project.optional-dependencies]
+# JAX codegen backend (TargetJax).
+jax = ["jax>=0.10", "jaxlib>=0.10"]
+# Running the examples/ vehicles and physics demos.
+examples = ["matplotlib>=3.10", "scipy>=1.17", "rerun-sdk>=0.33"]
+# Building this documentation site.
+docs = [
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.26",
+]
+# Test + lint.
+dev = ["pytest>=9.0", "pytest-xdist>=3.8"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["manta"]
