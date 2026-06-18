@@ -1,13 +1,12 @@
-"""Madgwick AHRS recurrence block — numpy behavior + C++ roundtrip.
+"""Madgwick AHRS recurrence block — numpy behavior + codegen smoke.
 
-Madgwick adds zero backend code (it reuses the generic `lower_recurrence`
-path PID established). These tests pin the convention (gyro integration,
-accelerometer convergence, quaternion stays unit) and prove the compiled
-C++ `step()` reproduces the numpy quaternion trajectory exactly.
+Madgwick adds zero backend code: it reuses the generic `lower_recurrence`
+path PID establishes and Mahony already roundtrips through compiled C++
+(quaternion output included). So there's no separate Madgwick C++ roundtrip
+— these tests pin the convention (gyro integration, accelerometer
+convergence, quaternion stays unit) and that the C++ target emits its files.
 """
 
-import shutil
-import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -61,36 +60,7 @@ def test_madgwick_quaternion_stays_unit():
         assert np.linalg.norm(q) == pytest.approx(1.0, abs=1e-9)
 
 
-# --- C++ roundtrip ----------------------------------------------------------
-
-_GYRO = [[0.1, -0.2, 0.05], [0.3, 0.1, -0.1], [-0.2, 0.2, 0.15],
-         [0.0, -0.3, 0.2], [0.25, 0.1, -0.05]]
-_ACCEL = [[0.0, 0.0, 9.81], [0.5, 0.0, 9.7], [0.3, -0.4, 9.6],
-          [-0.2, 0.3, 9.75], [0.1, 0.1, 9.8]]
-_DT = 0.02
-
-_HARNESS = r"""
-#include "madgwick.hpp"
-#include <cstdio>
-
-int main() {
-    manta_gen::Madgwick f;
-    const double g[5][3] = {{0.1,-0.2,0.05},{0.3,0.1,-0.1},{-0.2,0.2,0.15},
-                            {0.0,-0.3,0.2},{0.25,0.1,-0.05}};
-    const double a[5][3] = {{0.0,0.0,9.81},{0.5,0.0,9.7},{0.3,-0.4,9.6},
-                            {-0.2,0.3,9.75},{0.1,0.1,9.8}};
-    for (int i = 0; i < 5; ++i) {
-        manta_gen::Madgwick::Inputs u;
-        u.gyro  << g[i][0], g[i][1], g[i][2];
-        u.accel << a[i][0], a[i][1], a[i][2];
-        auto o = f.step(u, 0.02, 0.0);
-        std::printf("q %.17g %.17g %.17g %.17g\n",
-                    o.orientation[0], o.orientation[1],
-                    o.orientation[2], o.orientation[3]);
-    }
-    return 0;
-}
-"""
+# --- codegen smoke ----------------------------------------------------------
 
 
 def test_madgwick_emits_cpp_files(tmp_path: Path):
@@ -98,46 +68,3 @@ def test_madgwick_emits_cpp_files(tmp_path: Path):
     for p in (result.kernels_c, result.kernels_h, result.wrapper_hpp,
               result.wrapper_cpp, result.cmakelists):
         assert p.exists(), p
-
-
-def test_madgwick_python_cpp_roundtrip(tmp_path: Path):
-    cxx = next((c for c in ("c++", "g++", "clang++") if shutil.which(c)), None)
-    cc = next((c for c in ("cc", "gcc", "clang") if shutil.which(c)), None)
-    if cxx is None or cc is None:
-        pytest.skip("no C/C++ compiler on PATH")
-    eigen_inc = next((p for p in ("/usr/include/eigen3",
-                                  "/usr/local/include/eigen3")
-                      if Path(p, "Eigen", "Dense").exists()), None)
-    if eigen_inc is None:
-        pytest.skip("Eigen headers not found")
-
-    f = Madgwick(beta=0.1)
-    result = TargetCpp(f, tmp_path, class_name="Madgwick")
-
-    k_obj, w_obj = tmp_path / "k.o", tmp_path / "w.o"
-    for cmd in (
-        [cc, "-c", "-O2", "-fPIC", str(result.kernels_c), "-o", str(k_obj)],
-        [cxx, "-c", "-std=c++17", "-O2", "-fPIC", f"-I{eigen_inc}",
-         f"-I{tmp_path}", str(result.wrapper_cpp), "-o", str(w_obj)],
-    ):
-        p = subprocess.run(cmd, capture_output=True, text=True)
-        assert p.returncode == 0, p.stderr
-
-    h_src = tmp_path / "harness_main.cpp"
-    h_src.write_text(_HARNESS)
-    binary = tmp_path / "harness"
-    p = subprocess.run(
-        [cxx, "-std=c++17", "-O2", f"-I{eigen_inc}", f"-I{tmp_path}",
-         str(h_src), str(w_obj), str(k_obj), "-o", str(binary)],
-        capture_output=True, text=True)
-    assert p.returncode == 0, p.stderr
-    p = subprocess.run([str(binary)], capture_output=True, text=True)
-    assert p.returncode == 0, p.stderr
-    cpp_q = [[float(x) for x in line.split()[1:]]
-             for line in p.stdout.strip().splitlines()]
-
-    r = TargetNumpy(f)
-    np_q = [list(r.step(_DT, gyro=g, accel=a)["orientation"])
-            for g, a in zip(_GYRO, _ACCEL)]
-
-    np.testing.assert_allclose(cpp_q, np_q, atol=1e-12)

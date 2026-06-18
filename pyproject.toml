@@ -30,3 +30,11 @@ dev = ["pytest>=9.0", "pytest-xdist>=3.8"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["manta"]
+
+[tool.pytest.ini_options]
+# Run in parallel by default (pytest-xdist). Override with `-n0` to serialize.
+addopts = "-n auto"
+markers = [
+    "slow: long-running fits, Monte-Carlo, or fine-dt convergence sweeps",
+    "cpp: shells out to a C/C++ compiler (codegen roundtrips)",
+]

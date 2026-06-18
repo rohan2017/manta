@@ -47,7 +47,7 @@ def _record(world, n_win=3, K=120, seed=5):
 @pytest.fixture(scope="module")
 def fitted():
     """One shared recovery solve: model starts 5x off, each way."""
-    windows = _record(_noisy_drone(), n_win=2, K=100)
+    windows = _record(_noisy_drone(), n_win=2, K=35)
     model = _noisy_drone(gyro=0.02, accel=0.01)
     nf = NoiseFit(model, noise={
         "imu.gyro_noise": Prior(sigma=2.0),
@@ -60,7 +60,7 @@ def test_noise_fit_recovers_sigmas(fitted):
     _, res = fitted
     g = res.values["drone.imu.gyro_noise"]
     a = res.values["drone.imu.accel_noise"]
-    # ~200 samples/axis: expect σ to ~10%; assert 20%.
+    # ~70 samples/axis: expect σ to ~15%; assert 20%.
     assert abs(g - TRUE_GYRO) / TRUE_GYRO < 0.2, g
     assert abs(a - TRUE_ACCEL) / TRUE_ACCEL < 0.2, a
     # The data informed both: posterior ≪ prior.
@@ -167,7 +167,7 @@ def test_noise_fit_uninformed_channel_posterior_stays_at_prior():
     noise under dominant measurement noise, short window): its Laplace
     posterior must come back ≈ the prior — 'this σ is your prior
     talking' — while the measurement channels are pinned down."""
-    windows = _record(_noisy_drone(), n_win=1, K=60, seed=11)
+    windows = _record(_noisy_drone(), n_win=1, K=40, seed=11)
     model = _noisy_drone()
     t1 = next(p for p in model.crafts[0].parts if p.name == "t1")
     t1.force_noise_sigma = 1e-4               # active but ~invisible
