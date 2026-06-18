@@ -242,7 +242,7 @@ of a Module — no per-transform code anywhere:
 
 | Target | Accepts | Produces |
 |---|---|---|
-| `TargetNumpy(x)` | any Module / transform | `NumpyRuntime` — surface derived from the Module's shape (sim `step`/`outputs`, filter `predict`/`update`/`feed`/`step`, regulator `control`, recurrence `step`) |
+| `TargetNumpy(x)` | any Module / transform | `NumpyRuntime` — surface derived from the Module's shape (sim `step`/`outputs`, filter `predict`/`update`, regulator `control`, recurrence `step`) |
 | `TargetCpp(x, out_dir, class_name)` | any Module / transform | C++ static lib: typed Eigen class over flat-C kernels (+ CMake) |
 | `TargetJax(x)` | any Module / transform (flat crafts) | `JaxModule` — every kernel as a jitted JAX function + a `lax.scan` rollout you can `jax.grad`/`jax.vmap` through (needs `pip install jax`; not a core dependency) |
 
@@ -342,7 +342,7 @@ GPU-rendered Windows-native viewer from WSL). Shared helpers live in
 
 In active development. The public API (`World`, `Craft`, `Sim`, `EKF`,
 `LQR`, `TargetNumpy`, `TargetCpp`) is settled enough that the demos
-and 498 tests don't carry compat shims. The full deploy-to-robot path
+and 567 tests don't carry compat shims. The full deploy-to-robot path
 lowers to C++ — `TargetCpp` handles `Sim`, `EKF` (mutable state + Joseph
 update), and `LQR` (feed-forward control law), each verified against the
 numpy backend by a compile-and-run roundtrip test. Open items:

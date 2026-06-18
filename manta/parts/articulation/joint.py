@@ -161,7 +161,7 @@ class ArticulatedJoint(CompositePart):
         for descendant in self.walk():
             if descendant is self or not descendant.contributes_inertia:
                 continue
-            m = float(declared_attr(descendant, "mass", 0.0) or 0.0)
+            m = float(declared_attr(descendant, "mass", 0.0))
             moi_diag = declared_attr(descendant, "moi", (0.0, 0.0, 0.0))
             I_own = np.diag([float(moi_diag[0]),
                              float(moi_diag[1]),
@@ -191,7 +191,7 @@ class ArticulatedJoint(CompositePart):
         for descendant in self.walk():
             if descendant is self or not descendant.contributes_inertia:
                 continue
-            total += float(declared_attr(descendant, "mass", 0.0) or 0.0)
+            total += float(declared_attr(descendant, "mass", 0.0))
         return total
 
     # ----- update() --------------------------------------------------------

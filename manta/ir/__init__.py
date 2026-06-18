@@ -18,6 +18,7 @@ from .frames import (
     PlanetFrame,
     CraftFrame,
     PartFrame,
+    ParentFrame,
     FrameError,
 )
 from .types import Scalar, Vec3, Mat3, Quat
@@ -30,7 +31,7 @@ from .graph import Graph
 
 __all__ = [
     "Frame",
-    "WorldFrame", "PlanetFrame", "CraftFrame", "PartFrame",
+    "WorldFrame", "PlanetFrame", "CraftFrame", "PartFrame", "ParentFrame",
     "FrameError",
     "Scalar", "Vec3", "Mat3", "Quat",
     "Manifold", "ScalarManifold", "R3Manifold", "SO3Manifold",

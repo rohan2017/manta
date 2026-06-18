@@ -400,7 +400,7 @@ def sigma_horizon(ekf, *, horizon: float, dt: float = 0.02,
     # --- per-sensor H/R/rate ---------------------------------------------
     x_s, u_s, dt_s, t_s = sys.x_sym, sys.u_sym, sys.dt_sym, sys.t_sym
     zero_dt = ca.MX.zeros(1, 1)
-    chosen = []                                  # (full, H_fn, R_fn, period)
+    chosen = []                                  # (full, dim, H_fn, R_fn, period)
     for H_fn, full in _select_sensors(ir, sensors, who="sigma_horizon"):
         s = sys.sensors[full]
         L_h = (ca.substitute(s.L_h_sym, dt_s, zero_dt)

@@ -26,8 +26,21 @@ import itertools
 from abc import ABC, abstractmethod
 from typing import Any
 
+import casadi as ca
+
 from ..ir.types import Vec3
 from ..parts.base import DeclarationHost
+
+
+def project_extend_mx(r_mx, c_mx):
+    """Gram-Schmidt `projected`-combining residual on raw MX vectors:
+    add only the part of `c_mx` that extends `r_mx`, capping negative
+    projections at zero so a contribution that would shrink the running
+    sum is ignored along the run. Shared by Vec3 fields and FluidField's
+    velocity component."""
+    denom = ca.dot(r_mx, r_mx) + 1e-12
+    proj_clip = ca.fmax(0.0, ca.dot(c_mx, r_mx) / denom)
+    return r_mx + (c_mx - proj_clip * r_mx)
 
 
 def anchored_pose(craft, offset_body):
@@ -259,16 +272,8 @@ class SuperposedField(Field, ABC):
         that's orthogonal to (or extending) the running sum. Default
         works on Vec3-valued fields. Compound fields override.
         """
-        import casadi as ca
         from ..ir.types import Vec3 as _Vec3
         if not (isinstance(running, _Vec3) and isinstance(contribution, _Vec3)):
             return running + contribution
-        r_mx = running._mx
-        c_mx = contribution._mx
-        denom = ca.dot(r_mx, r_mx) + 1e-12
-        proj_scalar = ca.dot(c_mx, r_mx) / denom
-        # Cap negative projections at zero so a contribution that
-        # would shrink the running sum gets ignored along the run.
-        proj_clip   = ca.fmax(0.0, proj_scalar)
-        residual    = c_mx - proj_clip * r_mx
-        return _Vec3[running._frame].from_mx(r_mx + residual)
+        extended = project_extend_mx(running._mx, contribution._mx)
+        return _Vec3[running._frame].from_mx(extended)

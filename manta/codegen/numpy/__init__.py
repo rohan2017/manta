@@ -8,19 +8,19 @@ exactly the surface its Module shape implies — nothing else:
 
   * `NumpySim` (`_sim`)               — THREADED + an oracle ``step``
                         entry. Held state: `sim.state` (nested dict),
-                        `step(dt)`, `outputs()`, `out`/`command` ports,
-                        `attach_driver` (feeds the NOISE port).
+                        `step(dt)`/`step_n`, `outputs()`/`reading(name)`,
+                        `attach_driver` (feeds the NOISE port),
+                        `rate_gate`/`command_latch`.
   * `NumpyFilter` (`_filter`)         — HELD + a ``predict`` entry.
-                        `predict`/`update` (by sensor *name*),
-                        `feed`+`step` (the measurement bus), `x`/`P`,
-                        `reset`, `state_dict`, `meas`/`command`/
-                        `estimate` ports.
+                        `predict`/`update` (by sensor *name* or a
+                        caller-supplied `h(x)`), `x`/`P`, `reset`,
+                        `state_dict`, `Q`.
   * `NumpyRecurrence` (`_recurrence`) — HELD + an OUTPUT port.
                         `step(dt, **inputs)`, `readouts()`, `reset`,
-                        `input`/`output` ports, `compute`.
+                        `state`.
   * `NumpyRegulator` (`_regulator`)   — THREADED + a ``control`` entry.
-                        `u(x)`, `control(state_dict)`, `estimate_in`/
-                        `command` ports, `compute`.
+                        `u(x)`, `control(state_dict)`, `retarget`,
+                        `x_ref`.
 
 `NoiseDriver` (`_noise`) drives the oracle's NOISE port; `_compile`
 holds the optional cc-compiled-kernel path.

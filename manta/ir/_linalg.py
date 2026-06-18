@@ -63,7 +63,7 @@ def _chol_column_solve(L: list, b_col, n: int) -> ca.MX:
 def spd_solve(A: ca.MX, B: ca.MX) -> ca.MX:
     """`A⁻¹ B` for a small SPD `A` (n×n) and any-width `B` (n×m),
     unrolled Cholesky — see module docstring for why not `ca.solve`."""
-    n = A.shape[0]
+    n = _square_dim(A, op="spd_solve")
     L = chol_lower(A, n)
     cols = [_chol_column_solve(L, B[:, j], n) for j in range(B.shape[1])]
     return ca.horzcat(*cols)

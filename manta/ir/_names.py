@@ -1,10 +1,11 @@
 """Name resolution — the one suffix-matching rule, shared everywhere.
 
 `resolve_suffix` is the single home of manta's "exact name, else unique
-`.suffix`, else raise" convention (`StateSpec.slot`, the measurement bus,
-and every transform that takes user-supplied input/sensor/parameter names
-all route through it). It lives here, in the IR layer, so foundational
-modules (`bus`, `state_spec`) need not reach up into `linearization`.
+`.suffix`, else raise" convention (`StateSpec.slot`, the numpy Sim/EKF
+sensor lookup, and every transform that takes user-supplied
+input/sensor/parameter names all route through it). It lives here, in the
+IR layer, so foundational modules (`state_spec`) need not reach up into
+`linearization`.
 """
 
 from __future__ import annotations

@@ -1,9 +1,12 @@
-"""Fields — additive superpositions of Disturbance objects.
+"""Fields — superpositions of Disturbance objects.
 
 A `Field` is a physical scalar/vector/tensor that pervades the world
-(gravity, fluid density+velocity, magnetic field). It's the sum of
-zero-or-more `Disturbance` contributions. The architecture is locked
-per the Field redesign:
+(gravity, fluid density+velocity, magnetic field). It combines
+zero-or-more `Disturbance` contributions according to each one's
+`combining` flag — additive (the default), averaged, or projected.
+`OpticalField` is the enumerated exception: it carries discrete sources
+rather than a summable value. The architecture is locked per the Field
+redesign:
 
   * Single concrete class per physical kind. GravityField is one
     class; multiple gravity sources (uniform background, point masses,
@@ -11,8 +14,8 @@ per the Field redesign:
     same Field instance.
   * `field.add(Disturbance)` — append a contribution.
   * `field.value_at_sym(point)` — return the symbolic MX value of the
-    field at `point` (Vec3[WorldFrame]). Equals the sum of every
-    registered disturbance's contribution.
+    field at `point` (Vec3[WorldFrame]), every registered disturbance
+    combined per its `combining` flag.
 
 User-facing surface::
 

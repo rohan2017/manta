@@ -51,7 +51,7 @@ from .fields import Field
 # Coupling is referenced below as a type and via isinstance; the ABC
 # itself lives in couplings/base.py. External callers should import it
 # from `manta.couplings` (or `manta`).
-from .couplings.base import Coupling   # noqa: E402
+from .couplings.base import Coupling
 
 
 # ---------------------------------------------------------------------------

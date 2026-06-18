@@ -10,9 +10,11 @@ defining feature over Madgwick — so a constant rate-gyro offset is learned
 out rather than integrated into drift.
 
 State: an `orientation` quaternion (SO(3)) and a `gyro_bias` 3-vector (the
-integral-feedback term). Inputs: `gyro` (rad/s) and `accel` (direction only,
-eps-guarded). Output: the `orientation` quaternion; the learned bias is
-readable from the state.
+integral-feedback term, *added* to the gyro — so it is the negative of a
+physical additive offset, opposite in sign to the IMU part's `gyro_bias`).
+Inputs: `gyro` (rad/s) and `accel` (direction only, eps-guarded). Output:
+the `orientation` quaternion; the learned correction is readable from the
+state.
 
 Convention matches the reference Mahony IMU implementation (sensor-frame
 gyro/accel). Like every recurrence block this is forward-only — the kernel
