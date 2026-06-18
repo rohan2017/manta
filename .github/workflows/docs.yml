@@ -36,6 +36,10 @@ jobs:
       - name: Deploy to Cloudflare Workers
         uses: cloudflare/wrangler-action@v3
         with:
+          # Assets-only Workers (no `main` entry-point) require Wrangler v4;
+          # the action otherwise defaults to v3 and fails with "Missing
+          # entry-point".
+          wranglerVersion: "4"
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: deploy
