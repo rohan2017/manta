@@ -34,6 +34,8 @@ class WindBias(Disturbance):
     def contribute_at_sym(self, point, t):
         return FluidState(
             density=ca.MX(0.0),
+            pressure=ca.MX(0.0),
+            temperature=ca.MX(0.0),
             velocity=Vec3[WorldFrame].from_mx(self.velocity._mx),
         )
 

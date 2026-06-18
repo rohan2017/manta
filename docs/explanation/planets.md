@@ -12,8 +12,9 @@ fields.
 - **The planet-fixed frame** — axis + rotation rate, and the symbolic +
   numpy transforms between `PlanetFrame` and `WorldFrame`.
 - **Standing disturbances** — what `Earth` auto-registers on the world's
-  shared fields: point-mass (+ optional J2) gravity, ocean + ISA
-  atmosphere via `PlanetFrameFluid`, a dipole magnetic field.
+  shared fields: point-mass (+ optional J2) gravity, an `Ocean` + ISA
+  `Atmosphere` pair of fluid regimes (baseline media built on
+  `PlanetFrameFluid`), a dipole magnetic field.
 - **Initial-state factories** — `earth.position(...)`, `earth.velocity(...)`,
   `earth.at_rest()` and how they resolve to WorldFrame seeds at compile
   time.

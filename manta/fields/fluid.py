@@ -1,15 +1,35 @@
 """FluidField + concrete fluid disturbances.
 
-A FluidField returns `FluidState(density, velocity)` at a queried
-world-frame point. The value is compound — density (Scalar, kg/m³)
-plus bulk flow velocity (Vec3[WorldFrame], m/s) — so `FluidState`
-implements `__add__` for per-field-component summation, letting the
-generic `Field.value_at_sym` superposition machinery work unchanged.
+A FluidField returns `FluidState(density, pressure, temperature,
+velocity)` at a queried world-frame point. The value is compound — three
+scalars (density kg/m³, pressure Pa, temperature K) plus a bulk flow
+velocity (Vec3[WorldFrame], m/s).
 
-Density and pressure/temperature gas modeling are deferred — v1 ships
-density (incompressible-fluid surrogate) + bulk velocity. Future work:
-add `pressure`, `temperature` to FluidState and derive density via the
-ideal-gas law when configured for gases.
+Disturbances combine by role (their `combining` flag), per component:
+
+  * **baseline** — a regime medium (an ocean, an atmosphere). Baselines
+    LAYER by their spatial `membership` rather than summing: in insertion
+    order, `base ← (1 − w)·base + w·value`. So a global air background
+    overlaid by an ocean pocket (membership = wet-fraction) gives
+    `(1 − wet)·air + wet·ocean` — an alpha-composite override with no
+    dilution, and vacuum (zero) where no baseline is active. This is the
+    "which fluid am I in" selection: you don't *sum* 1025 + 1.225 kg/m³.
+
+  * **averaged** — an estimation overlay (overlapping wind bubbles). The
+    averaged disturbances are combined into a membership-weighted mean
+    *among themselves* (`Σ wᵢ·valueᵢ / Σ wᵢ`), so two crafts' wind
+    estimates agree where their bubbles overlap.
+
+  * **additive** — a perturbation on top of the regime (a current, a
+    thruster wake, a wing vortex, an explosion blast). Plain
+    membership-weighted sum. (A future fluid-thruster must query the
+    ambient velocity first and contribute only its delta, so two nearby
+    thrusters don't double-count — that is the part's job, not the
+    field's.)
+
+`result = baseline + averaged + perturbations`, per component. This is a
+deliberately simple linear-superposition rule set — NOT a Navier-Stokes
+solve; advection and true currents are out of scope.
 """
 
 from __future__ import annotations
@@ -20,7 +40,8 @@ import casadi as ca
 
 from ..ir.frames import WorldFrame
 from ..ir.types import Vec3
-from .base import Disturbance, SuperposedField, project_extend_mx
+from ..smoothing import hermite_blend, soft_norm
+from .base import Disturbance, SuperposedField
 
 
 _VEC3_ANCHOR = Vec3[WorldFrame]
@@ -28,38 +49,55 @@ _VEC3_ANCHOR = Vec3[WorldFrame]
 
 @dataclass(frozen=True)
 class FluidState:
-    """Local fluid properties at an world-frame point.
+    """Local fluid properties at a world-frame point.
 
-    density   — kg/m³. CasADi-MX scalar (so it composes with symbolic
-                state in tracing).
-    velocity  — bulk fluid velocity at the point, Vec3[WorldFrame].
+    density      — kg/m³. CasADi-MX scalar (composes with symbolic state).
+    pressure     — Pa. MX scalar.
+    temperature  — K. MX scalar.
+    velocity     — bulk fluid velocity at the point, Vec3[WorldFrame].
 
     Disturbances and `FluidField.value_at_sym` return / consume this
-    type. Per-component addition is defined so the Field base class can
-    sum disturbances without special-casing this field.
+    type. `__add__` (per-component sum) backs the additive pool;
+    `scaled` (per-component scalar multiply) backs the membership
+    weighting in the baseline / averaged blends.
     """
     density: ca.MX                  # scalar MX
+    pressure: ca.MX                 # scalar MX
+    temperature: ca.MX              # scalar MX
     velocity: "Vec3"                # Vec3[WorldFrame]
 
     def __add__(self, other: "FluidState") -> "FluidState":
         return FluidState(
-            density  = self.density + other.density,
-            velocity = self.velocity + other.velocity,
+            density     = self.density + other.density,
+            pressure    = self.pressure + other.pressure,
+            temperature = self.temperature + other.temperature,
+            velocity    = self.velocity + other.velocity,
+        )
+
+    def scaled(self, s) -> "FluidState":
+        """This state with every component multiplied by the MX (or
+        float) scalar `s` — the membership weight in the blends."""
+        return FluidState(
+            density     = s * self.density,
+            pressure    = s * self.pressure,
+            temperature = s * self.temperature,
+            velocity    = _VEC3_ANCHOR.from_mx(s * self.velocity._mx),
         )
 
 
 class FluidField(SuperposedField):
-    """Fluid density + bulk velocity over the world frame.
+    """Fluid density + pressure + temperature + bulk velocity over the
+    world frame.
 
-    The field value at a point is a `FluidState`. Concrete sources
-    (uniform background, localized currents, planet-registered ocean +
-    atmosphere) are added as Disturbance subclasses to one FluidField
-    instance.
+    The field value at a point is a `FluidState`. Concrete sources are
+    added as `Disturbance` subclasses with a `combining` role (see the
+    module docstring): `baseline` regime media, `averaged` estimation
+    overlays, and `additive` perturbations.
 
     The `add_uniform` builder returns self for chaining; other
     disturbances attach via `field.add(CurrentFlow(...))`. The constructor
-    accepts `density=` for the common single-uniform case (no flow) —
-    equivalent to one `add_uniform`.
+    accepts `density=`/`pressure=`/`temperature=` for the common
+    single-uniform case — equivalent to one `add_uniform` baseline.
     """
 
     # Sentinel for the type-check in Field.add — any disturbance whose
@@ -68,39 +106,108 @@ class FluidField(SuperposedField):
 
     def __init__(self,
                  density: float | None = None,
-                 velocity: tuple[float, float, float] = (0.0, 0.0, 0.0)
+                 velocity: tuple[float, float, float] = (0.0, 0.0, 0.0),
+                 *,
+                 pressure: float = 0.0,
+                 temperature: float = 0.0,
                  ) -> None:
         super().__init__()
         if density is not None:
-            self.add_uniform(density, velocity)
+            self.add_uniform(density, velocity,
+                             pressure=pressure, temperature=temperature)
 
     def _zero_value(self) -> FluidState:
         return FluidState(
-            density  = ca.MX(0.0),
-            velocity = _VEC3_ANCHOR.constant((0.0, 0.0, 0.0)),
+            density     = ca.MX(0.0),
+            pressure    = ca.MX(0.0),
+            temperature = ca.MX(0.0),
+            velocity    = _VEC3_ANCHOR.constant((0.0, 0.0, 0.0)),
         )
 
-    def _scale(self, value: FluidState, scalar: float) -> FluidState:
-        return FluidState(
-            density  = scalar * value.density,
-            velocity = _VEC3_ANCHOR.from_mx(scalar * value.velocity._mx),
-        )
+    def value_at_sym(self, point: "Vec3", t) -> FluidState:
+        """Combine every registered disturbance at `point`/`t` into one
+        `FluidState`, per the baseline / averaged / additive rule set
+        (module docstring). Returns the zero value if none are
+        registered.
+        """
+        if not self._disturbances:
+            return self._zero_value()
 
-    def _project_combine(self, running: FluidState,
-                          contribution: FluidState) -> FluidState:
-        """Projected combination for a FluidState. Density adds linearly
-        (no projection); velocity uses the Gram-Schmidt residual rule."""
-        new_density = running.density + contribution.density
-        new_velocity = _VEC3_ANCHOR.from_mx(
-            project_extend_mx(running.velocity._mx, contribution.velocity._mx))
-        return FluidState(density=new_density, velocity=new_velocity)
+        baselines = [d for d in self._disturbances if d.combining == "baseline"]
+        averaged  = [d for d in self._disturbances if d.combining == "averaged"]
+        additive  = [d for d in self._disturbances if d.combining == "additive"]
+
+        # Baseline regimes: layered alpha-composite override in insertion
+        # order. base ← (1 − w)·base + w·contribution.
+        base = self._zero_value()
+        for d in baselines:
+            w = d.membership(point, t)
+            c = d.contribute_at_sym(point, t)
+            base = base.scaled(1.0 - w) + c.scaled(w)
+
+        # Averaged overlays: membership-weighted self-mean.
+        avg = self._zero_value()
+        if averaged:
+            num = self._zero_value()
+            den = ca.MX(0.0)
+            for d in averaged:
+                w = d.membership(point, t)
+                num = num + d.contribute_at_sym(point, t).scaled(w)
+                den = den + w
+            avg = num.scaled(1.0 / (den + 1e-9))
+
+        # Additive perturbations: membership-weighted sum on top.
+        pert = self._zero_value()
+        for d in additive:
+            w = d.membership(point, t)
+            pert = pert + d.contribute_at_sym(point, t).scaled(w)
+
+        return base + avg + pert
 
     def add_uniform(self,
                     density: float,
-                    velocity: tuple[float, float, float] = (0.0, 0.0, 0.0)
+                    velocity: tuple[float, float, float] = (0.0, 0.0, 0.0),
+                    *,
+                    pressure: float = 0.0,
+                    temperature: float = 0.0,
                     ) -> "FluidField":
-        """Attach a uniform density (+ optional flow). Returns self."""
-        return self.add(UniformFluid(density, velocity))
+        """Attach a uniform baseline medium (density + optional pressure,
+        temperature, flow). Returns self."""
+        return self.add(UniformFluid(density, velocity,
+                                     pressure=pressure,
+                                     temperature=temperature))
+
+
+# ---------------------------------------------------------------------------
+# Membership helpers — smooth spatial supports (C¹), returned as callables
+# `(point: Vec3, t) -> ca.MX in [0, 1]` to pass as `membership=`.
+# ---------------------------------------------------------------------------
+
+def below_surface(surface_height, width: float):
+    """Membership = 1 below a surface, 0 above, blended over ±`width`.
+
+    `surface_height(point, t)` returns the signed height of `point` above
+    the surface (negative = submerged), as an MX. Used for an ocean
+    regime whose top is a (possibly waving) sea surface; the complement
+    `1 − membership` is the matching atmosphere region.
+    """
+    def _membership(point, t):
+        return 1.0 - hermite_blend(surface_height(point, t), width)
+    return _membership
+
+
+def within_sphere(center: tuple[float, float, float],
+                  radius: float, width: float):
+    """Membership = 1 inside a world-frame sphere, 0 outside, blended
+    over ±`width` about the radius. For a localized pocket (a wind
+    bubble, an explosion); for a craft-following centre, override
+    `Disturbance.membership` instead (see `CraftWindBubble`)."""
+    c = _VEC3_ANCHOR.constant(tuple(float(x) for x in center))
+
+    def _membership(point, t):
+        d = soft_norm(point._mx - c._mx)
+        return 1.0 - hermite_blend(d - radius, width)
+    return _membership
 
 
 # ---------------------------------------------------------------------------
@@ -108,22 +215,37 @@ class FluidField(SuperposedField):
 # ---------------------------------------------------------------------------
 
 class UniformFluid(Disturbance):
-    """Position-independent fluid: constant density + (optional) flow.
+    """Position-independent baseline medium: constant density (+ optional
+    pressure, temperature, flow).
+
+    A `baseline` regime — where it is active (its membership, global by
+    default) it *defines* the ambient fluid rather than adding to it.
 
     Args:
-        density   — kg/m³. Common values: ~1.225 (air), ~1025 (seawater),
-                    ~1000 (fresh water).
-        velocity  — bulk flow vector in WorldFrame, m/s. Default zero.
+        density      — kg/m³. Common: ~1.225 (air), ~1025 (seawater),
+                       ~1000 (fresh water).
+        velocity     — bulk flow vector in WorldFrame, m/s. Default zero.
+        pressure     — Pa. Default 0 (unset).
+        temperature  — K. Default 0 (unset).
     """
 
     field_value_shape = FluidState
+    combining = "baseline"
 
     def __init__(self,
                  density: float,
-                 velocity: tuple[float, float, float] = (0.0, 0.0, 0.0), *, name: str | None = None) -> None:
-        super().__init__(name=name)
-        self.density  = float(density)
-        self.velocity = tuple(float(x) for x in velocity)
+                 velocity: tuple[float, float, float] = (0.0, 0.0, 0.0),
+                 *,
+                 pressure: float = 0.0,
+                 temperature: float = 0.0,
+                 name: str | None = None,
+                 combining: str | None = None,
+                 membership=None) -> None:
+        super().__init__(name=name, combining=combining, membership=membership)
+        self.density     = float(density)
+        self.pressure    = float(pressure)
+        self.temperature = float(temperature)
+        self.velocity    = tuple(float(x) for x in velocity)
         if self.density < 0.0:
             raise ValueError(
                 f"UniformFluid: density must be >= 0, got {density!r}")
@@ -133,33 +255,40 @@ class UniformFluid(Disturbance):
 
     def contribute_at_sym(self, point, t) -> FluidState:
         return FluidState(
-            density  = ca.MX(self.density),
-            velocity = _VEC3_ANCHOR.constant(self.velocity),
+            density     = ca.MX(self.density),
+            pressure    = ca.MX(self.pressure),
+            temperature = ca.MX(self.temperature),
+            velocity    = _VEC3_ANCHOR.constant(self.velocity),
         )
 
     def __repr__(self) -> str:
         return (f"<UniformFluid density={self.density} "
+                f"pressure={self.pressure} temperature={self.temperature} "
                 f"velocity={self.velocity}>")
 
 
 class CurrentFlow(Disturbance):
-    """Localized current — adds a velocity contribution without changing
-    density.
+    """Localized current — an additive velocity perturbation that leaves
+    density / pressure / temperature untouched.
 
     v1 ships the simplest non-spatial model: a constant velocity
-    contribution everywhere. Future versions will accept a Gaussian
-    envelope around a centroid, or a tabulated current map. For now
-    `CurrentFlow((0, 1, 0))` adds 1 m/s in +y to whatever density the
-    background UniformFluid provides.
+    contribution everywhere (bound it with a `membership=` for a pocket).
+    Future versions will accept a Gaussian envelope or a tabulated map.
 
     Args:
         velocity — world-frame velocity contribution, m/s.
     """
 
     field_value_shape = FluidState
+    combining = "additive"
 
-    def __init__(self, velocity: tuple[float, float, float], *, name: str | None = None) -> None:
-        super().__init__(name=name)
+    def __init__(self,
+                 velocity: tuple[float, float, float],
+                 *,
+                 name: str | None = None,
+                 combining: str | None = None,
+                 membership=None) -> None:
+        super().__init__(name=name, combining=combining, membership=membership)
         self.velocity = tuple(float(x) for x in velocity)
         if len(self.velocity) != 3:
             raise ValueError(
@@ -167,11 +296,11 @@ class CurrentFlow(Disturbance):
 
     def contribute_at_sym(self, point, t) -> FluidState:
         return FluidState(
-            density  = ca.MX(0.0),
-            velocity = _VEC3_ANCHOR.constant(self.velocity),
+            density     = ca.MX(0.0),
+            pressure    = ca.MX(0.0),
+            temperature = ca.MX(0.0),
+            velocity    = _VEC3_ANCHOR.constant(self.velocity),
         )
 
     def __repr__(self) -> str:
         return f"<CurrentFlow velocity={self.velocity}>"
-
-

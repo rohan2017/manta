@@ -51,11 +51,13 @@ a craft.
 
 ::: manta.parts.IMU
 
-::: manta.parts.DVL
+::: manta.parts.VelocitySensor
 
 ::: manta.parts.Magnetometer
 
 ::: manta.parts.PositionSensor
+
+::: manta.parts.Barometer
 
 ::: manta.parts.ProjectiveCamera
 

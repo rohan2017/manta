@@ -1,11 +1,11 @@
-"""PlanetFrameFluid + Earth — the lambda-based replacement for the
-old PlanetCoRotatingFluid.
+"""PlanetFrameFluid + Earth Ocean/Atmosphere regimes.
 
 Validates:
-  * Density evaluated from PlanetFrame-coords lambdas; user can use
+  * A user PlanetFrameFluid evaluated from PlanetFrame-coords lambdas;
     `ca.if_else` for hard boundaries (no soft-smoothing artefacts).
-  * Earth's combined ocean+atmosphere profile: full water density
-    at any depth, exponential ISA density above sea level.
+  * Earth's ocean + atmosphere baselines, layered by membership: full
+    water density + hydrostatic pressure at any depth; ISA-troposphere
+    temperature / pressure / (ideal-gas) density above sea level.
   * Co-rotation contribution still works: a craft at PlanetFrame
     rest gets WorldFrame velocity `ω × r`.
 """
@@ -19,6 +19,9 @@ from manta.ir.frames import WorldFrame
 from manta.ir.types import Vec3
 from manta.parts import Mass
 from manta.planets import Earth, SeaWaves
+from manta.planets.atmosphere import (
+    R_AIR, ideal_gas_density, isa_pressure, isa_temperature,
+)
 from manta.planets.disturbances import PlanetFrameFluid
 
 
@@ -31,6 +34,19 @@ def _sample(world: World, point: tuple[float, float, float],
 def _sample_density(world: World, point: tuple[float, float, float],
                     t: float = 0.0) -> float:
     return float(ca.evalf(_sample(world, point, t).density))
+
+
+def _scalar(world, point, attr, t: float = 0.0) -> float:
+    return float(ca.evalf(getattr(_sample(world, point, t), attr)))
+
+
+def _earth_isa_constants(earth):
+    """The (P0, T0, lapse, g0, R) Earth feeds into the ISA equations."""
+    T0 = earth.sea_level_temperature
+    g0 = (earth.gravity_mu if earth.gravity_mu > 0.0 else Earth.MU) \
+        / earth.planet_radius ** 2
+    P0 = earth.air_density * R_AIR * T0
+    return P0, T0, earth.lapse_rate, g0, R_AIR
 
 
 # ---------------------------------------------------------------------------
@@ -51,20 +67,46 @@ def test_ocean_full_density_at_any_depth():
             err_msg=f"depth={depth}")
 
 
-def test_atmosphere_exponential_falloff():
-    """ISA-style exponential density profile above sea level."""
+def test_atmosphere_isa_lapse_profile():
+    """ISA troposphere above sea level: linear temperature lapse,
+    consistent barometric pressure, ideal-gas density."""
     earth = Earth(rotation_rate=0.0)
     w = World(); w.add_planet(earth)
     c = Craft("probe"); c.add(Mass("body", mass=1.0))
     w.add_craft(c, position=(earth.R_EQ + 1.0, 0, 0))
     Sim(w)
 
-    H = earth.atmosphere_scale_height
+    P0, T0, L, g0, R = _earth_isa_constants(earth)
     for alt in (100.0, 1000.0, 10000.0):
-        rho = _sample_density(w, (earth.R_EQ + alt, 0, 0))
-        expected = earth.air_density * np.exp(-alt / H)
-        np.testing.assert_allclose(rho, expected, rtol=1e-9,
-            err_msg=f"alt={alt}")
+        p = (earth.R_EQ + alt, 0, 0)
+        T_exp = float(ca.evalf(isa_temperature(alt, T0, L)))
+        P_exp = float(ca.evalf(isa_pressure(alt, P0, T0, L, g0, R)))
+        rho_exp = float(ca.evalf(ideal_gas_density(P_exp, T_exp, R)))
+        np.testing.assert_allclose(_scalar(w, p, "temperature"), T_exp,
+                                   rtol=1e-9, err_msg=f"T alt={alt}")
+        np.testing.assert_allclose(_scalar(w, p, "pressure"), P_exp,
+                                   rtol=1e-9, err_msg=f"P alt={alt}")
+        np.testing.assert_allclose(_sample_density(w, p), rho_exp,
+                                   rtol=1e-9, err_msg=f"rho alt={alt}")
+
+
+def test_ocean_hydrostatic_pressure():
+    """Underwater: constant density, pressure rising as P0 + ρ·g·depth,
+    constant temperature."""
+    earth = Earth(rotation_rate=0.0)
+    w = World(); w.add_planet(earth)
+    c = Craft("probe"); c.add(Mass("body", mass=1.0))
+    w.add_craft(c, position=(earth.R_EQ, 0, 0))
+    Sim(w)
+
+    P0, T0, _, g0, _ = _earth_isa_constants(earth)
+    for depth in (1.0, 10.0, 100.0, 1000.0):
+        p = (earth.R_EQ - depth, 0, 0)
+        P_exp = P0 + earth.water_density * g0 * depth
+        np.testing.assert_allclose(_scalar(w, p, "pressure"), P_exp,
+                                   rtol=1e-9, err_msg=f"depth={depth}")
+        np.testing.assert_allclose(_scalar(w, p, "temperature"), T0,
+                                   atol=1e-9, err_msg=f"depth={depth}")
 
 
 def test_atmosphere_vanishes_at_lunar_distance():

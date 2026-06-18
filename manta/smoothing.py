@@ -34,3 +34,29 @@ def smooth_max0(x_mx: ca.MX, eps_sq: float) -> ca.MX:
     over which the kink may be rounded.
     """
     return 0.5 * (x_mx + ca.sqrt(x_mx * x_mx + eps_sq))
+
+
+def smoothstep(s_mx: ca.MX) -> ca.MX:
+    """C¹ Hermite step on a clamped argument: 0 at s ≤ −1, 1 at s ≥ 1,
+    rising monotonically through 0.5 at s = 0.
+
+    Returns ``0.5 + 0.75·s − 0.25·s³`` after clamping ``s`` to [−1, 1].
+    The derivative ``0.75·(1 − s²)`` vanishes at both ends, so the ramp
+    has **compact support** — outside [−1, 1] the value is flat at 0/1
+    with zero slope, and nothing leaks past the band (the property a
+    1000:1 water/air density switch relies on). The flip side
+    (``1 − smoothstep``) gives a falling step.
+    """
+    s = ca.fmax(-1.0, ca.fmin(1.0, s_mx))
+    return 0.5 + 0.75 * s - 0.25 * s ** 3
+
+
+def hermite_blend(x_mx: ca.MX, width: float) -> ca.MX:
+    """Smooth 0→1 ramp in ``x``, rising over the half-width ``width``
+    about x = 0: 0 at ``x ≤ −width``, 1 at ``x ≥ +width`` (via
+    :func:`smoothstep`). With ``width <= 0`` it degrades to the hard step
+    ``x > 0 ? 1 : 0`` — a sharp interface with no blend band.
+    """
+    if width <= 0.0:
+        return ca.if_else(x_mx > 0.0, ca.MX(1.0), ca.MX(0.0))
+    return smoothstep(x_mx / width)

@@ -14,12 +14,18 @@ instance.
 - **One field per physical kind** — why `GravityField` is a single class
   and a planet's pull, a uniform background, and a body-pull are all
   *disturbances* on it.
-- **The combining flags** — how overlapping disturbances combine:
-    - `"additive"` (default) — linear sum (gravity, B-field).
-    - `"averaged"` — mean of the running additive sum + every averaged
-      contribution (overlapping wind bubbles compromise on the mean).
-    - `"projected"` — Gram-Schmidt residual; only the component extending
-      the running sum is added.
+- **Combining** — most fields are a plain linear superposition (sum) of
+  their disturbances (gravity, B-field). `FluidField` is richer: each
+  disturbance has a `combining` role and a smooth spatial `membership`,
+  and the field folds them per [`FluidField.value_at_sym`][manta.fields.FluidField]:
+    - `"baseline"` — a regime medium (`Ocean`, `Atmosphere`) that *layers*
+      by membership in insertion order (`base ← (1−w)·base + w·value`), so
+      a background overlaid by a pocket is an alpha-composite override —
+      density is selected by region, never summed.
+    - `"averaged"` — a membership-weighted self-mean among the averaged
+      disturbances (overlapping wind bubbles agree on the mean).
+    - `"additive"` — a membership-weighted perturbation summed on top
+      (currents, thruster wakes, explosions).
 - **Estimable disturbances** — how a disturbance carrying `State`/`Noise`
   (e.g. `CraftWindBubble`) becomes a state the
   [EKF](estimation.md) estimates.

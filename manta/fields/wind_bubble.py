@@ -35,6 +35,7 @@ from ..ir.frames import WorldFrame
 from ..ir.types import Vec3
 from ..parts._declarations import RandomWalkNoise
 from ..parts._trace import active_trace, is_promoted
+from ..smoothing import hermite_blend, soft_norm
 from .base import Disturbance
 from .fluid import FluidState
 
@@ -45,27 +46,31 @@ _VEC3_W = Vec3[WorldFrame]
 class CraftWindBubble(Disturbance):
     """A localized wind contribution anchored to a craft.
 
-    Density contribution is zero (wind doesn't change density). The
-    velocity contribution equals the estimated wind vector inside the
-    bubble (where `|point - craft.position| < radius`) and zero
-    outside, gated by a hard `ca.if_else`.
+    Density / pressure / temperature contributions are zero (wind only
+    moves the air). The wind vector is the disturbance's value
+    everywhere; its spatial confinement to the bubble (where
+    `|point - craft.position| < radius`) is the `membership` — a smooth
+    sphere indicator (1 inside, 0 outside, blended over `boundary`).
+
+    `combining="averaged"` keeps the estimation design intent: the field
+    folds all `averaged` disturbances into a membership-weighted mean, so
+    where two crafts' bubbles overlap their wind estimates agree on the
+    weighted average (rather than summing).
 
     The wind itself is a `RandomWalkNoise` channel — the framework
     synthesizes a state slot named `<bubble.name>.wind` and an RW
     driver, evolving the wind via `wind_next = wind + sqrt(dt)·driver`.
 
     Args:
-        craft   — owning Craft. The bubble follows the craft's
-                  WorldFrame position symbolically (read inside
-                  `contribute_at_sym` from the active trace's bindings).
-        radius  — bubble radius in meters. Outside this, the
-                  contribution is exactly zero.
-        sigma   — RW drift density σ/√Hz for the wind. Larger ⇒ EKF
-                  expects more drift in the wind estimate.
-
-    The default `combining="averaged"` matches the design intent:
-    overlapping bubbles compromise on the mean of their wind
-    estimates.
+        craft    — owning Craft. The bubble follows the craft's
+                   WorldFrame position symbolically (read from the active
+                   trace's bindings).
+        radius   — bubble radius in meters; membership is 1 well inside.
+        sigma    — RW drift density σ/√Hz for the wind. Larger ⇒ EKF
+                   expects more drift in the wind estimate.
+        boundary — width (m) of the smooth membership shell at the
+                   radius. 0 (default) is a hard cutoff; >0 gives a C¹
+                   ramp (healthier Jacobians for a craft crossing it).
     """
 
     field_value_shape = FluidState
@@ -78,15 +83,17 @@ class CraftWindBubble(Disturbance):
                  craft,
                  radius: float = 20.0,
                  sigma: float = 1e-3, *,
+                 boundary: float = 0.0,
                  name: str | None = None,
                  combining: str | None = None) -> None:
         super().__init__(name=name or f"{craft.name}_wind",
                          combining=combining,
                          wind_sigma=sigma)
-        self.craft  = craft
-        self.radius = float(radius)
+        self.craft    = craft
+        self.radius   = float(radius)
+        self.boundary = float(boundary)
 
-    def contribute_at_sym(self, point, t) -> FluidState:
+    def _craft_pos_mx(self):
         # Craft's symbolic position (bound on the active trace by
         # compile_world_tick Pass 0a). Bubbles must be added AFTER their
         # anchor craft was added to the world; Sim(world) then guarantees
@@ -94,17 +101,21 @@ class CraftWindBubble(Disturbance):
         trace = active_trace()
         if trace is None:
             raise RuntimeError(
-                "CraftWindBubble.contribute_at_sym: no active trace — this "
-                "is only callable during a world-tick compile.")
-        craft_pos = trace.craft_sym_state(self.craft)["position"]
-        delta_mx  = point._mx - craft_pos._mx
-        d_sq      = ca.dot(delta_mx, delta_mx)
-        in_bubble = ca.if_else(d_sq < self.radius ** 2,
-                               ca.MX(1.0), ca.MX(0.0))
+                "CraftWindBubble: no active trace — this is only callable "
+                "during a world-tick compile.")
+        return trace.craft_sym_state(self.craft)["position"]._mx
+
+    def membership(self, point, t) -> "ca.MX":
+        d = soft_norm(point._mx - self._craft_pos_mx())
+        return 1.0 - hermite_blend(d - self.radius, self.boundary)
+
+    def contribute_at_sym(self, point, t) -> FluidState:
         wind_mx = self.wind._mx if is_promoted(self.wind) else self.wind
         return FluidState(
-            density  = ca.MX(0.0),
-            velocity = _VEC3_W.from_mx(in_bubble * wind_mx),
+            density     = ca.MX(0.0),
+            pressure    = ca.MX(0.0),
+            temperature = ca.MX(0.0),
+            velocity    = _VEC3_W.from_mx(wind_mx),
         )
 
     def __repr__(self) -> str:

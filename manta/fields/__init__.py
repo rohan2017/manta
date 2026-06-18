@@ -1,12 +1,14 @@
 """Fields — superpositions of Disturbance objects.
 
 A `Field` is a physical scalar/vector/tensor that pervades the world
-(gravity, fluid density+velocity, magnetic field). It combines
-zero-or-more `Disturbance` contributions according to each one's
-`combining` flag — additive (the default), averaged, or projected.
-`OpticalField` is the enumerated exception: it carries discrete sources
-rather than a summable value. The architecture is locked per the Field
-redesign:
+(gravity, fluid density+pressure+temperature+velocity, magnetic field).
+Most fields combine zero-or-more `Disturbance` contributions by linear
+superposition (a plain sum). `FluidField` is richer: its disturbances
+combine per a `combining` flag — `baseline` regime media (ocean, air)
+that layer by spatial `membership`, plus `additive` perturbations and
+`averaged` estimation overlays on top. `OpticalField` is the enumerated
+exception: it carries discrete sources rather than a summable value. The
+architecture is locked per the Field redesign:
 
   * Single concrete class per physical kind. GravityField is one
     class; multiple gravity sources (uniform background, point masses,
@@ -15,7 +17,8 @@ redesign:
   * `field.add(Disturbance)` — append a contribution.
   * `field.value_at_sym(point)` — return the symbolic MX value of the
     field at `point` (Vec3[WorldFrame]), every registered disturbance
-    combined per its `combining` flag.
+    combined (a plain sum, or `FluidField`'s baseline/averaged/additive
+    blend).
 
 User-facing surface::
 
@@ -35,6 +38,7 @@ from .gravity import (
 )
 from .fluid   import (
     CurrentFlow, FluidField, FluidState, UniformFluid,
+    below_surface, within_sphere,
 )
 from .mag     import BodyDipoleMag, DipoleMag, MagField, UniformMag
 from .collision import CollisionField, HalfSpace, Sphere
@@ -48,6 +52,7 @@ __all__ = [
     "GravityField", "UniformGravity", "PointMassGravity", "J2Gravity",
     "BodyPointMassGravity",
     "FluidField", "FluidState", "UniformFluid", "CurrentFlow",
+    "below_surface", "within_sphere",
     "CraftWindBubble",
     "MagField", "UniformMag", "DipoleMag", "BodyDipoleMag",
     "CollisionField", "HalfSpace", "Sphere",

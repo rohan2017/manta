@@ -29,11 +29,12 @@ import numpy as np
 
 from ..fields import (
     CollisionField, DipoleMag, GravityField, FluidField, J2Gravity,
-    MagField, PointMassGravity,
+    MagField, PointMassGravity, below_surface,
 )
 from ..smoothing import soft_norm
+from .atmosphere import LAPSE_ISA, R_AIR, T0_ISA
 from .base import Planet
-from .disturbances import PlanetFrameFluid
+from .disturbances import Atmosphere, Ocean
 
 
 @dataclass(frozen=True)
@@ -99,8 +100,15 @@ class Earth(Planet):
                          planet's equatorial radius, m. Default 0
                          (sea-level surface coincides with R_EQ).
         water_density  — ocean density, kg/m³. Default 1025 (seawater).
-        air_density    — atmosphere density, kg/m³. Default 1.225 (ISA
-                         sea-level).
+        air_density    — atmosphere density at sea level, kg/m³. Default
+                         1.225 (ISA). Sets the sea-level pressure via the
+                         ideal-gas law `P0 = ρ0·R·T0`; aloft the air
+                         follows the ISA troposphere (lapse + ideal gas),
+                         so density is no longer a pure exponential.
+        sea_level_temperature — ISA sea-level temperature T0, K. Default
+                         288.15. Drops with altitude at `lapse_rate`.
+        lapse_rate     — ISA troposphere temperature lapse, K/m. Default
+                         6.5e-3.
         gravity_mu     — gravitational parameter μ (m³/s²). 0 disables
                          gravity. Default `Earth.MU`.
         include_j2     — register a J2 oblateness perturbation
@@ -115,9 +123,9 @@ class Earth(Planet):
                          the surface), so `Collider`-footed craft can
                          stand anywhere on the planet without a
                          per-site ground plane. Default True.
-        surface_smoothing — m. Blend the water/air density switch over
-                         this length (logistic in altitude) instead of
-                         a hard `if_else`. Physically: a finite-size
+        surface_smoothing — m. Blend the water/air switch over this
+                         length (a C¹ Hermite step in altitude) instead
+                         of a hard `if_else`. Physically: a finite-size
                          volume element crosses the surface over its
                          own diameter; numerically it turns point-
                          sampled buoyancy from bang-bang into a smooth
@@ -133,10 +141,6 @@ class Earth(Planet):
     J2:       float = 1.0826267e-3
     DIPOLE:   float = 7.94e22            # A·m²
 
-    # ISA-style atmospheric scale height (m). Density falls off as
-    # exp(-altitude / SCALE_HEIGHT) above sea level.
-    ATMOSPHERE_SCALE_HEIGHT: float = 8500.0
-
     def __init__(self,
                  name: str = "earth",
                  *,
@@ -146,7 +150,8 @@ class Earth(Planet):
                  sea_level: float = 0.0,
                  water_density: float = 1025.0,
                  air_density: float = 1.225,
-                 atmosphere_scale_height: float | None = None,
+                 sea_level_temperature: float = T0_ISA,
+                 lapse_rate: float = LAPSE_ISA,
                  gravity_mu: float = MU,
                  include_j2: bool = False,
                  dipole_moment: float = 0.0,
@@ -164,10 +169,8 @@ class Earth(Planet):
         self.sea_level     = float(sea_level)
         self.water_density = float(water_density)
         self.air_density   = float(air_density)
-        self.atmosphere_scale_height = float(
-            atmosphere_scale_height
-            if atmosphere_scale_height is not None
-            else self.ATMOSPHERE_SCALE_HEIGHT)
+        self.sea_level_temperature = float(sea_level_temperature)
+        self.lapse_rate    = float(lapse_rate)
         self.gravity_mu    = float(gravity_mu)
         self.include_j2    = bool(include_j2)
         self.dipole_moment = float(dipole_moment)
@@ -200,90 +203,97 @@ class Earth(Planet):
                     eq_radius=self.R_EQ,
                     polar_axis=tuple(self.axis.tolist())))
 
-        # Fluid: a single PlanetFrameFluid whose density function
-        # branches on altitude (water below the — possibly waving —
-        # sea surface, exponential atmosphere above), optionally
-        # blended over `surface_smoothing` metres. With waves, the
-        # underwater bulk velocity carries the first-order deep-water
-        # orbital motion.
+        # Fluid: two baseline regimes on one FluidField — an `Atmosphere`
+        # (global background, ISA troposphere) overlaid by an `Ocean`
+        # (membership below the — possibly waving — sea surface, blended
+        # over `surface_smoothing` metres). The FluidField layers them by
+        # membership: `(1−wet)·air + wet·ocean`. The (ρ,P,T) physics live
+        # in `manta.planets.atmosphere`, so other planets reuse this.
         ff = world.get_or_create_field(FluidField)
-        R_planet  = self.planet_radius
-        rho_w     = self.water_density
-        rho_air   = self.air_density
-        scale_h   = self.atmosphere_scale_height
-        delta     = self.surface_smoothing
-        waves     = self.waves
+        R_planet = self.planet_radius
+        rho_w    = self.water_density
+        T0       = self.sea_level_temperature
+        L        = self.lapse_rate
+        # Sea-level pressure implied by the sea-level air density (P0 =
+        # ρ0·R·T0); with the defaults this is the conventional 101325 Pa.
+        P0       = self.air_density * R_AIR * T0
+        delta    = self.surface_smoothing
+        waves    = self.waves
+
+        # Surface gravity for barometric + hydrostatic pressure. Needed
+        # even when the gravity *force* is disabled (gravity_mu=0): fall
+        # back to the class default μ rather than a magic g.
+        mu = self.gravity_mu if self.gravity_mu > 0.0 else self.MU
+        g0 = mu / R_planet ** 2
 
         if waves is not None:
             wave_dir = np.asarray(waves.direction, dtype=float)
             wave_dir = wave_dir / np.linalg.norm(wave_dir)
             k_wave   = 2.0 * np.pi / float(waves.wavelength)
-            if waves.speed is not None:
-                c_wave = float(waves.speed)
-            else:
-                # Deep-water dispersion needs a surface gravity even when
-                # the gravity *force* is disabled (gravity_mu=0): fall
-                # back to the class default μ rather than a magic g.
-                mu = self.gravity_mu if self.gravity_mu > 0.0 else self.MU
-                g0 = mu / R_planet**2
-                c_wave = float(np.sqrt(g0 * waves.wavelength
-                                       / (2.0 * np.pi)))
+            c_wave   = (float(waves.speed) if waves.speed is not None
+                        else float(np.sqrt(g0 * waves.wavelength
+                                           / (2.0 * np.pi))))
             omega_wave = k_wave * c_wave
             dir_dm = ca.DM(wave_dir.reshape(3, 1))
 
-        def _altitude(p_planet, t):
-            """Signed height above the local (waving) sea surface, plus
-            the mean-sea-level altitude (for depth-decay terms)."""
-            r = soft_norm(p_planet)
-            alt_mean = r - R_planet
+        def _signed_altitude(p_planet, t):
+            """Signed height (m) of a PlanetFrame point above the local
+            (waving) sea surface — negative when submerged."""
+            alt_mean = soft_norm(p_planet) - R_planet
             if waves is None:
-                return alt_mean, alt_mean
-            xi    = ca.dot(p_planet, dir_dm)
-            eta   = waves.amplitude * ca.cos(k_wave * xi - omega_wave * t)
-            return alt_mean - eta, alt_mean
+                return alt_mean
+            xi  = ca.dot(p_planet, dir_dm)
+            eta = waves.amplitude * ca.cos(k_wave * xi - omega_wave * t)
+            return alt_mean - eta
 
-        def _wet(altitude):
-            """Water fraction: 1 below −δ, 0 above +δ, C¹ smoothstep
-            between. Compact support matters — with a ~1000:1 density
-            ratio, a logistic tail would leak water density metres into
-            the air."""
-            if delta <= 0.0:
-                return ca.if_else(altitude < 0.0, 1.0, 0.0)
-            s = ca.fmax(-1.0, ca.fmin(1.0, altitude / delta))
-            return 0.5 - 0.75 * s + 0.25 * s**3
+        def _depth(p_planet, t):
+            """Depth (m, positive downward) below the sea surface."""
+            return ca.fmax(0.0, -_signed_altitude(p_planet, t))
 
-        def density_fn(p_planet, t):
-            altitude, _ = _altitude(p_planet, t)
-            # Air density continues its profile down to the surface;
-            # clamp the exponent so it doesn't grow below.
-            rho_air_at = rho_air * ca.exp(-ca.fmax(altitude, 0.0) / scale_h)
-            if delta <= 0.0:
-                return ca.if_else(altitude < 0.0, rho_w, rho_air_at)
-            wet = _wet(altitude)
-            return wet * rho_w + (1.0 - wet) * rho_air_at
+        def _surface_height_world(point, t):
+            """Signed altitude above the surface for a WORLD-frame query
+            point — the ocean's membership runs on world coords, so do
+            the world→planet transform here (the field weights by it)."""
+            t = t._mx if hasattr(t, "_mx") else t
+            r_world  = point._mx - self.position_world_sym()
+            R_pw     = ca.transpose(self.R_world_from_planet_sym(t))
+            return _signed_altitude(R_pw @ r_world, t)
 
         if waves is None:
-            velocity_fn = None
+            ocean_velocity_fn = None
         else:
-            def velocity_fn(p_planet, t):
+            def ocean_velocity_fn(p_planet, t):
                 # First-order deep-water orbital velocity: circles of
-                # radius `amplitude·e^{k·z}`, in phase with the crest,
-                # gated to the wet side of the (waving) surface.
-                altitude, alt_mean = _altitude(p_planet, t)
-                r = soft_norm(p_planet)
-                up = p_planet / r
+                # radius `amplitude·e^{k·z}` in phase with the crest. No
+                # explicit wet-gate — the ocean membership in the field's
+                # baseline blend confines it to the water.
+                alt_mean = soft_norm(p_planet) - R_planet
+                up = p_planet / soft_norm(p_planet)
                 xi = ca.dot(p_planet, dir_dm)
                 phase = k_wave * xi - omega_wave * t
                 decay = ca.exp(k_wave * ca.fmin(alt_mean, 0.0))
-                speed = waves.amplitude * omega_wave * decay \
-                    * _wet(altitude)
+                speed = waves.amplitude * omega_wave * decay
                 return speed * (ca.cos(phase) * dir_dm
                                 + ca.sin(phase) * up)
 
-        ff.add(PlanetFrameFluid(planet=self,
-                                density_fn=density_fn,
-                                velocity_fn=velocity_fn,
-                                name=f"{self.name}_fluid"))
+        # Background air everywhere (added first), ocean carving in below
+        # the surface (added second → overrides where its membership is
+        # high).
+        ff.add(Atmosphere(self, _signed_altitude,
+                          surface_gravity=g0,
+                          sea_level_temperature=T0,
+                          sea_level_pressure=P0,
+                          lapse_rate=L,
+                          gas_constant=R_AIR,
+                          name=f"{self.name}_air"))
+        ff.add(Ocean(self, _depth,
+                     surface_gravity=g0,
+                     water_density=rho_w,
+                     surface_pressure=P0,
+                     temperature=T0,
+                     velocity_fn=ocean_velocity_fn,
+                     membership=below_surface(_surface_height_world, delta),
+                     name=f"{self.name}_ocean"))
 
         # Solid surface: the sea-level sphere as a collision obstacle —
         # locally indistinguishable from a ground plane (the outward

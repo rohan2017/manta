@@ -32,17 +32,6 @@ from ..ir.types import Vec3
 from ..parts.base import DeclarationHost
 
 
-def project_extend_mx(r_mx, c_mx):
-    """Gram-Schmidt `projected`-combining residual on raw MX vectors:
-    add only the part of `c_mx` that extends `r_mx`, capping negative
-    projections at zero so a contribution that would shrink the running
-    sum is ignored along the run. Shared by Vec3 fields and FluidField's
-    velocity component."""
-    denom = ca.dot(r_mx, r_mx) + 1e-12
-    proj_clip = ca.fmax(0.0, ca.dot(c_mx, r_mx) / denom)
-    return r_mx + (c_mx - proj_clip * r_mx)
-
-
 def anchored_pose(craft, offset_body):
     """World pose of a body-fixed point during the tick trace.
 
@@ -97,18 +86,23 @@ class Disturbance(DeclarationHost, ABC):
                     unique across the world's disturbances. Defaults
                     to `<ClassName>_<counter>`.
         combining — how this disturbance's contribution composes with
-                    others on the same field. See `Field.value_at_sym`
-                    for the per-stage rule. One of:
+                    others on the same field. One of:
                       "additive"  (default) — straight linear sum.
-                      "averaged"  — arithmetic-mean stage; the running
-                                    additive total + every averaged
-                                    contribution are averaged together.
-                      "projected" — only the component of this
-                                    contribution that's orthogonal to
-                                    (or extends) the running sum is
-                                    kept. Order-dependent across
-                                    multiple projected entries; the
-                                    canonical order is insertion.
+                      "baseline"  — a regime medium (e.g. ocean / air);
+                                    baselines layer by membership rather
+                                    than summing.
+                      "averaged"  — a membership-weighted self-mean
+                                    among the averaged disturbances (an
+                                    estimation overlay, e.g. overlapping
+                                    wind bubbles agreeing on a mean).
+                    Only `FluidField` interprets "baseline"/"averaged"
+                    (see `FluidField.value_at_sym`); for other superposed
+                    fields (gravity, B-field) every disturbance is summed
+                    additively regardless of this flag.
+        membership — optional callable `(point, t) -> MX in [0, 1]` giving
+                    this disturbance's spatial support. Defaults to 1
+                    everywhere. Used by `FluidField` to bound regimes /
+                    perturbations; ignored by purely-additive fields.
     """
 
     field_value_shape: type = type(None)
@@ -119,6 +113,7 @@ class Disturbance(DeclarationHost, ABC):
 
     def __init__(self, name: str | None = None, *,
                  combining: str | None = None,
+                 membership=None,
                  **overrides: Any) -> None:
         from ..ir.module import check_name
         self.name = check_name(
@@ -126,11 +121,13 @@ class Disturbance(DeclarationHost, ABC):
                 f"{type(self).__name__}_{next(_DISTURBANCE_NAME_COUNTER)}"),
             who=type(self).__name__)
         if combining is not None:
-            if combining not in ("additive", "averaged", "projected"):
+            if combining not in ("additive", "averaged", "baseline"):
                 raise ValueError(
                     f"Disturbance: combining must be 'additive', "
-                    f"'averaged', or 'projected'; got {combining!r}")
+                    f"'averaged', or 'baseline'; got {combining!r}")
             self.combining = combining
+        if membership is not None:
+            self._membership = membership
         self._apply_declarations(overrides)
 
     # --- Declaration walking: inherited from DeclarationHost ----------
@@ -144,6 +141,16 @@ class Disturbance(DeclarationHost, ABC):
         the host Field's value type. Static disturbances accept `t` and
         ignore it."""
         raise NotImplementedError
+
+    def membership(self, point: "Vec3", t) -> "ca.MX":
+        """Spatial support of this disturbance at `point`/`t`, an MX in
+        [0, 1]. Defaults to 1 everywhere (global); a `membership=`
+        callable passed at construction, or a subclass override, narrows
+        it (a sea half-space, a bubble). `FluidField` weights each
+        contribution by this; additive vector fields ignore it."""
+        if getattr(self, "_membership", None) is not None:
+            return self._membership(point, t)
+        return ca.MX(1.0)
 
 
 class Field:
@@ -215,65 +222,17 @@ class SuperposedField(Field, ABC):
         raise NotImplementedError
 
     def value_at_sym(self, point: "Vec3", t):
-        """Fold every registered disturbance's contribution at `point`
-        at time `t` according to each disturbance's `combining` flag.
+        """Linear superposition: the sum of every registered
+        disturbance's contribution at `point` at time `t`.
 
-        Three stages, in order:
-
-          1. **additive**: linear sum. The default; correct for
-             gravity, B-field, fluid velocity superposition, collision
-             penetration vectors.
-          2. **averaged**: arithmetic mean. The running additive total
-             plus every averaged contribution are averaged together.
-             Used e.g. when several crafts each maintain a localized
-             wind/current estimate and you want overlapping bubbles to
-             agree.
-          3. **projected**: Gram-Schmidt-style residual. Each
-             contribution is added only by the component orthogonal to
-             the running sum (or extending it along its direction).
-             Vectors aligned-and-smaller than the running sum
-             contribute zero; vectors at 90° pass through unchanged.
-             Order-dependent across multiple projected entries —
-             canonical order is insertion order.
-
-        Returns the field value as a CasADi-typed expression in the
-        field's `value_shape`. If no disturbances are registered,
-        returns the field's zero value.
+        This base fold is purely additive — correct for gravity, the
+        B-field, and collision penetration vectors, whose disturbances
+        only ever combine additively. Fields with richer combining
+        semantics (`FluidField`: layered regime baselines + perturbations
+        + membership weighting) override this method. If no disturbances
+        are registered, returns the field's zero value.
         """
-        additive  = [d for d in self._disturbances if d.combining == "additive"]
-        averaged  = [d for d in self._disturbances if d.combining == "averaged"]
-        projected = [d for d in self._disturbances if d.combining == "projected"]
-
         out = self._zero_value()
-        for d in additive:
+        for d in self._disturbances:
             out = out + d.contribute_at_sym(point, t)
-        if averaged:
-            terms = [d.contribute_at_sym(point, t) for d in averaged]
-            for term in terms:
-                out = out + term
-            out = self._scale(out, 1.0 / (1 + len(averaged)))
-        for d in projected:
-            out = self._project_combine(out, d.contribute_at_sym(point, t))
         return out
-
-    # ---- Combining-stage hooks (subclasses can override) -------------
-
-    def _scale(self, value, scalar: float):
-        """Multiply a field value by a scalar (used by the `averaged`
-        stage). Default for Vec3-valued fields uses CasADi's scalar
-        broadcast. Compound fields (FluidState) override."""
-        from ..ir.types import Vec3 as _Vec3
-        if isinstance(value, _Vec3):
-            return _Vec3[value._frame].from_mx(scalar * value._mx)
-        return scalar * value
-
-    def _project_combine(self, running, contribution):
-        """Add `contribution` to `running` keeping only the component
-        that's orthogonal to (or extending) the running sum. Default
-        works on Vec3-valued fields. Compound fields override.
-        """
-        from ..ir.types import Vec3 as _Vec3
-        if not (isinstance(running, _Vec3) and isinstance(contribution, _Vec3)):
-            return running + contribution
-        extended = project_extend_mx(running._mx, contribution._mx)
-        return _Vec3[running._frame].from_mx(extended)
