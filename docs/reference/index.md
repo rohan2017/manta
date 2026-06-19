@@ -14,8 +14,8 @@ organized by the same layers as the [architecture](../explanation/architecture.m
 - **[Estimation](estimation.md)** — attitude filters and observability /
   consistency analysis.
 - **[System identification](fit.md)** — `Fit`, `NoiseFit`.
-- **[Targets](targets.md)** — `TargetNumpy` / `TargetCpp` / `TargetJax`
-  and the runtimes they produce.
+- **[Targets](targets.md)** — `TargetNumpy` / `TargetCpp` / `TargetWasm`
+  / `TargetJax` and the runtimes they produce.
 - **[IR primitives](ir.md)** — frames, types, manifolds, state spec.
 
 Most users work through the top-level `manta` namespace:

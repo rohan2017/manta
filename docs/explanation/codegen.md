@@ -17,6 +17,10 @@ generic lowering of a Module.
   / recurrence).
 - **`TargetCpp`** — a typed Eigen class over flat-C kernels + CMake; the
   ABI is generated from one record so the C++ surface mirrors numpy.
+- **`TargetWasm`** — the *same* flat-C kernels behind a thin flat-double
+  C ABI + a JS runtime + an Emscripten build, so a Module runs in the
+  browser. Reuses the C++ backend's math path verbatim; adds only the
+  marshalling glue.
 - **`TargetJax`** — a jitted `lax.scan` rollout (flat crafts).
 - **Identical loops across backends** — the property that makes
   "develop in Python, deploy in C++" work.
@@ -25,5 +29,6 @@ generic lowering of a Module.
 
 - Reference: [Targets](../reference/targets.md)
 - Code: `manta/codegen/target.py`, `manta/codegen/numpy/`,
-  `manta/codegen/cpp/`, `manta/codegen/jax/`
-- How-to: [Deploy a model to C++](../how-to/deploy-cpp.md)
+  `manta/codegen/cpp/`, `manta/codegen/wasm/`, `manta/codegen/jax/`
+- How-to: [Deploy a model to C++](../how-to/deploy-cpp.md),
+  [Run a model in the browser (WASM)](../how-to/deploy-wasm.md)

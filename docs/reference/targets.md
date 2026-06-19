@@ -2,13 +2,16 @@
 
 A `Target*` lowers a Module to a backend. `TargetNumpy` returns the
 matching native-Python runtime view; `TargetCpp` emits an Eigen C++
-library; `TargetJax` emits a jitted rollout.
+library; `TargetWasm` emits a browser bundle (WASM + JS); `TargetJax`
+emits a jitted rollout.
 
 ## Targets
 
 ::: manta.TargetNumpy
 
 ::: manta.TargetCpp
+
+::: manta.TargetWasm
 
 ::: manta.TargetJax
 

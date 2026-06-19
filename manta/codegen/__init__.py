@@ -17,6 +17,7 @@ Each backend is a self-contained subpackage:
       target.py   as_module — the backend entry-point contract
       numpy/      TargetNumpy + the kernel engine + views + NoiseDriver
       cpp/        TargetCpp + module_emit (the generic emitter)
+      wasm/       TargetWasm + the C-ABI shim + JS runtime (browser bundle)
       jax/        TargetJax + the SX→JAX translator (lazy: needs `jax`)
       <future>/   new languages slot in here
 
@@ -25,6 +26,7 @@ Adding a backend = translate a `ca.Function` + one generic lowering of a
 """
 
 from .cpp import TargetCpp
+from .wasm import TargetWasm
 from .numpy import (
     NoiseDriver, NumpyFilter, NumpyRecurrence, NumpyRegulator, NumpyRuntime,
     NumpySim, TargetNumpy,
@@ -41,7 +43,7 @@ def TargetJax(x):
     return _TargetJax(x)
 
 __all__ = [
-    "TargetNumpy", "TargetCpp", "TargetJax", "NoiseDriver",
+    "TargetNumpy", "TargetCpp", "TargetWasm", "TargetJax", "NoiseDriver",
     "NumpyRuntime", "NumpySim", "NumpyFilter", "NumpyRecurrence",
     "NumpyRegulator",
 ]

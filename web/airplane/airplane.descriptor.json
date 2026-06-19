@@ -1,0 +1,198 @@
+{
+  "name": "world",
+  "className": "Airplane",
+  "basename": "airplane",
+  "hosting": "threaded",
+  "ambientDim": 21,
+  "tangentDim": 20,
+  "stateSlots": [
+    {
+      "name": "plane.position",
+      "off": 0,
+      "dim": 3
+    },
+    {
+      "name": "plane.orientation",
+      "off": 3,
+      "dim": 4
+    },
+    {
+      "name": "plane.velocity",
+      "off": 7,
+      "dim": 3
+    },
+    {
+      "name": "plane.angular_velocity",
+      "off": 10,
+      "dim": 3
+    },
+    {
+      "name": "plane.ail_l.angle",
+      "off": 13,
+      "dim": 1
+    },
+    {
+      "name": "plane.ail_l.rate",
+      "off": 14,
+      "dim": 1
+    },
+    {
+      "name": "plane.ail_r.angle",
+      "off": 15,
+      "dim": 1
+    },
+    {
+      "name": "plane.ail_r.rate",
+      "off": 16,
+      "dim": 1
+    },
+    {
+      "name": "plane.elev.angle",
+      "off": 17,
+      "dim": 1
+    },
+    {
+      "name": "plane.elev.rate",
+      "off": 18,
+      "dim": 1
+    },
+    {
+      "name": "plane.rud.angle",
+      "off": 19,
+      "dim": 1
+    },
+    {
+      "name": "plane.rud.rate",
+      "off": 20,
+      "dim": 1
+    }
+  ],
+  "initialState": [
+    0.0,
+    0.0,
+    0.3,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "inputs": [
+    {
+      "name": "plane.ail_l.torque_cmd",
+      "dim": 1,
+      "default": 0.0,
+      "sigma": null,
+      "rate": null
+    },
+    {
+      "name": "plane.ail_r.torque_cmd",
+      "dim": 1,
+      "default": 0.0,
+      "sigma": null,
+      "rate": null
+    },
+    {
+      "name": "plane.elev.torque_cmd",
+      "dim": 1,
+      "default": 0.0,
+      "sigma": null,
+      "rate": null
+    },
+    {
+      "name": "plane.rud.torque_cmd",
+      "dim": 1,
+      "default": 0.0,
+      "sigma": null,
+      "rate": null
+    },
+    {
+      "name": "plane.prop.throttle",
+      "dim": 1,
+      "default": 0.0,
+      "sigma": null,
+      "rate": null
+    }
+  ],
+  "noise": [
+    {
+      "name": "plane.prop.force_noise",
+      "dim": 3,
+      "default": 0.0,
+      "sigma": 0.0,
+      "rate": null
+    },
+    {
+      "name": "plane.prop.torque_noise",
+      "dim": 3,
+      "default": 0.0,
+      "sigma": 0.0,
+      "rate": null
+    }
+  ],
+  "params": [],
+  "measurements": {},
+  "outputs": {},
+  "entryPoints": [
+    {
+      "method": "step",
+      "shim": "airplane_step",
+      "inSize": 34,
+      "outSize": 21,
+      "in": [
+        {
+          "name": "x",
+          "kind": "state",
+          "off": 0,
+          "size": 21
+        },
+        {
+          "name": "u",
+          "kind": "control",
+          "off": 21,
+          "size": 5
+        },
+        {
+          "name": "noise",
+          "kind": "noise",
+          "off": 26,
+          "size": 6
+        },
+        {
+          "name": "dt",
+          "kind": "timestep",
+          "off": 32,
+          "size": 1
+        },
+        {
+          "name": "t",
+          "kind": "time",
+          "off": 33,
+          "size": 1
+        }
+      ],
+      "out": [
+        {
+          "name": "x",
+          "kind": "state",
+          "off": 0,
+          "size": 21,
+          "writesState": true
+        }
+      ]
+    }
+  ]
+}

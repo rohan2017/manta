@@ -11,14 +11,15 @@ A genuinely new physical kind is a new `Field` subclass.
 
 - **New disturbance (common case)** — subclass `Disturbance`, implement
   `contribute_at_sym(point, t)`, set the `combining` flag
-  (additive / averaged / projected), add it to the field instance.
+  (additive / averaged / baseline), add it to the field instance.
 - **Estimable disturbance** — carry `State` / `Noise` declarations so the
   disturbance becomes an EKF-estimated state (as `CraftWindBubble` does).
 - **Body-anchored disturbance** — emit it from a `FieldSource` part so it
   rides a craft.
-- **New field kind (rare)** — subclass `Field` / `SuperposedField`,
-  define the value type and the `_scale` / `_project_combine` hooks if the
-  value is compound (see `FluidField`/`FluidState`).
+- **New field kind (rare)** — subclass `Field` / `SuperposedField`, set
+  `value_shape` (the CasADi-MX value type) and override `_zero_value()` (the
+  additive identity); for compound combining, override `value_at_sym()`
+  itself (see `FluidField`/`FluidState`).
 
 ## Source material
 

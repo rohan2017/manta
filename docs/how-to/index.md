@@ -6,6 +6,8 @@ done.
 
 - **[Deploy a model to C++](deploy-cpp.md)** — lower a `Sim`/`EKF`/`LQR`
   to an Eigen C++ library for embedded use.
+- **[Run a model in the browser (WASM)](deploy-wasm.md)** — lower the same
+  Module to a WebAssembly + JS bundle via Emscripten.
 - **[Fit parameters from a log](fit-parameters.md)** — system-ID against
   recorded controls + measurements.
 - **[Write a custom Part](custom-part.md)** — add a new part with its own
