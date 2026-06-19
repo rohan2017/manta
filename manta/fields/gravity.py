@@ -19,7 +19,7 @@ from ..ir.types import Vec3
 from .base import Disturbance, SuperposedField
 
 
-_VEC3_ANCHOR = Vec3[WorldFrame]
+_VEC3_W = Vec3[WorldFrame]
 
 
 class GravityField(SuperposedField):
@@ -34,7 +34,7 @@ class GravityField(SuperposedField):
     single-uniform case — equivalent to one `add_uniform` call.
     """
 
-    value_shape = _VEC3_ANCHOR
+    value_shape = _VEC3_W
 
     def __init__(self, g: tuple[float, float, float] | None = None) -> None:
         super().__init__()
@@ -42,7 +42,7 @@ class GravityField(SuperposedField):
             self.add_uniform(g)
 
     def _zero_value(self):
-        return _VEC3_ANCHOR.constant((0.0, 0.0, 0.0))
+        return _VEC3_W.constant((0.0, 0.0, 0.0))
 
     def add_uniform(self, g_vec: tuple[float, float, float]) -> "GravityField":
         """Attach a position-independent gravity vector. Returns self.
@@ -62,7 +62,7 @@ class UniformGravity(Disturbance):
                 with z pointing up.
     """
 
-    field_value_shape = _VEC3_ANCHOR
+    field_value_shape = _VEC3_W
 
     def __init__(self, g_vec: tuple[float, float, float], *, name: str | None = None) -> None:
         super().__init__(name=name)
@@ -75,7 +75,7 @@ class UniformGravity(Disturbance):
         # Constant regardless of `point`; the symbolic dependency on
         # point is None — CasADi will fold this into a constant during
         # codegen.
-        return _VEC3_ANCHOR.constant(self.g_vec)
+        return _VEC3_W.constant(self.g_vec)
 
     def __repr__(self) -> str:
         return f"<UniformGravity g_vec={self.g_vec}>"
@@ -88,7 +88,7 @@ def _point_mass_accel(point, center, GM: float, eps: float):
     r_mx = (point - center)._mx
     r_sq = ca.dot(r_mx, r_mx) + eps**2
     r_mag = ca.sqrt(r_sq)
-    return _VEC3_ANCHOR.from_mx((-GM / (r_sq * r_mag)) * r_mx)
+    return _VEC3_W.from_mx((-GM / (r_sq * r_mag)) * r_mx)
 
 
 class PointMassGravity(Disturbance):
@@ -105,7 +105,7 @@ class PointMassGravity(Disturbance):
                    scale, well above numerical noise.
     """
 
-    field_value_shape = _VEC3_ANCHOR
+    field_value_shape = _VEC3_W
 
     def __init__(self,
                  position: tuple[float, float, float],
@@ -125,7 +125,7 @@ class PointMassGravity(Disturbance):
 
     def contribute_at_sym(self, point, t):
         return _point_mass_accel(
-            point, _VEC3_ANCHOR.constant(self.position), self.GM, self.eps)
+            point, _VEC3_W.constant(self.position), self.GM, self.eps)
 
     def __repr__(self) -> str:
         return (f"<PointMassGravity position={self.position} GM={self.GM:.3e}>")
@@ -145,7 +145,7 @@ class BodyPointMassGravity(Disturbance):
         eps         — softening length, m. Default 1.0.
     """
 
-    field_value_shape = _VEC3_ANCHOR
+    field_value_shape = _VEC3_W
 
     def __init__(self, craft, offset_body, GM: float,
                  eps: float = 1.0, *, name: str | None = None) -> None:
@@ -193,7 +193,7 @@ class J2Gravity(Disturbance):
         eps         — softening length, m.
     """
 
-    field_value_shape = _VEC3_ANCHOR
+    field_value_shape = _VEC3_W
 
     def __init__(self,
                  position: tuple[float, float, float],
@@ -224,7 +224,7 @@ class J2Gravity(Disturbance):
             raise ValueError(f"J2Gravity: eps must be >= 0, got {eps!r}")
 
     def contribute_at_sym(self, point, t):
-        r_src = _VEC3_ANCHOR.constant(self.position)
+        r_src = _VEC3_W.constant(self.position)
         r     = point - r_src
         r_mx  = r._mx
         r_sq  = ca.dot(r_mx, r_mx) + self.eps**2
@@ -236,7 +236,7 @@ class J2Gravity(Disturbance):
         cos2 = (z_dot_r * z_dot_r) / r_sq
         bracket = (1.0 - 5.0 * cos2) * r_mx + 2.0 * z_dot_r * z_hat
         g_mx = coef * bracket
-        return _VEC3_ANCHOR.from_mx(g_mx)
+        return _VEC3_W.from_mx(g_mx)
 
     def __repr__(self) -> str:
         return (f"<J2Gravity position={self.position} GM={self.GM:.3e} "

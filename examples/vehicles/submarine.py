@@ -56,19 +56,19 @@ BUOY_FAC = 1.15                   # total displaced volume / (MASS/RHO): slight
 COM_Z = -0.20                     # CoM below the buoy line (z=0) → pendulum
 DECK_Z = 0.70                     # GPS mast: antennas well clear of the wave band
 
-# --- Earth rotation ---------------------------------------------------------
-# The world frame is INERTIAL and the Earth spins in it, so the IMU gyro
-# (= angular_velocity[WorldFrame]) reads the body's INERTIAL rate with NO
-# Earth-rate term in the part model: a sub co-rotating with the Earth senses
-# the planet's spin. We sit at the pole (spin axis = local up) so the gyro
-# reads Ω cleanly on its vertical axis AND the co-rotating ocean is stationary
-# here (Ω×r = 0 on the axis). A mid-latitude would put a horizontal NORTH
-# component on the gyro — the true gyrocompass signal — but in this
-# inertial-world frame the co-rotating ocean then sweeps a fixed point at
-# Ω·R·cos(lat) ≈ 300 m/s; a clean latitude demo needs a rotating local-tangent
-# nav frame (a framework addition, not done here).
-EARTH_AXIS = (0.0, 0.0, 1.0)
-OMEGA_EARTH = Earth.SIDEREAL * np.array(EARTH_AXIS)          # world-frame rate
+# --- Earth + scene ----------------------------------------------------------
+# The world frame is INERTIAL and the Earth spins in it (sidereal by default),
+# so the IMU gyro (= angular_velocity[WorldFrame]) reads the body's INERTIAL
+# rate with NO Earth-rate term in the part model: a sub co-rotating with the
+# Earth senses the planet's spin. We anchor a local `Scene` at the north pole
+# and work in its small ENU coordinates (placement, depth-hold, rendering all
+# scene-relative), leaving the planet at its true scale at the world origin.
+# At the pole the spin axis is local up, so the gyro reads Ω on its vertical
+# axis AND the co-rotating ocean is locally still (Ω×r = 0 on the axis). A
+# mid-latitude scene would put a NORTH component on the gyro — the gyrocompass
+# signal — but the co-rotating ocean would then sweep past at Ω·R·cos(lat).
+ANCHOR = (0.0, 0.0, Earth.R_EQ)       # north-pole surface point (planet frame)
+START = (0.0, 0.0, -0.2)              # scene-local: 0.2 m below the surface
 
 # --- thrust (N, N) ----------------------------------------------------------
 SURGE, SWAY, HEAVE, YAW, PITCH = 900.0, 350.0, 450.0, 350.0, 120.0
@@ -138,14 +138,16 @@ def build_world():
     sub.add(SurfaceGPS("gps_fore", position_noise_sigma=0.1, transform=(1.0, 0, DECK_Z)))
     sub.add(SurfaceGPS("gps_aft", position_noise_sigma=0.1, transform=(-1.0, 0, DECK_Z)))
 
-    earth = Earth(position=(0, 0, -Earth.R_EQ), rotation_rate=Earth.SIDEREAL,
-                  rotation_axis=EARTH_AXIS, waves=WAVES, surface_smoothing=SMOOTH)
+    earth = Earth(waves=WAVES, surface_smoothing=SMOOTH)
     w = World().add_planet(earth)
+    scene = earth.scene_at(ANCHOR)
     # Co-rotating with the Earth: the IMU then reads Earth's spin (a real
     # Earth-fixed sub does). Over the run this turns the sub ~0.2°, which the
     # filter tracks; the point is the steady inertial rate on the gyro.
-    w.add_craft(sub, position=(0, 0, -0.2), angular_velocity=tuple(OMEGA_EARTH))
-    return w, sub
+    # `scene.at_rest` supplies the body spin rate + orbital velocity and
+    # places the sub by its small scene-local coordinate.
+    w.add_craft(sub, **scene.at_rest(START))
+    return w, sub, earth, scene
 
 
 def mix(surge, sway, heave, yaw, pitch):
@@ -177,7 +179,7 @@ def main() -> None:
     dt = 0.02
     duration = args.duration or (1e9 if args.keyboard else 48.0)
 
-    w, c = build_world()
+    w, c, earth, scene = build_world()
     sim = TargetNumpy(Sim(w))
     # The IMU gyro reads angular_velocity[WorldFrame] — the body's INERTIAL
     # rate — so co-rotating with the spinning Earth it senses Earth's spin with
@@ -193,8 +195,7 @@ def main() -> None:
                "sub.gps_fore.position", "sub.gps_aft.position"]
     ekf_ir = EKF(w, sensors=sensors)
     ekf = TargetNumpy(ekf_ir)
-    ekf.reset(state={"sub": c.initial_state(
-                  position=(0.0, 0.0, -0.2), angular_velocity=tuple(OMEGA_EARTH))},
+    ekf.reset(state={"sub": c.initial_state(**scene.at_rest(START))},
               P=np.eye(ekf.spec.tangent_dim) * 0.1)
     # Always-on inertial sensors fed every step; the two GPS are folded by
     # hand, only when their antenna is out of the water.
@@ -218,13 +219,19 @@ def main() -> None:
     if args.keyboard:
         print("Controls:  W/S surge   A/D yaw   space/shift heave   Q/E sway\n")
 
+    # Everything lives under `world/scene` — the local ENU frame at the pole.
+    # The scene's (planet-radius) world pose is logged on that entity each
+    # frame; children stay in small scene coordinates and the view tracks it.
     viz = None if args.no_viz else Viz("manta/submarine", addr=args.viz_addr)
     if viz is not None:
-        viz.split_cylinder("world/sub/hull", HULL_R, HULL_L,
+        viz.split_cylinder("world/scene/sub/hull", HULL_R, HULL_L,
                            colors=((210, 200, 90), (180, 140, 40)))
-        viz.pose("world/sub/hull", (0, 0, 0), (np.cos(np.pi/4), 0, np.sin(np.pi/4), 0))
-        viz.box("world/sub_est/hull", (HULL_L, 0.2, 0.2), color=(120, 120, 120, 130))
-        viz.plane("world/seabed", z=-25.0, size=80.0, color=(30, 40, 35, 255))
+        viz.pose("world/scene/sub/hull", (0, 0, 0),
+                 (np.cos(np.pi/4), 0, np.sin(np.pi/4), 0))
+        viz.box("world/scene/sub_est/hull", (HULL_L, 0.2, 0.2),
+                color=(120, 120, 120, 130))
+        viz.plane("world/scene/seabed", z=-25.0, size=80.0, color=(30, 40, 35, 255))
+        viz.track("world/scene")
 
     n = int(duration / dt)
     pacer = Pacer() if (args.keyboard or viz is not None) else None
@@ -242,8 +249,9 @@ def main() -> None:
             depth_sp = float(np.clip(
                 depth_sp + (ctrl.held("space") - ctrl.held("shift")) * 3.0 * dt,
                 -18.0, 0.0))
-            z = float(np.asarray(sim.state["sub"]["position"]).ravel()[2])
-            vz = float(np.asarray(sim.state["sub"]["velocity"]).ravel()[2])
+            pre = scene.relative(sim.state["sub"], t)   # depth-hold in scene coords
+            z = float(pre["position"][2])
+            vz = float(pre["velocity"][2])
             heave = float(np.clip(0.4 * (depth_sp - z) - 0.8 * vz, -1.0, 1.0))
             cmd = mix(surge=ctrl.held("w") - ctrl.held("s"),
                       sway=ctrl.held("e") - ctrl.held("q"),
@@ -261,25 +269,25 @@ def main() -> None:
                     surfaced = True
             ekf.predict(dt, u=cmd)   # then predict forward (you own the order)
 
-            tp = np.asarray(sim.state["sub"]["position"]).ravel()
-            tq = np.asarray(sim.state["sub"]["orientation"]).ravel()
-            est = ekf.state_dict()["sub"]
-            ep = np.asarray(est["position"]).ravel()
-            eq = np.asarray(est["orientation"]).ravel()
+            trel = scene.relative(sim.state["sub"], t)
+            erel = scene.relative(ekf.state_dict()["sub"], t)
+            tp = np.asarray(trel["position"]); tq = np.asarray(trel["orientation"])
+            ep = np.asarray(erel["position"]); eq = np.asarray(erel["orientation"])
             if viz is not None and viz.due(t):
                 viz.t(t)
-                viz.pose("world/sub", tp, tq)
-                viz.pose("world/sub_est", ep, eq)
-                viz.trail("world/trail", tp, max_len=2000, min_dist=0.1,
+                viz.pose("world/scene", *scene.world_pose(t))
+                viz.pose("world/scene/sub", tp, tq)
+                viz.pose("world/scene/sub_est", ep, eq)
+                viz.trail("world/scene/trail", tp, max_len=2000, min_dist=0.1,
                           color=(120, 230, 255) if surfaced else (90, 130, 180))
-                # Sub-centred wave surface (same η the physics uses) + a deep
-                # seabed plane for depth reference.
+                # Sub-centred wave surface (same η the physics uses, in scene
+                # coords) + a deep seabed plane for depth reference.
                 xs = tp[0] + np.linspace(-12, 12, 12)
                 ys = tp[1] + np.linspace(-12, 12, 12)
                 Xg, Yg = np.meshgrid(xs, ys)
-                viz.heightfield("world/waves", Xg, Yg, _eta(Xg, Yg, t),
+                viz.heightfield("world/scene/waves", Xg, Yg, _eta(Xg, Yg, t),
                                 color=(40, 110, 165))
-                viz.pose("world/seabed", (tp[0], tp[1], 0.0))
+                viz.pose("world/scene/seabed", (tp[0], tp[1], 0.0))
             if (i + 1) % 50 == 0:
                 he = abs((_heading(tq) - _heading(eq) + 180) % 360 - 180)
                 print(f"{t:>5.1f} {tp[2]:>7.2f} {'GPS' if surfaced else ' DR':>5} "

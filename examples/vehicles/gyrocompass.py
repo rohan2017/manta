@@ -25,10 +25,12 @@ w.r.t. orientation is exactly zero — which is why the `observability()` rank
 test calls heading unobservable here. It is *weakly* observable, through slow
 dynamics; `sigma_horizon()` (printed at startup) resolves it, showing heading
 σ collapsing over the alignment window. From a 35° initial heading error the
-filter pulls most of it out in the first seconds, then grinds the rest out
-Earth-rate slow: ~1.5° after five minutes and still closing (real marine
-gyrocompasses take minutes-to-hours for the same reason — the north signal
-is only Ω·cos φ ≈ 5e-5 rad/s).
+filter grinds it out Earth-rate slow — minutes to align, still closing at five
+(real marine gyrocompasses take minutes-to-hours for the same reason: the
+north signal is only Ω·cos φ ≈ 5e-5 rad/s). The exact rate is set by the
+sea-chop realisation: with the chop off the alignment is fast and seed-free
+(sub-degree in seconds, the rate the σ-horizon predicts); the micro-chop is
+what makes the live grind slow and noise-realisation-dependent.
 
 A tiny `ProcessNoise` part declares the unmodeled buffeting (micro-chop): the
 same channel jitters the truth and auto-builds the filter's Q, keeping the
@@ -54,9 +56,11 @@ from .._viz import Viz
 RHO = 1025.0
 MASS = 120.0
 LAT = np.radians(45.0)                       # latitude (sets the north signal)
-EARTH_AXIS = (float(np.cos(LAT)), 0.0, float(np.sin(LAT)))   # north = +x
-OMEGA = Earth.SIDEREAL * np.array(EARTH_AXIS)                # world-frame spin
 GYRO_SIGMA = 1.0e-5                           # FOG/RLG-grade: resolves 7e-5 rad/s
+# A real point on Earth at 45°N (the planet keeps its true +z spin axis — no
+# axis-tilt trick). The buoy floats 0.2 m below the surface in SCENE coords.
+ANCHOR = (Earth.R_EQ * float(np.cos(LAT)), 0.0, Earth.R_EQ * float(np.sin(LAT)))
+BELOW = (0.0, 0.0, -0.2)
 
 
 def build_world(heading_deg: float):
@@ -78,19 +82,18 @@ def build_world(heading_deg: float):
     # gets down-weighted into a stall).
     b.add(ProcessNoise("pn", force_noise_sigma=0.02, torque_noise_sigma=1e-3))
 
-    earth = Earth(position=(0, 0, -Earth.R_EQ), rotation_rate=Earth.SIDEREAL,
-                  rotation_axis=EARTH_AXIS, waves=SeaWaves(amplitude=0.0, wavelength=12.0),
+    # Earth spins at its sidereal rate about its true +z axis. We anchor a
+    # local Scene (ENU: +x north, +z up) at a real 45°N point and work in it.
+    earth = Earth(waves=SeaWaves(amplitude=0.0, wavelength=12.0),
                   surface_smoothing=0.3)
     w = World().add_planet(earth)
-    # Co-rotate (so the IMU senses Ω) AND co-orbit (v = Ω×r, so the buoy is at
-    # rest relative to the sea — no current).
-    r0 = np.array([0, 0, -0.2]) - np.array([0, 0, -Earth.R_EQ])
-    v_orbit = np.cross(OMEGA, r0)
-    h = np.radians(heading_deg)
-    w.add_craft(b, position=(0, 0, -0.2), velocity=tuple(v_orbit),
-                angular_velocity=tuple(OMEGA),
-                orientation=(np.cos(h / 2), 0, 0, np.sin(h / 2)))
-    return w, b, v_orbit
+    scene = earth.scene_at(ANCHOR)
+    # `scene.at_rest` rigidly attaches the buoy to the spinning Earth: it
+    # derives the co-orbit velocity (Ω×r, so the buoy is at rest in the sea —
+    # no current) AND the body spin rate (so the IMU senses Ω). `heading`
+    # yaws the attitude about local up (0 faces north).
+    w.add_craft(b, **scene.at_rest(BELOW, heading=np.radians(heading_deg)))
+    return w, b, earth, scene
 
 
 def _heading(q):
@@ -106,20 +109,19 @@ def main() -> None:
     dt = 0.02
     duration = args.duration or 300.0
 
-    w, c, v_orbit = build_world(args.heading)
+    w, c, earth, scene = build_world(args.heading)
     sim = TargetNumpy(Sim(w))
     sim.attach_driver(NoiseDriver(seed=1))
 
     # The filter: same world model, gyro + accel only. Coarse-alignment
     # prior — position/velocity/Ω known (moored at a known latitude),
-    # heading NOT (orientation starts at identity, prior σ ~40°).
+    # heading NOT: `scene.at_rest` with no `heading` gives the same
+    # co-rotating kinematics but scene-north attitude (the filter starts
+    # facing north, prior σ ~40°, and must find true north on its own).
     ekf_ir = EKF(w, sensors=["gyro.imu.gyro", "gyro.imu.accel"])
     ekf = TargetNumpy(ekf_ir)
     P0 = np.diag([0.5] * 3 + [0.5] * 3 + [0.1] * 3 + [1e-4] * 3)
-    ekf.reset(state={"gyro": c.initial_state(
-                  position=(0, 0, -0.2), velocity=tuple(v_orbit),
-                  angular_velocity=tuple(OMEGA),
-                  orientation=(1.0, 0.0, 0.0, 0.0))},
+    ekf.reset(state={"gyro": c.initial_state(**scene.at_rest(BELOW))},
               P=P0)
     IMU_SENSORS = ["gyro.imu.gyro", "gyro.imu.accel"]
 
@@ -137,12 +139,17 @@ def main() -> None:
           f"(north component {Earth.SIDEREAL*np.cos(LAT):.2e})")
     print(f"  true heading {args.heading:.1f}°; filter starts at 0°\n")
 
+    # Everything is logged under `world/scene` — the local ENU frame at 45°N.
+    # The scene's own (planet-radius) world pose goes on that entity each
+    # frame; children stay in small scene coordinates and the view tracks it,
+    # so we never shift the planet.
     viz = None if args.no_viz else Viz("manta/gyrocompass", addr=args.viz_addr)
     if viz is not None:
-        viz.box("world/buoy/hull", (2.0, 0.4, 0.4), color=(210, 200, 90))
-        viz.plane("world/sea", z=0.0, size=12.0, color=(40, 90, 160, 120))
-        viz.arrow("world/true_north", (0, 0, 1.2), (3, 0, 0), color=(90, 230, 120),
-                  radius=0.05)               # +x = true north (fixed)
+        viz.box("world/scene/buoy/hull", (2.0, 0.4, 0.4), color=(210, 200, 90))
+        viz.plane("world/scene/sea", z=0.0, size=12.0, color=(40, 90, 160, 120))
+        viz.arrow("world/scene/true_north", (0, 0, 1.2), (3, 0, 0),
+                  color=(90, 230, 120), radius=0.05)   # +x = local north (fixed)
+        viz.track("world/scene")
 
     pacer = Pacer() if (args.keyboard or viz is not None) else None
     print(f"{'t (s)':>6} {'est °':>8} {'true °':>8} {'err °':>7} {'σ_yaw °':>8}")
@@ -155,20 +162,21 @@ def main() -> None:
             ekf.update(nm, sim.reading(nm))
         ekf.predict(dt)
 
-        eq = np.asarray(ekf.state_dict()["gyro"]["orientation"]).ravel()
-        est_heading = _heading(eq)
-        tp = np.asarray(sim.state["gyro"]["position"]).ravel()
-        tq = np.asarray(sim.state["gyro"]["orientation"]).ravel()
+        # Heading is the yaw in the SCENE frame (relative to local north).
+        est_heading = _heading(
+            scene.relative(ekf.state_dict()["gyro"], t)["orientation"])
+        trel = scene.relative(sim.state["gyro"], t)
         if viz is not None and viz.due(t):
             viz.t(t)
-            viz.pose("world/buoy", tp, tq)
+            viz.pose("world/scene", *scene.world_pose(t))
+            viz.pose("world/scene/buoy", trel["position"], trel["orientation"])
             # Needle: where the filter currently thinks north is.
             a = np.radians(-est_heading)
-            viz.arrow("world/buoy/needle", (0, 0, 0.6),
+            viz.arrow("world/scene/buoy/needle", (0, 0, 0.6),
                       (3 * np.cos(a), 3 * np.sin(a), 0), color=(235, 80, 80),
                       radius=0.05)
         if (i + 1) % int(10 / dt) == 0:
-            true = _heading(tq)
+            true = _heading(trel["orientation"])
             err = abs((est_heading - true + 180) % 360 - 180)
             sig_yaw = np.degrees(np.sqrt(np.asarray(ekf.P)[5, 5]))
             print(f"{t+dt:>6.0f} {est_heading:>8.2f} {true:>8.2f} "

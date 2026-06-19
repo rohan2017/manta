@@ -44,7 +44,7 @@ from ..smoothing import hermite_blend, soft_norm
 from .base import Disturbance, SuperposedField
 
 
-_VEC3_ANCHOR = Vec3[WorldFrame]
+_VEC3_W = Vec3[WorldFrame]
 
 
 @dataclass(frozen=True)
@@ -81,7 +81,7 @@ class FluidState:
             density     = s * self.density,
             pressure    = s * self.pressure,
             temperature = s * self.temperature,
-            velocity    = _VEC3_ANCHOR.from_mx(s * self.velocity._mx),
+            velocity    = _VEC3_W.from_mx(s * self.velocity._mx),
         )
 
 
@@ -121,7 +121,7 @@ class FluidField(SuperposedField):
             density     = ca.MX(0.0),
             pressure    = ca.MX(0.0),
             temperature = ca.MX(0.0),
-            velocity    = _VEC3_ANCHOR.constant((0.0, 0.0, 0.0)),
+            velocity    = _VEC3_W.constant((0.0, 0.0, 0.0)),
         )
 
     def value_at_sym(self, point: "Vec3", t) -> FluidState:
@@ -202,7 +202,7 @@ def within_sphere(center: tuple[float, float, float],
     over ±`width` about the radius. For a localized pocket (a wind
     bubble, an explosion); for a craft-following centre, override
     `Disturbance.membership` instead (see `CraftWindBubble`)."""
-    c = _VEC3_ANCHOR.constant(tuple(float(x) for x in center))
+    c = _VEC3_W.constant(tuple(float(x) for x in center))
 
     def _membership(point, t):
         d = soft_norm(point._mx - c._mx)
@@ -258,7 +258,7 @@ class UniformFluid(Disturbance):
             density     = ca.MX(self.density),
             pressure    = ca.MX(self.pressure),
             temperature = ca.MX(self.temperature),
-            velocity    = _VEC3_ANCHOR.constant(self.velocity),
+            velocity    = _VEC3_W.constant(self.velocity),
         )
 
     def __repr__(self) -> str:
@@ -299,8 +299,74 @@ class CurrentFlow(Disturbance):
             density     = ca.MX(0.0),
             pressure    = ca.MX(0.0),
             temperature = ca.MX(0.0),
-            velocity    = _VEC3_ANCHOR.constant(self.velocity),
+            velocity    = _VEC3_W.constant(self.velocity),
         )
 
     def __repr__(self) -> str:
         return f"<CurrentFlow velocity={self.velocity}>"
+
+
+class WeatherPatch(Disturbance):
+    """Local thermodynamic perturbation — additive temperature / pressure
+    (and optional density) deltas layered on top of the ambient regime.
+
+    The planet's `Atmosphere` / `Ocean` baseline already gives a sane
+    *average* (T, P, ρ) everywhere; a `WeatherPatch` is how a user paints
+    a custom LOCAL curve over it — a warm thermal, a low-pressure cell, a
+    surface inversion — without touching the baseline. Bind it to a
+    region with `membership=` (e.g. `within_sphere(...)`); the default is
+    global.
+
+    Each of `temperature` (K), `pressure` (Pa) and `density` (kg/m³) is
+    either a constant or a callable `(point: Vec3[WorldFrame], t) ->
+    ca.MX` for a position/time-varying field — so a curve is just a
+    Python function of the query point. They are **deltas**: they add to
+    whatever the baseline (and any other patches) already report.
+
+    Note: this perturbs the (T, P, ρ) components independently — it does
+    NOT re-impose the ideal-gas tie between them. That is deliberate (the
+    user is authoring the curve they want); pass whichever components you
+    care about and leave the rest at 0.
+
+    Args:
+        temperature — K delta. Constant or `(point, t) -> MX`. Default 0.
+        pressure    — Pa delta. Constant or `(point, t) -> MX`. Default 0.
+        density     — kg/m³ delta. Constant or `(point, t) -> MX`. Default 0.
+    """
+
+    field_value_shape = FluidState
+    combining = "additive"
+
+    def __init__(self,
+                 *,
+                 temperature=0.0,
+                 pressure=0.0,
+                 density=0.0,
+                 name: str | None = None,
+                 combining: str | None = None,
+                 membership=None) -> None:
+        super().__init__(name=name, combining=combining, membership=membership)
+        self.temperature = temperature
+        self.pressure    = pressure
+        self.density     = density
+
+    @staticmethod
+    def _eval(field, point, t):
+        """A constant or a `(point, t) -> MX` callable → MX scalar."""
+        if callable(field):
+            return field(point, t)
+        return ca.MX(float(field))
+
+    def contribute_at_sym(self, point, t) -> FluidState:
+        return FluidState(
+            density     = self._eval(self.density, point, t),
+            pressure    = self._eval(self.pressure, point, t),
+            temperature = self._eval(self.temperature, point, t),
+            velocity    = _VEC3_W.constant((0.0, 0.0, 0.0)),
+        )
+
+    def __repr__(self) -> str:
+        def _s(v):
+            return "fn" if callable(v) else repr(v)
+        return (f"<WeatherPatch temperature={_s(self.temperature)} "
+                f"pressure={_s(self.pressure)} density={_s(self.density)}>")

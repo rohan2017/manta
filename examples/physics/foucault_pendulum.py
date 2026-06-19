@@ -67,8 +67,12 @@ def _build_world():
     # the collision surface, so the base's feet land on the planet itself.
     w = World()
     w.add_planet(earth)
-    w.add_craft(base, position=earth.position(0.0, 0.0, R),
-                velocity=earth.at_rest(), angular_velocity=(0.0, 0.0, OMEGA))
+    # A local Scene at the north pole (planet at the world origin). Placing
+    # the base "at rest" in it gives the co-spin body rate (0, 0, OMEGA) and
+    # zero orbital velocity (Ω×r = 0 on the axis). The bob, by contrast, is
+    # left inertial (velocity 0) — that's the Foucault effect.
+    scene = earth.scene_at((0.0, 0.0, R))
+    w.add_craft(base, **scene.at_rest())
     w.add_craft(bob, position=(DEFL, 0.0, R + APEX - LEN),
                 velocity=(0.0, 0.0, 0.0))
     w.add_coupling(Tether(base, "hook", bob, "hook",

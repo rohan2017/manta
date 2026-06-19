@@ -36,7 +36,7 @@ from ..smoothing import smooth_max0, soft_norm
 from .base import Disturbance, SuperposedField
 
 
-_VEC3_ANCHOR = Vec3[WorldFrame]
+_VEC3_W = Vec3[WorldFrame]
 
 # Smoothing parameter for the penetration-depth `max(0, x)` regularizer:
 # the kink is rounded over ±sqrt(1e-12) = ±1 µm of signed distance, so
@@ -54,10 +54,10 @@ class CollisionField(SuperposedField):
     query point is inside it. Multi-obstacle overlap composes additively.
     """
 
-    value_shape = _VEC3_ANCHOR
+    value_shape = _VEC3_W
 
     def _zero_value(self):
-        return _VEC3_ANCHOR.constant((0.0, 0.0, 0.0))
+        return _VEC3_W.constant((0.0, 0.0, 0.0))
 
     def add_half_space(self,
                        origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
@@ -89,7 +89,7 @@ class HalfSpace(Disturbance):
                  normal=(0,0,1).
     """
 
-    field_value_shape = _VEC3_ANCHOR
+    field_value_shape = _VEC3_W
 
     def __init__(self,
                  origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
@@ -107,8 +107,8 @@ class HalfSpace(Disturbance):
         self.normal = unit_axis(normal, who="HalfSpace", what="normal")
 
     def contribute_at_sym(self, point, t):
-        origin_v = _VEC3_ANCHOR.constant(self.origin)
-        normal_v = _VEC3_ANCHOR.constant(self.normal)
+        origin_v = _VEC3_W.constant(self.origin)
+        normal_v = _VEC3_W.constant(self.normal)
         # Signed perpendicular distance from plane (positive = outside).
         diff_mx   = (point - origin_v)._mx
         normal_mx = normal_v._mx
@@ -117,7 +117,7 @@ class HalfSpace(Disturbance):
         depth = smooth_max0(-signed_d, _SMOOTH_EPS_SQ)
         # Outward vector = depth · normal.
         out_mx = normal_mx * depth
-        return _VEC3_ANCHOR.from_mx(out_mx)
+        return _VEC3_W.from_mx(out_mx)
 
     def __repr__(self) -> str:
         return f"<HalfSpace origin={self.origin} normal={self.normal}>"
@@ -136,7 +136,7 @@ class Sphere(Disturbance):
         radius — sphere radius, m.
     """
 
-    field_value_shape = _VEC3_ANCHOR
+    field_value_shape = _VEC3_W
 
     def __init__(self,
                  center: tuple[float, float, float],
@@ -152,14 +152,14 @@ class Sphere(Disturbance):
             raise ValueError(f"Sphere: radius must be > 0; got {radius!r}")
 
     def contribute_at_sym(self, point, t):
-        center_v = _VEC3_ANCHOR.constant(self.center)
+        center_v = _VEC3_W.constant(self.center)
         diff_mx  = (point - center_v)._mx
         r = soft_norm(diff_mx)
         # Signed distance from the surface (positive = outside).
         signed_d = r - self.radius
         depth = smooth_max0(-signed_d, _SMOOTH_EPS_SQ)
         out_mx = (diff_mx / r) * depth
-        return _VEC3_ANCHOR.from_mx(out_mx)
+        return _VEC3_W.from_mx(out_mx)
 
     def __repr__(self) -> str:
         return f"<Sphere center={self.center} radius={self.radius}>"

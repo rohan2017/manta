@@ -7,6 +7,8 @@ disturbances on the shared fields, and initial-state factories.
 
 ::: manta.planets.Earth
 
+::: manta.planets.Scene
+
 ::: manta.planets.PlanetState
 
 ::: manta.planets.SeaWaves

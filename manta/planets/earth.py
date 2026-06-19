@@ -15,9 +15,12 @@ shared GravityField, FluidField, and MagField:
                    the spin axis (pointing along `-rotation_axis`).
                    Skipped when `dipole_moment == 0`.
 
-Default rotation rate is 0 (non-rotating Earth, for sim simplicity).
-Pass `rotation_rate=Earth.SIDEREAL` to enable Coriolis + centrifugal
-effects (and a co-rotating ocean).
+By default Earth spins at its true sidereal rate (`Earth.SIDEREAL`)
+about +z, so Coriolis + centrifugal effects and the co-rotating
+ocean/atmosphere are on out of the box — a craft pinned to the surface
+should be placed via `earth.scene_at(...).at_rest(...)` to get the
+matching orbital velocity + body spin rate. Pass `rotation_rate=0.0` for
+a non-rotating Earth (drops those pseudo-forces, handy for a simpler sim).
 """
 
 from __future__ import annotations
@@ -94,8 +97,10 @@ class Earth(Planet):
     Args:
         name           — identifier. Default "earth".
         position       — planet center in WorldFrame (m).
-        rotation_rate  — angular rate, rad/s. Earth sidereal:
-                         `Earth.SIDEREAL`. Default 0.
+        rotation_rate  — angular rate, rad/s. Default: Earth's true
+                         sidereal rate (`Earth.SIDEREAL`). Pass 0.0 for a
+                         non-rotating Earth. Most users never set this —
+                         place craft with `earth.scene_at(...)` instead.
         sea_level      — elevation of the ocean's top above the
                          planet's equatorial radius, m. Default 0
                          (sea-level surface coincides with R_EQ).
@@ -145,7 +150,7 @@ class Earth(Planet):
                  name: str = "earth",
                  *,
                  position: tuple[float, float, float] = (0.0, 0.0, 0.0),
-                 rotation_rate: float = 0.0,
+                 rotation_rate: float | None = None,
                  rotation_axis: tuple[float, float, float] = (0.0, 0.0, 1.0),
                  sea_level: float = 0.0,
                  water_density: float = 1025.0,
@@ -162,10 +167,13 @@ class Earth(Planet):
         # spin axis off local-up so the inertial Earth rate the IMU senses has
         # a horizontal (north) component — the gyrocompass signal. Default +z
         # (sub at the pole / spin axis = local vertical).
+        # Default to the true sidereal rate: a realistic Earth out of the
+        # box. `rotation_rate=0.0` explicitly opts into a non-rotating one.
+        omega = self.SIDEREAL if rotation_rate is None else float(rotation_rate)
         super().__init__(name=name,
                          position=position,
                          rotation_axis=rotation_axis,
-                         omega=rotation_rate)
+                         omega=omega)
         self.sea_level     = float(sea_level)
         self.water_density = float(water_density)
         self.air_density   = float(air_density)

@@ -37,7 +37,7 @@ from .gravity import (
     UniformGravity,
 )
 from .fluid   import (
-    CurrentFlow, FluidField, FluidState, UniformFluid,
+    CurrentFlow, FluidField, FluidState, UniformFluid, WeatherPatch,
     below_surface, within_sphere,
 )
 from .mag     import BodyDipoleMag, DipoleMag, MagField, UniformMag
@@ -51,7 +51,7 @@ __all__ = [
     "Disturbance", "Field",
     "GravityField", "UniformGravity", "PointMassGravity", "J2Gravity",
     "BodyPointMassGravity",
-    "FluidField", "FluidState", "UniformFluid", "CurrentFlow",
+    "FluidField", "FluidState", "UniformFluid", "CurrentFlow", "WeatherPatch",
     "below_surface", "within_sphere",
     "CraftWindBubble",
     "MagField", "UniformMag", "DipoleMag", "BodyDipoleMag",

@@ -32,6 +32,8 @@ per each disturbance's `combining` flag. See
 
 ::: manta.fields.CurrentFlow
 
+::: manta.fields.WeatherPatch
+
 ::: manta.fields.CraftWindBubble
 
 ## Magnetic

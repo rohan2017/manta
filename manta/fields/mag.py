@@ -25,7 +25,7 @@ from ..ir.types import Vec3
 from .base import Disturbance, SuperposedField
 
 
-_VEC3_ANCHOR = Vec3[WorldFrame]
+_VEC3_W = Vec3[WorldFrame]
 
 # Vacuum permeability over 4π. In SI units. μ₀/(4π) = 1e-7 H/m.
 _MU0_OVER_4PI = 1.0e-7
@@ -40,7 +40,7 @@ class MagField(SuperposedField):
     to one `add_uniform`.
     """
 
-    value_shape = _VEC3_ANCHOR
+    value_shape = _VEC3_W
 
     def __init__(self, B: tuple[float, float, float] | None = None) -> None:
         super().__init__()
@@ -48,7 +48,7 @@ class MagField(SuperposedField):
             self.add_uniform(B)
 
     def _zero_value(self):
-        return _VEC3_ANCHOR.constant((0.0, 0.0, 0.0))
+        return _VEC3_W.constant((0.0, 0.0, 0.0))
 
     def add_uniform(self, B_vec: tuple[float, float, float]) -> "MagField":
         """Attach a position-independent magnetic field. Returns self."""
@@ -64,7 +64,7 @@ class UniformMag(Disturbance):
       * Pole      ≈ 60 µT       — (0, 0, -6e-5)
     """
 
-    field_value_shape = _VEC3_ANCHOR
+    field_value_shape = _VEC3_W
 
     def __init__(self, B_vec: tuple[float, float, float], *, name: str | None = None) -> None:
         super().__init__(name=name)
@@ -74,7 +74,7 @@ class UniformMag(Disturbance):
                 f"UniformMag: B_vec must be length-3, got {B_vec!r}")
 
     def contribute_at_sym(self, point, t):
-        return _VEC3_ANCHOR.constant(self.B_vec)
+        return _VEC3_W.constant(self.B_vec)
 
     def __repr__(self) -> str:
         return f"<UniformMag B_vec={self.B_vec}>"
@@ -91,7 +91,7 @@ def _dipole_B(point, center, moment_mx, eps: float):
     m_dot_r = ca.dot(moment_mx, r_mx)
     B_mx = _MU0_OVER_4PI * (
         (3.0 * m_dot_r / (r_cubed * r_sq)) * r_mx - moment_mx / r_cubed)
-    return _VEC3_ANCHOR.from_mx(B_mx)
+    return _VEC3_W.from_mx(B_mx)
 
 
 class DipoleMag(Disturbance):
@@ -110,7 +110,7 @@ class DipoleMag(Disturbance):
                    dipole position. Default 1e-3.
     """
 
-    field_value_shape = _VEC3_ANCHOR
+    field_value_shape = _VEC3_W
 
     def __init__(self,
                  position: tuple[float, float, float],
@@ -122,8 +122,8 @@ class DipoleMag(Disturbance):
         self.eps      = float(eps)
 
     def contribute_at_sym(self, point, t):
-        return _dipole_B(point, _VEC3_ANCHOR.constant(self.position),
-                         _VEC3_ANCHOR.constant(self.moment)._mx, self.eps)
+        return _dipole_B(point, _VEC3_W.constant(self.position),
+                         _VEC3_W.constant(self.moment)._mx, self.eps)
 
     def __repr__(self) -> str:
         return (f"<DipoleMag position={self.position} moment={self.moment}>")
@@ -145,7 +145,7 @@ class BodyDipoleMag(Disturbance):
         eps         — softening length, m. Default 1e-3.
     """
 
-    field_value_shape = _VEC3_ANCHOR
+    field_value_shape = _VEC3_W
 
     def __init__(self, craft, offset_body,
                  moment_body: tuple[float, float, float],

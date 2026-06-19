@@ -16,8 +16,15 @@ fields.
   `Atmosphere` pair of fluid regimes (baseline media built on
   `PlanetFrameFluid`), a dipole magnetic field.
 - **Initial-state factories** — `earth.position(...)`, `earth.velocity(...)`,
-  `earth.at_rest()` and how they resolve to WorldFrame seeds at compile
-  time.
+  `earth.at_rest()` and how they resolve to WorldFrame seeds at compile time.
+- **`Scene`** — `earth.scene_at(planet_point)` returns a local East/North/Up
+  frame fixed in the planet's body frame, used as numeric I/O glue while the
+  dynamics stay in WorldFrame: `scene.at_rest(...)` for full rigid-attachment
+  placement (orbital velocity + body spin rate + local-tangent attitude) in
+  small scene-local coordinates, `scene.relative(state)` to report a craft's
+  pose/velocity scene-relative, and `scene.world_pose(t)` to anchor rendering
+  (publish the scene's world pose, log children relative to it, track it) so
+  the planet can stay at its true scale at the world origin.
 - **Multiple planets** in one world, superposing into the shared fields.
 - **Earth's rotation and the gyrocompass** — sensing Earth-rate (see the
   gyrocompass demo).

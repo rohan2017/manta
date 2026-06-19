@@ -175,6 +175,91 @@ class Planet:
         return self.velocity(0.0, 0.0, 0.0)
 
     # ------------------------------------------------------------------
+    # Rigid-attachment kinematics — full WorldFrame initial state for a
+    # craft fixed to (co-rotating with) the planet. Cartesian throughout;
+    # general for any rotating planet (no per-subclass code).
+    # ------------------------------------------------------------------
+
+    def local_tangent_basis(self,
+                            position: tuple[float, float, float]
+                            ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Local East/North/Up unit vectors (WorldFrame) at a WorldFrame
+        point — a purely Cartesian local-tangent frame, no lat/lon.
+
+        `Up` is the local radial (from the planet centre out through the
+        point). `North` is the planet's spin axis projected into the
+        tangent plane and normalised — the same true-north direction a
+        gyrocompass finds from the spin vector. `East = North × Up`.
+
+        Where North is undefined — the planet isn't rotating, or the
+        point sits on the spin axis — it falls back to a stable
+        tangential reference (world +x, else +y), so the basis is always
+        well-formed (only its azimuth is then arbitrary). Returns
+        `(east, north, up)`.
+        """
+        r_world = np.asarray(position, dtype=float) - self.center
+        n = float(np.linalg.norm(r_world))
+        if n == 0.0:
+            raise ValueError(
+                f"{type(self).__name__}.local_tangent_basis: undefined at "
+                f"the planet centre")
+        up = r_world / n
+        north = self.axis - float(np.dot(self.axis, up)) * up
+        nn = float(np.linalg.norm(north))
+        if nn < 1e-9:
+            for ref in (np.array([1.0, 0.0, 0.0]), np.array([0.0, 1.0, 0.0])):
+                north = ref - float(np.dot(ref, up)) * up
+                nn = float(np.linalg.norm(north))
+                if nn > 1e-9:
+                    break
+        north = north / nn
+        east = np.cross(north, up)
+        return east, north, up
+
+    def _local_tangent_rotmat(self, position, heading) -> np.ndarray:
+        """3×3 world-from-craft rotation for the local-tangent attitude:
+        body +x = North, +z = Up, +y = Up×North, yawed by `heading` (rad)
+        about Up (right-handed)."""
+        _, north, up = self.local_tangent_basis(position)
+        R_base = np.column_stack([north, np.cross(up, north), up])
+        c, s = np.cos(heading), np.sin(heading)
+        Rz = np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
+        return R_base @ Rz
+
+    def local_tangent_orientation(self,
+                                  position: tuple[float, float, float],
+                                  heading: float = 0.0) -> tuple:
+        """World-from-craft quaternion `(w, x, y, z)` placing the craft in
+        the local-tangent frame at WorldFrame point `position`: body
+        forward (+x) along North, up (+z) along the local radial, yawed by
+        `heading` (radians, right-handed about Up — 0 faces North).
+
+        Cartesian and general: 'North' is the spin-axis tangential
+        projection (see `local_tangent_basis`)."""
+        from ..ir._rotation import quat_from_rotmat_np
+        R_wc = self._local_tangent_rotmat(position, float(heading))
+        return tuple(float(v) for v in quat_from_rotmat_np(R_wc))
+
+    def scene_at(self,
+                 position: tuple[float, float, float],
+                 *,
+                 heading: float = 0.0) -> "Scene":
+        """A local **`Scene`** anchored at PlanetFrame point `position` — a
+        ground patch with a human-friendly East/North/Up frame, used to
+        place craft and to translate poses/state for reporting + rendering.
+
+        `position` is in the planet-fixed frame (origin at the planet
+        centre), so a point on the surface is a planet-radius vector — with
+        the planet left at the world origin you place a craft anywhere on
+        it: north pole `(0, 0, R_EQ)`, equator `(R_EQ, 0, 0)`. The scene's
+        axes are the local tangent frame there (+z up, +x north), optionally
+        yawed by `heading` (radians) about up. See `Scene` for the full API
+        (`at_rest`, `relative`, `world_pose`).
+        """
+        from .scene import Scene
+        return Scene(self, position, heading=heading)
+
+    # ------------------------------------------------------------------
     # Disturbance registration (subclass override hook)
     # ------------------------------------------------------------------
 

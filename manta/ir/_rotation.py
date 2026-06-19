@@ -181,3 +181,60 @@ def quat_mul_np(a: np.ndarray, b: np.ndarray) -> np.ndarray:
         w1*y2 - x1*z2 + y1*w2 + z1*x2,
         w1*z2 + x1*y2 - y1*x2 + z1*w2,
     ])
+
+
+def quat_conj_np(q: np.ndarray) -> np.ndarray:
+    """numpy conjugate (inverse, for a unit quaternion) of (w, x, y, z)."""
+    w, x, y, z = np.asarray(q, dtype=float)
+    return np.array([w, -x, -y, -z])
+
+
+def quat_to_rotmat_np(q: np.ndarray) -> np.ndarray:
+    """numpy `quat_to_rotmat`: 3×3 rotation matrix from a (w, x, y, z) unit
+    quaternion (the numeric twin of `quat_to_rotmat`)."""
+    w, x, y, z = np.asarray(q, dtype=float)
+    return np.array([
+        [1 - 2*(y*y + z*z), 2*(x*y - w*z),     2*(x*z + w*y)],
+        [2*(x*y + w*z),     1 - 2*(x*x + z*z), 2*(y*z - w*x)],
+        [2*(x*z - w*y),     2*(y*z + w*x),     1 - 2*(x*x + y*y)],
+    ])
+
+
+def quat_from_rotmat_np(R: np.ndarray) -> np.ndarray:
+    """numpy (w, x, y, z) unit quaternion from a 3×3 rotation matrix.
+
+    Shepperd's method: pick the largest of the four diagonal-derived
+    candidates so the divisor is well away from zero (numerically stable
+    over the whole rotation group). `R` is assumed orthonormal with
+    det +1; the result is sign-normalised to w ≥ 0.
+    """
+    R = np.asarray(R, dtype=float)
+    t = R[0, 0] + R[1, 1] + R[2, 2]
+    if t > 0.0:
+        s = np.sqrt(t + 1.0) * 2.0          # s = 4w
+        w = 0.25 * s
+        x = (R[2, 1] - R[1, 2]) / s
+        y = (R[0, 2] - R[2, 0]) / s
+        z = (R[1, 0] - R[0, 1]) / s
+    elif R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
+        s = np.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2]) * 2.0   # s = 4x
+        w = (R[2, 1] - R[1, 2]) / s
+        x = 0.25 * s
+        y = (R[0, 1] + R[1, 0]) / s
+        z = (R[0, 2] + R[2, 0]) / s
+    elif R[1, 1] > R[2, 2]:
+        s = np.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2]) * 2.0   # s = 4y
+        w = (R[0, 2] - R[2, 0]) / s
+        x = (R[0, 1] + R[1, 0]) / s
+        y = 0.25 * s
+        z = (R[1, 2] + R[2, 1]) / s
+    else:
+        s = np.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1]) * 2.0   # s = 4z
+        w = (R[1, 0] - R[0, 1]) / s
+        x = (R[0, 2] + R[2, 0]) / s
+        y = (R[1, 2] + R[2, 1]) / s
+        z = 0.25 * s
+    q = np.array([w, x, y, z])
+    if q[0] < 0.0:
+        q = -q
+    return q / np.linalg.norm(q)

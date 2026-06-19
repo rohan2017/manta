@@ -233,3 +233,71 @@ def test_surface_smoothing_blends_density():
                                earth.water_density, rtol=1e-9)
     np.testing.assert_allclose(_sample_density(w, (0, 0, 0.3)),
                                earth.air_density, rtol=1e-4)
+
+
+# ---------------------------------------------------------------------------
+# Realistic Earth default + local WeatherPatch overlays
+# ---------------------------------------------------------------------------
+
+def test_earth_spins_at_sidereal_by_default():
+    """Out of the box Earth turns at its true sidereal rate; passing
+    rotation_rate=0.0 explicitly opts into a non-rotating planet."""
+    assert Earth().omega == Earth.SIDEREAL
+    assert Earth(rotation_rate=0.0).omega == 0.0
+    assert Earth(rotation_rate=1.5).omega == 1.5
+
+
+def _patch_world(*patches):
+    earth = Earth(rotation_rate=0.0)
+    w = World(); w.add_planet(earth)
+    c = Craft("probe"); c.add(Mass("body", mass=1.0))
+    w.add_craft(c, position=(earth.R_EQ + 100.0, 0, 0))
+    ff = w.get_or_create_field(FluidField)
+    for p in patches:
+        ff.add(p)
+    Sim(w)
+    return earth, w
+
+
+def test_weather_patch_adds_local_temperature_and_pressure():
+    """A WeatherPatch lays a constant (T, P) delta on top of the ISA
+    baseline inside its region, and contributes nothing outside it."""
+    from manta.fields import WeatherPatch, within_sphere
+    earth = Earth(rotation_rate=0.0)
+    ctr = (earth.R_EQ + 200.0, 0.0, 0.0)
+    earth, w = _patch_world(
+        WeatherPatch(temperature=5.0, pressure=-300.0,
+                     membership=within_sphere(ctr, radius=50.0, width=5.0)))
+
+    P0, T0, L, g0, R = _earth_isa_constants(earth)
+    T_base = float(ca.evalf(isa_temperature(200.0, T0, L)))
+    P_base = float(ca.evalf(isa_pressure(200.0, P0, T0, L, g0, R)))
+    # Inside (membership ≈ 1): baseline + delta.
+    np.testing.assert_allclose(_scalar(w, ctr, "temperature"),
+                               T_base + 5.0, rtol=1e-6)
+    np.testing.assert_allclose(_scalar(w, ctr, "pressure"),
+                               P_base - 300.0, rtol=1e-6)
+    # Far outside the sphere (membership ≈ 0): pure baseline, no delta.
+    far = (earth.R_EQ + 1000.0, 0.0, 0.0)
+    T_far = float(ca.evalf(isa_temperature(1000.0, T0, L)))
+    np.testing.assert_allclose(_scalar(w, far, "temperature"),
+                               T_far, rtol=1e-6)
+
+
+def test_weather_patch_callable_curve():
+    """The delta can be a callable `(point, t) -> MX` — a custom curve over
+    the baseline, here a temperature that grows with altitude."""
+    from manta.fields import WeatherPatch
+
+    R_EQ = Earth.R_EQ
+
+    def warm(point, t):
+        return 0.01 * (point._mx[0] - R_EQ)      # +0.01 K per metre of altitude
+
+    earth, w = _patch_world(WeatherPatch(temperature=warm))
+    P0, T0, L, g0, R = _earth_isa_constants(earth)
+    for alt in (100.0, 500.0):
+        pt = (earth.R_EQ + alt, 0.0, 0.0)
+        T_base = float(ca.evalf(isa_temperature(alt, T0, L)))
+        np.testing.assert_allclose(_scalar(w, pt, "temperature"),
+                                   T_base + 0.01 * alt, rtol=1e-6)

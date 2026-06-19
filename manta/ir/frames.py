@@ -5,8 +5,8 @@ its class. Frame tags participate in IR type checking: a `Vec3[WorldFrame]`
 cannot be cross-producted with a `Vec3[CraftFrame]` without rotating one of
 them through a `Quat[WorldFrame, CraftFrame]` first.
 
-Stock frames cover the manta hierarchy `World → Planet → Anchor → Craft →
-Part`. Users declaring their own frames just subclass `Frame`:
+Stock frames cover the manta hierarchy `World → Planet → Craft → Part`.
+Users declaring their own frames just subclass `Frame`:
 
     class WheelFrame(Frame):
         '''Body frame of a steering wheel; rotates about CraftFrame.+y.'''
