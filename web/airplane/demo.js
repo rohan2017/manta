@@ -49,6 +49,9 @@ const C = {
 const SLOT = Object.fromEntries(
   descriptor.stateSlots.map((s) => [s.name.replace("plane.", ""), s.off]));
 
+const SURFACES = ["ail_l", "ail_r", "elev", "rud"];
+const lerp = (a, b, k) => a + (b - a) * k;
+
 function quatWXYZtoThree(q, off) {
   // manta [w,x,y,z] at state offset `off` → THREE.Quaternion(x,y,z,w)
   return new THREE.Quaternion(q[off + 1], q[off + 2], q[off + 3], q[off]);
@@ -172,21 +175,16 @@ function buildScene(canvas) {
   return { renderer, scene, camera, air };
 }
 
-// Smoothed chase camera: 7 m behind the plane along its heading, 2.5 m up.
-function chaseCamera(camera, pos, yaw, alpha) {
+// Chase camera, exponentially smoothed toward 7.5 m behind the plane along
+// its heading, 2.5 m up. `k` is a frame-rate-independent smoothing factor.
+function chaseCamera(camera, pos, yaw, k) {
   const eye = new THREE.Vector3(
     pos[0] - 7.5 * Math.cos(yaw), pos[1] - 7.5 * Math.sin(yaw), pos[2] + 2.5);
-  camera.position.lerp(eye, alpha);
+  camera.position.lerp(eye, k);
   const look = new THREE.Vector3(
     pos[0] + 3 * Math.cos(yaw), pos[1] + 3 * Math.sin(yaw), pos[2] + 0.3);
-  camera._look = camera._look
-    ? camera._look.lerp(look, alpha) : look.clone();
+  camera._look = camera._look ? camera._look.lerp(look, k) : look.clone();
   camera.lookAt(camera._look);
-}
-
-function yawFromQuat(q, off) {
-  const w = q[off], x = q[off + 1], y = q[off + 2], z = q[off + 3];
-  return Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z));
 }
 
 export async function start(canvas, hud) {
@@ -194,28 +192,40 @@ export async function start(canvas, hud) {
   const sim = rt.sim();
   const { renderer, scene, camera, air } = buildScene(canvas);
 
-  // input: keyboard held set, OR'd with the autopilot script.
+  // Mode: "auto" (scripted circuit, loops) until the user clicks to take
+  // over → "manual" (keyboard only, no auto-reset). Scrolling the demo out
+  // of view (handled by the page) or reloading returns to "auto".
+  let mode = "auto";
   const KEYS = new Set("wasdqexz".split(""));
   const down = new Set();
-  let manualUntil = 0;          // wall-clock until which we show "MANUAL"
+
+  canvas.addEventListener("pointerdown", () => { mode = "manual"; });
   addEventListener("keydown", (e) => {
     const k = e.key.toLowerCase();
-    if (KEYS.has(k)) { down.add(k); manualUntil = performance.now() + 1500;
-      e.preventDefault(); }
+    if (mode === "manual" && KEYS.has(k)) { down.add(k); e.preventDefault(); }
   });
   addEventListener("keyup", (e) => down.delete(e.key.toLowerCase()));
 
   let t = 0, throttle = 0, acc = 0, last = performance.now();
-  const held = (k) => down.has(k)
-    || SCRIPT.some(([a, b, key]) => key === k && t >= a && t < b);
+  let prev = Float64Array.from(sim.state);     // pose at the last frame edge
 
   function reset() {
     sim.state = Float64Array.from(descriptor.initialState);
     sim.t = 0; t = 0; throttle = 0;
+    prev = Float64Array.from(sim.state);        // no interpolation across reset
   }
+  // The page calls this when the demo scrolls out of view: hand control back
+  // to the autopilot and start the circuit fresh.
+  function toAuto() { if (mode !== "auto") { mode = "auto"; down.clear(); }
+    reset(); }
+
+  // In auto mode the script drives; in manual only the live keyboard does.
+  const held = (k) => mode === "manual"
+    ? (down.has(k) ? 1 : 0)
+    : (SCRIPT.some(([a, b, key]) => key === k && t >= a && t < b) ? 1 : 0);
 
   function controlFrame() {
-    if (t >= LOOP_T) reset();
+    if (mode === "auto" && t >= LOOP_T) reset();
     throttle = Math.min(Math.max(
       throttle + (held("x") - held("z")) * THR_RATE * FRAME, 0), THR_MAX);
     const ail = MAX_AIL * (held("q") - held("e")) - AIL_TRIM * throttle;
@@ -226,13 +236,34 @@ export async function start(canvas, hud) {
     };
     for (let i = 0; i < SUBSTEPS; i++) {
       const u = { "prop.throttle": throttle };
-      for (const name of ["ail_l", "ail_r", "elev", "rud"]) {
+      for (const name of SURFACES) {
         const angle = sim.state[SLOT[`${name}.angle`]];
         u[`${name}.torque_cmd`] = SERVO_KP * (target[name] - angle);
       }
       sim.step(DT, u);
       t += DT;
     }
+  }
+
+  // Render the airframe at the interpolated pose between the two most recent
+  // frame edges (`prev`→`curr`, fraction `a`) — this is what removes the
+  // jitter: the eye sees continuous motion, not 50 Hz physics steps. Returns
+  // the interpolated position + heading for the camera.
+  function applyPose(curr, a) {
+    const P = SLOT.position, O = SLOT.orientation;
+    const pos = [lerp(prev[P], curr[P], a), lerp(prev[P + 1], curr[P + 1], a),
+                 lerp(prev[P + 2], curr[P + 2], a)];
+    air.plane.position.set(pos[0], pos[1], pos[2]);
+    const q = quatWXYZtoThree(prev, O).slerp(quatWXYZtoThree(curr, O), a);
+    air.plane.quaternion.copy(q);
+    for (const name of SURFACES) {
+      const off = SLOT[`${name}.angle`];
+      air.surf[name].group.quaternion.setFromAxisAngle(
+        air.surf[name].axis, lerp(prev[off], curr[off], a));
+    }
+    const yaw = Math.atan2(2 * (q.w * q.z + q.x * q.y),
+                           1 - 2 * (q.y * q.y + q.z * q.z));
+    return { pos, yaw };
   }
 
   function resize() {
@@ -244,34 +275,35 @@ export async function start(canvas, hud) {
   }
 
   function frame(now) {
-    acc += Math.min((now - last) / 1000, 0.05); last = now;
-    while (acc >= FRAME) { controlFrame(); acc -= FRAME; }
-
-    const s = sim.state;
-    air.plane.position.set(s[SLOT.position], s[SLOT.position + 1],
-                           s[SLOT.position + 2]);
-    air.plane.quaternion.copy(quatWXYZtoThree(s, SLOT.orientation));
-    for (const name of ["ail_l", "ail_r", "elev", "rud"]) {
-      const { group, axis } = air.surf[name];
-      group.quaternion.setFromAxisAngle(axis, s[SLOT[`${name}.angle`]]);
+    const rdt = Math.min((now - last) / 1000, 0.05); last = now;
+    acc += rdt;
+    // Fixed-timestep physics with leftover accumulator for interpolation.
+    while (acc >= FRAME) {
+      prev = Float64Array.from(sim.state);
+      controlFrame();
+      acc -= FRAME;
     }
-    air.prop.rotation.x += (0.3 + throttle * 2.2);   // spin ∝ throttle
+    const a = Math.min(acc / FRAME, 1);
 
-    const pos = [s[SLOT.position], s[SLOT.position + 1], s[SLOT.position + 2]];
-    chaseCamera(camera, pos, yawFromQuat(s, SLOT.orientation), 0.08);
+    const { pos, yaw } = applyPose(sim.state, a);
+    air.prop.rotation.x += (0.3 + throttle * 2.2);            // spin ∝ throttle
+    chaseCamera(camera, pos, yaw, 1 - Math.exp(-rdt / 0.10)); // dt-independent
 
     resize();
     renderer.render(scene, camera);
 
     if (hud) {
+      const s = sim.state;
       const v = Math.hypot(s[SLOT.velocity], s[SLOT.velocity + 1],
                            s[SLOT.velocity + 2]);
-      const mode = performance.now() < manualUntil ? "MANUAL" : "AUTOPILOT";
       hud.textContent =
         `alt ${pos[2].toFixed(1)} m   spd ${v.toFixed(1)} m/s   ` +
-        `thr ${(throttle * 100).toFixed(0)}%   ${mode}`;
+        `thr ${(throttle * 100).toFixed(0)}%   ` +
+        (mode === "manual" ? "MANUAL" : "AUTOPILOT");
     }
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
+
+  return { toAuto };
 }

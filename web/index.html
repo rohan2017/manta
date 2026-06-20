@@ -348,7 +348,7 @@ ekf = <span class="c-fn">TargetNumpy</span>(<span class="c-fn">EKF</span>(w))   
         <span><b>A</b>/<b>D</b> yaw</span>
         <span><b>Q</b>/<b>E</b> roll</span>
         <span><b>X</b>/<b>Z</b> throttle</span>
-        <span>— autopilot flies until you grab the keys</span>
+        <span>— click to fly · scroll away to reset to autopilot</span>
       </div>
     </div>
     <p class="demo-cap reveal d3">
@@ -417,23 +417,29 @@ ekf = <span class="c-fn">TargetNumpy</span>(<span class="c-fn">EKF</span>(w))   
   // error — the page reads fine without it.
   const canvas = document.getElementById("flight");
   const hud = document.getElementById("hud");
-  let started = false;
-  async function boot() {
-    if (started) return; started = true;
-    try {
-      const { start } = await import("/airplane/demo.js");
-      await start(canvas, hud);
-    } catch (err) {
-      console.error("[manta demo]", err);
-      hud.textContent = "live demo unavailable in this browser";
-    }
+  let demo = null, booting = null;
+  function boot() {
+    if (!booting) booting = (async () => {
+      try {
+        const { start } = await import("/airplane/demo.js");
+        demo = await start(canvas, hud);
+      } catch (err) {
+        console.error("[manta demo]", err);
+        hud.textContent = "live demo unavailable in this browser";
+      }
+    })();
+    return booting;
   }
   if (!window.WebGL2RenderingContext) {
     hud.textContent = "live demo needs WebGL2";
   } else if ("IntersectionObserver" in window) {
+    // Boot when the viewport scrolls into view; when it scrolls back out,
+    // hand control to the autopilot and reset (a fresh load starts in auto).
     const io = new IntersectionObserver((es) => {
-      if (es.some((e) => e.isIntersecting)) { io.disconnect(); boot(); }
-    }, { rootMargin: "200px" });
+      const visible = es.some((e) => e.isIntersecting);
+      if (visible) boot();
+      else if (demo) demo.toAuto();
+    }, { rootMargin: "200px 0px" });
     io.observe(document.getElementById("demo"));
   } else {
     boot();
