@@ -1,12 +1,12 @@
 """Airplane — a Cessna 172 Skyhawk flown on real control surfaces.
 
-Built from published 172-class figures: ~1043 kg, 10.97 m span, 16.2 m²
-wing on a NACA 2412 section (via the `naca()` helper), a NACA 0012 tail,
-and the real moments of inertia. No IMU, no stabilizer loops — the
-airframe is statically stable on its own. As a high-wing aircraft the CG
-hangs about a metre below the wing, and that pendulum is its real roll
-stability; the horizontal tail and vertical fin weathervane it back to
-trim in pitch and yaw.
+Geometry is a measured 172 airframe survey (coordinate origin at the
+propeller hub): 11.0 m span / 16.2 m² wing on a NACA 2412 section (via the
+`naca()` helper), a NACA 0012 tail 5.4 m aft, gear and surface stations to
+scale, plus ~1043 kg and the real moments of inertia. No IMU, no stabilizer
+loops — the airframe is statically stable on its own: wing dihedral and the
+high-wing-over-CG pendulum give roll stability, and the horizontal tail and
+vertical fin weathervane it back to trim in pitch and yaw.
 
 Every control is a `ControlSurface` — a wing section with a deflectable
 trailing-edge flap, no hinge joint: two ailerons outboard on the wing,
@@ -49,48 +49,56 @@ from manta.parts import (
 from .._control import Pacer, TerminalController, common_args, make_controller
 from .._viz import Viz
 
-# --- Cessna 172 Skyhawk (published 172-class figures; m, kg, x fwd / y
-# left / z up). Origin at the wing aerodynamic centre (quarter-chord, ≈ the
-# CG longitudinally). The high wing sits ~2.4 m off the ground on the cabin
-# roof, so the CG hangs ~1.2 m below it — that pendulum, with the tail/fin,
-# is the airframe's stability. Stations below are scaled from the 172
-# three-view; tell me the real numbers and I'll drop them straight in. -----
+# --- Cessna 172 Skyhawk, from a measured airframe survey. Coordinate
+# origin is the PROPELLER SPINNER HUB; +x forward (so the airframe lies at
+# negative x), +y left, +z up. Aerodynamic parts sit at their quarter-chord
+# (where lift acts); the survey's surface CENTRES map to those QCs. -------
 MASS       = 1043.0                    # typical loaded mass (MTOW ~1111 kg)
 MOI        = (1285.0, 1825.0, 2667.0)  # Ixx, Iyy, Izz (kg·m²)
-# Longitudinal stations (m, +fwd) from the wing quarter-chord:
-PROP_X     = 2.30                      # propeller disc (nose)
-WING_LE    = 0.37                      # wing leading edge (chord/4 ahead of AC)
-WING_TE    = -1.10                     # wing trailing edge (hinge line of ailerons)
-TAIL_X     = -4.55                     # tail aero centre (tail arm 4.55 m)
-NOSE_GEAR_X = 1.45
-MAIN_GEAR_X = -0.20                    # mains just aft of the CG (lets it rotate)
-# Vertical stations (m, +up) from the wing:
-CG_Z       = -1.20                     # CG below the high wing
-THRUST_Z   = -1.05                     # propeller thrust line (engine height)
-HSTAB_Z    = -0.70                     # horizontal tail height
-FIN_BASE_Z = -0.70                     # fin root (= tailplane)
-FIN_TOP_Z  = 0.35                      # fin tip (~2.75 m above ground)
-FIN_Z      = 0.5 * (FIN_BASE_Z + FIN_TOP_Z)   # fin / rudder aero centre
-GEAR_Z     = -2.40                     # wheel contacts (wing 2.4 m up, parked)
-START_Z    = -GEAR_Z                   # parked so the wheels rest on z=0
-CG         = (0.0, 0.0, CG_Z)
-# Wing + surface planform:
-WING_AREA  = 16.2                      # m² total planform
-WING_SPAN  = 11.0                      # m
-WING_CHORD = 1.47                      # mean chord (= area / span)
-WING_INC   = np.radians(1.5)           # wing rigging incidence
-AIL_AREA   = 1.6                       # each outboard aileron section
-AIL_Y      = 4.3                       # aileron section span station
-AIL_SPAN   = 2.0                       # aileron section span (viz)
-HTAIL_AREA = 3.0                       # horizontal stabiliser + elevator
-HTAIL_CHORD = 0.9
-HTAIL_SPAN = 3.4
-VTAIL_AREA = 1.1                       # vertical fin + rudder
-VTAIL_CHORD = 1.0
-GEAR_TRACK = 1.25                      # half the main-gear track
-GEAR = {"nose":   (NOSE_GEAR_X, 0.0, GEAR_Z),    # tricycle gear contacts
-        "main_l": (MAIN_GEAR_X, +GEAR_TRACK, GEAR_Z),
-        "main_r": (MAIN_GEAR_X, -GEAR_TRACK, GEAR_Z)}
+
+# CG — not in the survey: placed near the wing quarter-chord (~28% MAC) at
+# cabin height. The high wing then sits ~0.85 m above the CG.
+CG         = (-1.90, 0.0, 0.10)
+
+# Main wing — NACA 2412, rectangular, +1.5° rigging incidence.
+WING_AREA  = 16.2; WING_SPAN = 11.0; WING_CHORD = 1.47
+WING_INC   = np.radians(1.5)
+WING_QC_X  = -1.73                      # quarter-chord (centre −2.10, +0.37 fwd)
+WING_Z     = 0.95
+WING_LE_X  = -1.36; WING_TE_X = -2.83   # root chord edges (viz)
+DIHEDRAL   = np.radians(8.0)            # on the outboard panels for roll
+                                        # stability (the flat centre gives none)
+
+# Ailerons — the outboard wing sections (survey y 3.20–5.35), each a
+# ControlSurface (wing section + trailing-edge flap).
+AIL_Y      = 4.27                       # section centre span station
+AIL_SPAN   = 2.15
+AIL_AREA   = AIL_SPAN * WING_CHORD       # ≈ 3.16 m² outboard section
+AIL_FLAP   = 0.32 / WING_CHORD           # aileron is 22% of the chord
+
+# Horizontal tail — NACA 0012, span 3.45, chord 0.85 (elevator = rear 41%).
+HTAIL_QC_X = -7.29; HTAIL_Z = 0.65       # QC (centre −7.50, +0.21 fwd)
+HTAIL_SPAN = 3.45; HTAIL_CHORD = 0.85
+HTAIL_AREA = HTAIL_SPAN * HTAIL_CHORD
+ELEV_FLAP  = 0.35 / HTAIL_CHORD
+
+# Vertical tail — NACA 0012, height 1.98 (z 0.70–2.68), chord 0.90 (rudder
+# = rear 42%).
+VTAIL_QC_X = -7.18; VTAIL_Z = 1.69       # QC (centre −7.40, +0.22 fwd)
+VTAIL_BASE_Z = 0.70; VTAIL_TOP_Z = 2.68
+VTAIL_CHORD = 0.90
+VTAIL_AREA = (VTAIL_TOP_Z - VTAIL_BASE_Z) * VTAIL_CHORD
+RUD_FLAP   = 0.38 / VTAIL_CHORD
+
+# Landing gear — wheel contact points (track 2.55 m).
+GEAR_Z     = -1.35
+GEAR = {"nose":   (-0.91, 0.0, GEAR_Z),
+        "main_l": (-2.82, +1.275, GEAR_Z),
+        "main_r": (-2.82, -1.275, GEAR_Z)}
+START_Z    = -GEAR_Z                     # parked so the wheels rest on z=0
+
+# Fuselage envelope (viz): nose at the hub back to the tail-cone tip.
+FUS_TAIL_X = -8.28; FUS_TAIL_Z = 0.55
 
 # --- propulsion (160 hp Lycoming O-320, fixed-pitch prop) + control throws --
 THRUST     = 2600.0                    # N, static (sized for a brisk demo
@@ -98,13 +106,13 @@ THRUST     = 2600.0                    # N, static (sized for a brisk demo
 PROP_TORQUE = -410.0                   # N·m reaction roll at full power
                                        # (160 hp / ~2700 rpm ≈ 420 N·m); rolls
                                        # left, held off with right-aileron trim
-MAX_AIL    = np.radians(8.0)
+MAX_AIL    = np.radians(12.0)
 MAX_ELEV   = np.radians(14.0)
 MAX_RUD    = np.radians(22.0)
 THR_MAX    = 1.0
 THR_RATE   = 0.4                       # throttle slew per second (X/Z held)
-AIL_TRIM   = np.radians(0.42)          # right-aileron trim vs. prop torque
-ELEV_TRIM  = np.radians(-4.5)          # standing nose-up elevator: rotates and
+AIL_TRIM   = np.radians(0.30)          # right-aileron trim vs. prop torque
+ELEV_TRIM  = np.radians(-3.0)          # standing nose-up elevator: rotates and
                                        # climbs hands-off at full power
 
 # Full-size surfaces: servo authority sized so the surfaces track command
@@ -131,43 +139,46 @@ def build_world():
     ar = WING_SPAN**2 / WING_AREA
     wing = naca("2412", "wing", area=WING_AREA - 2 * AIL_AREA, chord=WING_CHORD,
                 induced_k=1.0 / (np.pi * ar * 0.8),
-                chord_axis=wing_chord_axis, normal_axis=wing_normal_axis)
+                chord_axis=wing_chord_axis, normal_axis=wing_normal_axis,
+                transform=(WING_QC_X, 0.0, WING_Z))
     a.add(wing)
 
-    # Ailerons: outboard 2412 sections with trailing-edge flaps, at ±span.
+    # Ailerons: outboard 2412 sections with trailing-edge flaps, set at the
+    # wing dihedral (lift tilts inboard, so sideslip is self-correcting).
     foil = dict(alpha_0=wing.alpha_0, Cm_ac=wing.Cm_ac, CL_max=wing.CL_max,
                 CD_0=wing.CD_0, induced_k=wing.induced_k)
+    sd = np.sin(DIHEDRAL)
     for name, sy in (("ail_l", +1.0), ("ail_r", -1.0)):
         a.add(ControlSurface(name, area=AIL_AREA, chord=WING_CHORD,
-                             flap_chord_fraction=0.3, **foil,
+                             flap_chord_fraction=AIL_FLAP, **foil,
                              chord_axis=wing_chord_axis,
-                             normal_axis=wing_normal_axis, **SERVO,
-                             transform=(0.0, sy * AIL_Y, 0.0)))
+                             normal_axis=(-si, -sy * sd, ci), **SERVO,
+                             transform=(WING_QC_X, sy * AIL_Y, WING_Z)))
 
     # Horizontal tail = elevator (whole stabiliser), symmetric NACA 0012.
     t = naca("0012", area=1.0, chord=1.0)   # 0012 invariants (CL_max, CD_0)
     a.add(ControlSurface("elev", area=HTAIL_AREA, chord=HTAIL_CHORD,
-                         flap_chord_fraction=0.4,
+                         flap_chord_fraction=ELEV_FLAP,
                          CL_max=t.CL_max, CD_0=t.CD_0, induced_k=0.06,
                          chord_axis=(1.0, 0.0, 0.0), normal_axis=(0.0, 0.0, 1.0),
-                         **SERVO, transform=(TAIL_X, 0.0, HSTAB_Z)))
+                         **SERVO, transform=(HTAIL_QC_X, 0.0, HTAIL_Z)))
 
     # Vertical fin = rudder (whole fin), stood upright so lift acts along y.
     a.add(ControlSurface("rud", area=VTAIL_AREA, chord=VTAIL_CHORD,
-                         flap_chord_fraction=0.4,
+                         flap_chord_fraction=RUD_FLAP,
                          CL_max=t.CL_max, CD_0=t.CD_0, induced_k=0.08,
                          chord_axis=(1.0, 0.0, 0.0), normal_axis=(0.0, 1.0, 0.0),
-                         **SERVO, transform=(TAIL_X, 0.0, FIN_Z)))
+                         **SERVO, transform=(VTAIL_QC_X, 0.0, VTAIL_Z)))
 
     # Fuselage parasite drag (at CG height, so no pitch moment) + propeller:
-    # thrust along the centreline at the nose, with the engine's reaction
+    # thrust along the centreline at the hub, with the engine's reaction
     # roll torque about the thrust axis.
     a.add(DragSurface.isotropic_quadratic("fuselage", area=0.7,
                                           drag_coefficient=0.4,
-                                          transform=(0.0, 0.0, CG_Z)))
+                                          transform=CG))
     a.add(Thruster("prop", force=(THRUST, 0.0, 0.0),
                    torque=(PROP_TORQUE, 0.0, 0.0),
-                   transform=(PROP_X, 0.0, THRUST_Z)))
+                   transform=(0.0, 0.0, 0.0)))
 
     # Tricycle landing gear: frictionless point contacts (free-rolling
     # wheels) on the ground plane.
@@ -223,49 +234,45 @@ def main() -> None:
             print("Type into THIS terminal; watch the viewer.\n")
 
     FIXED, MOVING, METAL = (120, 150, 210), (240, 150, 60), (150, 150, 158)
-    # Surface chords: the moving control is the rear fraction; the fixed
-    # stabiliser/fin/wing is what's ahead of the hinge line.
-    AIL_FLAP_C  = 0.30 * WING_CHORD
-    ELEV_FLAP_C = 0.40 * HTAIL_CHORD
-    RUD_FLAP_C  = 0.40 * VTAIL_CHORD
+    # Control-surface chords (survey, m); the moving flap is the rear part,
+    # the fixed stabiliser/fin/wing is ahead of the hinge line.
+    AIL_FLAP_C, ELEV_FLAP_C, RUD_FLAP_C = 0.32, 0.35, 0.38
     HSTAB_FIX_C = HTAIL_CHORD - ELEV_FLAP_C
     FIN_FIX_C   = VTAIL_CHORD - RUD_FLAP_C
-    # Hinge-line x of each control (rear edge of its fixed surface).
-    AIL_HINGE_X  = WING_TE                      # wing trailing edge
-    ELEV_HINGE_X = TAIL_X + 0.25 * HTAIL_CHORD - HSTAB_FIX_C
-    RUD_HINGE_X  = TAIL_X + 0.25 * VTAIL_CHORD - FIN_FIX_C
+    HTAIL_TE_X  = HTAIL_QC_X - 0.75 * HTAIL_CHORD     # tailplane trailing edge
+    VTAIL_TE_X  = VTAIL_QC_X - 0.75 * VTAIL_CHORD
+    # Hinge-line x of each control (front of its moving flap).
+    AIL_HINGE_X  = WING_TE_X + AIL_FLAP_C
+    ELEV_HINGE_X = HTAIL_TE_X + ELEV_FLAP_C
+    RUD_HINGE_X  = VTAIL_TE_X + RUD_FLAP_C
     viz = None if args.no_viz else Viz("manta/airplane", addr=args.viz_addr)
     if viz is not None:
         viz.plane("world/ground", z=0.0, size=2000.0, color=(70, 110, 70, 160))
         viz.box("world/runway", (1000.0, 30.0, 0.01), center=(450.0, 0.0, 0.0),
                 color=(120, 120, 125))
-        # --- fixed airframe -------------------------------------------------
-        # Fuselage: nose (behind the prop) back to the tail cone, at CG height.
-        fus_nose, fus_tail = PROP_X - 0.1, TAIL_X - 0.45
-        viz.box("world/plane/fus", (fus_nose - fus_tail, 0.55, 0.72),
-                center=(0.5 * (fus_nose + fus_tail), 0, CG_Z), color=METAL)
-        # High wing across the top (posed with incidence at f == 0).
+        # --- fixed airframe (all relative to the prop hub) -----------------
+        # Fuselage: prop hub back to the tail-cone tip.
+        viz.box("world/plane/fus", (-FUS_TAIL_X, 1.0, 1.1),
+                center=(0.5 * FUS_TAIL_X, 0, 0.15), color=METAL)
+        # High wing across the top, centred on its 50%-chord line.
         viz.box("world/plane/wing/panel", (WING_CHORD, WING_SPAN, 0.13),
-                center=(WING_LE - 0.5 * WING_CHORD, 0, 0), color=FIXED)
-        # Fixed horizontal stabiliser + vertical fin (the elevator/rudder
-        # are the moving flaps behind them).
-        viz.box("world/plane/hstab",
-                (HSTAB_FIX_C, HTAIL_SPAN, 0.08),
-                center=(ELEV_HINGE_X + 0.5 * HSTAB_FIX_C, 0, HSTAB_Z),
+                center=(WING_LE_X - 0.5 * WING_CHORD, 0, WING_Z), color=FIXED)
+        # Fixed horizontal stabiliser + vertical fin (elevator/rudder are the
+        # moving flaps drawn behind them).
+        viz.box("world/plane/hstab", (HSTAB_FIX_C, HTAIL_SPAN, 0.08),
+                center=(ELEV_HINGE_X + 0.5 * HSTAB_FIX_C, 0, HTAIL_Z),
                 color=FIXED)
-        viz.box("world/plane/fin",
-                (FIN_FIX_C, 0.08, FIN_TOP_Z - FIN_BASE_Z),
-                center=(RUD_HINGE_X + 0.5 * FIN_FIX_C, 0, FIN_Z), color=FIXED)
+        viz.box("world/plane/fin", (FIN_FIX_C, 0.08, VTAIL_TOP_Z - VTAIL_BASE_Z),
+                center=(RUD_HINGE_X + 0.5 * FIN_FIX_C, 0, VTAIL_Z), color=FIXED)
         # Landing gear: a strut down to each wheel.
         for nm, (gx, gy, gz) in GEAR.items():
-            viz.box(f"world/plane/strut_{nm}",
-                    (0.09, 0.09, (CG_Z - 0.3) - gz),
-                    center=(gx, gy, 0.5 * ((CG_Z - 0.3) + gz)), color=(60, 60, 65))
+            viz.box(f"world/plane/strut_{nm}", (0.09, 0.09, -0.35 - gz),
+                    center=(gx, gy, 0.5 * (-0.35 + gz)), color=(60, 60, 65))
             viz.point(f"world/plane/wheel_{nm}", (gx, gy, gz),
                       color=(30, 30, 35), radius=0.3)
-        # Propeller disc at the nose.
-        viz.box("world/plane/prop", (0.05, 0.12, 1.9),
-                center=(PROP_X, 0, THRUST_Z), color=(45, 45, 50))
+        # Propeller disc at the hub.
+        viz.box("world/plane/prop", (0.05, 0.12, 1.9), center=(0, 0, 0),
+                color=(45, 45, 50))
         # --- moving control flaps (posed by deflection below) --------------
         viz.box("world/plane/ail_l/s", (AIL_FLAP_C, AIL_SPAN, 0.04),
                 center=(-0.5 * AIL_FLAP_C, 0, 0), color=MOVING)
@@ -273,15 +280,15 @@ def main() -> None:
                 center=(-0.5 * AIL_FLAP_C, 0, 0), color=MOVING)
         viz.box("world/plane/elev/s", (ELEV_FLAP_C, HTAIL_SPAN, 0.05),
                 center=(-0.5 * ELEV_FLAP_C, 0, 0), color=MOVING)
-        viz.box("world/plane/rud/s", (RUD_FLAP_C, 0.05, FIN_TOP_Z - FIN_BASE_Z),
+        viz.box("world/plane/rud/s", (RUD_FLAP_C, 0.05, 1.45),
                 center=(-0.5 * RUD_FLAP_C, 0, 0), color=MOVING)
 
     # Control → (hinge-line position, hinge axis) for the per-tick flap pose.
     # The flap box (above) is drawn just behind the hinge and swung by δ.
-    hinges = {"ail_l": ((AIL_HINGE_X, +AIL_Y, 0.0), (0, 1, 0)),
-              "ail_r": ((AIL_HINGE_X, -AIL_Y, 0.0), (0, 1, 0)),
-              "elev":  ((ELEV_HINGE_X, 0.0, HSTAB_Z), (0, 1, 0)),
-              "rud":   ((RUD_HINGE_X, 0.0, FIN_Z), (0, 0, 1))}
+    hinges = {"ail_l": ((AIL_HINGE_X, +AIL_Y, WING_Z), (0, 1, 0)),
+              "ail_r": ((AIL_HINGE_X, -AIL_Y, WING_Z), (0, 1, 0)),
+              "elev":  ((ELEV_HINGE_X, 0.0, HTAIL_Z), (0, 1, 0)),
+              "rud":   ((RUD_HINGE_X, 0.0, VTAIL_Z), (0, 0, 1))}
 
     throttle = 0.0                     # parked, engine idle
     airborne = False
@@ -355,7 +362,7 @@ def main() -> None:
                                  _quat(axis, ang))
                 if abs(throttle - thr_logged) > 0.005:
                     thr_logged = throttle
-                    viz.arrow("world/plane/thrust", (PROP_X, 0, THRUST_Z),
+                    viz.arrow("world/plane/thrust", (0, 0, 0),
                               (3.0 * throttle, 0, 0), color=(235, 80, 80),
                               radius=0.2)
                 # Chase cam: 30 m behind the plane along its heading (yaw
@@ -366,10 +373,6 @@ def main() -> None:
                 viz.chase("world/chase", eye, p)
                 if f == 0:
                     viz.track("world/chase")   # after the camera exists
-                    # Wing incidence pose: logged here (not at init) so
-                    # it exists on the sim timeline.
-                    viz.pose("world/plane/wing", (0, 0, 0),
-                             _quat((0, 1, 0), -WING_INC))
                 # Sparse + capped: most calls are no-ops (min_dist), and
                 # the re-sent polyline stays small. World-frame points, so
                 # NOT a child of the posed plane.
