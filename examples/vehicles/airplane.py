@@ -1,25 +1,30 @@
-"""Airplane — a passively stable airframe flown on real control surfaces.
+"""Airplane — a Cessna 172 Skyhawk flown on real control surfaces.
 
-No IMU, no stabilizer loops: the airframe itself is stable, like a
-trainer RC plane. The main `Aerofoil` wing is mounted at +10° incidence
-with the ballast `Mass` hung below its quarter-chord; a neutral
-horizontal tail weathervanes the nose back to trim, and the vertical fin
-does the same in yaw. Every control is a real `ControlSurface` — a wing
-section with a deflectable trailing-edge flap, no hinge joint: two
-ailerons at the wingtips, the elevator is the whole horizontal tail, the
-rudder the whole vertical fin. The keys command a target deflection; each
-surface's one-state servo (with its stall torque and aerodynamic hinge
-moment — so a surface can blow back at speed) drives it there, and the
-combined wing+flap lift falls out of the physics. Because the surfaces
-are massless flaps rather than articulated joints, the craft stays a flat
-rigid body — one deflection state per surface, not a joint angle+rate, and
-no per-step articulated solve: 17 states instead of 21, and the sim step
-and EKF predict run several times faster. A nose
-`Thruster` plays propeller, with a touch of reaction counter-torque about
-the thrust axis. Tricycle-gear `Collider`s rest the plane on a
-`CollisionField` runway — it starts parked, and the wing's built-in
-incidence floats it off the ground on its own once the takeoff roll
-passes flying speed.
+Built from published 172-class figures: ~1043 kg, 10.97 m span, 16.2 m²
+wing on a NACA 2412 section (via the `naca()` helper), a NACA 0012 tail,
+and the real moments of inertia. No IMU, no stabilizer loops — the
+airframe is statically stable on its own. As a high-wing aircraft the CG
+hangs about a metre below the wing, and that pendulum is its real roll
+stability; the horizontal tail and vertical fin weathervane it back to
+trim in pitch and yaw.
+
+Every control is a `ControlSurface` — a wing section with a deflectable
+trailing-edge flap, no hinge joint: two ailerons outboard on the wing,
+the elevator is the whole horizontal tail, the rudder the whole vertical
+fin. The keys command a target deflection; each surface's one-state servo
+(with its stall torque and aerodynamic hinge moment — so a surface can
+blow back at speed) drives it there, and the combined wing+flap lift
+falls out of the physics. Because the surfaces are massless flaps rather
+than articulated joints, the craft stays a flat rigid body — one
+deflection state per surface, not a joint angle+rate, and no per-step
+articulated solve: 17 states instead of 21, and the sim step and EKF
+predict run several times faster.
+
+A nose `Thruster` plays propeller (constant thrust, with a reaction roll
+torque the aileron trim cancels). Tricycle-gear `Colliders` rest it on a
+`CollisionField` runway. Like a real 172, it is flown on trim: a standing
+nose-up elevator trim rotates it at flying speed and holds the climb, so
+the scripted flight needs only throttle and the occasional aileron.
 
 Controls:  S/W elevator (pitch up/down)   A/D rudder (yaw left/right)
            Q/E ailerons (roll left/right)  X/Z throttle up/down
@@ -38,37 +43,55 @@ import numpy as np
 from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import CollisionField, FluidField, GravityField
 from manta.parts import (
-    Aerofoil, Collider, ControlSurface, DragSurface, Mass, Thruster,
+    Collider, ControlSurface, DragSurface, Mass, Thruster, naca,
 )
 
 from .._control import Pacer, TerminalController, common_args, make_controller
 from .._viz import Viz
 
-# --- airframe geometry (m, kg; x forward, y left, z up) --------------------
-MASS      = 3.0
-CG        = (0.0, 0.0, -0.18)          # ballast below the wing quarter-chord
-WING_INC  = np.radians(4.0)            # wing incidence (built-in AoA); the
-                                       # Aerofoil lift model is stronger than
-                                       # the old one, so less incidence trims
-                                       # the same cruise lift
-WING_CHORD = 0.3                       # mean wing chord (Reynolds reference)
-AIL_SPAN  = 1.0                        # aileron section station along the span
-TAIL_X    = -1.25                      # horizontal tail quarter-chord
-TAIL_CHORD = 0.18
-FIN_Z     = 0.12                       # vertical-stab mid-height
-FIN_CHORD = 0.18
-SURF_OFF  = (-0.05, 0.0, 0.0)          # viz panel offset behind the aero centre
-GEAR = {"nose":   (0.4, 0.0, -0.3),    # tricycle gear contact points
-        "main_l": (-0.1, +0.25, -0.3),
-        "main_r": (-0.1, -0.25, -0.3)}
+# --- Cessna 172 Skyhawk (published 172N-class figures; m, kg, x fwd / y
+# left / z up). Origin at the wing aerodynamic centre (quarter-chord). The
+# high wing sits above the cabin, so the CG hangs ~1 m below it — that
+# pendulum is the 172's real roll stability, not a modelling hack. ---------
+MASS       = 1043.0                    # typical loaded mass (MTOW ~1111 kg)
+MOI        = (1285.0, 1825.0, 2667.0)  # Ixx, Iyy, Izz (kg·m²)
+CG_Z       = -1.0                      # CG below the high wing
+CG         = (0.0, 0.0, CG_Z)
+WING_AREA  = 16.2                      # m² total planform
+WING_SPAN  = 10.97                     # m
+WING_CHORD = 1.48                      # mean chord (= area / span)
+WING_INC   = np.radians(1.5)           # wing rigging incidence
+AIL_AREA   = 1.6                       # each outboard aileron section
+AIL_Y      = 4.0                       # aileron section span station
+TAIL_X     = -4.6                      # tail quarter-chord aft of the wing AC
+HTAIL_AREA = 3.0                       # horizontal stabiliser + elevator
+HTAIL_CHORD = 0.9
+VTAIL_AREA = 1.1                       # vertical fin + rudder
+VTAIL_CHORD = 1.0
+FIN_Z      = 0.7                       # fin centre above the tail boom
+SURF_OFF   = (-0.3, 0.0, 0.0)          # viz panel offset behind the aero centre
+GEAR = {"nose":   (1.1, 0.0, -1.8),    # tricycle gear contact points
+        "main_l": (-0.4, +1.3, -1.8),
+        "main_r": (-0.4, -1.3, -1.8)}
+START_Z    = 1.8                       # parked so the wheels rest on z=0
 
-# --- control limits ----------------------------------------------------------
-MAX_AIL   = np.radians(8.0)
-MAX_ELEV  = np.radians(20.0)
-MAX_RUD   = np.radians(20.0)
-THR_MAX   = 1.0
-THR_RATE  = 0.4                        # throttle slew per second (X/Z held)
-AIL_TRIM  = np.radians(0.045)          # aileron trim vs. prop torque, per throttle
+# --- propulsion (160 hp Lycoming, fixed-pitch prop, modelled as constant
+# thrust) + control throws ---------------------------------------------------
+THRUST     = 2600.0                    # N, static (sized for a brisk demo
+                                       # climb; a stock 172 is ~1300 N)
+PROP_TORQUE = -45.0                    # N·m reaction roll (countered by trim)
+MAX_AIL    = np.radians(8.0)
+MAX_ELEV   = np.radians(14.0)
+MAX_RUD    = np.radians(22.0)
+THR_MAX    = 1.0
+THR_RATE   = 0.4                       # throttle slew per second (X/Z held)
+AIL_TRIM   = np.radians(0.055)         # aileron trim vs. prop torque, per throttle
+ELEV_TRIM  = np.radians(-4.5)          # standing nose-up elevator: rotates and
+                                       # climbs hands-off at full power
+
+# Full-size surfaces: servo authority sized so the surfaces track command
+# in normal flight but can still blow back under extreme load.
+SERVO = dict(stall_torque=600.0, hinge_damping=40.0, servo_gain=4000.0)
 
 # Deflection-command sign per surface, chosen so the documented keys give
 # the intuitive response (S = nose up, D = nose right, Q = roll left).
@@ -78,66 +101,66 @@ RUD_SIGN  = +1.0
 
 def build_world():
     a = Craft("plane")
-    a.add(Mass("body", mass=MASS, moi=(0.4, 0.35, 0.7), transform=CG))
+    a.add(Mass("body", mass=MASS, moi=MOI, transform=CG))
 
-    # Main wing at +10° incidence: tilt the chord/normal pair in the part
-    # frame so level flight already sees α = WING_INC. The centre section
-    # is a plain Aerofoil; the wingtips are aileron ControlSurfaces sharing
-    # the same incidence — together they make up the full wing area.
+    # Main wing — NACA 2412 (cambered), rigged at +1.5° incidence: tilt the
+    # chord/normal pair so level flight already sees α = WING_INC. The
+    # centre section is a plain Aerofoil; the outboard tips are aileron
+    # ControlSurfaces sharing the same foil — together the full wing area.
     ci, si = np.cos(WING_INC), np.sin(WING_INC)
     wing_chord_axis  = (ci, 0.0, si)
     wing_normal_axis = (-si, 0.0, ci)
-    a.add(Aerofoil("wing", area=0.6, chord=WING_CHORD,
-                   CL_max=1.2, CD_0=0.02, induced_k=0.05,
-                   chord_axis=wing_chord_axis, normal_axis=wing_normal_axis))
+    ar = WING_SPAN**2 / WING_AREA
+    wing = naca("2412", "wing", area=WING_AREA - 2 * AIL_AREA, chord=WING_CHORD,
+                induced_k=1.0 / (np.pi * ar * 0.8),
+                chord_axis=wing_chord_axis, normal_axis=wing_normal_axis)
+    a.add(wing)
 
-    # Ailerons: wingtip sections with trailing-edge flaps, at ±span.
+    # Ailerons: outboard 2412 sections with trailing-edge flaps, at ±span.
+    foil = dict(alpha_0=wing.alpha_0, Cm_ac=wing.Cm_ac, CL_max=wing.CL_max,
+                CD_0=wing.CD_0, induced_k=wing.induced_k)
     for name, sy in (("ail_l", +1.0), ("ail_r", -1.0)):
-        a.add(ControlSurface(name, area=0.06, chord=WING_CHORD,
-                             flap_chord_fraction=0.3,
-                             CL_max=1.2, CD_0=0.02, induced_k=0.06,
+        a.add(ControlSurface(name, area=AIL_AREA, chord=WING_CHORD,
+                             flap_chord_fraction=0.3, **foil,
                              chord_axis=wing_chord_axis,
-                             normal_axis=wing_normal_axis,
-                             stall_torque=5.0, hinge_damping=0.3,
-                             servo_gain=40.0,
-                             transform=(0.0, sy * AIL_SPAN, 0.0)))
+                             normal_axis=wing_normal_axis, **SERVO,
+                             transform=(0.0, sy * AIL_Y, 0.0)))
 
-    # Horizontal tail = elevator: the whole stabiliser is one control
-    # surface (stab + elevator combined).
-    a.add(ControlSurface("elev", area=0.14, chord=TAIL_CHORD,
+    # Horizontal tail = elevator (whole stabiliser), symmetric NACA 0012.
+    t = naca("0012", area=1.0, chord=1.0)   # 0012 invariants (CL_max, CD_0)
+    a.add(ControlSurface("elev", area=HTAIL_AREA, chord=HTAIL_CHORD,
                          flap_chord_fraction=0.4,
-                         CL_max=1.2, CD_0=0.01, induced_k=0.04,
+                         CL_max=t.CL_max, CD_0=t.CD_0, induced_k=0.06,
                          chord_axis=(1.0, 0.0, 0.0), normal_axis=(0.0, 0.0, 1.0),
-                         stall_torque=5.0, hinge_damping=0.3, servo_gain=40.0,
-                         transform=(TAIL_X, 0.0, 0.0)))
+                         **SERVO, transform=(TAIL_X, 0.0, 0.0)))
 
-    # Vertical fin = rudder: stood upright so lift acts along body y.
-    a.add(ControlSurface("rud", area=0.09, chord=FIN_CHORD,
+    # Vertical fin = rudder (whole fin), stood upright so lift acts along y.
+    a.add(ControlSurface("rud", area=VTAIL_AREA, chord=VTAIL_CHORD,
                          flap_chord_fraction=0.4,
-                         CL_max=1.2, CD_0=0.01, induced_k=0.04,
+                         CL_max=t.CL_max, CD_0=t.CD_0, induced_k=0.08,
                          chord_axis=(1.0, 0.0, 0.0), normal_axis=(0.0, 1.0, 0.0),
-                         stall_torque=5.0, hinge_damping=0.3, servo_gain=40.0,
-                         transform=(TAIL_X, 0.0, FIN_Z)))
+                         **SERVO, transform=(TAIL_X, 0.0, FIN_Z)))
 
-    # Fuselage drag (at CG height, so it adds no pitch moment) + propeller:
-    # thrust through the CG, with a small reaction torque about the axis.
-    a.add(DragSurface.isotropic_quadratic("fuselage", area=0.02,
+    # Fuselage parasite drag (at CG height, so no pitch moment) + propeller:
+    # thrust along the centreline, with a reaction roll torque about the axis.
+    a.add(DragSurface.isotropic_quadratic("fuselage", area=0.7,
                                           drag_coefficient=0.4,
-                                          transform=(0.0, 0.0, CG[2])))
-    a.add(Thruster("prop", force=(9.0, 0.0, 0.0), torque=(-0.04, 0.0, 0.0),
-                   transform=(0.45, 0.0, CG[2])))
+                                          transform=(0.0, 0.0, CG_Z)))
+    a.add(Thruster("prop", force=(THRUST, 0.0, 0.0),
+                   torque=(PROP_TORQUE, 0.0, 0.0),
+                   transform=(1.5, 0.0, CG_Z)))
 
     # Tricycle landing gear: frictionless point contacts (free-rolling
     # wheels) on the ground plane.
     for name, pos in GEAR.items():
-        a.add(Collider(name, stiffness=2000.0, damping=60.0, transform=pos))
+        a.add(Collider(name, stiffness=1.5e5, damping=8000.0, transform=pos))
 
     w = (World()
          .add_field(GravityField().add_uniform((0.0, 0.0, -9.81)))
          .add_field(FluidField().add_uniform(density=1.225))
          .add_field(CollisionField().add_half_space(origin=(0.0, 0.0, 0.0),
                                                     normal=(0.0, 0.0, 1.0))))
-    w.add_craft(a, position=(0.0, 0.0, 0.30))    # parked on the runway
+    w.add_craft(a, position=(0.0, 0.0, START_Z))    # parked on the runway
     return w
 
 
@@ -160,18 +183,19 @@ def _euler(q_wxyz):
 def main() -> None:
     args = common_args(__doc__).parse_args()
     dt = 0.002
-    duration = args.duration or (1e9 if args.keyboard else 36.0)
+    duration = args.duration or (1e9 if args.keyboard else 120.0)
 
     sim = TargetNumpy(Sim(build_world()))
 
-    # Scripted flight: full throttle down the runway (the wing incidence
-    # lifts it off by itself), climb, bank into a right turn, level the
-    # wings, then throttle off and glide back down to a landing.
+    # Scripted flight, flown like a real 172: full power down the runway —
+    # the elevator trim rotates it at flying speed and holds the climb —
+    # then ease the power back and nose level for cruise, bank into a right
+    # turn, roll level, and finally throttle off and glide down to land.
     script = [(0.5, 3.0, {"x"}),       # full throttle → takeoff roll + climb
-              (9.0, 10.6, {"z"}),      # back to cruise power
-              (12.5, 12.9, {"e"}),     # roll right into a bank
-              (15.5, 15.8, {"q"}),     # roll back wings-level
-              (18.0, 21.0, {"z"})]     # throttle to zero → glide in
+              (38.0, 39.0, {"z"}),     # ease back to cruise power
+              (44.0, 44.4, {"e"}),     # roll right into a bank
+              (46.5, 46.9, {"q"}),     # roll back wings-level
+              (54.0, 58.0, {"z"})]     # throttle to idle → glide down to land
     ctrl = make_controller(args.keyboard, script)
     if args.keyboard:
         print("Controls:  S/W pitch up/down   A/D yaw   Q/E roll   "
@@ -182,33 +206,32 @@ def main() -> None:
     FIXED, MOVING = (120, 150, 210), (240, 150, 60)
     viz = None if args.no_viz else Viz("manta/airplane", addr=args.viz_addr)
     if viz is not None:
-        viz.plane("world/ground", z=0.0, size=300.0, color=(70, 110, 70, 160))
-        viz.box("world/runway", (60.0, 3.0, 0.002), center=(55.0, 0.0, 0.0),
+        viz.plane("world/ground", z=0.0, size=2000.0, color=(70, 110, 70, 160))
+        viz.box("world/runway", (900.0, 25.0, 0.01), center=(420.0, 0.0, 0.0),
                 color=(120, 120, 125))
         for pos in GEAR.values():
             viz.point(f"world/plane/gear/{pos[0]:.2f}_{pos[1]:.2f}", pos,
-                      color=(40, 40, 45), radius=0.05)
-        viz.box("world/plane/fus", (0.95, 0.035, 0.035), center=(-0.45, 0, 0),
+                      color=(40, 40, 45), radius=0.25)
+        # Fuselage + fin post, at CG height; wing across the top (high wing).
+        viz.box("world/plane/fus", (7.5, 0.5, 0.6), center=(-1.4, 0, CG_Z),
                 color=(150, 150, 158))
-        viz.box("world/plane/wing/panel", (0.15, 1.2, 0.008),
-                center=(-0.075, 0, 0), color=FIXED)
-        viz.box("world/plane/tail", (0.075, 0.3, 0.006),
-                center=(TAIL_X - 0.0375, 0, 0), color=FIXED)
-        viz.box("world/plane/fin", (0.075, 0.005, 0.12),
-                center=(TAIL_X - 0.0375, 0, FIN_Z), color=FIXED)
-        viz.box("world/plane/ail_l/s", (0.05, 0.2, 0.004), center=SURF_OFF,
+        viz.box("world/plane/wing/panel",
+                (WING_CHORD, WING_SPAN, 0.12), center=(-0.4, 0, 0), color=FIXED)
+        # Moving surfaces: ailerons at the tips, elevator = whole tailplane,
+        # rudder = whole fin (each posed by its deflection below).
+        viz.box("world/plane/ail_l/s", (0.45, 2.0, 0.04), center=SURF_OFF,
                 color=MOVING)
-        viz.box("world/plane/ail_r/s", (0.05, 0.2, 0.004), center=SURF_OFF,
+        viz.box("world/plane/ail_r/s", (0.45, 2.0, 0.04), center=SURF_OFF,
                 color=MOVING)
-        viz.box("world/plane/elev/s", (0.04, 0.3, 0.004), center=SURF_OFF,
+        viz.box("world/plane/elev/s", (HTAIL_CHORD, 3.4, 0.05), center=SURF_OFF,
                 color=MOVING)
-        viz.box("world/plane/rud/s", (0.04, 0.003, 0.1), center=SURF_OFF,
+        viz.box("world/plane/rud/s", (VTAIL_CHORD, 0.05, 1.4), center=SURF_OFF,
                 color=MOVING)
 
     # Hinge name → (viz path, hinge position, hinge axis) for the per-tick
     # deflection poses.
-    hinges = {"ail_l": ((0.0, +AIL_SPAN, 0.0), (0, 1, 0)),
-              "ail_r": ((0.0, -AIL_SPAN, 0.0), (0, 1, 0)),
+    hinges = {"ail_l": ((0.0, +AIL_Y, 0.0), (0, 1, 0)),
+              "ail_r": ((0.0, -AIL_Y, 0.0), (0, 1, 0)),
               "elev":  ((TAIL_X, 0.0, 0.0), (0, 1, 0)),
               "rud":   ((TAIL_X, 0.0, FIN_Z), (0, 0, 1))}
 
@@ -249,7 +272,8 @@ def main() -> None:
             ail = MAX_AIL * (ctrl.held("q") - ctrl.held("e")) \
                 + AIL_TRIM * throttle
             targets = {
-                "elev": ELEV_SIGN * MAX_ELEV * (ctrl.held("s") - ctrl.held("w")),
+                "elev": ELEV_SIGN * MAX_ELEV * (ctrl.held("s") - ctrl.held("w"))
+                        + ELEV_TRIM,
                 "rud":  RUD_SIGN  * MAX_RUD  * (ctrl.held("d") - ctrl.held("a")),
                 "ail_l": +ail, "ail_r": -ail,
             }
@@ -283,14 +307,14 @@ def main() -> None:
                                  _quat(axis, ang))
                 if abs(throttle - thr_logged) > 0.005:
                     thr_logged = throttle
-                    viz.arrow("world/plane/thrust", (0.5, 0, CG[2]),
-                              (0.6 * throttle, 0, 0), color=(235, 80, 80),
-                              radius=0.02)
-                # Chase cam: 7 m behind the plane along its heading (yaw
-                # only — no roll/pitch, so the horizon stays level), 2 m up.
+                    viz.arrow("world/plane/thrust", (1.5, 0, CG_Z),
+                              (3.0 * throttle, 0, 0), color=(235, 80, 80),
+                              radius=0.2)
+                # Chase cam: 30 m behind the plane along its heading (yaw
+                # only — no roll/pitch, so the horizon stays level), 8 m up.
                 yaw = _euler(q)[0]
                 eye = p + np.array(
-                    [-7.0 * np.cos(yaw), -7.0 * np.sin(yaw), 2.0])
+                    [-30.0 * np.cos(yaw), -30.0 * np.sin(yaw), 8.0])
                 viz.chase("world/chase", eye, p)
                 if f == 0:
                     viz.track("world/chase")   # after the camera exists
@@ -303,12 +327,12 @@ def main() -> None:
                 # NOT a child of the posed plane.
                 viz.trail("world/trail", p, max_len=300, min_dist=2.0)
 
-            # Wheels-off / touchdown reporting (gear sits at z≈0.30 at rest).
-            if not airborne and p[2] > 0.6:
+            # Wheels-off / touchdown reporting (origin rides at START_Z at rest).
+            if not airborne and p[2] > START_Z + 0.6:
                 airborne = True
                 print(f"      -- wheels off at t = {t:.2f} s, "
                       f"ground roll {p[0]:.1f} m")
-            elif airborne and p[2] < 0.35:
+            elif airborne and p[2] < START_Z + 0.3:
                 airborne = False
                 v = np.asarray(st["velocity"]).ravel()
                 print(f"      -- touchdown at t = {t:.2f} s, "
