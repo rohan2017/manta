@@ -12,7 +12,7 @@ import pytest
 
 from manta import Craft, World
 from manta.fields import PointMassGravity, UniformFluid, UniformGravity
-from manta.parts import Mass, Naca00xx, PointBuoy, PrismaticJoint, RevoluteJoint
+from manta.parts import Aerofoil, Mass, PointBuoy, PrismaticJoint, RevoluteJoint
 from manta.planets import Planet
 
 
@@ -77,16 +77,16 @@ def test_joint_axis_validated_and_normalized(cls):
 # Airfoil: area > 0, orthonormal axes
 # ---------------------------------------------------------------------------
 
-def test_naca_validation():
+def test_aerofoil_validation():
     with pytest.raises(ValueError, match="area must be > 0"):
-        Naca00xx("wing", area=0.0)
+        Aerofoil("wing", area=0.0)
     with pytest.raises(ValueError, match="must be perpendicular"):
-        Naca00xx("wing", chord_axis=(1.0, 0.0, 0.0),
+        Aerofoil("wing", chord_axis=(1.0, 0.0, 0.0),
                  normal_axis=(1.0, 0.0, 1.0))
     with pytest.raises(ValueError, match="CD_0 and induced_k"):
-        Naca00xx("wing", CD_0=-0.01)
+        Aerofoil("wing", CD_0=-0.01)
     # Non-unit but orthogonal axes are normalized.
-    a = Naca00xx("wing", chord_axis=(2.0, 0.0, 0.0),
+    a = Aerofoil("wing", chord_axis=(2.0, 0.0, 0.0),
                  normal_axis=(0.0, 0.0, 0.5))
     assert a.chord_axis == (1.0, 0.0, 0.0)
     assert a.normal_axis == (0.0, 0.0, 1.0)

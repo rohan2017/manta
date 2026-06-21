@@ -39,7 +39,7 @@ standard force-at-offset path. Off-axis drag surfaces produce body
 torques automatically.
 
 What's still deferred:
-  * Lift (airfoils with angle of attack) — use Naca00xx for that.
+  * Lift (airfoils with angle of attack) — use Aerofoil for that.
   * Spanwise variation — DragSurface is a single panel.
 """
 

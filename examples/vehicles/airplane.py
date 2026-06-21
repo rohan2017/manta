@@ -1,20 +1,25 @@
 """Airplane — a passively stable airframe flown on real control surfaces.
 
 No IMU, no stabilizer loops: the airframe itself is stable, like a
-trainer RC plane. The main `Naca00xx` wing is mounted at +10° incidence
+trainer RC plane. The main `Aerofoil` wing is mounted at +10° incidence
 with the ballast `Mass` hung below its quarter-chord; a neutral
 horizontal tail weathervanes the nose back to trim, and the vertical fin
-does the same in yaw. Every control is a real surface: small Naca panels
-riding saturating `RevoluteJoint` hinges — two ailerons at the wingtip trailing
-edges, an elevator behind the tail, a rudder behind the fin. The keys
-command a target deflection and a tiny P-servo (plus joint damping)
-drives each hinge there; the aerodynamic hinge moment, the servo
-reaction on the airframe, and the surface's lift all fall out of the
-physics. A nose `Thruster` plays propeller, with a touch of reaction
-counter-torque about the thrust axis. Tricycle-gear `Collider`s rest the
-plane on a `CollisionField` runway — it starts parked, and the wing's
-built-in incidence floats it off the ground on its own once the takeoff
-roll passes flying speed.
+does the same in yaw. Every control is a real `ControlSurface` — a wing
+section with a deflectable trailing-edge flap, no hinge joint: two
+ailerons at the wingtips, the elevator is the whole horizontal tail, the
+rudder the whole vertical fin. The keys command a target deflection; each
+surface's one-state servo (with its stall torque and aerodynamic hinge
+moment — so a surface can blow back at speed) drives it there, and the
+combined wing+flap lift falls out of the physics. Because the surfaces
+are massless flaps rather than articulated joints, the craft stays a flat
+rigid body — one deflection state per surface, not a joint angle+rate, and
+no per-step articulated solve: 17 states instead of 21, and the sim step
+and EKF predict run several times faster. A nose
+`Thruster` plays propeller, with a touch of reaction counter-torque about
+the thrust axis. Tricycle-gear `Collider`s rest the plane on a
+`CollisionField` runway — it starts parked, and the wing's built-in
+incidence floats it off the ground on its own once the takeoff roll
+passes flying speed.
 
 Controls:  S/W elevator (pitch up/down)   A/D rudder (yaw left/right)
            Q/E ailerons (roll left/right)  X/Z throttle up/down
@@ -32,7 +37,9 @@ import numpy as np
 
 from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import CollisionField, FluidField, GravityField
-from manta.parts import Collider, DragSurface, RevoluteJoint, Mass, Naca00xx, Thruster
+from manta.parts import (
+    Aerofoil, Collider, ControlSurface, DragSurface, Mass, Thruster,
+)
 
 from .._control import Pacer, TerminalController, common_args, make_controller
 from .._viz import Viz
@@ -40,72 +47,77 @@ from .._viz import Viz
 # --- airframe geometry (m, kg; x forward, y left, z up) --------------------
 MASS      = 3.0
 CG        = (0.0, 0.0, -0.18)          # ballast below the wing quarter-chord
-WING_INC  = np.radians(10.0)           # wing incidence (built-in AoA)
-AIL_HINGE = 0.225                      # wing TE behind the quarter-chord mount
-AIL_SPAN  = 1.0                        # aileron hinge station along the span
-TAIL_X    = -1.2                       # horizontal tail quarter-chord
-ELEV_X    = -1.32                      # elevator hinge (tail TE)
+WING_INC  = np.radians(4.0)            # wing incidence (built-in AoA); the
+                                       # Aerofoil lift model is stronger than
+                                       # the old one, so less incidence trims
+                                       # the same cruise lift
+WING_CHORD = 0.3                       # mean wing chord (Reynolds reference)
+AIL_SPAN  = 1.0                        # aileron section station along the span
+TAIL_X    = -1.25                      # horizontal tail quarter-chord
+TAIL_CHORD = 0.18
 FIN_Z     = 0.12                       # vertical-stab mid-height
-SURF_OFF  = (-0.05, 0.0, 0.0)          # surface panel centre behind its hinge
+FIN_CHORD = 0.18
+SURF_OFF  = (-0.05, 0.0, 0.0)          # viz panel offset behind the aero centre
 GEAR = {"nose":   (0.4, 0.0, -0.3),    # tricycle gear contact points
         "main_l": (-0.1, +0.25, -0.3),
         "main_r": (-0.1, -0.25, -0.3)}
 
-# --- control limits + servo --------------------------------------------------
+# --- control limits ----------------------------------------------------------
 MAX_AIL   = np.radians(8.0)
 MAX_ELEV  = np.radians(20.0)
 MAX_RUD   = np.radians(20.0)
 THR_MAX   = 1.0
 THR_RATE  = 0.4                        # throttle slew per second (X/Z held)
-SERVO_KP  = 20.0                       # hinge servo: torque = KP·(target − angle)
-AIL_TRIM  = np.radians(0.13)           # aileron trim vs. prop torque, per throttle
+AIL_TRIM  = np.radians(0.045)          # aileron trim vs. prop torque, per throttle
 
-
-def _hinge(name: str, pos: tuple, axis: tuple) -> RevoluteJoint:
-    """A control-surface hinge: saturating RevoluteJoint + a small rotor Mass so the
-    DOF has inertia for the servo to push against."""
-    j = RevoluteJoint(name, mode="saturating", stall_torque=5.0, damping=0.3,
-              axis=axis, transform=pos)
-    j.add(Mass(f"{name}_m", mass=0.02, moi=(0.002, 0.002, 0.002),
-               transform=SURF_OFF))
-    return j
+# Deflection-command sign per surface, chosen so the documented keys give
+# the intuitive response (S = nose up, D = nose right, Q = roll left).
+ELEV_SIGN = -1.0                       # +cmd = TE down = nose down → negate
+RUD_SIGN  = +1.0
 
 
 def build_world():
     a = Craft("plane")
     a.add(Mass("body", mass=MASS, moi=(0.4, 0.35, 0.7), transform=CG))
 
-    # Main wing at +10° incidence: tilt the chord/normal pair in the
-    # part frame so level flight already sees α = WING_INC.
+    # Main wing at +10° incidence: tilt the chord/normal pair in the part
+    # frame so level flight already sees α = WING_INC. The centre section
+    # is a plain Aerofoil; the wingtips are aileron ControlSurfaces sharing
+    # the same incidence — together they make up the full wing area.
     ci, si = np.cos(WING_INC), np.sin(WING_INC)
-    a.add(Naca00xx("wing", area=0.72, CL_max=1.2, CD_0=0.02, induced_k=0.25,
-                   chord_axis=(ci, 0.0, si), normal_axis=(-si, 0.0, ci)))
+    wing_chord_axis  = (ci, 0.0, si)
+    wing_normal_axis = (-si, 0.0, ci)
+    a.add(Aerofoil("wing", area=0.6, chord=WING_CHORD,
+                   CL_max=1.2, CD_0=0.02, induced_k=0.05,
+                   chord_axis=wing_chord_axis, normal_axis=wing_normal_axis))
 
-    # Ailerons: hinges at the wingtip trailing edges, spanwise (y) axis.
+    # Ailerons: wingtip sections with trailing-edge flaps, at ±span.
     for name, sy in (("ail_l", +1.0), ("ail_r", -1.0)):
-        h = _hinge(name, (-AIL_HINGE, sy * AIL_SPAN, 0.0), (0.0, 1.0, 0.0))
-        h.add(Naca00xx(f"{name}_s", area=0.04, CL_max=1.2, CD_0=0.01,
-                       induced_k=0.1, transform=SURF_OFF))
-        a.add(h)
+        a.add(ControlSurface(name, area=0.06, chord=WING_CHORD,
+                             flap_chord_fraction=0.3,
+                             CL_max=1.2, CD_0=0.02, induced_k=0.06,
+                             chord_axis=wing_chord_axis,
+                             normal_axis=wing_normal_axis,
+                             stall_torque=5.0, hinge_damping=0.3,
+                             servo_gain=40.0,
+                             transform=(0.0, sy * AIL_SPAN, 0.0)))
 
-    # Horizontal tail (neutral incidence) + elevator on its trailing edge.
-    a.add(Naca00xx("tail", area=0.09, CL_max=1.2, CD_0=0.01, induced_k=0.1,
-                   transform=(TAIL_X, 0.0, 0.0)))
-    elev = _hinge("elev", (ELEV_X, 0.0, 0.0), (0.0, 1.0, 0.0))
-    elev.add(Naca00xx("elev_s", area=0.05, CL_max=1.2, CD_0=0.01,
-                      induced_k=0.1, transform=SURF_OFF))
-    a.add(elev)
+    # Horizontal tail = elevator: the whole stabiliser is one control
+    # surface (stab + elevator combined).
+    a.add(ControlSurface("elev", area=0.14, chord=TAIL_CHORD,
+                         flap_chord_fraction=0.4,
+                         CL_max=1.2, CD_0=0.01, induced_k=0.04,
+                         chord_axis=(1.0, 0.0, 0.0), normal_axis=(0.0, 0.0, 1.0),
+                         stall_torque=5.0, hinge_damping=0.3, servo_gain=40.0,
+                         transform=(TAIL_X, 0.0, 0.0)))
 
-    # Vertical stabilizer above the tail + rudder on its trailing edge.
-    # Same Naca panel, stood upright: lift acts along body y.
-    a.add(Naca00xx("fin", area=0.06, CL_max=1.2, CD_0=0.01, induced_k=0.1,
-                   chord_axis=(1.0, 0.0, 0.0), normal_axis=(0.0, 1.0, 0.0),
-                   transform=(TAIL_X, 0.0, FIN_Z)))
-    rud = _hinge("rud", (ELEV_X, 0.0, FIN_Z), (0.0, 0.0, 1.0))
-    rud.add(Naca00xx("rud_s", area=0.03, CL_max=1.2, CD_0=0.01,
-                     induced_k=0.1, chord_axis=(1.0, 0.0, 0.0),
-                     normal_axis=(0.0, 1.0, 0.0), transform=SURF_OFF))
-    a.add(rud)
+    # Vertical fin = rudder: stood upright so lift acts along body y.
+    a.add(ControlSurface("rud", area=0.09, chord=FIN_CHORD,
+                         flap_chord_fraction=0.4,
+                         CL_max=1.2, CD_0=0.01, induced_k=0.04,
+                         chord_axis=(1.0, 0.0, 0.0), normal_axis=(0.0, 1.0, 0.0),
+                         stall_torque=5.0, hinge_damping=0.3, servo_gain=40.0,
+                         transform=(TAIL_X, 0.0, FIN_Z)))
 
     # Fuselage drag (at CG height, so it adds no pitch moment) + propeller:
     # thrust through the CG, with a small reaction torque about the axis.
@@ -195,10 +207,10 @@ def main() -> None:
 
     # Hinge name → (viz path, hinge position, hinge axis) for the per-tick
     # deflection poses.
-    hinges = {"ail_l": ((-AIL_HINGE, +AIL_SPAN, 0.0), (0, 1, 0)),
-              "ail_r": ((-AIL_HINGE, -AIL_SPAN, 0.0), (0, 1, 0)),
-              "elev":  ((ELEV_X, 0.0, 0.0), (0, 1, 0)),
-              "rud":   ((ELEV_X, 0.0, FIN_Z), (0, 0, 1))}
+    hinges = {"ail_l": ((0.0, +AIL_SPAN, 0.0), (0, 1, 0)),
+              "ail_r": ((0.0, -AIL_SPAN, 0.0), (0, 1, 0)),
+              "elev":  ((TAIL_X, 0.0, 0.0), (0, 1, 0)),
+              "rud":   ((TAIL_X, 0.0, FIN_Z), (0, 0, 1))}
 
     throttle = 0.0                     # parked, engine idle
     airborne = False
@@ -235,19 +247,21 @@ def main() -> None:
             # A whisker of aileron trim cancels the propeller's torque roll
             # (exactly what a real plane's trim tab is set for).
             ail = MAX_AIL * (ctrl.held("q") - ctrl.held("e")) \
-                - AIL_TRIM * throttle
-            targets = {"elev": MAX_ELEV * (ctrl.held("s") - ctrl.held("w")),
-                       "rud": MAX_RUD * (ctrl.held("d") - ctrl.held("a")),
-                       "ail_l": +ail, "ail_r": -ail}
+                + AIL_TRIM * throttle
+            targets = {
+                "elev": ELEV_SIGN * MAX_ELEV * (ctrl.held("s") - ctrl.held("w")),
+                "rud":  RUD_SIGN  * MAX_RUD  * (ctrl.held("d") - ctrl.held("a")),
+                "ail_l": +ail, "ail_r": -ail,
+            }
 
-            # Physics substeps: targets are held over the frame, but the
-            # hinge servos re-read their joint angle every substep.
+            # Physics substeps: deflection commands are held over the frame;
+            # each surface's own one-state servo drives it there (and lets
+            # it blow back if the air loads exceed the servo's stall torque).
             for _ in range(substeps):
                 st = sim.state["plane"]    # re-fetch: step() swaps the dict
                 st["prop.throttle"] = throttle
                 for name, target in targets.items():
-                    st[f"{name}.torque_cmd"] = \
-                        SERVO_KP * (target - float(st[f"{name}.angle"]))
+                    st[f"{name}.deflection_cmd"] = target
                 sim.step(dt)
                 t += dt
 
@@ -262,7 +276,7 @@ def main() -> None:
                 # — only log what actually changed. Surfaces and throttle
                 # sit still most of the flight.
                 for name, (pos, axis) in hinges.items():
-                    ang = float(st[f"{name}.angle"])
+                    ang = float(st[f"{name}.deflection"])
                     if abs(ang - hinge_logged.get(name, 1e9)) > 0.002:
                         hinge_logged[name] = ang
                         viz.pose(f"world/plane/{name}", pos,

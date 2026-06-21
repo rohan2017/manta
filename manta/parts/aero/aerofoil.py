@@ -21,7 +21,7 @@ Lift model (signed angle of attack α about the zero-lift line):
     CLmax_e = CL_max · clmax_reynolds_factor(Re)           (Re-scaled cap)
     x       = (CL_alpha / CLmax_e) · (α − alpha_0)
     CL      = CLmax_e · sin(x)        # slope CL_alpha at α₀, peak CLmax_e
-    CD      = CD_0 · cd0_reynolds_factor(Re) + induced_k · sin²(x)
+    CD      = CD_0 · cd0_reynolds_factor(Re) + induced_k · CL²
     Cm      = Cm_ac                   # constant couple about the AC
 
 Decoupling the lift-curve slope `CL_alpha` (≈2π, Re-independent) from the
@@ -119,7 +119,8 @@ class Aerofoil(Part):
                        DOWN at low Reynolds number.
         CD_0         — reference (at Re ≈ 5·10⁵) zero-lift drag coefficient.
                        Scaled by the local Reynolds number.
-        induced_k    — induced/lift-dependent drag factor.
+        induced_k    — induced-drag factor: CD gains induced_k·CL², so
+                       induced_k ≈ 1/(π·AR·e) (≈0.05 for an AR-6 wing).
     """
 
     area:        float = Parameter(0.1)
@@ -131,7 +132,7 @@ class Aerofoil(Part):
     Cm_ac:       float = Parameter(0.0)
     CL_max:      float = Parameter(1.3)
     CD_0:        float = Parameter(0.01)
-    induced_k:   float = Parameter(0.1)
+    induced_k:   float = Parameter(0.05)
 
     def __init__(self, name: str, **overrides) -> None:
         super().__init__(name, **overrides)
@@ -201,7 +202,9 @@ class Aerofoil(Part):
         x  = (float(self.CL_alpha) / CLmax_eff) * alpha_eff
         sx = ca.sin(x)
         CL = CLmax_eff * sx
-        CD = CD0_eff + float(self.induced_k) * sx * sx
+        # Induced drag scales with CL² (≈ CL²/(π·AR·e)); induced_k is that
+        # 1/(π·AR·e) coefficient, NOT a coefficient on the raw AoA.
+        CD = CD0_eff + float(self.induced_k) * CL * CL
         Cm = float(self.Cm_ac) + d_Cm
 
         q_dyn = 0.5 * rho * v2d_sq

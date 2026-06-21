@@ -36,7 +36,9 @@ from __future__ import annotations
 import numpy as np
 
 from manta import PID, Craft, Sim, TargetNumpy, World
-from manta.parts import DragSurface, RevoluteJoint, Mass, Naca00xx, PointBuoy, Thruster
+from manta.parts import (
+    Aerofoil, DragSurface, RevoluteJoint, Mass, PointBuoy, Thruster,
+)
 from manta.planets import Earth, SeaWaves
 
 from .._control import Pacer, common_args, make_controller
@@ -132,26 +134,30 @@ def build_world():
     # then produces a restoring roll moment instead of a divergent one.
     for tag, sy in (("l", +1.0), ("r", -1.0)):
         chord, normal = _tilt(FRONT_INC, sy * DIHEDRAL)
-        b.add(Naca00xx(f"foil_{tag}", area=FRONT_AREA, CL_max=1.1, CD_0=0.01,
-                       induced_k=0.1, chord_axis=chord, normal_axis=normal,
+        b.add(Aerofoil(f"foil_{tag}", area=FRONT_AREA, chord=0.12,
+                       CL_max=1.1, CD_0=0.01, induced_k=0.04,
+                       chord_axis=chord, normal_axis=normal,
                        transform=(FRONT_X, sy * FOIL_Y, FRONT_Z)))
     # Strut sample points sit LOW so they stay wetted at foiling ride
     # height — they are the only yaw stiffness once the hull is dry.
-    b.add(Naca00xx("strut_f", area=0.025, CL_max=1.1, CD_0=0.01,
-                   induced_k=0.1, chord_axis=(1, 0, 0), normal_axis=(0, 1, 0),
+    b.add(Aerofoil("strut_f", area=0.025, chord=0.10,
+                   CL_max=1.1, CD_0=0.01, induced_k=0.04,
+                   chord_axis=(1, 0, 0), normal_axis=(0, 1, 0),
                    transform=(FRONT_X, 0.0, -0.55)))
 
     # Rear split foil: each half is an elevon on a spanwise hinge.
     chord, normal = _tilt(REAR_INC, 0.0)
     for tag, sy in (("l", +1.0), ("r", -1.0)):
         h = _hinge(f"elev_{tag}", (REAR_X, sy * ELEV_Y, REAR_Z), (0, 1, 0))
-        h.add(Naca00xx(f"elev_{tag}_s", area=0.012, CL_max=1.1, CD_0=0.01,
-                       induced_k=0.1, chord_axis=chord, normal_axis=normal,
+        h.add(Aerofoil(f"elev_{tag}_s", area=0.012, chord=0.06,
+                       CL_max=1.1, CD_0=0.01, induced_k=0.04,
+                       chord_axis=chord, normal_axis=normal,
                        transform=(-0.03, 0.0, 0.0)))
         b.add(h)
     # Rear vertical stabilizer: much bigger than the front strut.
-    b.add(Naca00xx("strut_r", area=0.08, CL_max=1.1, CD_0=0.01,
-                   induced_k=0.1, chord_axis=(1, 0, 0), normal_axis=(0, 1, 0),
+    b.add(Aerofoil("strut_r", area=0.08, chord=0.12,
+                   CL_max=1.1, CD_0=0.01, induced_k=0.04,
+                   chord_axis=(1, 0, 0), normal_axis=(0, 1, 0),
                    transform=(REAR_X, 0.0, -0.70)))
 
     # Vectoring thruster: a yaw RevoluteJoint at the stern carries the prop.
