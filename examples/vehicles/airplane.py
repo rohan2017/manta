@@ -1,9 +1,9 @@
 """Airplane — a Cessna 172 Skyhawk flown on real control surfaces.
 
-Geometry is a measured 172 airframe survey (coordinate origin at the
-propeller hub): 11.0 m span / 16.2 m² wing on a NACA 2412 section (via the
-`naca()` helper), a NACA 0012 tail 5.4 m aft, gear and surface stations to
-scale, plus ~1043 kg and the real moments of inertia. No IMU, no stabilizer
+Geometry is a re-measured 172 airframe survey (coordinate origin at the
+propeller plane): 11.0 m span / 16.2 m² wing on a NACA 2412 section (via the
+`naca()` helper), a NACA 0012 tail 4.6 m aft, gear and surface stations to
+scale, plus 1043 kg gross and the real moments of inertia. No IMU, no stabilizer
 loops — the airframe is statically stable on its own: wing dihedral and the
 high-wing-over-CG pendulum give roll stability, and the horizontal tail and
 vertical fin weathervane it back to trim in pitch and yaw.
@@ -49,50 +49,61 @@ from manta.parts import (
 from .._control import Pacer, TerminalController, common_args, make_controller
 from .._viz import Viz
 
-# --- Cessna 172 Skyhawk, from a measured airframe survey. Coordinate
-# origin is the PROPELLER SPINNER HUB; +x forward (so the airframe lies at
-# negative x), +y left, +z up. Aerodynamic parts sit at their quarter-chord
-# (where lift acts); the survey's surface CENTRES map to those QCs. -------
-MASS       = 1043.0                    # typical loaded mass (MTOW ~1111 kg)
-MOI        = (1285.0, 1825.0, 2667.0)  # Ixx, Iyy, Izz (kg·m²)
+# --- Cessna 172 Skyhawk, from a re-measured airframe survey. Coordinate
+# origin is the PROPELLER PLANE (spinner tip) on the thrust line; +x forward
+# (so the airframe lies at negative x), +y left, +z up. Aerodynamic parts sit
+# at their quarter-chord (where lift acts); measured c/4 stations map to them.
+MASS       = 1043.0                    # kg, max gross (2300 lb); empty ~745 kg
+MOI        = (1742.0, 2475.0, 3616.0)  # Ixx, Iyy, Izz (kg·m²) at gross
+#                                        (Roskam 1285/1825/2667 slug·ft² ×1.356)
 
-# CG — from the survey.
-CG         = (-2.30, 0.0, -0.20)
+# CG — at gross, standard C172 reference.
+CG         = (-2.45, 0.0, -0.20)
 
-# Main wing — NACA 2412, rectangular, +1.5° rigging incidence.
-WING_AREA  = 16.2; WING_SPAN = 11.0; WING_CHORD = 1.47
+# Main wing — NACA 2412, rectangular, +1.5° rigging incidence, 1.7° dihedral.
+WING_AREA  = 16.2; WING_SPAN = 11.0; WING_CHORD = 1.49
 WING_INC   = np.radians(1.5)
-WING_QC_X  = -1.73                      # quarter-chord (centre −2.10, +0.37 fwd)
-WING_Z     = 0.95
-DIHEDRAL   = np.radians(1.73)           # real 172 wing dihedral
+WING_QC_X  = -2.44                      # quarter-chord (LE −2.07, TE −3.56)
+WING_Z     = 0.85
+DIHEDRAL   = np.radians(1.7)
 
-# Ailerons — the outboard wing sections (survey y 3.20–5.35), each a
-# ControlSurface (wing section + trailing-edge flap).
-AIL_Y      = 4.27                       # section centre span station
-AIL_SPAN   = 2.15
-AIL_AREA   = AIL_SPAN * WING_CHORD       # ≈ 3.16 m² outboard section
-AIL_FLAP   = 0.32 / WING_CHORD           # aileron is 22% of the chord
+# Ailerons — outboard wing sections (span 1.8 m, centred y ±3.9), each a
+# ControlSurface (full-chord wing section + trailing-edge flap). The flap is
+# the measured 0.46 m aileron chord.
+AIL_Y      = 3.9                        # section centre span station
+AIL_SPAN   = 1.8
+AIL_AREA   = AIL_SPAN * WING_CHORD       # ≈ 2.68 m² outboard section
+AIL_FLAP   = 0.46 / WING_CHORD           # aileron is 31% of the chord
 
-# Horizontal tail — NACA 0012, span 3.45, chord 0.85 (elevator = rear 41%).
-HTAIL_QC_X = -7.29; HTAIL_Z = 0.65       # QC (centre −7.50, +0.21 fwd)
-HTAIL_SPAN = 3.45; HTAIL_CHORD = 0.85
-HTAIL_AREA = HTAIL_SPAN * HTAIL_CHORD
-ELEV_FLAP  = 0.35 / HTAIL_CHORD
+# Horizontal tail — NACA 0012, rectangular, span 3.40, chord 0.60; the whole
+# stabiliser is the elevator (flap = the rear 0.27 m → 45% of the chord).
+HTAIL_QC_X = -7.05; HTAIL_Z = 0.25       # c/4 (LE −6.90, TE −7.50)
+HTAIL_AREA = 2.0; HTAIL_CHORD = 0.60
+ELEV_FLAP  = 0.27 / HTAIL_CHORD
 
-# Vertical tail — NACA 0012, height 1.98 (z 0.70–2.68), chord 0.90 (rudder
-# = rear 42%).
-VTAIL_QC_X = -7.18; VTAIL_Z = 1.69       # QC (centre −7.40, +0.22 fwd)
-VTAIL_BASE_Z = 0.70; VTAIL_TOP_Z = 2.68
-VTAIL_CHORD = 0.90
-VTAIL_AREA = (VTAIL_TOP_Z - VTAIL_BASE_Z) * VTAIL_CHORD
-RUD_FLAP   = 0.38 / VTAIL_CHORD
+# Vertical tail — NACA 0012, height ~1.2 (z 0.30–1.49), mean chord 0.95; the
+# whole fin is the rudder (flap = the rear 0.50 m → 53% of the chord). The fin
+# is tapered, so its MAC c/4 sits aft of the measured root c/4 (−6.60): anchor
+# the rectangular surface to the real TE (−7.50) so the rudder hinge lands on
+# the measured −7.00 (QC = −7.50 + 0.75·0.95).
+VTAIL_QC_X = -6.79; VTAIL_Z = 0.90       # MAC c/4 (TE −7.50, hinge −7.00)
+VTAIL_AREA = 1.1; VTAIL_CHORD = 0.95
+RUD_FLAP   = 0.50 / VTAIL_CHORD
 
-# Landing gear — wheel contact points (track 2.55 m).
-GEAR_Z     = -1.35
-GEAR = {"nose":   (-0.91, 0.0, GEAR_Z),
-        "main_l": (-2.82, +1.275, GEAR_Z),
-        "main_r": (-2.82, -1.275, GEAR_Z)}
+# Landing gear — wheel contact points (track 2.54 m, wheelbase 1.56 m).
+GEAR_Z     = -1.23
+GEAR = {"nose":   (-1.10, 0.0, GEAR_Z),
+        "main_l": (-2.66, +1.27, GEAR_Z),
+        "main_r": (-2.66, -1.27, GEAR_Z)}
 START_Z    = -GEAR_Z                     # parked so the wheels rest on z=0
+
+# Fuselage (decorative viz only — physics is a point DragSurface at the CG):
+# three measured rectangular prisms, each center=(x,y,z), size=(L,W,H).
+FUSELAGE_BOXES = dict(
+    nose  = dict(center=(-0.50, 0.0, -0.10), size=(1.00, 0.90, 0.95)),
+    cabin = dict(center=(-2.30, 0.0,  0.10), size=(2.60, 1.05, 1.40)),
+    tail  = dict(center=(-5.55, 0.0,  0.00), size=(3.90, 0.55, 0.75)),
+)
 
 # --- propulsion (160 hp Lycoming O-320, fixed-pitch prop) + control throws --
 THRUST     = 2600.0                    # N, static (sized for a brisk demo
@@ -124,24 +135,43 @@ def build_world():
     a.add(Mass("body", mass=MASS, moi=MOI, transform=CG))
 
     # Main wing — NACA 2412 (cambered), rigged at +1.5° incidence: tilt the
-    # chord/normal pair so level flight already sees α = WING_INC. The
-    # centre section is a plain Aerofoil; the outboard tips are aileron
-    # ControlSurfaces sharing the same foil — together the full wing area.
+    # chord/normal pair so level flight already sees α = WING_INC. The wing is
+    # unswept and rectangular (chord WING_CHORD, tips at ±WING_SPAN/2), split
+    # spanwise into CONTIGUOUS panels that tile the full span so each carries
+    # the real dihedral and the ailerons sit at their measured station. Per
+    # side, root→tip: an inboard fixed panel, the aileron ControlSurface (a
+    # wing section + trailing-edge flap), and a fixed tip panel. Every panel
+    # shares the wing quarter-chord x and chord-plane height; dihedral enters
+    # through normal_axis (y-component ∓sd → lift tilts inboard), since a single
+    # panel spanning both sides could not tilt left and right oppositely.
     ci, si = np.cos(WING_INC), np.sin(WING_INC)
-    wing_chord_axis  = (ci, 0.0, si)
-    wing_normal_axis = (-si, 0.0, ci)
+    sd = np.sin(DIHEDRAL)
+    wing_chord_axis = (ci, 0.0, si)
     ar = WING_SPAN**2 / WING_AREA
-    wing = naca("2412", "wing", area=WING_AREA - 2 * AIL_AREA, chord=WING_CHORD,
-                induced_k=1.0 / (np.pi * ar * 0.8),
-                chord_axis=wing_chord_axis, normal_axis=wing_normal_axis,
-                transform=(WING_QC_X, 0.0, WING_Z))
-    a.add(wing)
+    wing_ik = 1.0 / (np.pi * ar * 0.8)
+    tip = 0.5 * WING_SPAN                             # wingtip station (+5.50)
+    ail_in, ail_out = AIL_Y - 0.5 * AIL_SPAN, AIL_Y + 0.5 * AIL_SPAN   # 3.0/4.8
 
-    # Ailerons: outboard 2412 sections with trailing-edge flaps, set at the
-    # wing dihedral (lift tilts inboard, so sideslip is self-correcting).
+    def panel(name, sy, y0, y1):
+        """A fixed rectangular wing panel spanning y in [y0, y1] on side sy,
+        placed at its span centroid with the wing's quarter-chord and dihedral.
+        """
+        return naca("2412", name, area=(y1 - y0) * WING_CHORD, chord=WING_CHORD,
+                    induced_k=wing_ik, chord_axis=wing_chord_axis,
+                    normal_axis=(-si, -sy * sd, ci),
+                    transform=(WING_QC_X, sy * 0.5 * (y0 + y1), WING_Z))
+
+    wing = None
+    for s, sy in (("l", +1.0), ("r", -1.0)):
+        wing = panel(f"wing_in_{s}", sy, 0.0, ail_in)     # root → aileron
+        a.add(wing)
+        a.add(panel(f"wing_tip_{s}", sy, ail_out, tip))   # aileron → tip
+
+    # Ailerons: the outboard wing section (root chord, span AIL_SPAN) with a
+    # trailing-edge flap, at the wing dihedral so lift tilts inboard (sideslip
+    # is self-correcting). Placed at the aileron's span centroid AIL_Y.
     foil = dict(alpha_0=wing.alpha_0, Cm_ac=wing.Cm_ac, CL_max=wing.CL_max,
                 CD_0=wing.CD_0, induced_k=wing.induced_k)
-    sd = np.sin(DIHEDRAL)
     for name, sy in (("ail_l", +1.0), ("ail_r", -1.0)):
         a.add(ControlSurface(name, area=AIL_AREA, chord=WING_CHORD,
                              flap_chord_fraction=AIL_FLAP, **foil,
@@ -213,12 +243,11 @@ def draw_airframe(viz, craft):
     map used to swing the moving control flaps each frame.
 
     Only the fuselage is decorative (it is a point drag source, not a
-    shaped part): its extent is derived from the nose (prop) and the
-    aft-most surface so it still tracks the real layout.
+    shaped part): it is drawn from the measured FUSELAGE_BOXES prisms.
     """
     from manta.parts import Aerofoil, ControlSurface, Collider, Thruster
     FIXED, MOVING, METAL = (120, 150, 210), (240, 150, 60), (150, 150, 158)
-    hinges, surf_te, wing_te = {}, [], -1.0
+    hinges = {}
     for p in craft.parts:
         T = [float(v) for v in p.transform]
         if isinstance(p, (Aerofoil, ControlSurface)):
@@ -227,7 +256,6 @@ def draw_airframe(viz, craft):
             nax = [float(v) for v in p.normal_axis]
             vertical = abs(nax[1]) > abs(nax[2])        # fin/rudder
             le_x, te_x = T[0] + 0.25 * c, T[0] - 0.75 * c
-            surf_te.append(te_x)
 
             def box(name, chord_len, cx, color):
                 size = ((chord_len, 0.07, span) if vertical
@@ -249,24 +277,20 @@ def draw_airframe(viz, craft):
                                   tuple(round(v) for v in ax))
             else:
                 box(f"world/plane/{p.name}", c, T[0] - 0.25 * c, FIXED)
-                if p.name == "wing":
-                    wing_te = te_x
         elif isinstance(p, Thruster):
-            viz.box(f"world/plane/{p.name}", (0.05, 0.18, 1.9),
+            viz.box(f"world/plane/{p.name}", (0.05, 0.18, 1.93),
                     center=tuple(T), color=(45, 45, 50))
         elif isinstance(p, Collider):
             viz.box(f"world/plane/strut_{p.name}", (0.09, 0.09, -0.35 - T[2]),
                     center=(T[0], T[1], 0.5 * (-0.35 + T[2])), color=(60, 60, 65))
             viz.point(f"world/plane/wheel_{p.name}", tuple(T),
                       color=(30, 30, 35), radius=0.3)
-    # Fuselage (decorative): cabin from the nose to the wing trailing edge,
-    # tail boom on to just past the aft-most surface.
-    tail_x = min(surf_te) - 0.3
-    viz.box("world/plane/fus", (-wing_te, 1.1, 1.35),
-            center=(0.5 * wing_te, 0, 0.1), color=METAL)
-    viz.box("world/plane/boom", (wing_te - tail_x, 0.5, 0.65),
-            center=(0.5 * (wing_te + tail_x), 0, 0.3), color=METAL)
-    viz.track("world/plane/fus")
+    # Fuselage (decorative): three measured prisms. The cabin is the entity
+    # the camera tracks.
+    for nm, b in FUSELAGE_BOXES.items():
+        viz.box(f"world/plane/fus_{nm}", b["size"], center=b["center"],
+                color=METAL)
+    viz.track("world/plane/fus_cabin")
     return hinges
 
 
