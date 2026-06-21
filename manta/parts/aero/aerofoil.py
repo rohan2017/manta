@@ -156,14 +156,15 @@ class Aerofoil(Part):
                 f"{who}: chord_axis and normal_axis must be perpendicular "
                 f"(unit-vector dot product is {dot:.3e}).")
 
-    # The deflection-dependent aero shifts live here so a ControlSurface
-    # subclass can add the flap contribution without re-deriving the wind.
-    def _aero_shift(self, ctx):
-        """(Δalpha_0, ΔCm) applied on top of the foil's own camber. Zero
-        for a plain Aerofoil; a control surface overrides it."""
-        return ca.MX(0.0), ca.MX(0.0)
+    def _aero_wrench(self, ctx, d_alpha0, d_Cm):
+        """Force + pitching couple in PartFrame for this foil, given extra
+        deflection shifts ``d_alpha0`` (rad, shifts the zero-lift line) and
+        ``d_Cm`` (moment). Also returns the wind diagnostics a control
+        surface needs for its hinge dynamics: the signed angle of attack
+        and the dynamic pressure. Plain `Aerofoil` passes zero shifts.
 
-    def update(self, ctx) -> PartUpdate:
+        Returns ``(F_part, tau_part, alpha, q_dyn)``.
+        """
         p_world          = ctx.position[WorldFrame]
         v_surface_anchor = ctx.velocity[WorldFrame]
 
@@ -194,8 +195,7 @@ class Aerofoil(Part):
         CLmax_eff = float(self.CL_max) * clmax_reynolds_factor(Re)
         CD0_eff = float(self.CD_0) * cd0_reynolds_factor(Re)
 
-        # Deflection shifts (flap): effective zero-lift line + extra moment.
-        d_alpha0, d_Cm = self._aero_shift(ctx)
+        # Effective zero-lift line including any flap shift.
         alpha_eff = alpha - (float(self.alpha_0) + d_alpha0)
 
         x  = (float(self.CL_alpha) / CLmax_eff) * alpha_eff
@@ -219,6 +219,11 @@ class Aerofoil(Part):
         span_mx = ca.cross(chord_mx, normal_mx)
         M_mag   = q_dyn * float(self.area) * float(self.chord) * Cm
         tau_part = Vec3[PartFrame].from_mx(M_mag * span_mx)
+        return F_part, tau_part, alpha, q_dyn
+
+    def update(self, ctx) -> PartUpdate:
+        F_part, tau_part, _alpha, _q = self._aero_wrench(
+            ctx, ca.MX(0.0), ca.MX(0.0))
         return PartUpdate(wrench=Wrench(force=F_part, torque=tau_part))
 
 
