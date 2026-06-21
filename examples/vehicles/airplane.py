@@ -64,7 +64,6 @@ WING_AREA  = 16.2; WING_SPAN = 11.0; WING_CHORD = 1.47
 WING_INC   = np.radians(1.5)
 WING_QC_X  = -1.73                      # quarter-chord (centre −2.10, +0.37 fwd)
 WING_Z     = 0.95
-WING_LE_X  = -1.36; WING_TE_X = -2.83   # root chord edges (viz)
 DIHEDRAL   = np.radians(1.73)           # real 172 wing dihedral
 
 # Ailerons — the outboard wing sections (survey y 3.20–5.35), each a
@@ -205,12 +204,80 @@ def _euler(q_wxyz):
     return yaw, pitch, roll
 
 
+def draw_airframe(viz, craft):
+    """Render the airframe straight from the SIM parts — nothing is
+    duplicated, so what you see is the geometry the physics uses. Each
+    aerofoil / control surface is drawn at its part transform (the
+    quarter-chord) with its real chord and span (= area / chord); the prop
+    and gear at their transforms. Returns the ``{name: (hinge_pos, axis)}``
+    map used to swing the moving control flaps each frame.
+
+    Only the fuselage is decorative (it is a point drag source, not a
+    shaped part): its extent is derived from the nose (prop) and the
+    aft-most surface so it still tracks the real layout.
+    """
+    from manta.parts import Aerofoil, ControlSurface, Collider, Thruster
+    FIXED, MOVING, METAL = (120, 150, 210), (240, 150, 60), (150, 150, 158)
+    hinges, surf_te, wing_te = {}, [], -1.0
+    for p in craft.parts:
+        T = [float(v) for v in p.transform]
+        if isinstance(p, (Aerofoil, ControlSurface)):
+            c = float(p.chord)
+            span = float(p.area) / c
+            nax = [float(v) for v in p.normal_axis]
+            vertical = abs(nax[1]) > abs(nax[2])        # fin/rudder
+            le_x, te_x = T[0] + 0.25 * c, T[0] - 0.75 * c
+            surf_te.append(te_x)
+
+            def box(name, chord_len, cx, color):
+                size = ((chord_len, 0.07, span) if vertical
+                        else (chord_len, span, 0.07))
+                viz.box(name, size, center=(cx, T[1], T[2]), color=color)
+
+            if isinstance(p, ControlSurface):
+                flap_c = float(p.flap_chord_fraction) * c
+                fixed_c = c - flap_c
+                box(f"world/plane/{p.name}_fix", fixed_c,
+                    le_x - 0.5 * fixed_c, FIXED)
+                flap_size = ((flap_c, 0.05, span) if vertical
+                             else (flap_c, span, 0.05))
+                viz.box(f"world/plane/{p.name}/s", flap_size,
+                        center=(-0.5 * flap_c, 0, 0), color=MOVING)
+                ax = np.cross([float(v) for v in p.chord_axis], nax)
+                ax = ax / np.linalg.norm(ax)
+                hinges[p.name] = ((te_x + flap_c, T[1], T[2]),
+                                  tuple(round(v) for v in ax))
+            else:
+                box(f"world/plane/{p.name}", c, T[0] - 0.25 * c, FIXED)
+                if p.name == "wing":
+                    wing_te = te_x
+        elif isinstance(p, Thruster):
+            viz.box(f"world/plane/{p.name}", (0.05, 0.18, 1.9),
+                    center=tuple(T), color=(45, 45, 50))
+        elif isinstance(p, Collider):
+            viz.box(f"world/plane/strut_{p.name}", (0.09, 0.09, -0.35 - T[2]),
+                    center=(T[0], T[1], 0.5 * (-0.35 + T[2])), color=(60, 60, 65))
+            viz.point(f"world/plane/wheel_{p.name}", tuple(T),
+                      color=(30, 30, 35), radius=0.3)
+    # Fuselage (decorative): cabin from the nose to the wing trailing edge,
+    # tail boom on to just past the aft-most surface.
+    tail_x = min(surf_te) - 0.3
+    viz.box("world/plane/fus", (-wing_te, 1.1, 1.35),
+            center=(0.5 * wing_te, 0, 0.1), color=METAL)
+    viz.box("world/plane/boom", (wing_te - tail_x, 0.5, 0.65),
+            center=(0.5 * (wing_te + tail_x), 0, 0.3), color=METAL)
+    viz.track("world/plane/fus")
+    return hinges
+
+
 def main() -> None:
     args = common_args(__doc__).parse_args()
     dt = 0.002
     duration = args.duration or (1e9 if args.keyboard else 120.0)
 
-    sim = TargetNumpy(Sim(build_world()))
+    world = build_world()
+    craft = world.crafts[0]
+    sim = TargetNumpy(Sim(world))
 
     # Scripted flight, flown like a real 172: full power down the runway —
     # the elevator trim rotates it at flying speed and holds the climb —
@@ -228,74 +295,14 @@ def main() -> None:
         if isinstance(ctrl, TerminalController):
             print("Type into THIS terminal; watch the viewer.\n")
 
-    FIXED, MOVING, METAL = (120, 150, 210), (240, 150, 60), (150, 150, 158)
-    # Control-surface chords (survey, m); the moving flap is the rear part,
-    # the fixed stabiliser/fin/wing is ahead of the hinge line.
-    AIL_FLAP_C, ELEV_FLAP_C, RUD_FLAP_C = 0.32, 0.35, 0.38
-    HSTAB_FIX_C = HTAIL_CHORD - ELEV_FLAP_C
-    FIN_FIX_C   = VTAIL_CHORD - RUD_FLAP_C
-    HTAIL_TE_X  = HTAIL_QC_X - 0.75 * HTAIL_CHORD     # tailplane trailing edge
-    VTAIL_TE_X  = VTAIL_QC_X - 0.75 * VTAIL_CHORD
-    # Hinge-line x of each control (front of its moving flap).
-    AIL_HINGE_X  = WING_TE_X + AIL_FLAP_C
-    ELEV_HINGE_X = HTAIL_TE_X + ELEV_FLAP_C
-    RUD_HINGE_X  = VTAIL_TE_X + RUD_FLAP_C
     viz = None if args.no_viz else Viz("manta/airplane", addr=args.viz_addr)
+    hinges = {}
     if viz is not None:
         viz.plane("world/ground", z=0.0, size=2000.0, color=(70, 110, 70, 160))
         viz.box("world/runway", (1000.0, 30.0, 0.01), center=(450.0, 0.0, 0.0),
                 color=(120, 120, 125))
-        # --- fixed airframe (all relative to the prop hub) -----------------
-        # Fuselage: engine cowl, cabin, and the tapering tail boom. The
-        # cabin (`fus`) is the entity the camera tracks.
-        viz.box("world/plane/cowl", (1.3, 0.85, 0.9), center=(-0.65, 0, -0.1),
-                color=METAL)
-        viz.box("world/plane/fus", (2.7, 1.15, 1.4), center=(-2.35, 0, 0.15),
-                color=METAL)
-        viz.box("world/plane/boom", (4.8, 0.5, 0.65), center=(-5.9, 0, 0.3),
-                color=METAL)
-        viz.track("world/plane/fus")     # camera follows the fuselage
-        # High wing across the top: the main box stops at the aileron hinge
-        # line; a fixed inboard strip fills the trailing edge between the
-        # ailerons, which are the moving flaps behind the outboard edge.
-        WING_BOX_C = WING_CHORD - AIL_FLAP_C
-        viz.box("world/plane/wing/panel", (WING_BOX_C, WING_SPAN, 0.13),
-                center=(WING_LE_X - 0.5 * WING_BOX_C, 0, WING_Z), color=FIXED)
-        viz.box("world/plane/wing/te", (AIL_FLAP_C, 2 * (AIL_Y - 0.5 * AIL_SPAN),
-                0.05), center=(AIL_HINGE_X - 0.5 * AIL_FLAP_C, 0, WING_Z),
-                color=FIXED)
-        # Fixed horizontal stabiliser + vertical fin (elevator/rudder are the
-        # moving flaps drawn behind them).
-        viz.box("world/plane/hstab", (HSTAB_FIX_C, HTAIL_SPAN, 0.08),
-                center=(ELEV_HINGE_X + 0.5 * HSTAB_FIX_C, 0, HTAIL_Z),
-                color=FIXED)
-        viz.box("world/plane/fin", (FIN_FIX_C, 0.08, VTAIL_TOP_Z - VTAIL_BASE_Z),
-                center=(RUD_HINGE_X + 0.5 * FIN_FIX_C, 0, VTAIL_Z), color=FIXED)
-        # Landing gear: a strut down to each wheel.
-        for nm, (gx, gy, gz) in GEAR.items():
-            viz.box(f"world/plane/strut_{nm}", (0.09, 0.09, -0.35 - gz),
-                    center=(gx, gy, 0.5 * (-0.35 + gz)), color=(60, 60, 65))
-            viz.point(f"world/plane/wheel_{nm}", (gx, gy, gz),
-                      color=(30, 30, 35), radius=0.3)
-        # Propeller disc at the hub.
-        viz.box("world/plane/prop", (0.05, 0.12, 1.9), center=(0, 0, 0),
-                color=(45, 45, 50))
-        # --- moving control flaps (posed by deflection below) --------------
-        viz.box("world/plane/ail_l/s", (AIL_FLAP_C, AIL_SPAN, 0.04),
-                center=(-0.5 * AIL_FLAP_C, 0, 0), color=MOVING)
-        viz.box("world/plane/ail_r/s", (AIL_FLAP_C, AIL_SPAN, 0.04),
-                center=(-0.5 * AIL_FLAP_C, 0, 0), color=MOVING)
-        viz.box("world/plane/elev/s", (ELEV_FLAP_C, HTAIL_SPAN, 0.05),
-                center=(-0.5 * ELEV_FLAP_C, 0, 0), color=MOVING)
-        viz.box("world/plane/rud/s", (RUD_FLAP_C, 0.05, 1.45),
-                center=(-0.5 * RUD_FLAP_C, 0, 0), color=MOVING)
-
-    # Control → (hinge-line position, hinge axis) for the per-tick flap pose.
-    # The flap box (above) is drawn just behind the hinge and swung by δ.
-    hinges = {"ail_l": ((AIL_HINGE_X, +AIL_Y, WING_Z), (0, 1, 0)),
-              "ail_r": ((AIL_HINGE_X, -AIL_Y, WING_Z), (0, 1, 0)),
-              "elev":  ((ELEV_HINGE_X, 0.0, HTAIL_Z), (0, 1, 0)),
-              "rud":   ((RUD_HINGE_X, 0.0, VTAIL_Z), (0, 0, 1))}
+        # The whole airframe is drawn from the sim parts — see draw_airframe.
+        hinges = draw_airframe(viz, craft)
 
     throttle = 0.0                     # parked, engine idle
     airborne = False
