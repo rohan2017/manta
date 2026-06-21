@@ -56,9 +56,8 @@ from .._viz import Viz
 MASS       = 1043.0                    # typical loaded mass (MTOW ~1111 kg)
 MOI        = (1285.0, 1825.0, 2667.0)  # Ixx, Iyy, Izz (kg·m²)
 
-# CG — not in the survey: placed near the wing quarter-chord (~28% MAC) at
-# cabin height. The high wing then sits ~0.85 m above the CG.
-CG         = (-1.90, 0.0, 0.10)
+# CG — from the survey.
+CG         = (-2.30, 0.0, -0.20)
 
 # Main wing — NACA 2412, rectangular, +1.5° rigging incidence.
 WING_AREA  = 16.2; WING_SPAN = 11.0; WING_CHORD = 1.47
@@ -66,8 +65,7 @@ WING_INC   = np.radians(1.5)
 WING_QC_X  = -1.73                      # quarter-chord (centre −2.10, +0.37 fwd)
 WING_Z     = 0.95
 WING_LE_X  = -1.36; WING_TE_X = -2.83   # root chord edges (viz)
-DIHEDRAL   = np.radians(8.0)            # on the outboard panels for roll
-                                        # stability (the flat centre gives none)
+DIHEDRAL   = np.radians(1.73)           # real 172 wing dihedral
 
 # Ailerons — the outboard wing sections (survey y 3.20–5.35), each a
 # ControlSurface (wing section + trailing-edge flap).
@@ -96,9 +94,6 @@ GEAR = {"nose":   (-0.91, 0.0, GEAR_Z),
         "main_l": (-2.82, +1.275, GEAR_Z),
         "main_r": (-2.82, -1.275, GEAR_Z)}
 START_Z    = -GEAR_Z                     # parked so the wheels rest on z=0
-
-# Fuselage envelope (viz): nose at the hub back to the tail-cone tip.
-FUS_TAIL_X = -8.28; FUS_TAIL_Z = 0.55
 
 # --- propulsion (160 hp Lycoming O-320, fixed-pitch prop) + control throws --
 THRUST     = 2600.0                    # N, static (sized for a brisk demo
@@ -251,12 +246,24 @@ def main() -> None:
         viz.box("world/runway", (1000.0, 30.0, 0.01), center=(450.0, 0.0, 0.0),
                 color=(120, 120, 125))
         # --- fixed airframe (all relative to the prop hub) -----------------
-        # Fuselage: prop hub back to the tail-cone tip.
-        viz.box("world/plane/fus", (-FUS_TAIL_X, 1.0, 1.1),
-                center=(0.5 * FUS_TAIL_X, 0, 0.15), color=METAL)
-        # High wing across the top, centred on its 50%-chord line.
-        viz.box("world/plane/wing/panel", (WING_CHORD, WING_SPAN, 0.13),
-                center=(WING_LE_X - 0.5 * WING_CHORD, 0, WING_Z), color=FIXED)
+        # Fuselage: engine cowl, cabin, and the tapering tail boom. The
+        # cabin (`fus`) is the entity the camera tracks.
+        viz.box("world/plane/cowl", (1.3, 0.85, 0.9), center=(-0.65, 0, -0.1),
+                color=METAL)
+        viz.box("world/plane/fus", (2.7, 1.15, 1.4), center=(-2.35, 0, 0.15),
+                color=METAL)
+        viz.box("world/plane/boom", (4.8, 0.5, 0.65), center=(-5.9, 0, 0.3),
+                color=METAL)
+        viz.track("world/plane/fus")     # camera follows the fuselage
+        # High wing across the top: the main box stops at the aileron hinge
+        # line; a fixed inboard strip fills the trailing edge between the
+        # ailerons, which are the moving flaps behind the outboard edge.
+        WING_BOX_C = WING_CHORD - AIL_FLAP_C
+        viz.box("world/plane/wing/panel", (WING_BOX_C, WING_SPAN, 0.13),
+                center=(WING_LE_X - 0.5 * WING_BOX_C, 0, WING_Z), color=FIXED)
+        viz.box("world/plane/wing/te", (AIL_FLAP_C, 2 * (AIL_Y - 0.5 * AIL_SPAN),
+                0.05), center=(AIL_HINGE_X - 0.5 * AIL_FLAP_C, 0, WING_Z),
+                color=FIXED)
         # Fixed horizontal stabiliser + vertical fin (elevator/rudder are the
         # moving flaps drawn behind them).
         viz.box("world/plane/hstab", (HSTAB_FIX_C, HTAIL_SPAN, 0.08),
@@ -365,14 +372,6 @@ def main() -> None:
                     viz.arrow("world/plane/thrust", (0, 0, 0),
                               (3.0 * throttle, 0, 0), color=(235, 80, 80),
                               radius=0.2)
-                # Chase cam: 30 m behind the plane along its heading (yaw
-                # only — no roll/pitch, so the horizon stays level), 8 m up.
-                yaw = _euler(q)[0]
-                eye = p + np.array(
-                    [-30.0 * np.cos(yaw), -30.0 * np.sin(yaw), 8.0])
-                viz.chase("world/chase", eye, p)
-                if f == 0:
-                    viz.track("world/chase")   # after the camera exists
                 # Sparse + capped: most calls are no-ops (min_dist), and
                 # the re-sent polyline stays small. World-frame points, so
                 # NOT a child of the posed plane.
