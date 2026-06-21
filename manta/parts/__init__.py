@@ -27,6 +27,7 @@ from .actuation.thruster import Thruster
 from .aero.drag_surface import DragSurface
 from .disturbance.process_noise import ProcessNoise
 from .aero.naca_airfoil import Naca00xx
+from .aero.aerofoil import Aerofoil, naca
 from .attachment.tether_endpoint import TetherEndpoint
 from .attachment.trajectory_endpoint import (
     LinearTrajectory, TrajectoryEndpoint, TrajectorySample, hover,
@@ -45,7 +46,7 @@ __all__ = [
     "IMU", "VelocitySensor", "Magnetometer", "PositionSensor", "Barometer",
     "ProjectiveCamera", "BBoxCamera", "CentroidCamera",
     "Thruster",
-    "DragSurface", "Naca00xx",
+    "DragSurface", "Naca00xx", "Aerofoil", "naca",
     "ProcessNoise",
     "TetherEndpoint",
     "TrajectoryEndpoint", "TrajectorySample", "LinearTrajectory", "hover",
