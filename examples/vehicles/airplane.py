@@ -49,43 +49,61 @@ from manta.parts import (
 from .._control import Pacer, TerminalController, common_args, make_controller
 from .._viz import Viz
 
-# --- Cessna 172 Skyhawk (published 172N-class figures; m, kg, x fwd / y
-# left / z up). Origin at the wing aerodynamic centre (quarter-chord). The
-# high wing sits above the cabin, so the CG hangs ~1 m below it — that
-# pendulum is the 172's real roll stability, not a modelling hack. ---------
+# --- Cessna 172 Skyhawk (published 172-class figures; m, kg, x fwd / y
+# left / z up). Origin at the wing aerodynamic centre (quarter-chord, ≈ the
+# CG longitudinally). The high wing sits ~2.4 m off the ground on the cabin
+# roof, so the CG hangs ~1.2 m below it — that pendulum, with the tail/fin,
+# is the airframe's stability. Stations below are scaled from the 172
+# three-view; tell me the real numbers and I'll drop them straight in. -----
 MASS       = 1043.0                    # typical loaded mass (MTOW ~1111 kg)
 MOI        = (1285.0, 1825.0, 2667.0)  # Ixx, Iyy, Izz (kg·m²)
-CG_Z       = -1.0                      # CG below the high wing
+# Longitudinal stations (m, +fwd) from the wing quarter-chord:
+PROP_X     = 2.30                      # propeller disc (nose)
+WING_LE    = 0.37                      # wing leading edge (chord/4 ahead of AC)
+WING_TE    = -1.10                     # wing trailing edge (hinge line of ailerons)
+TAIL_X     = -4.55                     # tail aero centre (tail arm 4.55 m)
+NOSE_GEAR_X = 1.45
+MAIN_GEAR_X = -0.20                    # mains just aft of the CG (lets it rotate)
+# Vertical stations (m, +up) from the wing:
+CG_Z       = -1.20                     # CG below the high wing
+THRUST_Z   = -1.05                     # propeller thrust line (engine height)
+HSTAB_Z    = -0.70                     # horizontal tail height
+FIN_BASE_Z = -0.70                     # fin root (= tailplane)
+FIN_TOP_Z  = 0.35                      # fin tip (~2.75 m above ground)
+FIN_Z      = 0.5 * (FIN_BASE_Z + FIN_TOP_Z)   # fin / rudder aero centre
+GEAR_Z     = -2.40                     # wheel contacts (wing 2.4 m up, parked)
+START_Z    = -GEAR_Z                   # parked so the wheels rest on z=0
 CG         = (0.0, 0.0, CG_Z)
+# Wing + surface planform:
 WING_AREA  = 16.2                      # m² total planform
-WING_SPAN  = 10.97                     # m
-WING_CHORD = 1.48                      # mean chord (= area / span)
+WING_SPAN  = 11.0                      # m
+WING_CHORD = 1.47                      # mean chord (= area / span)
 WING_INC   = np.radians(1.5)           # wing rigging incidence
 AIL_AREA   = 1.6                       # each outboard aileron section
-AIL_Y      = 4.0                       # aileron section span station
-TAIL_X     = -4.6                      # tail quarter-chord aft of the wing AC
+AIL_Y      = 4.3                       # aileron section span station
+AIL_SPAN   = 2.0                       # aileron section span (viz)
 HTAIL_AREA = 3.0                       # horizontal stabiliser + elevator
 HTAIL_CHORD = 0.9
+HTAIL_SPAN = 3.4
 VTAIL_AREA = 1.1                       # vertical fin + rudder
 VTAIL_CHORD = 1.0
-FIN_Z      = 0.7                       # fin centre above the tail boom
-SURF_OFF   = (-0.3, 0.0, 0.0)          # viz panel offset behind the aero centre
-GEAR = {"nose":   (1.1, 0.0, -1.8),    # tricycle gear contact points
-        "main_l": (-0.4, +1.3, -1.8),
-        "main_r": (-0.4, -1.3, -1.8)}
-START_Z    = 1.8                       # parked so the wheels rest on z=0
+GEAR_TRACK = 1.25                      # half the main-gear track
+GEAR = {"nose":   (NOSE_GEAR_X, 0.0, GEAR_Z),    # tricycle gear contacts
+        "main_l": (MAIN_GEAR_X, +GEAR_TRACK, GEAR_Z),
+        "main_r": (MAIN_GEAR_X, -GEAR_TRACK, GEAR_Z)}
 
-# --- propulsion (160 hp Lycoming, fixed-pitch prop, modelled as constant
-# thrust) + control throws ---------------------------------------------------
+# --- propulsion (160 hp Lycoming O-320, fixed-pitch prop) + control throws --
 THRUST     = 2600.0                    # N, static (sized for a brisk demo
                                        # climb; a stock 172 is ~1300 N)
-PROP_TORQUE = -45.0                    # N·m reaction roll (countered by trim)
+PROP_TORQUE = -410.0                   # N·m reaction roll at full power
+                                       # (160 hp / ~2700 rpm ≈ 420 N·m); rolls
+                                       # left, held off with right-aileron trim
 MAX_AIL    = np.radians(8.0)
 MAX_ELEV   = np.radians(14.0)
 MAX_RUD    = np.radians(22.0)
 THR_MAX    = 1.0
 THR_RATE   = 0.4                       # throttle slew per second (X/Z held)
-AIL_TRIM   = np.radians(0.055)         # aileron trim vs. prop torque, per throttle
+AIL_TRIM   = np.radians(0.42)          # right-aileron trim vs. prop torque
 ELEV_TRIM  = np.radians(-4.5)          # standing nose-up elevator: rotates and
                                        # climbs hands-off at full power
 
@@ -132,7 +150,7 @@ def build_world():
                          flap_chord_fraction=0.4,
                          CL_max=t.CL_max, CD_0=t.CD_0, induced_k=0.06,
                          chord_axis=(1.0, 0.0, 0.0), normal_axis=(0.0, 0.0, 1.0),
-                         **SERVO, transform=(TAIL_X, 0.0, 0.0)))
+                         **SERVO, transform=(TAIL_X, 0.0, HSTAB_Z)))
 
     # Vertical fin = rudder (whole fin), stood upright so lift acts along y.
     a.add(ControlSurface("rud", area=VTAIL_AREA, chord=VTAIL_CHORD,
@@ -142,13 +160,14 @@ def build_world():
                          **SERVO, transform=(TAIL_X, 0.0, FIN_Z)))
 
     # Fuselage parasite drag (at CG height, so no pitch moment) + propeller:
-    # thrust along the centreline, with a reaction roll torque about the axis.
+    # thrust along the centreline at the nose, with the engine's reaction
+    # roll torque about the thrust axis.
     a.add(DragSurface.isotropic_quadratic("fuselage", area=0.7,
                                           drag_coefficient=0.4,
                                           transform=(0.0, 0.0, CG_Z)))
     a.add(Thruster("prop", force=(THRUST, 0.0, 0.0),
                    torque=(PROP_TORQUE, 0.0, 0.0),
-                   transform=(1.5, 0.0, CG_Z)))
+                   transform=(PROP_X, 0.0, THRUST_Z)))
 
     # Tricycle landing gear: frictionless point contacts (free-rolling
     # wheels) on the ground plane.
@@ -203,37 +222,66 @@ def main() -> None:
         if isinstance(ctrl, TerminalController):
             print("Type into THIS terminal; watch the viewer.\n")
 
-    FIXED, MOVING = (120, 150, 210), (240, 150, 60)
+    FIXED, MOVING, METAL = (120, 150, 210), (240, 150, 60), (150, 150, 158)
+    # Surface chords: the moving control is the rear fraction; the fixed
+    # stabiliser/fin/wing is what's ahead of the hinge line.
+    AIL_FLAP_C  = 0.30 * WING_CHORD
+    ELEV_FLAP_C = 0.40 * HTAIL_CHORD
+    RUD_FLAP_C  = 0.40 * VTAIL_CHORD
+    HSTAB_FIX_C = HTAIL_CHORD - ELEV_FLAP_C
+    FIN_FIX_C   = VTAIL_CHORD - RUD_FLAP_C
+    # Hinge-line x of each control (rear edge of its fixed surface).
+    AIL_HINGE_X  = WING_TE                      # wing trailing edge
+    ELEV_HINGE_X = TAIL_X + 0.25 * HTAIL_CHORD - HSTAB_FIX_C
+    RUD_HINGE_X  = TAIL_X + 0.25 * VTAIL_CHORD - FIN_FIX_C
     viz = None if args.no_viz else Viz("manta/airplane", addr=args.viz_addr)
     if viz is not None:
         viz.plane("world/ground", z=0.0, size=2000.0, color=(70, 110, 70, 160))
-        viz.box("world/runway", (900.0, 25.0, 0.01), center=(420.0, 0.0, 0.0),
+        viz.box("world/runway", (1000.0, 30.0, 0.01), center=(450.0, 0.0, 0.0),
                 color=(120, 120, 125))
-        for pos in GEAR.values():
-            viz.point(f"world/plane/gear/{pos[0]:.2f}_{pos[1]:.2f}", pos,
-                      color=(40, 40, 45), radius=0.25)
-        # Fuselage + fin post, at CG height; wing across the top (high wing).
-        viz.box("world/plane/fus", (7.5, 0.5, 0.6), center=(-1.4, 0, CG_Z),
-                color=(150, 150, 158))
-        viz.box("world/plane/wing/panel",
-                (WING_CHORD, WING_SPAN, 0.12), center=(-0.4, 0, 0), color=FIXED)
-        # Moving surfaces: ailerons at the tips, elevator = whole tailplane,
-        # rudder = whole fin (each posed by its deflection below).
-        viz.box("world/plane/ail_l/s", (0.45, 2.0, 0.04), center=SURF_OFF,
-                color=MOVING)
-        viz.box("world/plane/ail_r/s", (0.45, 2.0, 0.04), center=SURF_OFF,
-                color=MOVING)
-        viz.box("world/plane/elev/s", (HTAIL_CHORD, 3.4, 0.05), center=SURF_OFF,
-                color=MOVING)
-        viz.box("world/plane/rud/s", (VTAIL_CHORD, 0.05, 1.4), center=SURF_OFF,
-                color=MOVING)
+        # --- fixed airframe -------------------------------------------------
+        # Fuselage: nose (behind the prop) back to the tail cone, at CG height.
+        fus_nose, fus_tail = PROP_X - 0.1, TAIL_X - 0.45
+        viz.box("world/plane/fus", (fus_nose - fus_tail, 0.55, 0.72),
+                center=(0.5 * (fus_nose + fus_tail), 0, CG_Z), color=METAL)
+        # High wing across the top (posed with incidence at f == 0).
+        viz.box("world/plane/wing/panel", (WING_CHORD, WING_SPAN, 0.13),
+                center=(WING_LE - 0.5 * WING_CHORD, 0, 0), color=FIXED)
+        # Fixed horizontal stabiliser + vertical fin (the elevator/rudder
+        # are the moving flaps behind them).
+        viz.box("world/plane/hstab",
+                (HSTAB_FIX_C, HTAIL_SPAN, 0.08),
+                center=(ELEV_HINGE_X + 0.5 * HSTAB_FIX_C, 0, HSTAB_Z),
+                color=FIXED)
+        viz.box("world/plane/fin",
+                (FIN_FIX_C, 0.08, FIN_TOP_Z - FIN_BASE_Z),
+                center=(RUD_HINGE_X + 0.5 * FIN_FIX_C, 0, FIN_Z), color=FIXED)
+        # Landing gear: a strut down to each wheel.
+        for nm, (gx, gy, gz) in GEAR.items():
+            viz.box(f"world/plane/strut_{nm}",
+                    (0.09, 0.09, (CG_Z - 0.3) - gz),
+                    center=(gx, gy, 0.5 * ((CG_Z - 0.3) + gz)), color=(60, 60, 65))
+            viz.point(f"world/plane/wheel_{nm}", (gx, gy, gz),
+                      color=(30, 30, 35), radius=0.3)
+        # Propeller disc at the nose.
+        viz.box("world/plane/prop", (0.05, 0.12, 1.9),
+                center=(PROP_X, 0, THRUST_Z), color=(45, 45, 50))
+        # --- moving control flaps (posed by deflection below) --------------
+        viz.box("world/plane/ail_l/s", (AIL_FLAP_C, AIL_SPAN, 0.04),
+                center=(-0.5 * AIL_FLAP_C, 0, 0), color=MOVING)
+        viz.box("world/plane/ail_r/s", (AIL_FLAP_C, AIL_SPAN, 0.04),
+                center=(-0.5 * AIL_FLAP_C, 0, 0), color=MOVING)
+        viz.box("world/plane/elev/s", (ELEV_FLAP_C, HTAIL_SPAN, 0.05),
+                center=(-0.5 * ELEV_FLAP_C, 0, 0), color=MOVING)
+        viz.box("world/plane/rud/s", (RUD_FLAP_C, 0.05, FIN_TOP_Z - FIN_BASE_Z),
+                center=(-0.5 * RUD_FLAP_C, 0, 0), color=MOVING)
 
-    # Hinge name → (viz path, hinge position, hinge axis) for the per-tick
-    # deflection poses.
-    hinges = {"ail_l": ((0.0, +AIL_Y, 0.0), (0, 1, 0)),
-              "ail_r": ((0.0, -AIL_Y, 0.0), (0, 1, 0)),
-              "elev":  ((TAIL_X, 0.0, 0.0), (0, 1, 0)),
-              "rud":   ((TAIL_X, 0.0, FIN_Z), (0, 0, 1))}
+    # Control → (hinge-line position, hinge axis) for the per-tick flap pose.
+    # The flap box (above) is drawn just behind the hinge and swung by δ.
+    hinges = {"ail_l": ((AIL_HINGE_X, +AIL_Y, 0.0), (0, 1, 0)),
+              "ail_r": ((AIL_HINGE_X, -AIL_Y, 0.0), (0, 1, 0)),
+              "elev":  ((ELEV_HINGE_X, 0.0, HSTAB_Z), (0, 1, 0)),
+              "rud":   ((RUD_HINGE_X, 0.0, FIN_Z), (0, 0, 1))}
 
     throttle = 0.0                     # parked, engine idle
     airborne = False
@@ -307,7 +355,7 @@ def main() -> None:
                                  _quat(axis, ang))
                 if abs(throttle - thr_logged) > 0.005:
                     thr_logged = throttle
-                    viz.arrow("world/plane/thrust", (1.5, 0, CG_Z),
+                    viz.arrow("world/plane/thrust", (PROP_X, 0, THRUST_Z),
                               (3.0 * throttle, 0, 0), color=(235, 80, 80),
                               radius=0.2)
                 # Chase cam: 30 m behind the plane along its heading (yaw
