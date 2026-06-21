@@ -23,6 +23,12 @@ P0_ISA: float = 101325.0      # Pa  — sea-level pressure
 R_AIR: float = 287.05         # J/(kg·K) — specific gas constant, dry air
 LAPSE_ISA: float = 6.5e-3     # K/m — troposphere temperature lapse rate
 
+# Sutherland's law constants for dry air (the default gas species). A
+# different gas (CO₂ on Mars, N₂ on Titan) supplies its own triple.
+MU_REF_AIR: float = 1.716e-5  # Pa·s — reference dynamic viscosity
+T_REF_SUTHERLAND: float = 273.15   # K — reference temperature for MU_REF
+S_SUTHERLAND_AIR: float = 110.4    # K — Sutherland constant for air
+
 # Sea-level density implied by the reference (P0/(R·T0) ≈ 1.225 kg/m³,
 # the conventional ISA value) — handy as a default and a cross-check.
 RHO0_ISA: float = P0_ISA / (R_AIR * T0_ISA)
@@ -62,6 +68,24 @@ def isa_pressure(altitude,
 def ideal_gas_density(pressure, temperature, R: float = R_AIR):
     """Ideal-gas density ``ρ = P / (R·T)`` (temperature floored positive)."""
     return pressure / (R * ca.fmax(temperature, _T_FLOOR))
+
+
+def sutherland_viscosity(temperature,
+                         mu_ref: float = MU_REF_AIR,
+                         T_ref: float = T_REF_SUTHERLAND,
+                         S: float = S_SUTHERLAND_AIR):
+    """Gas dynamic viscosity μ(T) via Sutherland's law,
+    ``μ = mu_ref·(T/T_ref)^1.5·(T_ref + S)/(T + S)`` (Pa·s).
+
+    Viscosity of a dilute gas is essentially pressure-independent, so this
+    keys on temperature alone. The defaults are dry air (μ ≈ 1.79e-5 Pa·s
+    at the ISA sea-level 288.15 K); a different gas species passes its own
+    ``mu_ref`` / ``T_ref`` / ``S``. Temperature is floored positive so the
+    Jacobian stays finite above the troposphere (and at an unset T=0).
+    Liquids do NOT follow this law — water sets its viscosity explicitly.
+    """
+    T = ca.fmax(temperature, _T_FLOOR)
+    return mu_ref * (T / T_ref) ** 1.5 * (T_ref + S) / (T + S)
 
 
 def hydrostatic_pressure(P_surface, rho, g, depth):

@@ -30,6 +30,7 @@ from ..ir.types import Vec3
 from .atmosphere import (
     LAPSE_ISA, P0_ISA, R_AIR, T0_ISA,
     hydrostatic_pressure, ideal_gas_density, isa_pressure, isa_temperature,
+    sutherland_viscosity,
 )
 
 
@@ -54,6 +55,12 @@ class PlanetFrameFluid(Disturbance):
                          velocity *in PlanetFrame*. Defaults to zero (a
                          fluid at rest in the planet frame). Rotated back
                          to WorldFrame and augmented with `ω × r`.
+        viscosity_fn   — optional `(p_planet, t) → ca.MX` dynamic viscosity
+                         μ (Pa·s). Default `None` → for a gas regime (one
+                         with a `temperature_fn`) it is filled from
+                         Sutherland's law for air at the local temperature;
+                         with no temperature to derive from it is left
+                         unset (0). A liquid regime passes a constant μ.
         membership     — optional `(point: Vec3[World], t) → ca.MX in
                          [0,1]` spatial support (e.g. an ocean half-space);
                          see `Disturbance.membership`. Default: global.
@@ -70,6 +77,7 @@ class PlanetFrameFluid(Disturbance):
                  pressure_fn: Callable[[ca.MX, ca.MX], ca.MX] | None = None,
                  temperature_fn: Callable[[ca.MX, ca.MX], ca.MX] | None = None,
                  velocity_fn: Callable[[ca.MX, ca.MX], ca.MX] | None = None,
+                 viscosity_fn: Callable[[ca.MX, ca.MX], ca.MX] | None = None,
                  name: str | None = None,
                  membership=None,
                  combining: str = "baseline") -> None:
@@ -79,6 +87,7 @@ class PlanetFrameFluid(Disturbance):
         self.pressure_fn    = pressure_fn
         self.temperature_fn = temperature_fn
         self.velocity_fn    = velocity_fn
+        self.viscosity_fn   = viscosity_fn
 
     def _to_planet(self, point, t):
         """World query point → PlanetFrame coords + the world-frame
@@ -100,6 +109,15 @@ class PlanetFrameFluid(Disturbance):
         temp = (self.temperature_fn(p_planet, t)
                 if self.temperature_fn is not None else ca.MX(0.0))
 
+        # Viscosity: explicit fn if given, else Sutherland(T) for a gas
+        # regime that has a temperature, else left unset (0).
+        if self.viscosity_fn is not None:
+            visc = self.viscosity_fn(p_planet, t)
+        elif self.temperature_fn is not None:
+            visc = sutherland_viscosity(temp)
+        else:
+            visc = ca.MX(0.0)
+
         # Velocity in PlanetFrame (defaults to zero) → WorldFrame.
         if self.velocity_fn is not None:
             v_planet = self.velocity_fn(p_planet, t)
@@ -116,6 +134,7 @@ class PlanetFrameFluid(Disturbance):
             density     = rho,
             pressure    = pres,
             temperature = temp,
+            viscosity   = visc,
             velocity    = _VEC3_W.from_mx(v_world),
         )
 
@@ -140,6 +159,10 @@ class Atmosphere(PlanetFrameFluid):
         sea_level_temperature / sea_level_pressure / lapse_rate /
         gas_constant  — ISA reference constants (Earth defaults).
         velocity_fn   — optional PlanetFrame bulk velocity.
+        viscosity_fn  — optional `(p_planet, t) → μ` override. Default
+                        `None` → Sutherland's law for air at the local
+                        temperature; a non-air atmosphere (CO₂, N₂) passes
+                        its own species' Sutherland fit here.
         membership / name — see `PlanetFrameFluid`.
     """
 
@@ -153,6 +176,7 @@ class Atmosphere(PlanetFrameFluid):
                  lapse_rate: float = LAPSE_ISA,
                  gas_constant: float = R_AIR,
                  velocity_fn: Callable[[ca.MX, ca.MX], ca.MX] | None = None,
+                 viscosity_fn: Callable[[ca.MX, ca.MX], ca.MX] | None = None,
                  membership=None,
                  name: str | None = None) -> None:
         T0, P0, L, R, g = (sea_level_temperature, sea_level_pressure,
@@ -172,6 +196,7 @@ class Atmosphere(PlanetFrameFluid):
                          pressure_fn=pressure_fn,
                          temperature_fn=temperature_fn,
                          velocity_fn=velocity_fn,
+                         viscosity_fn=viscosity_fn,
                          membership=membership, name=name)
 
 
@@ -190,6 +215,9 @@ class Ocean(PlanetFrameFluid):
         water_density — kg/m³ (default 1025, seawater).
         surface_pressure — Pa at the sea surface (default ISA P0).
         temperature   — K (constant, default ISA T0).
+        viscosity     — dynamic viscosity μ (Pa·s, constant). Default
+                        1.35e-3 (seawater near 10 °C). Water does NOT obey
+                        Sutherland's law, so it is set directly here.
         velocity_fn   — optional PlanetFrame bulk velocity (wave orbital).
         membership / name — see `PlanetFrameFluid`.
     """
@@ -202,11 +230,13 @@ class Ocean(PlanetFrameFluid):
                  water_density: float = 1025.0,
                  surface_pressure: float = P0_ISA,
                  temperature: float = T0_ISA,
+                 viscosity: float = 1.35e-3,
                  velocity_fn: Callable[[ca.MX, ca.MX], ca.MX] | None = None,
                  membership=None,
                  name: str | None = None) -> None:
         rho_w, P_surf, g, T = (water_density, surface_pressure,
                                surface_gravity, temperature)
+        mu_w = float(viscosity)
 
         def density_fn(p_planet, t):
             return ca.MX(rho_w)
@@ -217,8 +247,12 @@ class Ocean(PlanetFrameFluid):
         def temperature_fn(p_planet, t):
             return ca.MX(T)
 
+        def viscosity_fn(p_planet, t):
+            return ca.MX(mu_w)
+
         super().__init__(planet, density_fn,
                          pressure_fn=pressure_fn,
                          temperature_fn=temperature_fn,
                          velocity_fn=velocity_fn,
+                         viscosity_fn=viscosity_fn,
                          membership=membership, name=name)

@@ -54,6 +54,10 @@ class FluidState:
     density      — kg/m³. CasADi-MX scalar (composes with symbolic state).
     pressure     — Pa. MX scalar.
     temperature  — K. MX scalar.
+    viscosity    — dynamic viscosity μ, Pa·s. MX scalar. An independent
+                   property (like density): a gas baseline fills it from
+                   temperature via Sutherland's law, while water sets it
+                   directly. Drives the Reynolds number a foil sees.
     velocity     — bulk fluid velocity at the point, Vec3[WorldFrame].
 
     Disturbances and `FluidField.value_at_sym` return / consume this
@@ -65,12 +69,20 @@ class FluidState:
     pressure: ca.MX                 # scalar MX
     temperature: ca.MX              # scalar MX
     velocity: "Vec3"                # Vec3[WorldFrame]
+    viscosity: ca.MX = None         # scalar MX (defaults to 0 = unset)
+
+    def __post_init__(self):
+        # Tolerate older 4-component construction: an unset viscosity is a
+        # zero MX, combined like the other scalars.
+        if self.viscosity is None:
+            object.__setattr__(self, "viscosity", ca.MX(0.0))
 
     def __add__(self, other: "FluidState") -> "FluidState":
         return FluidState(
             density     = self.density + other.density,
             pressure    = self.pressure + other.pressure,
             temperature = self.temperature + other.temperature,
+            viscosity   = self.viscosity + other.viscosity,
             velocity    = self.velocity + other.velocity,
         )
 
@@ -81,6 +93,7 @@ class FluidState:
             density     = s * self.density,
             pressure    = s * self.pressure,
             temperature = s * self.temperature,
+            viscosity   = s * self.viscosity,
             velocity    = _VEC3_W.from_mx(s * self.velocity._mx),
         )
 
@@ -110,11 +123,13 @@ class FluidField(SuperposedField):
                  *,
                  pressure: float = 0.0,
                  temperature: float = 0.0,
+                 viscosity: float | None = None,
                  ) -> None:
         super().__init__()
         if density is not None:
             self.add_uniform(density, velocity,
-                             pressure=pressure, temperature=temperature)
+                             pressure=pressure, temperature=temperature,
+                             viscosity=viscosity)
 
     def _zero_value(self) -> FluidState:
         return FluidState(
@@ -170,12 +185,15 @@ class FluidField(SuperposedField):
                     *,
                     pressure: float = 0.0,
                     temperature: float = 0.0,
+                    viscosity: float | None = None,
                     ) -> "FluidField":
         """Attach a uniform baseline medium (density + optional pressure,
-        temperature, flow). Returns self."""
+        temperature, viscosity, flow). Viscosity defaults to Sutherland's
+        law for air; pass it explicitly for a liquid. Returns self."""
         return self.add(UniformFluid(density, velocity,
                                      pressure=pressure,
-                                     temperature=temperature))
+                                     temperature=temperature,
+                                     viscosity=viscosity))
 
 
 # ---------------------------------------------------------------------------
@@ -227,6 +245,11 @@ class UniformFluid(Disturbance):
         velocity     — bulk flow vector in WorldFrame, m/s. Default zero.
         pressure     — Pa. Default 0 (unset).
         temperature  — K. Default 0 (unset).
+        viscosity    — dynamic viscosity μ, Pa·s. Default `None` → filled
+                       from Sutherland's law for air at `temperature`
+                       (or ISA sea level if temperature is unset), giving
+                       ~1.79e-5 for a bare air medium. Liquids and exotic
+                       gases pass μ explicitly (seawater ≈ 1.35e-3).
     """
 
     field_value_shape = FluidState
@@ -238,6 +261,7 @@ class UniformFluid(Disturbance):
                  *,
                  pressure: float = 0.0,
                  temperature: float = 0.0,
+                 viscosity: float | None = None,
                  name: str | None = None,
                  combining: str | None = None,
                  membership=None) -> None:
@@ -252,19 +276,30 @@ class UniformFluid(Disturbance):
         if len(self.velocity) != 3:
             raise ValueError(
                 f"UniformFluid: velocity must be length-3, got {velocity!r}")
+        # Default-fill viscosity from Sutherland(T) for air — a lazy import
+        # keeps the fields↔planets dependency one-directional at load time.
+        if viscosity is None:
+            from ..planets.atmosphere import T0_ISA, sutherland_viscosity
+            T = self.temperature if self.temperature > 0.0 else T0_ISA
+            viscosity = float(sutherland_viscosity(T))
+        self.viscosity = float(viscosity)
+        if self.viscosity < 0.0:
+            raise ValueError(
+                f"UniformFluid: viscosity must be >= 0, got {viscosity!r}")
 
     def contribute_at_sym(self, point, t) -> FluidState:
         return FluidState(
             density     = ca.MX(self.density),
             pressure    = ca.MX(self.pressure),
             temperature = ca.MX(self.temperature),
+            viscosity   = ca.MX(self.viscosity),
             velocity    = _VEC3_W.constant(self.velocity),
         )
 
     def __repr__(self) -> str:
         return (f"<UniformFluid density={self.density} "
                 f"pressure={self.pressure} temperature={self.temperature} "
-                f"velocity={self.velocity}>")
+                f"viscosity={self.viscosity:.3e} velocity={self.velocity}>")
 
 
 class CurrentFlow(Disturbance):
