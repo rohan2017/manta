@@ -183,13 +183,19 @@ class Viz:
             kw["quaternion"] = self.rr.Quaternion(xyzw=[x, y, z, w])
         self.rr.log(path, self.rr.Transform3D(**kw))
 
-    def box(self, path, half_sizes, *, center=(0.0, 0.0, 0.0),
+    def box(self, path, size, *, center=(0.0, 0.0, 0.0),
             color=(150, 150, 150), static: bool = True) -> None:
-        """A solid box at ``center`` in the entity's frame (default origin)."""
+        """A solid box at ``center`` in the entity's frame (default origin).
+
+        ``size`` is the box's FULL extent ``(dx, dy, dz)`` — e.g. a wing of
+        chord 1.49 m passes 1.49, not 0.745. (rerun's `Boxes3D` wants
+        half-extents, so this halves internally — matching `split_cylinder`,
+        which likewise takes a full height.)
+        """
         self.rr.log(
             path,
             self.rr.Boxes3D(centers=[_vec3(center)],
-                            half_sizes=[_vec3(half_sizes)], colors=[color],
+                            half_sizes=[0.5 * _vec3(size)], colors=[color],
                             fill_mode="solid"),
             static=static)
 
