@@ -96,6 +96,10 @@ GEAR = {"nose":   (-1.10, 0.0, GEAR_Z),
         "main_l": (-2.66, +1.27, GEAR_Z),
         "main_r": (-2.66, -1.27, GEAR_Z)}
 START_Z    = -GEAR_Z                     # parked so the wheels rest on z=0
+# Wheels roll freely fore–aft (body x) and vertically, but grip sideways
+# (body y), so the airframe tracks where it points: a yaw (rudder) on the
+# ground becomes a turn instead of a frictionless sideways skid.
+GEAR_FRICTION = (0.0, 6000.0, 0.0)      # N·s/m per body axis (lateral grip)
 
 # Fuselage (decorative viz only — physics is a point DragSurface at the CG):
 # three measured rectangular prisms, each center=(x,y,z), size=(L,W,H).
@@ -106,19 +110,30 @@ FUSELAGE_BOXES = dict(
 )
 
 # --- propulsion (160 hp Lycoming O-320, fixed-pitch prop) + control throws --
-THRUST     = 2600.0                    # N, static (sized for a brisk demo
-                                       # climb; a stock 172 is ~1300 N)
+THRUST     = 1300.0                    # N, static — a stock 172 at full power
 PROP_TORQUE = -410.0                   # N·m reaction roll at full power
                                        # (160 hp / ~2700 rpm ≈ 420 N·m); rolls
                                        # left, held off with right-aileron trim
+# Fuselage drag coefficients, applied per box face (the face area normal to
+# each body axis is that axis's reference area). Anisotropic — both physically
+# correct and what the slender shape needs: LOW nose-on (a fuselage is
+# streamlined fore–aft) and HIGH broadside, where the large side/top faces well
+# aft of the CG give the body its weathervane stability + yaw damping, the
+# authority a single point drag source at the CG could not provide. The tandem
+# boxes' frontal faces are de-shadowed in build_world (a box behind a larger
+# one adds no nose-on area), so axial drag ≈ the max cross-section, not the sum.
+FUSELAGE_CD_AXIAL = 0.10
+FUSELAGE_CD_SIDE  = 0.60
 MAX_AIL    = np.radians(12.0)
 MAX_ELEV   = np.radians(14.0)
 MAX_RUD    = np.radians(22.0)
 THR_MAX    = 1.0
 THR_RATE   = 0.4                       # throttle slew per second (X/Z held)
-AIL_TRIM   = np.radians(0.30)          # right-aileron trim vs. prop torque
-ELEV_TRIM  = np.radians(-3.0)          # standing nose-up elevator: rotates and
-                                       # climbs hands-off at full power
+AIL_TRIM   = np.radians(0.28)          # right-aileron trim vs. prop torque
+                                       # (sized for the ~43 m/s climb speed)
+ELEV_TRIM  = np.radians(-4.5)          # standing nose-up elevator: at the
+                                       # reduced power it gently rotates the
+                                       # plane near 44 m/s and holds the climb
 
 # Full-size surfaces: servo authority sized so the surfaces track command
 # in normal flight but can still blow back under extreme load.
@@ -194,12 +209,33 @@ def build_world():
                          chord_axis=(1.0, 0.0, 0.0), normal_axis=(0.0, 1.0, 0.0),
                          **SERVO, transform=(VTAIL_QC_X, 0.0, VTAIL_Z)))
 
-    # Fuselage parasite drag (at CG height, so no pitch moment) + propeller:
-    # thrust along the centreline at the hub, with the engine's reaction
-    # roll torque about the thrust axis.
-    a.add(DragSurface.isotropic_quadratic("fuselage", area=0.7,
-                                          drag_coefficient=0.4,
-                                          transform=CG))
+    # Fuselage aerodynamics: one anisotropic drag box per FUSELAGE_BOXES
+    # prism, mounted at the box centre. Drag along each body axis scales with
+    # the area of the box face normal to it — so the slender body is low-drag
+    # nose-on but has large side/top area. The aft tail box sits well behind
+    # the CG, so in a sideslip its side drag weathervanes the nose into the
+    # relative wind and damps yaw rate (giving the rudder a heading to hold
+    # against) — a single point drag source at the CG could do neither.
+    # Nose-on flow shadows the tandem boxes: a box behind a larger one sees no
+    # clean frontal flow, so the axial (x) reference area is only the GROWTH in
+    # frontal silhouette front-to-back (summing to ≈ the max cross-section, not
+    # all three faces). Side/top faces are normal to the tandem axis — never
+    # shadowed — so they use the full face.
+    front_seen = 0.0
+    for nm, b in FUSELAGE_BOXES.items():     # ordered nose → cabin → tail
+        lx, ly, lz = b["size"]
+        frontal = max(0.0, ly * lz - front_seen)   # un-shadowed frontal area
+        front_seen = max(front_seen, ly * lz)
+        # F_i = -½·ρ·Cd_i·A_i · v_i·|v_i|: Cd low fore–aft (x), high broadside.
+        A2 = -0.5 * np.diag([FUSELAGE_CD_AXIAL * frontal,
+                             FUSELAGE_CD_SIDE * lx * lz,
+                             FUSELAGE_CD_SIDE * lx * ly])
+        a.add(DragSurface(f"fus_{nm}",
+                          force_tensors=[np.zeros((3, 3)), A2],
+                          transform=b["center"]))
+
+    # Propeller: thrust along the centreline at the hub, with the engine's
+    # reaction roll torque about the thrust axis.
     a.add(Thruster("prop", force=(THRUST, 0.0, 0.0),
                    torque=(PROP_TORQUE, 0.0, 0.0),
                    transform=(0.0, 0.0, 0.0)))
@@ -207,7 +243,8 @@ def build_world():
     # Tricycle landing gear: frictionless point contacts (free-rolling
     # wheels) on the ground plane.
     for name, pos in GEAR.items():
-        a.add(Collider(name, stiffness=1.5e5, damping=8000.0, transform=pos))
+        a.add(Collider(name, stiffness=1.5e5, damping=8000.0,
+                       friction=GEAR_FRICTION, transform=pos))
 
     w = (World()
          .add_field(GravityField().add_uniform((0.0, 0.0, -9.81)))
@@ -245,7 +282,7 @@ def draw_airframe(viz, craft):
     Only the fuselage is decorative (it is a point drag source, not a
     shaped part): it is drawn from the measured FUSELAGE_BOXES prisms.
     """
-    from manta.parts import Aerofoil, ControlSurface, Collider, Thruster
+    from manta.parts import Aerofoil, ControlSurface, Collider
     FIXED, MOVING, METAL = (120, 150, 210), (240, 150, 60), (150, 150, 158)
     hinges = {}
     for p in craft.parts:
@@ -277,9 +314,6 @@ def draw_airframe(viz, craft):
                                   tuple(round(v) for v in ax))
             else:
                 box(f"world/plane/{p.name}", c, T[0] - 0.25 * c, FIXED)
-        elif isinstance(p, Thruster):
-            viz.box(f"world/plane/{p.name}", (0.05, 0.18, 1.93),
-                    center=tuple(T), color=(45, 45, 50))
         elif isinstance(p, Collider):
             viz.box(f"world/plane/strut_{p.name}", (0.09, 0.09, -0.35 - T[2]),
                     center=(T[0], T[1], 0.5 * (-0.35 + T[2])), color=(60, 60, 65))
@@ -297,21 +331,21 @@ def draw_airframe(viz, craft):
 def main() -> None:
     args = common_args(__doc__).parse_args()
     dt = 0.002
-    duration = args.duration or (1e9 if args.keyboard else 120.0)
+    duration = args.duration or (1e9 if args.keyboard else 130.0)
 
     world = build_world()
     craft = world.crafts[0]
     sim = TargetNumpy(Sim(world))
 
-    # Scripted flight, flown like a real 172: full power down the runway —
-    # the elevator trim rotates it at flying speed and holds the climb —
-    # then ease the power back and nose level for cruise, bank into a right
-    # turn, roll level, and finally throttle off and glide down to land.
-    script = [(0.5, 3.0, {"x"}),       # full throttle → takeoff roll + climb
-              (38.0, 39.0, {"z"}),     # ease back to cruise power
-              (44.0, 44.4, {"e"}),     # roll right into a bank
-              (46.5, 46.9, {"q"}),     # roll back wings-level
-              (54.0, 58.0, {"z"})]     # throttle to idle → glide down to land
+    # Scripted flight, flown like a real 172 at its true ~1300 N power: a long
+    # full-throttle takeoff roll (the elevator trim rotates it near 44 m/s and
+    # holds the climb), then a gentle left turn, roll level, and an idle glide
+    # back down to land. The reduced power makes the takeoff roll ~1 km, so the
+    # timings are far later than a brisk demo would use.
+    script = [(0.5, 4.0, {"x"}),       # full throttle → long takeoff roll, climb
+              (60.0, 60.5, {"q"}),     # bank left into a gentle climbing turn
+              (66.0, 66.5, {"e"}),     # roll back to wings-level
+              (74.0, 110.0, {"z"})]    # throttle to idle → glide down and land
     ctrl = make_controller(args.keyboard, script)
     if args.keyboard:
         print("Controls:  S/W pitch up/down   A/D yaw   Q/E roll   "
@@ -323,7 +357,7 @@ def main() -> None:
     hinges = {}
     if viz is not None:
         viz.plane("world/ground", z=0.0, size=2000.0, color=(70, 110, 70, 160))
-        viz.box("world/runway", (1000.0, 30.0, 0.01), center=(450.0, 0.0, 0.0),
+        viz.box("world/runway", (1400.0, 30.0, 0.01), center=(650.0, 0.0, 0.0),
                 color=(120, 120, 125))
         # The whole airframe is drawn from the sim parts — see draw_airframe.
         hinges = draw_airframe(viz, craft)
@@ -353,16 +387,21 @@ def main() -> None:
                 pacer.pace(t)
             ctrl.update(t)
 
-            # Direct key → deflection mapping (no inner loops). Hinge sign
-            # convention: +angle swings the panel's trailing edge toward
-            # +axis×chord, so +elev = TE up = nose up, +rud = nose right,
-            # +ail = that wing down.
+            # Direct key → deflection mapping (no inner loops). A positive
+            # ControlSurface command is trailing-edge-DOWN, which ADDS lift, so
+            # the raw senses are:
+            #   +ail_l  raises the LEFT wing  → rolls RIGHT
+            #   +elev   lifts the tail        → pitches nose DOWN
+            #   +rud    pushes the fin to +y  → yaws nose RIGHT
+            # ELEV_SIGN and the (e−q) aileron order flip these so the documented
+            # keys read intuitively (S = nose up, Q = roll left, D = nose right).
             throttle = float(np.clip(
                 throttle + (ctrl.held("x") - ctrl.held("z")) * THR_RATE
                 * FRAME, 0.0, THR_MAX))
             # A whisker of aileron trim cancels the propeller's torque roll
-            # (exactly what a real plane's trim tab is set for).
-            ail = MAX_AIL * (ctrl.held("q") - ctrl.held("e")) \
+            # (exactly what a real plane's trim tab is set for): +trim lifts the
+            # left wing, rolling right against the prop's left-roll torque.
+            ail = MAX_AIL * (ctrl.held("e") - ctrl.held("q")) \
                 + AIL_TRIM * throttle
             targets = {
                 "elev": ELEV_SIGN * MAX_ELEV * (ctrl.held("s") - ctrl.held("w"))
