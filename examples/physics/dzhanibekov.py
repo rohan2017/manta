@@ -37,6 +37,7 @@ from manta import Craft, Sim, TargetNumpy, World
 from manta.parts import Mass
 
 from .._control import Pacer
+from .._geom import rotmat
 from .._viz import Viz
 
 BAR = 0.7                            # crossbar half-length (m)
@@ -59,14 +60,6 @@ def principal_moments():
     ix = float((rel[:, 1] ** 2 + rel[:, 2] ** 2).sum())
     iy = float((rel[:, 0] ** 2 + rel[:, 2] ** 2).sum())
     return ix, iy, ix + iy           # planar: I_z = I_x + I_y
-
-
-def quat_R(q):
-    w, x, y, z = q
-    return np.array([
-        [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
-        [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
-        [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)]])
 
 
 def build_world():
@@ -134,7 +127,7 @@ def main() -> None:
             for name in ("stem_a", "stem_b"):
                 viz.point(f"world/tee/m_{name}", MASSES[name],
                           color=(180, 180, 190), radius=0.07)
-            viz.trail("world/tip_trail", pos + quat_R(q) @ TIP,
+            viz.trail("world/tip_trail", pos + rotmat(q) @ TIP,
                       color=(235, 200, 80), max_len=3000, min_dist=0.005)
 
         if (i + 1) % 2000 == 0:

@@ -42,6 +42,7 @@ from manta.parts import (
 from manta.planets import Earth, SeaWaves
 
 from .._control import Pacer, common_args, make_controller
+from .._geom import wave_elevation, yaw
 from .._viz import Viz
 
 # --- sea state + hull -------------------------------------------------------
@@ -161,19 +162,6 @@ def mix(surge, sway, heave, yaw, pitch):
     }
 
 
-def _eta(x, y, t):
-    """Wave elevation at (x, y, t) — the same planar sinusoid the Earth uses."""
-    k = 2 * np.pi / WAVES.wavelength
-    g0 = Earth.MU / Earth.R_EQ**2
-    omega = k * np.sqrt(g0 * WAVES.wavelength / (2 * np.pi))
-    return WAVES.amplitude * np.cos(k * x - omega * t)
-
-
-def _heading(q):
-    w, x, y, z = q
-    return np.degrees(np.arctan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z)))
-
-
 def main() -> None:
     args = common_args(__doc__).parse_args()
     dt = 0.02
@@ -285,11 +273,13 @@ def main() -> None:
                 xs = tp[0] + np.linspace(-12, 12, 12)
                 ys = tp[1] + np.linspace(-12, 12, 12)
                 Xg, Yg = np.meshgrid(xs, ys)
-                viz.heightfield("world/scene/waves", Xg, Yg, _eta(Xg, Yg, t),
+                viz.heightfield("world/scene/waves", Xg, Yg,
+                                wave_elevation(Xg, t, WAVES),
                                 color=(40, 110, 165))
                 viz.pose("world/scene/seabed", (tp[0], tp[1], 0.0))
             if (i + 1) % 50 == 0:
-                he = abs((_heading(tq) - _heading(eq) + 180) % 360 - 180)
+                he = abs((np.degrees(yaw(tq)) - np.degrees(yaw(eq))
+                          + 180) % 360 - 180)
                 print(f"{t:>5.1f} {tp[2]:>7.2f} {'GPS' if surfaced else ' DR':>5} "
                       f"{np.linalg.norm(tp - ep):>8.3f} {he:>9.2f}")
     except KeyboardInterrupt:

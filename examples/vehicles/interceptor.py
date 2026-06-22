@@ -55,6 +55,7 @@ from manta.parts import (
 )
 
 from .._control import Pacer
+from .._geom import quat_mul, rotmat
 from .._viz import Viz
 
 # --- world / rates ---------------------------------------------------------
@@ -162,28 +163,11 @@ def build_rocket():
 
 
 # ---------------------------------------------------------------------------
-# Quaternion / control helpers (numpy; manta quats are w,x,y,z)
+# Control helpers (numpy; manta quats are w,x,y,z — geometry lives in _geom)
 # ---------------------------------------------------------------------------
 
-def _R(q):
-    w, x, y, z = q
-    return np.array([
-        [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
-        [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
-        [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)]])
-
-
-def _qmul(a, b):
-    aw, ax, ay, az = a
-    bw, bx, by, bz = b
-    return np.array([aw * bw - ax * bx - ay * by - az * bz,
-                     aw * bx + ax * bw + ay * bz - az * by,
-                     aw * by - ax * bz + ay * bw + az * bx,
-                     aw * bz + ax * by - ay * bx + az * bw])
-
-
 def _qerr(q_ref, q):
-    qe = _qmul(q_ref, np.array([q[0], -q[1], -q[2], -q[3]]))
+    qe = quat_mul(q_ref, np.array([q[0], -q[1], -q[2], -q[3]]))
     if qe[0] < 0:
         qe = -qe
     n = np.linalg.norm(qe[1:])
@@ -213,7 +197,7 @@ def attitude_for_thrust(d):
 def autopilot(rk, q_ref):
     """Cascade: attitude error → gimbal ANGLE (capped) → joint torque PD."""
     q = np.asarray(rk["orientation"]).ravel()
-    Rwb = _R(q)
+    Rwb = rotmat(q)
     eb = Rwb.T @ _qerr(q_ref, q)
     wb = Rwb.T @ np.asarray(rk["angular_velocity"]).ravel()
     thx = np.clip(GIM_SIGN * (KATT * eb[0] - KRATE * wb[0]), -THMAX, THMAX)
@@ -292,7 +276,7 @@ def _aoa(q, v):
     sp = float(np.linalg.norm(v))
     if sp < 10:
         return 0.0
-    return float(np.degrees(np.arccos(np.clip((_R(q) @ [0, 0, 1.0]) @ v / sp,
+    return float(np.degrees(np.arccos(np.clip((rotmat(q) @ [0, 0, 1.0]) @ v / sp,
                                               -1, 1))))
 
 
@@ -408,7 +392,7 @@ def main() -> None:
             max_aoa = max(max_aoa, _aoa(np.asarray(rk["orientation"]).ravel(), rk_v))
         ang = 2 * np.arccos(np.clip(abs(np.dot(q_ref, q_tgt)), -1, 1))
         q_ref = _slerp(q_ref, q_tgt, 1.0 if ang < 1e-6 else min(1.0, SLEW * DT / ang))
-        bodyz = _R(np.asarray(rk["orientation"]).ravel()) @ [0, 0, 1.0]
+        bodyz = rotmat(np.asarray(rk["orientation"]).ravel()) @ [0, 0, 1.0]
         u = {"interceptor.main.throttle":
              float(np.clip(np.dot(F, bodyz) / MAXT, 0.05, 1.0)), **autopilot(rk, q_ref)}
 

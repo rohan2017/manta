@@ -1,9 +1,10 @@
 """FluidField + concrete fluid disturbances.
 
 A FluidField returns `FluidState(density, pressure, temperature,
-velocity)` at a queried world-frame point. The value is compound — three
-scalars (density kg/m³, pressure Pa, temperature K) plus a bulk flow
-velocity (Vec3[WorldFrame], m/s).
+viscosity, velocity)` at a queried world-frame point. The value is
+compound — four scalars (density kg/m³, pressure Pa, temperature K,
+dynamic viscosity Pa·s) plus a bulk flow velocity (Vec3[WorldFrame],
+m/s). Velocity comes last in every signature.
 
 Disturbances combine by role (their `combining` flag), per component:
 
@@ -51,6 +52,10 @@ _VEC3_W = Vec3[WorldFrame]
 class FluidState:
     """Local fluid properties at a world-frame point.
 
+    Fields are ordered `density, pressure, temperature, viscosity,
+    velocity` — the four scalars first, the Vec3 velocity last — and that
+    order is used in every signature and call site.
+
     density      — kg/m³. CasADi-MX scalar (composes with symbolic state).
     pressure     — Pa. MX scalar.
     temperature  — K. MX scalar.
@@ -58,6 +63,8 @@ class FluidState:
                    property (like density): a gas baseline fills it from
                    temperature via Sutherland's law, while water sets it
                    directly. Drives the Reynolds number a foil sees.
+                   Perturbation/overlay disturbances that carry no
+                   viscosity pass `ca.MX(0.0)`.
     velocity     — bulk fluid velocity at the point, Vec3[WorldFrame].
 
     Disturbances and `FluidField.value_at_sym` return / consume this
@@ -68,14 +75,8 @@ class FluidState:
     density: ca.MX                  # scalar MX
     pressure: ca.MX                 # scalar MX
     temperature: ca.MX              # scalar MX
+    viscosity: ca.MX                # scalar MX
     velocity: "Vec3"                # Vec3[WorldFrame]
-    viscosity: ca.MX = None         # scalar MX (defaults to 0 = unset)
-
-    def __post_init__(self):
-        # Tolerate older 4-component construction: an unset viscosity is a
-        # zero MX, combined like the other scalars.
-        if self.viscosity is None:
-            object.__setattr__(self, "viscosity", ca.MX(0.0))
 
     def __add__(self, other: "FluidState") -> "FluidState":
         return FluidState(
@@ -136,6 +137,7 @@ class FluidField(SuperposedField):
             density     = ca.MX(0.0),
             pressure    = ca.MX(0.0),
             temperature = ca.MX(0.0),
+            viscosity   = ca.MX(0.0),
             velocity    = _VEC3_W.constant((0.0, 0.0, 0.0)),
         )
 
@@ -334,6 +336,7 @@ class CurrentFlow(Disturbance):
             density     = ca.MX(0.0),
             pressure    = ca.MX(0.0),
             temperature = ca.MX(0.0),
+            viscosity   = ca.MX(0.0),
             velocity    = _VEC3_W.constant(self.velocity),
         )
 
@@ -397,6 +400,7 @@ class WeatherPatch(Disturbance):
             density     = self._eval(self.density, point, t),
             pressure    = self._eval(self.pressure, point, t),
             temperature = self._eval(self.temperature, point, t),
+            viscosity   = ca.MX(0.0),
             velocity    = _VEC3_W.constant((0.0, 0.0, 0.0)),
         )
 

@@ -19,9 +19,11 @@ at compile time to build the symbolic graph.
     - `State(init, manifold="R1"|"R3"|SO3Manifold(...))` — mutable
       per-tick state with manifold-correct boxplus.
     - `Input(default)` — per-tick user value.
-    - `Output(shape)` — per-tick observable (a sensor reading).
-    - `Noise(shape, kind="white"|"rw", sigma)` — white noise or an
-      RW-bias state that synthesizes its own slot + driver.
+    - `Output()` — per-tick observable (a sensor reading); shape is
+      inferred from what the part writes into `PartUpdate.outputs`.
+    - `WhiteNoise(signal_manifold, *, frame=…, sigma=…)` /
+      `RandomWalkNoise(...)` — white noise, or an RW-bias state that
+      synthesizes its own slot + driver. Both subclass `Noise`.
 - **The craft tree** — composite parts, mounting transforms, frames
   (`PartFrame`, `ParentFrame`, `CraftFrame`).
 - **`update()` and `PartUpdate`** — how a part contributes a `Wrench`

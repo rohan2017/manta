@@ -115,6 +115,7 @@ class CraftWindBubble(Disturbance):
             density     = ca.MX(0.0),
             pressure    = ca.MX(0.0),
             temperature = ca.MX(0.0),
+            viscosity   = ca.MX(0.0),
             velocity    = _VEC3_W.from_mx(wind_mx),
         )
 

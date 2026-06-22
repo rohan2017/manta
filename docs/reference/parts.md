@@ -45,7 +45,11 @@ a craft.
 
 ::: manta.parts.DragSurface
 
-::: manta.parts.Naca00xx
+::: manta.parts.Aerofoil
+
+::: manta.parts.naca
+
+::: manta.parts.ControlSurface
 
 ## Sensors
 

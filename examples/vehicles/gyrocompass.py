@@ -51,6 +51,7 @@ from manta.parts import DragSurface, IMU, Mass, PointBuoy, ProcessNoise
 from manta.planets import Earth, SeaWaves
 
 from .._control import Pacer, common_args
+from .._geom import yaw
 from .._viz import Viz
 
 RHO = 1025.0
@@ -94,11 +95,6 @@ def build_world(heading_deg: float):
     # yaws the attitude about local up (0 faces north).
     w.add_craft(b, **scene.at_rest(BELOW, heading=np.radians(heading_deg)))
     return w, b, earth, scene
-
-
-def _heading(q):
-    w, x, y, z = q
-    return np.degrees(np.arctan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z)))
 
 
 def main() -> None:
@@ -163,8 +159,8 @@ def main() -> None:
         ekf.predict(dt)
 
         # Heading is the yaw in the SCENE frame (relative to local north).
-        est_heading = _heading(
-            scene.relative(ekf.state_dict()["gyro"], t)["orientation"])
+        est_heading = np.degrees(yaw(
+            scene.relative(ekf.state_dict()["gyro"], t)["orientation"]))
         trel = scene.relative(sim.state["gyro"], t)
         if viz is not None and viz.due(t):
             viz.t(t)
@@ -176,7 +172,7 @@ def main() -> None:
                       (3 * np.cos(a), 3 * np.sin(a), 0), color=(235, 80, 80),
                       radius=0.05)
         if (i + 1) % int(10 / dt) == 0:
-            true = _heading(trel["orientation"])
+            true = np.degrees(yaw(trel["orientation"]))
             err = abs((est_heading - true + 180) % 360 - 180)
             sig_yaw = np.degrees(np.sqrt(np.asarray(ekf.P)[5, 5]))
             print(f"{t+dt:>6.0f} {est_heading:>8.2f} {true:>8.2f} "

@@ -127,15 +127,18 @@ scope:
   state; SO(3) slots carry an orientation (IMU integrators, attitude
   filters) with manifold-correct boxplus.
 - `Input(default)` — per-tick user-supplied value (e.g. throttle).
-- `Output(shape)` — per-tick observable (sensor reading).
-- `Noise(shape, kind="white"|"rw", sigma)` — per-tick white noise OR
-  RW bias state (synthesizes its own state slot + driver input).
+- `Output()` — per-tick observable (sensor reading); shape is inferred
+  from what the part writes into `PartUpdate.outputs`.
+- `WhiteNoise(signal_manifold="R3", *, frame=None, sigma=...)` — per-tick
+  i.i.d. Gaussian noise. `RandomWalkNoise(...)` — RW bias state
+  (synthesizes its own state slot + driver input). Both subclass `Noise`.
 
 Stock parts: `Mass`, `PointBuoy`, `Collider`, `Thruster` (polynomial
 in throttle), `RevoluteJoint` and `PrismaticJoint` (1-DOF joints, with Mass children for
-rotors), `DragSurface`, `Naca00xx` airfoil, `IMU` (gyro+accel, with
-Kalibr 4-parameter noise model), `DVL`, `Magnetometer`,
-`PositionSensor`, `TetherEndpoint`.
+rotors), `DragSurface`, `Aerofoil` (Re-aware, with the `naca()` helper)
+and `ControlSurface`, `IMU` (gyro+accel, with Kalibr 4-parameter noise
+model), `VelocitySensor`, `Magnetometer`, `PositionSensor`, `Barometer`,
+`TetherEndpoint`.
 
 ### Fields and Disturbances
 
@@ -143,11 +146,14 @@ Each `Field` (one of `GravityField`, `FluidField`, `MagField`,
 `CollisionField`) is a typed superposition of `Disturbance` objects.
 Disturbances combine via per-disturbance flags:
 
-- `"additive"` (default) — linear sum (gravity, B-field, etc.).
-- `"averaged"` — mean of running additive + every averaged
-  contribution (overlapping wind bubbles compromise on the mean).
-- `"projected"` — Gram-Schmidt residual (only add the component
-  orthogonal to or extending the running sum).
+- `"additive"` (default) — linear sum (gravity, B-field, a current or
+  thruster wake on top of a regime).
+- `"averaged"` — membership-weighted mean among the averaged
+  contributions (overlapping wind bubbles compromise on the mean).
+- `"baseline"` — a regime medium (an ocean, an atmosphere). Baselines
+  layer by spatial membership rather than summing
+  (`base ← (1 − w)·base + w·value`), so "which fluid am I in" is an
+  alpha-composite override, not a sum of 1025 + 1.225 kg/m³.
 
 Disturbances can carry State / Noise declarations like Parts —
 this is how `WindBias`, `CraftWindBubble`, and friends become
@@ -317,7 +323,7 @@ a self-running scripted fallback so they work unattended):
 # vehicles/ — visualized + keyboard (add --keyboard for live control)
 .venv/bin/python -m examples.vehicles.quadcopter         # Sim + EKF + LQR closed loop
 .venv/bin/python -m examples.vehicles.airplane           # control surfaces on RevoluteJoint hinges
-.venv/bin/python -m examples.vehicles.submarine          # PointBuoy + DVL + EKF
+.venv/bin/python -m examples.vehicles.submarine          # PointBuoy + VelocitySensor + EKF
 .venv/bin/python -m examples.vehicles.hydrofoil          # nested-RevoluteJoint laser gimbal (PID)
 
 # system identification — headless, no rerun needed
@@ -387,8 +393,8 @@ numpy backend by a compile-and-run roundtrip test. Open items:
   the end-of-interval state, biasing rate-derived states (orientation) by
   O(dt) — a gyro-only EKF drifted heading where a naive integrator didn't.
   Fixing it collapsed that error to ~0 (submarine est error: 2.2 m peak →
-  ~4 mm). `DVL` also gained a `velocity_noise` channel (it had none, so its
-  EKF R was singular).
+  ~4 mm). `VelocitySensor` also gained a `velocity_noise` channel (it had
+  none, so its EKF R was singular).
 - **Multi-craft EKF over coupled worlds** — works for parallel
   independent crafts (block-decomposed predict is wired); field-mediated
   cross-craft coupling in the *estimator* is untested at scale.

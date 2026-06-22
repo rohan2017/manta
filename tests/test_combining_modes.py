@@ -42,7 +42,8 @@ class _Const(Disturbance):
     def contribute_at_sym(self, point, t) -> FluidState:
         return FluidState(
             density=ca.MX(self._d), pressure=ca.MX(self._p),
-            temperature=ca.MX(self._T), velocity=_VEC3.constant(self._v))
+            temperature=ca.MX(self._T), viscosity=ca.MX(0.0),
+            velocity=_VEC3.constant(self._v))
 
 
 def _const_membership(w: float):

@@ -47,6 +47,7 @@ from manta.parts import (
 )
 
 from .._control import Pacer, TerminalController, common_args, make_controller
+from .._geom import euler_zyx, quat
 from .._viz import Viz
 
 # --- Cessna 172 Skyhawk, from a re-measured airframe survey. Coordinate
@@ -255,22 +256,6 @@ def build_world():
     return w
 
 
-def _quat(axis, angle):
-    """wxyz quaternion for a rotation of `angle` about `axis` (viz only)."""
-    h = 0.5 * angle
-    ax = np.asarray(axis, dtype=float)
-    return (np.cos(h), *(np.sin(h) * ax))
-
-
-def _euler(q_wxyz):
-    """ZYX yaw/pitch/roll (rad) from a wxyz quaternion."""
-    w, x, y, z = q_wxyz
-    yaw = np.arctan2(2 * (w*z + x*y), 1 - 2 * (y*y + z*z))
-    pitch = np.arcsin(np.clip(2 * (w*y - z*x), -1.0, 1.0))
-    roll = np.arctan2(2 * (w*x + y*z), 1 - 2 * (x*x + y*y))
-    return yaw, pitch, roll
-
-
 def draw_airframe(viz, craft):
     """Render the airframe straight from the SIM parts — nothing is
     duplicated, so what you see is the geometry the physics uses. Each
@@ -436,7 +421,7 @@ def main() -> None:
                     if abs(ang - hinge_logged.get(name, 1e9)) > 0.002:
                         hinge_logged[name] = ang
                         viz.pose(f"world/plane/{name}", pos,
-                                 _quat(axis, ang))
+                                 quat(axis, ang))
                 if abs(throttle - thr_logged) > 0.005:
                     thr_logged = throttle
                     viz.arrow("world/plane/thrust", (0, 0, 0),
@@ -459,7 +444,7 @@ def main() -> None:
                       f"{np.linalg.norm(v):.1f} m/s, sink {-v[2]:.1f} m/s")
             if (f + 1) % round(1.0 / FRAME) == 0:
                 v = np.asarray(st["velocity"]).ravel()
-                yaw, pitch, roll = _euler(np.asarray(st["orientation"]).ravel())
+                yaw, pitch, roll = euler_zyx(np.asarray(st["orientation"]).ravel())
                 print(f"{t:>6.2f} {p[0]:>8.1f} {p[2]:>8.1f} "
                       f"{np.linalg.norm(v):>9.2f} {np.degrees(pitch):>+7.1f} "
                       f"{np.degrees(roll):>+7.1f} {np.degrees(yaw):>+7.1f} "

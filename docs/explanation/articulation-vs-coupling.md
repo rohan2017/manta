@@ -50,7 +50,7 @@ craft.add(Mass("fuselage", mass=8.0, moi=(0.5, 1.2, 1.4)))
 hinge = RevoluteJoint("aileron_L", mode="saturating",
                       stall_torque=5.0, axis=(0, 1, 0),
                       transform=(0.0, 1.5, 0.0))
-hinge.add(Naca00xx("surf", ...))   # the surface rides the hinge
+hinge.add(Aerofoil("surf", ...))   # the surface rides the hinge
 craft.add(hinge)
 ```
 

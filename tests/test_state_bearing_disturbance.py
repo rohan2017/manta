@@ -36,6 +36,7 @@ class WindBias(Disturbance):
             density=ca.MX(0.0),
             pressure=ca.MX(0.0),
             temperature=ca.MX(0.0),
+            viscosity=ca.MX(0.0),
             velocity=Vec3[WorldFrame].from_mx(self.velocity._mx),
         )
 

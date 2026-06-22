@@ -42,6 +42,7 @@ from manta.parts import (
 from manta.planets import Earth, SeaWaves
 
 from .._control import Pacer, common_args, make_controller
+from .._geom import euler_zyx, quat, rotmat, wave_elevation, wrap_pi
 from .._viz import Viz
 
 # --- sea state --------------------------------------------------------------
@@ -184,40 +185,6 @@ def build_world():
     return w
 
 
-def _quat(axis, angle):
-    h = 0.5 * angle
-    return (np.cos(h), *(np.sin(h) * np.asarray(axis, dtype=float)))
-
-
-def _R(q_wxyz):
-    w, x, y, z = q_wxyz
-    return np.array([
-        [1 - 2*(y*y + z*z), 2*(x*y - w*z),     2*(x*z + w*y)],
-        [2*(x*y + w*z),     1 - 2*(x*x + z*z), 2*(y*z - w*x)],
-        [2*(x*z - w*y),     2*(y*z + w*x),     1 - 2*(x*x + y*y)]])
-
-
-def _wrap(a):
-    return (a + np.pi) % (2 * np.pi) - np.pi
-
-
-def _euler(q_wxyz):
-    """ZYX yaw/pitch/roll (rad); pitch + = nose down (about +y = left)."""
-    w, x, y, z = q_wxyz
-    yaw = np.arctan2(2 * (w*z + x*y), 1 - 2 * (y*y + z*z))
-    pitch = np.arcsin(np.clip(2 * (w*y - z*x), -1.0, 1.0))
-    roll = np.arctan2(2 * (w*x + y*z), 1 - 2 * (x*x + y*y))
-    return yaw, pitch, roll
-
-
-def _eta(x, y, t):
-    """Wave elevation at (x, y) — same planar sinusoid the Earth uses."""
-    k = 2 * np.pi / WAVES.wavelength
-    g0 = Earth.MU / Earth.R_EQ**2
-    omega = k * np.sqrt(g0 * WAVES.wavelength / (2 * np.pi))
-    return WAVES.amplitude * np.cos(k * x - omega * t)
-
-
 def main() -> None:
     args = common_args(__doc__).parse_args()
     dt = 0.002
@@ -299,7 +266,7 @@ def main() -> None:
                                 vec + VEC_RATE * FRAME))
 
             st = sim.state["boat"]
-            yaw, pitch, roll = _euler(np.asarray(st["orientation"]).ravel())
+            yaw, pitch, roll = euler_zyx(np.asarray(st["orientation"]).ravel())
             v_now = float(np.linalg.norm(np.asarray(st["velocity"]).ravel()))
             # Elevon authority grows with q ∝ v²: schedule the PID
             # output back down so the loops stay tuned at speed.
@@ -325,7 +292,7 @@ def main() -> None:
             # hull frame; each PID outputs a joint torque directly.
             p = np.asarray(st["position"]).ravel()
             q = np.asarray(st["orientation"]).ravel()
-            R = _R(q)
+            R = rotmat(q)
             to_tgt = R.T @ (TARGET - (p + R @ GIMBAL))
             des = {"pan": np.arctan2(to_tgt[1], to_tgt[0]),
                    "tilt": -np.arctan2(to_tgt[2], np.hypot(*to_tgt[:2]))}
@@ -341,7 +308,7 @@ def main() -> None:
                 for j, d in des.items():
                     ang = float(st[f"{j}.angle"])
                     st[f"{j}.torque_cmd"] = pid[j].step(
-                        dt, setpoint=ang + _wrap(d - ang),
+                        dt, setpoint=ang + wrap_pi(d - ang),
                         measurement=ang)["command"]
                 sim.step(dt)
                 t += dt
@@ -357,10 +324,10 @@ def main() -> None:
                     for tag, sy in (("l", +1.0), ("r", -1.0)):
                         viz.pose(f"world/boat/side_{tag}",
                                  (0, sy * DECK_Y / 2, (DECK_Z + KEEL_Z) / 2),
-                                 _quat((1, 0, 0), sy * (np.pi / 2 - slant)))
+                                 quat((1, 0, 0), sy * (np.pi / 2 - slant)))
                         viz.pose(f"world/boat/foil_{tag}",
                                  (FRONT_X, sy * FOIL_Y, FRONT_Z),
-                                 _quat((1, 0, 0), sy * DIHEDRAL))
+                                 quat((1, 0, 0), sy * DIHEDRAL))
                     viz.point("world/target", TARGET,
                               color=(90, 230, 120), radius=0.5)
                     # Laser ray along +x of the tilt frame.
@@ -372,16 +339,16 @@ def main() -> None:
                     sy = +1.0 if name.endswith("l") else -1.0
                     viz.pose(f"world/boat/{name}",
                              (REAR_X, sy * ELEV_Y, REAR_Z),
-                             _quat((0, 1, 0), float(st[f"{name}.angle"])))
+                             quat((0, 1, 0), float(st[f"{name}.angle"])))
                 viz.pose("world/boat/tvec", (-1.45, 0, -0.5),
-                         _quat((0, 0, 1), float(st["tvec.angle"])))
+                         quat((0, 0, 1), float(st["tvec.angle"])))
                 viz.arrow("world/boat/tvec/thrust", (0, 0, 0),
                           (-0.8 * throttle, 0, 0), color=(235, 80, 80),
                           radius=0.02)
                 viz.pose("world/boat/pan", tuple(GIMBAL),
-                         _quat((0, 0, 1), float(st["pan.angle"])))
+                         quat((0, 0, 1), float(st["pan.angle"])))
                 viz.pose("world/boat/pan/tilt", (0, 0, 0.12),
-                         _quat((0, 1, 0), float(st["tilt.angle"])))
+                         quat((0, 1, 0), float(st["tilt.angle"])))
                 if f == 0:
                     # Eye-track the boat: the orbit centre follows it and
                     # the user orbits/zooms normally.
@@ -394,15 +361,15 @@ def main() -> None:
                 xs = p[0] + np.linspace(-8.4, 8.4, 10)
                 ys = p[1] + np.linspace(-8.4, 8.4, 10)
                 Xg, Yg = np.meshgrid(xs, ys)
-                viz.heightfield("world/waves", Xg, Yg, _eta(Xg, Yg, t),
+                viz.heightfield("world/waves", Xg, Yg, wave_elevation(Xg, t, WAVES),
                                 color=(50, 110, 170))
 
             if (f + 1) % round(1.0 / FRAME) == 0:
                 v = np.asarray(st["velocity"]).ravel()
                 q = np.asarray(st["orientation"]).ravel()
-                yaw, pitch, roll = _euler(q)
+                yaw, pitch, roll = euler_zyx(q)
                 # Laser pointing error: actual ray direction vs. bearing.
-                R = _R(q)
+                R = rotmat(q)
                 pan_a, tilt_a = (float(st["pan.angle"]),
                                  float(st["tilt.angle"]))
                 d_world = R @ np.array(
