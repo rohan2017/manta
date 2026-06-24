@@ -3,8 +3,8 @@
   "className": "Airplane",
   "basename": "airplane",
   "hosting": "threaded",
-  "ambientDim": 21,
-  "tangentDim": 20,
+  "ambientDim": 17,
+  "tangentDim": 16,
   "stateSlots": [
     {
       "name": "plane.position",
@@ -27,55 +27,31 @@
       "dim": 3
     },
     {
-      "name": "plane.ail_l.angle",
+      "name": "plane.ail_l.deflection",
       "off": 13,
       "dim": 1
     },
     {
-      "name": "plane.ail_l.rate",
+      "name": "plane.ail_r.deflection",
       "off": 14,
       "dim": 1
     },
     {
-      "name": "plane.ail_r.angle",
+      "name": "plane.elev.deflection",
       "off": 15,
       "dim": 1
     },
     {
-      "name": "plane.ail_r.rate",
+      "name": "plane.rud.deflection",
       "off": 16,
-      "dim": 1
-    },
-    {
-      "name": "plane.elev.angle",
-      "off": 17,
-      "dim": 1
-    },
-    {
-      "name": "plane.elev.rate",
-      "off": 18,
-      "dim": 1
-    },
-    {
-      "name": "plane.rud.angle",
-      "off": 19,
-      "dim": 1
-    },
-    {
-      "name": "plane.rud.rate",
-      "off": 20,
       "dim": 1
     }
   ],
   "initialState": [
     0.0,
     0.0,
-    0.3,
+    1.23,
     1.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
     0.0,
     0.0,
     0.0,
@@ -92,28 +68,28 @@
   ],
   "inputs": [
     {
-      "name": "plane.ail_l.torque_cmd",
+      "name": "plane.ail_l.deflection_cmd",
       "dim": 1,
       "default": 0.0,
       "sigma": null,
       "rate": null
     },
     {
-      "name": "plane.ail_r.torque_cmd",
+      "name": "plane.ail_r.deflection_cmd",
       "dim": 1,
       "default": 0.0,
       "sigma": null,
       "rate": null
     },
     {
-      "name": "plane.elev.torque_cmd",
+      "name": "plane.elev.deflection_cmd",
       "dim": 1,
       "default": 0.0,
       "sigma": null,
       "rate": null
     },
     {
-      "name": "plane.rud.torque_cmd",
+      "name": "plane.rud.deflection_cmd",
       "dim": 1,
       "default": 0.0,
       "sigma": null,
@@ -150,37 +126,37 @@
     {
       "method": "step",
       "shim": "airplane_step",
-      "inSize": 34,
-      "outSize": 21,
+      "inSize": 30,
+      "outSize": 17,
       "in": [
         {
           "name": "x",
           "kind": "state",
           "off": 0,
-          "size": 21
+          "size": 17
         },
         {
           "name": "u",
           "kind": "control",
-          "off": 21,
+          "off": 17,
           "size": 5
         },
         {
           "name": "noise",
           "kind": "noise",
-          "off": 26,
+          "off": 22,
           "size": 6
         },
         {
           "name": "dt",
           "kind": "timestep",
-          "off": 32,
+          "off": 28,
           "size": 1
         },
         {
           "name": "t",
           "kind": "time",
-          "off": 33,
+          "off": 29,
           "size": 1
         }
       ],
@@ -189,7 +165,7 @@
           "name": "x",
           "kind": "state",
           "off": 0,
-          "size": 21,
+          "size": 17,
           "writesState": true
         }
       ]

@@ -3,7 +3,10 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "manta"
+# Distribution name on PyPI (`pip install mantapilot`). The import name stays
+# `manta` — see [tool.hatch.build.targets.wheel] below. PyPI `manta` is taken by
+# a defunct Joyent SDK; the import name is decoupled from the install name.
+name = "mantapilot"
 version = "0.1.0"
 description = "Python-first, CasADi-backed rigid-body sim, state estimation, and control synthesis for small vehicles."
 readme = "README.md"

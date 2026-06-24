@@ -3,265 +3,290 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>manta — rigid-body sim, EKF & LQR for small vehicles</title>
-<meta name="description" content="A Python-first, CasADi-backed framework for drones, rockets, underwater vehicles, and satellites — simulation, state estimation, and control synthesis over one declarative model.">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Hanken+Grotesk:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<title>manta — build your craft, manta writes the math</title>
+<meta name="description" content="A Python-first, CasADi-backed framework for simulation, state estimation, and control. Declare a vehicle in a few lines of Python, then lower it to JAX or embedded C++.">
+<link rel="icon" href="/manta.svg">
 <style>
   :root {
-    --bg:       #080b0c;
-    --bg-2:     #0c1213;
-    --panel:    #0e1617;
-    --ink:      #e8efed;
-    --muted:    #8597941a;
-    --text-dim: #93a39f;
-    --teal:     #2dd4bf;
-    --teal-br:  #5eead4;
-    --teal-dim: #1c8478;
-    --amber:    #f5b461;
-    --line:     rgba(94,234,212,.10);
-    --line-2:   rgba(94,234,212,.045);
-    --hair:     rgba(143,170,165,.16);
-    --radius:   14px;
+    --bg:        #d0e0e3;
+    --bg-deep:   #c3d6da;
+    --white:     #ffffff;
+    --ink:       #0d1417;
+    --ink-soft:  #46565d;
+    --navy:      #1c4587;
+    --blue:      #3d85c6;
+    --line:      rgba(28,69,135,.18);
+    --line-soft: rgba(28,69,135,.09);
+    --shadow:    24px 24px 60px -36px rgba(20,49,96,.45);
+    --sans: "Helvetica Neue", Helvetica, Arial, "Liberation Sans", sans-serif;
+    --mono: ui-monospace, "SF Mono", "Menlo", "Consolas", monospace;
+    --radius: 14px;
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
-
-  html { scroll-behavior: smooth; }
-
+  html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
   body {
-    font-family: "Hanken Grotesk", system-ui, sans-serif;
+    font-family: var(--sans);
     background: var(--bg);
     color: var(--ink);
-    line-height: 1.6;
+    line-height: 1.62;
     -webkit-font-smoothing: antialiased;
     overflow-x: hidden;
-    position: relative;
   }
+  a { color: var(--navy); text-decoration: none; }
+  ::selection { background: var(--blue); color: #fff; }
 
-  /* layered atmosphere: coordinate grid + radial signal glow */
-  body::before {
-    content: "";
-    position: fixed; inset: 0; z-index: -2;
-    background:
-      radial-gradient(900px 600px at 78% -8%, rgba(45,212,191,.13), transparent 60%),
-      radial-gradient(700px 500px at 0% 100%, rgba(45,212,191,.06), transparent 55%),
-      linear-gradient(var(--line) 1px, transparent 1px),
-      linear-gradient(90deg, var(--line) 1px, transparent 1px),
-      linear-gradient(var(--line-2) 1px, transparent 1px),
-      linear-gradient(90deg, var(--line-2) 1px, transparent 1px),
-      var(--bg);
-    background-size:
-      100% 100%, 100% 100%,
-      96px 96px, 96px 96px,
-      24px 24px, 24px 24px;
-  }
-  /* grain overlay */
-  body::after {
-    content: "";
-    position: fixed; inset: 0; z-index: -1; pointer-events: none;
-    opacity: .035;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-  }
+  .wrap { max-width: 1140px; margin: 0 auto; padding-left: 56px; padding-right: 56px; }
 
-  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 28px; }
-
-  /* ---- nav ---- */
+  /* ---------- nav ---------- */
   header {
-    position: sticky; top: 0; z-index: 10;
-    backdrop-filter: blur(8px);
-    border-bottom: 1px solid var(--hair);
-    background: rgba(8,11,12,.66);
+    position: sticky; top: 0; z-index: 30;
+    background: rgba(208,224,227,.82);
+    backdrop-filter: saturate(140%) blur(10px);
+    border-bottom: 1px solid var(--line-soft);
   }
-  nav { display: flex; align-items: center; justify-content: space-between; height: 64px; }
-  .brand { display: flex; align-items: baseline; gap: 11px; text-decoration: none; color: var(--ink); }
-  .brand .mark {
-    font-family: "Instrument Serif", Georgia, serif;
-    font-size: 28px; letter-spacing: .5px; line-height: 1;
+  nav { display: flex; align-items: center; justify-content: space-between; height: 68px; }
+  .brand { display: flex; align-items: center; gap: 10px; color: var(--ink); }
+  .brand .word {
+    font-size: 23px; font-weight: 700; letter-spacing: -.018em; color: var(--navy);
   }
   .brand .ver {
-    font-family: "JetBrains Mono", monospace; font-size: 11px;
-    color: var(--teal); border: 1px solid var(--teal-dim);
-    padding: 2px 6px; border-radius: 5px; letter-spacing: .04em;
+    font-family: var(--mono); font-size: 11px; color: var(--blue);
+    border: 1px solid var(--line); border-radius: 999px;
+    padding: 2px 9px; letter-spacing: .02em;
   }
-  .nav-links { display: flex; align-items: center; gap: 26px; }
+  .brand .ray { width: 26px; height: 26px; display: block; }
+  .nav-links { display: flex; align-items: center; gap: 30px; }
   .nav-links a {
-    font-family: "JetBrains Mono", monospace; font-size: 13px;
-    color: var(--text-dim); text-decoration: none; letter-spacing: .02em;
-    transition: color .18s ease;
+    font-size: 15px; color: var(--ink-soft); letter-spacing: -.005em;
+    transition: color .16s ease;
   }
-  .nav-links a:hover { color: var(--teal-br); }
+  .nav-links a:hover { color: var(--navy); }
 
-  /* ---- hero ---- */
-  .hero { position: relative; padding: 104px 0 76px; }
+  /* ---------- shared section furniture ---------- */
   .eyebrow {
-    font-family: "JetBrains Mono", monospace; font-size: 12.5px;
-    letter-spacing: .28em; text-transform: uppercase;
-    color: var(--teal); margin-bottom: 26px;
-    display: flex; align-items: center; gap: 12px;
+    font-family: var(--mono); font-size: 12px; letter-spacing: .2em;
+    text-transform: uppercase; color: var(--blue);
+    display: inline-flex; align-items: center; gap: 11px;
   }
-  .eyebrow::before {
-    content: ""; width: 30px; height: 1px; background: var(--teal-dim);
+  .eyebrow::before { content: ""; width: 22px; height: 1px; background: var(--blue); }
+  .section-head h2 {
+    font-size: clamp(28px, 4vw, 40px); font-weight: 700; letter-spacing: -.025em;
+    line-height: 1.08; margin: 20px 0 0; text-wrap: balance;
   }
-  h1 {
-    font-family: "Instrument Serif", Georgia, serif;
-    font-weight: 400; font-size: clamp(44px, 7.4vw, 88px);
-    line-height: 1.02; letter-spacing: -.5px;
-    max-width: 14ch;
-  }
-  h1 em { font-style: italic; color: var(--teal-br); }
-  .lede {
-    margin-top: 28px; max-width: 60ch; font-size: clamp(16px, 1.9vw, 19px);
-    color: #c2cecb;
-  }
-  .lede b { color: var(--ink); font-weight: 600; }
+  .section-head p { margin-top: 14px; max-width: 56ch; color: var(--ink-soft); font-size: 17px; }
 
-  .cta-row { margin-top: 40px; display: flex; flex-wrap: wrap; gap: 14px; }
+  /* ---------- hero ---------- */
+  .hero { padding-top: 74px; padding-bottom: 86px; }
+  .hero-grid {
+    display: grid; grid-template-columns: 1.2fr 1.05fr; gap: 24px; align-items: center;
+  }
+  .hero-logo { width: min(457px, 100%); height: auto; margin-bottom: 22px; display: block; }
+  .hero h1 {
+    font-size: clamp(29px, 4vw, 44px); font-weight: 700;
+    letter-spacing: -.03em; line-height: 1.06;
+  }
+  .hero h1 .accent { color: var(--navy); }
+  .install {
+    display: inline-flex; align-items: stretch;
+    background: var(--white); border: 1px solid var(--line);
+    border-radius: 10px; overflow: hidden; box-shadow: 0 10px 28px -22px rgba(20,49,96,.6);
+  }
+  .install code {
+    font-family: var(--mono); font-size: 13px; color: var(--ink);
+    padding: 0 12px 0 14px; white-space: nowrap; display: inline-flex; align-items: center;
+  }
+  .install code .pmpt { color: var(--blue); user-select: none; }
+  .copy-btn {
+    border: none; border-left: 1px solid var(--line-soft); cursor: pointer;
+    background: transparent; color: var(--ink-soft);
+    padding: 0 15px; font-family: var(--mono); font-size: 12px; letter-spacing: .04em;
+    display: inline-flex; align-items: center; gap: 7px; transition: background .15s, color .15s;
+  }
+  .copy-btn:hover { background: var(--bg); color: var(--navy); }
+  .copy-btn.done { color: var(--navy); }
+  .copy-btn svg { width: 15px; height: 15px; }
+  .copy-btn .ic-check { display: none; }
+  .copy-btn.done .ic-copy { display: none; }
+  .copy-btn.done .ic-check { display: inline-block; }
+  .hero .lede { margin-top: 26px; max-width: 52ch; font-size: 17px; color: var(--ink-soft); }
+  .hero .lede strong { color: var(--ink); font-weight: 600; }
+  .cta-row { margin-top: 32px; display: flex; flex-wrap: wrap; align-items: stretch; gap: 11px; }
   .btn {
-    font-family: "JetBrains Mono", monospace; font-size: 14px; font-weight: 500;
-    text-decoration: none; padding: 13px 22px; border-radius: 10px;
-    display: inline-flex; align-items: center; gap: 9px;
-    transition: transform .16s ease, box-shadow .2s ease, background .2s ease, border-color .2s ease;
+    font-size: 15px; font-weight: 600; letter-spacing: -.01em;
+    padding: 12px 22px; border-radius: 10px;
+    display: inline-flex; align-items: center; gap: 8px;
+    transition: transform .15s ease, box-shadow .2s ease, background .18s ease, border-color .18s;
   }
-  .btn-primary {
-    background: var(--teal); color: #04100e; font-weight: 700;
-    box-shadow: 0 0 0 1px var(--teal), 0 8px 30px -10px rgba(45,212,191,.6);
-  }
-  .btn-primary:hover { background: var(--teal-br); transform: translateY(-2px); box-shadow: 0 0 0 1px var(--teal-br), 0 14px 38px -12px rgba(94,234,212,.7); }
-  .btn-ghost { color: var(--ink); border: 1px solid var(--hair); background: rgba(255,255,255,.012); }
-  .btn-ghost:hover { border-color: var(--teal-dim); color: var(--teal-br); transform: translateY(-2px); }
+  .btn-primary { background: var(--navy); color: #fff; box-shadow: 0 12px 26px -14px rgba(28,69,135,.8); }
+  .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 18px 34px -14px rgba(28,69,135,.85); }
+  .btn-ghost { color: var(--navy); border: 1px solid var(--line); background: var(--white); }
+  .btn-ghost:hover { transform: translateY(-2px); border-color: var(--blue); }
 
-  /* decorative trajectory: estimate (ringed) tracks truth (solid) */
-  .traj {
-    position: absolute; top: 36px; right: -40px; width: min(46vw, 520px);
-    z-index: -1; opacity: .9; pointer-events: none;
+  /* hero media — looping showcase video (placeholder until provided) */
+  .hero-media {
+    position: relative; aspect-ratio: 4 / 3; border-radius: var(--radius);
+    background: var(--white); border: 1px solid var(--line);
+    box-shadow: var(--shadow); overflow: hidden;
   }
-  .traj .path { fill: none; stroke: var(--line); stroke-width: 1; }
-  .traj .truth-path { fill: none; stroke: rgba(94,234,212,.32); stroke-width: 1.5; stroke-dasharray: 2 5; stroke-linecap: round; }
-  .dot-truth { fill: var(--teal-br); filter: drop-shadow(0 0 6px var(--teal)); }
-  .dot-est   { fill: none; stroke: var(--amber); stroke-width: 2; opacity: .9; }
+  .hero-media video, .hero-media canvas { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .media-ph {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 12px; color: var(--ink-soft);
+    background:
+      radial-gradient(120% 90% at 50% 0%, rgba(61,133,198,.10), transparent 65%),
+      repeating-linear-gradient(135deg, rgba(28,69,135,.035) 0 12px, transparent 12px 24px);
+  }
+  .media-ph .glyph { width: 64px; height: 64px; opacity: .5; }
+  .media-ph span { font-family: var(--mono); font-size: 11.5px; letter-spacing: .14em; text-transform: uppercase; }
 
-  /* ---- code card ---- */
-  .code-card {
-    margin-top: 76px; border: 1px solid var(--hair); border-radius: var(--radius);
-    background: linear-gradient(180deg, var(--panel), #0a1011);
-    overflow: hidden; box-shadow: 0 30px 80px -40px rgba(0,0,0,.8);
+  /* ---------- examples / carousel ---------- */
+  .examples { padding-top: 30px; padding-bottom: 96px; }
+  .carousel { margin-top: 40px; position: relative; }
+  .stage {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 26px; align-items: stretch;
   }
-  .code-head {
-    display: flex; align-items: center; gap: 14px;
-    padding: 13px 18px; border-bottom: 1px solid var(--hair);
-    font-family: "JetBrains Mono", monospace; font-size: 12.5px; color: var(--text-dim);
+  .panel {
+    background: var(--white); border: 1px solid var(--line); border-radius: var(--radius);
+    box-shadow: var(--shadow); overflow: hidden; display: flex; flex-direction: column;
   }
-  .lights { display: flex; gap: 7px; }
-  .lights i { width: 11px; height: 11px; border-radius: 50%; display: block; opacity: .8; }
-  .lights i:nth-child(1){ background:#e06c75;} .lights i:nth-child(2){ background:#e5c07b;} .lights i:nth-child(3){ background:var(--teal);}
-  .code-head .cap { margin-left: auto; color: var(--teal-dim); }
+  .panel-bar {
+    display: flex; align-items: center; gap: 9px; padding: 12px 16px;
+    border-bottom: 1px solid var(--line-soft);
+    font-family: var(--mono); font-size: 12.5px; color: var(--ink-soft);
+  }
+  .panel-bar .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--line); }
+  .panel-bar .file { margin-left: 2px; }
+  .panel-bar .right { margin-left: auto; color: var(--blue); }
   pre {
-    margin: 0; padding: 24px 26px; overflow-x: auto;
-    font-family: "JetBrains Mono", monospace; font-size: 13.5px; line-height: 1.78;
-    color: var(--ink);
+    margin: 0; padding: 20px 22px; overflow: auto; flex: 1;
+    font-family: var(--mono); font-size: 13px; line-height: 1.74; color: var(--ink);
+    tab-size: 2;
   }
-  .c-kw { color: var(--teal-br); }
-  .c-mod { color: #cfe8e2; }
-  .c-str { color: #a8d8b9; }
-  .c-num { color: #7fd4e8; }
-  .c-com { color: #566663; font-style: italic; }
-  .c-fn  { color: #e8efed; }
-  .c-pm  { color: var(--text-dim); }
+  .c-kw  { color: var(--navy); }
+  .c-mod { color: var(--blue); }
+  .c-str { color: var(--blue); }
+  .c-num { color: var(--blue); }
+  .c-com { color: #7d8a91; font-style: italic; }
+  .c-cls { color: var(--ink); font-weight: 600; }
 
-  /* ---- live demo ---- */
-  .demo { padding: 84px 0 8px; }
-  .viewport {
-    position: relative; margin-top: 30px; aspect-ratio: 16 / 9;
-    border: 1px solid var(--hair); border-radius: var(--radius);
-    overflow: hidden; background: radial-gradient(120% 90% at 70% 0%, #0d1a1c, #070d0e 70%);
-    box-shadow: 0 30px 80px -40px rgba(0,0,0,.8);
+  /* render frame */
+  .render { padding: 0; position: relative; }
+  .render-stage {
+    position: relative; flex: 1; min-height: 340px;
+    background: radial-gradient(130% 100% at 50% 0%, #eef5f6, #d7e6e9 70%);
   }
-  .viewport canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-  .viewport .overlay {
-    position: absolute; pointer-events: none;
-    font-family: "JetBrains Mono", monospace; letter-spacing: .02em;
+  .render-stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .render-overlay { position: absolute; pointer-events: none; font-family: var(--mono); }
+  .render-hud {
+    top: 12px; left: 14px; font-size: 12px; color: var(--navy);
+    background: rgba(255,255,255,.7); border: 1px solid var(--line-soft);
+    padding: 4px 9px; border-radius: 7px; backdrop-filter: blur(3px);
   }
-  .hud {
-    top: 14px; left: 16px; font-size: 12.5px; color: var(--teal-br);
-    background: rgba(8,11,12,.5); padding: 6px 10px; border-radius: 8px;
-    border: 1px solid var(--line); backdrop-filter: blur(4px);
+  .render-keys {
+    bottom: 12px; left: 14px; right: 14px; font-size: 11.5px; color: var(--ink-soft);
+    display: flex; flex-wrap: wrap; gap: 5px 14px;
   }
-  .badge {
-    top: 14px; right: 16px; font-size: 11px; color: var(--text-dim);
-    text-transform: uppercase; letter-spacing: .14em;
+  .render-keys kbd {
+    font-family: var(--mono); font-size: 11px; color: var(--navy);
+    background: var(--white); border: 1px solid var(--line); border-bottom-width: 2px;
+    border-radius: 5px; padding: 1px 6px;
   }
-  .hint {
-    bottom: 14px; left: 16px; right: 16px; font-size: 12px; color: var(--text-dim);
-    display: flex; flex-wrap: wrap; gap: 8px 18px;
+  .skel-toggle {
+    position: absolute; top: 10px; right: 12px; pointer-events: auto; cursor: pointer;
+    font-family: var(--mono); font-size: 11.5px; letter-spacing: .02em;
+    color: var(--ink-soft); background: rgba(255,255,255,.78);
+    border: 1px solid var(--line); border-radius: 7px; padding: 5px 11px;
+    transition: color .15s, border-color .15s, background .15s;
   }
-  .hint b { color: var(--teal); font-weight: 500; }
-  .demo-cap { margin-top: 22px; max-width: 70ch; color: var(--text-dim); font-size: 15px; }
-  .demo-cap code { font-family: "JetBrains Mono", monospace; font-size: 13px; color: #cfe8e2; }
+  .skel-toggle:hover { color: var(--navy); border-color: var(--blue); }
+  .skel-toggle[aria-pressed="true"] { color: #fff; background: var(--navy); border-color: var(--navy); }
+  .click-fly {
+    inset: 0; display: flex; align-items: center; justify-content: center;
+    pointer-events: none; transition: opacity .25s ease;
+  }
+  .click-fly span {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .04em; color: var(--navy);
+    background: rgba(255,255,255,.82); border: 1px solid var(--line);
+    border-radius: 999px; padding: 7px 16px;
+  }
+  .render-stage.flying .click-fly { opacity: 0; }
+  .render-fallback {
+    position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+    text-align: center; padding: 24px; color: var(--ink-soft);
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.7;
+  }
+  .render-stage.failed .render-fallback { display: flex; }
+  .render-stage.failed canvas { display: none; }
 
-  /* ---- features ---- */
-  .features { padding: 92px 0 40px; }
-  .sec-label {
-    font-family: "JetBrains Mono", monospace; font-size: 12px; letter-spacing: .26em;
-    text-transform: uppercase; color: var(--text-dim); margin-bottom: 34px;
-    display: flex; align-items: center; gap: 12px;
+  /* carousel chrome */
+  .arrow {
+    position: absolute; top: 50%; transform: translateY(-50%); z-index: 5;
+    width: 44px; height: 44px; border-radius: 50%; cursor: pointer;
+    background: var(--white); border: 1px solid var(--line); color: var(--navy);
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 10px 24px -14px rgba(20,49,96,.6); transition: transform .15s, border-color .15s;
   }
-  .sec-label::after { content: ""; flex: 1; height: 1px; background: var(--hair); }
-  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px; background: var(--hair); border: 1px solid var(--hair); border-radius: var(--radius); overflow: hidden; }
-  .cell {
-    background: var(--bg-2); padding: 30px 28px; position: relative;
-    transition: background .2s ease;
+  .arrow:hover { border-color: var(--blue); transform: translateY(-50%) scale(1.06); }
+  .arrow:active { transform: translateY(-50%) scale(.96); }
+  .arrow svg { width: 18px; height: 18px; }
+  .arrow.prev { left: -22px; } .arrow.next { right: -22px; }
+  .carousel-foot {
+    margin-top: 26px; display: flex; align-items: center; justify-content: center; gap: 14px;
   }
-  .cell:hover { background: #0f1819; }
-  .cell .tag {
-    font-family: "JetBrains Mono", monospace; font-size: 12.5px; color: var(--teal);
-    letter-spacing: .02em;
+  .dots { display: flex; gap: 9px; }
+  .dots button {
+    width: 9px; height: 9px; border-radius: 50%; border: none; cursor: pointer; padding: 0;
+    background: var(--line); transition: background .15s, transform .15s;
   }
-  .cell h3 {
-    font-family: "Instrument Serif", Georgia, serif; font-weight: 400;
-    font-size: 26px; margin: 12px 0 8px; letter-spacing: .2px;
+  .dots button[aria-current="true"] { background: var(--navy); transform: scale(1.25); }
+  .ex-name {
+    font-family: var(--mono); font-size: 12.5px; color: var(--ink-soft);
+    min-width: 12ch; text-align: center;
   }
-  .cell p { color: var(--text-dim); font-size: 15px; }
+  .ex-name b { color: var(--navy); font-weight: 600; }
 
-  /* ---- pipeline strip ---- */
-  .pipe {
-    margin-top: 44px; display: flex; flex-wrap: wrap; align-items: center; gap: 14px;
-    font-family: "JetBrains Mono", monospace; font-size: 13px; color: var(--text-dim);
-    padding: 20px 24px; border: 1px dashed var(--hair); border-radius: var(--radius);
+  /* ---------- why manta ---------- */
+  .why { padding-top: 22px; padding-bottom: 100px; }
+  .tenets {
+    margin-top: 40px; display: grid; grid-template-columns: repeat(2, 1fr);
+    gap: 36px 64px;
   }
-  .pipe b { color: var(--teal-br); font-weight: 500; }
-  .pipe .arw { color: var(--teal-dim); }
+  .tenet h3 { font-size: 21px; font-weight: 700; letter-spacing: -.02em; margin: 0 0 10px; }
+  .tenet p { color: var(--ink-soft); font-size: 15.5px; }
+  .tenet p .em { color: var(--ink); font-weight: 600; }
 
-  /* ---- footer ---- */
-  footer {
-    margin-top: 92px; border-top: 1px solid var(--hair);
-    padding: 34px 0 60px;
+  /* ---------- footer ---------- */
+  footer { border-top: 1px solid var(--line-soft); padding: 30px 0 56px; }
+  .foot {
+    display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between;
+    font-size: 14px; color: var(--ink-soft);
   }
-  .foot { display: flex; flex-wrap: wrap; gap: 18px; align-items: center; justify-content: space-between;
-    font-family: "JetBrains Mono", monospace; font-size: 12.5px; color: var(--text-dim); }
-  .foot a { color: var(--text-dim); text-decoration: none; }
-  .foot a:hover { color: var(--teal-br); }
-  .foot .dot { color: var(--teal-dim); margin: 0 4px; }
+  .foot .links { display: flex; gap: 22px; }
+  .foot a:hover { color: var(--navy); }
 
-  /* ---- entrance choreography ---- */
-  .reveal { opacity: 0; transform: translateY(16px); animation: rise .8s cubic-bezier(.2,.7,.2,1) forwards; }
-  .d1 { animation-delay: .05s; } .d2 { animation-delay: .15s; } .d3 { animation-delay: .25s; }
-  .d4 { animation-delay: .35s; } .d5 { animation-delay: .5s; } .d6 { animation-delay: .62s; }
+  /* ---------- motion + responsive ---------- */
+  .reveal { opacity: 0; transform: translateY(14px); animation: rise .7s cubic-bezier(.2,.7,.2,1) forwards; }
+  .d1{animation-delay:.04s}.d2{animation-delay:.12s}.d3{animation-delay:.2s}.d4{animation-delay:.3s}
   @keyframes rise { to { opacity: 1; transform: none; } }
 
-  @media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after { animation: none !important; transition: none !important; }
-    .reveal { opacity: 1; transform: none; }
-    .dot-truth, .dot-est { display: none; }
-    html { scroll-behavior: auto; }
+  @media (max-width: 900px) {
+    .hero-grid { grid-template-columns: 1fr; gap: 36px; }
+    .hero-media { aspect-ratio: 16 / 10; }
+    .hero-logo { width: min(420px, 90%); }
+    .stage { grid-template-columns: 1fr; }
+    .tenets { grid-template-columns: 1fr; }
+    .arrow.prev { left: 6px; } .arrow.next { right: 6px; }
+    .arrow { background: rgba(255,255,255,.85); }
   }
-
-  @media (max-width: 720px) {
-    .traj { display: none; }
-    .nav-links a.hide-sm { display: none; }
-    .grid { grid-template-columns: 1fr; }
-    .hero { padding: 72px 0 56px; }
+  @media (max-width: 560px) {
+    .wrap { padding-left: 22px; padding-right: 22px; }
+    .nav-links { gap: 18px; }
+    .nav-links .hide-sm { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto; }
+    .reveal { opacity: 1; transform: none; }
   }
 </style>
 </head>
@@ -269,181 +294,166 @@
 
 <header>
   <nav class="wrap">
-    <a class="brand" href="/">
-      <span class="mark">manta</span>
+    <a class="brand" href="/" aria-label="manta home">
+      <span class="word">manta</span>
       <span class="ver">v0.1.0</span>
     </a>
     <div class="nav-links">
-      <a href="/docs/" class="hide-sm">docs</a>
-      <a href="/docs/reference/" class="hide-sm">api</a>
-      <a href="https://github.com/rohan2017/manta">github ↗</a>
+      <a href="/docs/">docs</a>
+      <a href="https://github.com/rohan2017/manta">GitHub ↗</a>
     </div>
   </nav>
 </header>
 
-<main class="wrap">
-  <section class="hero">
-    <svg class="traj" viewBox="0 0 520 360" aria-hidden="true"
-         xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
-      <path id="traj" class="path" d="M20,210 C90,60 200,40 270,150 S430,330 500,150"/>
-      <path class="truth-path" d="M20,210 C90,60 200,40 270,150 S430,330 500,150"/>
-      <circle class="dot-truth" r="4.5">
-        <animateMotion dur="9s" repeatCount="indefinite" keyPoints="0;1;0" keyTimes="0;0.5;1"
-          calcMode="spline" keySplines="0.45 0.05 0.55 0.95;0.45 0.05 0.55 0.95">
-          <mpath href="#traj" xlink:href="#traj"/>
-        </animateMotion>
-      </circle>
-      <circle class="dot-est" r="8">
-        <animateMotion dur="9s" begin="0.45s" repeatCount="indefinite" keyPoints="0;1;0" keyTimes="0;0.5;1"
-          calcMode="spline" keySplines="0.45 0.05 0.55 0.95;0.45 0.05 0.55 0.95">
-          <mpath href="#traj" xlink:href="#traj"/>
-        </animateMotion>
-      </circle>
-    </svg>
+<main>
+  <!-- ============ hero ============ -->
+  <section class="hero wrap">
+    <div class="hero-grid">
+      <div class="hero-copy">
+        <img class="hero-logo reveal d1" src="/manta-logo.svg?v=2" alt="mantapilot" width="672" height="166">
+        <h1 class="reveal d2">Build your craft.<br><span class="accent">manta</span> writes the math.</h1>
 
-    <div class="eyebrow reveal d1">rigid-body sim · EKF · LQR</div>
-    <h1 class="reveal d2">Declare the craft.<br><em>manta</em> writes the math.</h1>
-    <p class="lede reveal d3">
-      A Python-first, CasADi-backed framework for drones, rockets, underwater
-      vehicles, and satellites. <b>Simulation, state estimation, and control
-      synthesis</b> over a single declarative model — run it natively in
-      Python, then lower the exact same model to embedded C++.
-    </p>
-    <div class="cta-row reveal d4">
-      <a class="btn btn-primary" href="/docs/">Read the docs →</a>
-      <a class="btn btn-ghost" href="https://github.com/rohan2017/manta">View on GitHub ↗</a>
-    </div>
+        <p class="lede reveal d3">
+          A Python-first, CasADi-backed framework for <strong>simulation, state
+          estimation, and control</strong>. Multirotors, fixed wings, boats,
+          rockets, submarines, satellites, ekranoplans — you name it. Declare the
+          model in a few lines of Python, then lower it to a variety of backends:
+          run differentiable simulations with JAX, or export to embedded C++. 
+        </p>
 
-    <div class="code-card reveal d5">
-      <div class="code-head">
-        <span class="lights"><i></i><i></i><i></i></span>
-        <span>quickstart.py</span>
-        <span class="cap">truth + estimator over one world</span>
+        <div class="cta-row reveal d4">
+          <a class="btn btn-primary" href="/docs/">Read the docs</a>
+          <a class="btn btn-ghost" href="https://github.com/rohan2017/manta">GitHub ↗</a>
+          <div class="install">
+            <code><span class="pmpt">$ </span>pip install mantapilot</code>
+            <button class="copy-btn" id="copyBtn" aria-label="Copy install command" title="Copy">
+              <svg class="ic-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+              <svg class="ic-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+            </button>
+          </div>
+        </div>
       </div>
-<pre><span class="c-kw">from</span> <span class="c-mod">manta</span> <span class="c-kw">import</span> World, Craft, Sim, EKF, TargetNumpy
-<span class="c-kw">from</span> <span class="c-mod">manta.fields</span> <span class="c-kw">import</span> GravityField
-<span class="c-kw">from</span> <span class="c-mod">manta.parts</span> <span class="c-kw">import</span> IMU, Mass, Thruster
 
-drone = <span class="c-fn">Craft</span>(<span class="c-str">"drone"</span>)
-drone.<span class="c-fn">add</span>(<span class="c-fn">Mass</span>(<span class="c-str">"body"</span>, mass=<span class="c-num">1.5</span>, moi=(<span class="c-num">.05</span>, <span class="c-num">.05</span>, <span class="c-num">.08</span>)))
-drone.<span class="c-fn">add</span>(<span class="c-fn">Thruster</span>(<span class="c-str">"t"</span>, force=(<span class="c-num">0</span>, <span class="c-num">0</span>, <span class="c-num">1</span>)))
-drone.<span class="c-fn">add</span>(<span class="c-fn">IMU</span>(<span class="c-str">"imu"</span>, gyro_noise_sigma=<span class="c-num">.005</span>))
-
-w = <span class="c-fn">World</span>().<span class="c-fn">add_field</span>(<span class="c-fn">GravityField</span>(g=(<span class="c-num">0</span>, <span class="c-num">0</span>, <span class="c-num">-9.81</span>)))
-w.<span class="c-fn">add_craft</span>(drone, position=(<span class="c-num">0</span>, <span class="c-num">0</span>, <span class="c-num">5</span>))
-
-sim = <span class="c-fn">TargetNumpy</span>(<span class="c-fn">Sim</span>(w))     <span class="c-com"># truth model</span>
-ekf = <span class="c-fn">TargetNumpy</span>(<span class="c-fn">EKF</span>(w))     <span class="c-com"># estimator over the same world</span></pre>
+      <div class="hero-media reveal d3">
+        <!-- TODO: replace with the looping showcase reel (.mp4/.webm).
+             <video autoplay muted loop playsinline poster="…"><source src="…"></video> -->
+        <div class="media-ph">
+          <svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3c5 0 8 3.5 8 7 0 2-1.5 3.5-4 4l-4 7-4-7c-2.5-.5-4-2-4-4 0-3.5 3-7 8-7Z"/></svg>
+          <span>showcase reel · coming soon</span>
+        </div>
+      </div>
     </div>
   </section>
 
-  <section class="demo" id="demo">
-    <div class="sec-label reveal d1">live in your browser · compiled to wasm</div>
-    <div class="viewport reveal d2">
-      <canvas id="flight"></canvas>
-      <div class="overlay hud" id="hud">booting flight…</div>
-      <div class="overlay badge">TargetWasm</div>
-      <div class="overlay hint">
-        <span><b>W</b>/<b>S</b> pitch</span>
-        <span><b>A</b>/<b>D</b> yaw</span>
-        <span><b>Q</b>/<b>E</b> roll</span>
-        <span><b>X</b>/<b>Z</b> throttle</span>
-        <span>— click to fly · scroll away to reset to autopilot</span>
-      </div>
+  <!-- ============ examples / carousel ============ -->
+  <section class="examples wrap" id="examples">
+    <div class="section-head">
+      <h2 class="reveal d2">A handful of primitives.<br>Any vehicle.</h2>
+      <p class="reveal d2">The same parts — masses, thrusters, aero surfaces, sensors —
+        compose into different craft. On the left is the model; on the
+        right it's flying live, compiled to WebAssembly. Click in to take the controls.</p>
     </div>
-    <p class="demo-cap reveal d3">
-      The same airframe from <code>examples/vehicles/airplane.py</code> —
-      rigid-body dynamics, NACA aero surfaces on real saturating hinges, and
-      landing-gear contact — lowered to WebAssembly by <code>TargetWasm</code>
-      and stepped live at 500&nbsp;Hz. A 21-state jointed model, the identical
-      physics you'd run in Python, now in the tab.
-    </p>
+
+    <div class="carousel reveal d3">
+      <button class="arrow prev" id="prevBtn" aria-label="Previous example">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+
+      <div class="stage" id="stage">
+        <!-- code panel -->
+        <div class="panel">
+          <div class="panel-bar">            <span class="file" id="codeFile">quad.py</span>
+            <span class="right" id="codeTag">manta model</span>
+          </div>
+          <pre id="codeBlock"></pre>
+        </div>
+
+        <!-- render panel -->
+        <div class="panel render">
+          <div class="panel-bar">            <span class="file">live · TargetWasm</span>
+            <span class="right" id="renderTitle">quadcopter</span>
+          </div>
+          <div class="render-stage" id="renderStage">
+            <canvas id="renderCanvas"></canvas>
+            <button class="skel-toggle" id="skelToggle" aria-pressed="false">show skeleton</button>
+            <div class="render-overlay render-hud" id="renderHud">booting…</div>
+            <div class="render-overlay render-keys" id="renderKeys"></div>
+            <div class="render-overlay click-fly"><span id="clickFly">click to fly</span></div>
+            <div class="render-fallback" id="renderFallback"></div>
+          </div>
+        </div>
+      </div>
+
+      <button class="arrow next" id="nextBtn" aria-label="Next example">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
+      </button>
+    </div>
+
+    <div class="carousel-foot">
+      <div class="ex-name" id="exName"></div>
+      <div class="dots" id="dots"></div>
+    </div>
   </section>
 
-  <section class="features">
-    <div class="sec-label reveal d1">why manta</div>
-    <div class="grid reveal d2">
-      <div class="cell">
-        <div class="tag">model → transform → target</div>
-        <h3>Three siblings, one model</h3>
-        <p>Declare a World once. <code>Sim</code>, <code>EKF</code>, and
-          <code>LQR</code> are siblings over it — each owns its math and emits a
-          typed Module a backend lowers.</p>
-      </div>
-      <div class="cell">
-        <div class="tag">error-state · SO(3)</div>
-        <h3>Manifold-aware EKF</h3>
-        <p>Orientation stays on the quaternion sheet. Process and measurement
-          noise are auto-assembled by autodiff from the noise channels you
-          declared.</p>
-      </div>
-      <div class="cell">
-        <div class="tag">python → c++</div>
-        <h3>Develop here, deploy embedded</h3>
-        <p>Debug in native Python, then lower the identical model to a typed
-          Eigen C++ class over flat-C kernels — the same loop, both backends.</p>
-      </div>
-      <div class="cell">
-        <div class="tag">system id · MAP</div>
-        <h3>Fit to real flights</h3>
-        <p>Promote physical parameters — masses, thruster gains, mounts — and
-          recover them from logged controls and measurements.</p>
-      </div>
+  <!-- ============ why manta ============ -->
+  <section class="why wrap" id="why">
+    <div class="section-head">
+      <h2 class="reveal d2">A library to build on,<br>not a black box to fight.</h2>
+      <p class="reveal d2">manta exists to take the hard, mathy parts off your plate —
+        state estimation and control — and hand you something small enough to actually
+        read, hack, and make your own.</p>
     </div>
 
-    <div class="pipe reveal d3">
-      <span>World</span><span class="arw">→</span>
-      <b>Sim / EKF / LQR</b><span class="arw">→</span>
-      <span>Module IR</span><span class="arw">→</span>
-      <b>TargetNumpy · TargetCpp · TargetWasm · TargetJax</b>
+    <div class="tenets reveal d3">
+      <div class="tenet">        <h3>Simple enough to hack</h3>
+        <p>manta is a <span class="em">library, not a firmware</span> — no monolith to
+          fork, no build flag for every airframe. Projects like ArduPilot get you flying
+          on off-the-shelf parts; manta gives you a few primitives and a grand loop you
+          control, small enough to read and build your own firmware around.</p>
+      </div>
+      <div class="tenet">        <h3>Kept lightweight</h3>
+        <p>It isn't plug-and-play, on purpose. You bring your own hardware and write your
+          own drivers; manta handles the <span class="em">estimation and control math</span>.
+          It's for people who want to go past what an autopilot hands them — and in the
+          age of coding agents, a driver is the easy part.</p>
+      </div>
+      <div class="tenet">        <h3>One source of truth</h3>
+        <p>The same model drives <span class="em">simulation, estimation, and control</span> —
+          not three copies quietly drifting apart. Fitting your model to real flight data is part of the workflow, not an afterthought.</p>
+      </div>
+      <div class="tenet">        <h3>Readable Python, generated speed</h3>
+        <p>You write the model, not the firmware. The Kalman and control math stays
+          <span class="em">legible in Python</span>; manta optimizes and generates the fast
+          code. A little visibility traded for a clean interface.</p>
+      </div>
     </div>
   </section>
 </main>
 
 <footer>
   <div class="wrap foot">
-    <div>manta <span class="dot">·</span> MIT licensed</div>
-    <div>
-      <a href="/docs/">docs</a><span class="dot">·</span>
-      <a href="/docs/reference/">api reference</a><span class="dot">·</span>
-      <a href="https://github.com/rohan2017/manta">github</a>
+    <div>manta · MIT licensed · © 2026</div>
+    <div class="links">
+      <a href="/docs/">Docs</a>
+      <a href="/docs/reference/">API</a>
+      <a href="https://github.com/rohan2017/manta">GitHub</a>
     </div>
   </div>
 </footer>
 
-<script type="module">
-  // Boot the live WASM flight when the viewport scrolls into view (so the
-  // physics loop doesn't burn CPU off-screen). Fail soft on no-WebGL / load
-  // error — the page reads fine without it.
-  const canvas = document.getElementById("flight");
-  const hud = document.getElementById("hud");
-  let demo = null, booting = null;
-  function boot() {
-    if (!booting) booting = (async () => {
+<script type="module" src="/carousel.js"></script>
+<script>
+  // pip install → clipboard
+  (function () {
+    const btn = document.getElementById("copyBtn");
+    btn?.addEventListener("click", async () => {
       try {
-        const { start } = await import("/airplane/demo.js");
-        demo = await start(canvas, hud);
-      } catch (err) {
-        console.error("[manta demo]", err);
-        hud.textContent = "live demo unavailable in this browser";
-      }
-    })();
-    return booting;
-  }
-  if (!window.WebGL2RenderingContext) {
-    hud.textContent = "live demo needs WebGL2";
-  } else if ("IntersectionObserver" in window) {
-    // Boot when the viewport scrolls into view; when it scrolls back out,
-    // hand control to the autopilot and reset (a fresh load starts in auto).
-    const io = new IntersectionObserver((es) => {
-      const visible = es.some((e) => e.isIntersecting);
-      if (visible) boot();
-      else if (demo) demo.toAuto();
-    }, { rootMargin: "200px 0px" });
-    io.observe(document.getElementById("demo"));
-  } else {
-    boot();
-  }
+        await navigator.clipboard.writeText("pip install mantapilot");
+        btn.classList.add("done");
+        setTimeout(() => btn.classList.remove("done"), 1600);
+      } catch { /* clipboard blocked — no-op */ }
+    });
+  })();
 </script>
 
 </body>

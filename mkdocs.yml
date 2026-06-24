@@ -21,16 +21,21 @@ theme:
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      primary: teal
+      primary: blue
       toggle:
         icon: material/weather-night
         name: Switch to dark mode
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
-      primary: teal
+      primary: blue
       toggle:
         icon: material/weather-sunny
         name: Switch to light mode
+
+# Clicking the "manta" logo/title in the docs header returns to the homepage
+# at the site root (the docs live under /docs/).
+extra:
+  homepage: /
 
 plugins:
   - search

@@ -1,0 +1,237 @@
+{
+  "name": "world",
+  "className": "Quad",
+  "basename": "quad",
+  "hosting": "threaded",
+  "ambientDim": 13,
+  "tangentDim": 12,
+  "stateSlots": [
+    {
+      "name": "quad.position",
+      "off": 0,
+      "dim": 3
+    },
+    {
+      "name": "quad.orientation",
+      "off": 3,
+      "dim": 4
+    },
+    {
+      "name": "quad.velocity",
+      "off": 7,
+      "dim": 3
+    },
+    {
+      "name": "quad.angular_velocity",
+      "off": 10,
+      "dim": 3
+    }
+  ],
+  "initialState": [
+    0.0,
+    0.0,
+    2.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "inputs": [
+    {
+      "name": "quad.front.throttle",
+      "dim": 1,
+      "default": 0.0,
+      "sigma": null,
+      "rate": null
+    },
+    {
+      "name": "quad.right.throttle",
+      "dim": 1,
+      "default": 0.0,
+      "sigma": null,
+      "rate": null
+    },
+    {
+      "name": "quad.back.throttle",
+      "dim": 1,
+      "default": 0.0,
+      "sigma": null,
+      "rate": null
+    },
+    {
+      "name": "quad.left.throttle",
+      "dim": 1,
+      "default": 0.0,
+      "sigma": null,
+      "rate": null
+    }
+  ],
+  "noise": [
+    {
+      "name": "quad.front.force_noise",
+      "dim": 3,
+      "default": 0.0,
+      "sigma": 0.0,
+      "rate": null
+    },
+    {
+      "name": "quad.front.torque_noise",
+      "dim": 3,
+      "default": 0.0,
+      "sigma": 0.0,
+      "rate": null
+    },
+    {
+      "name": "quad.right.force_noise",
+      "dim": 3,
+      "default": 0.0,
+      "sigma": 0.0,
+      "rate": null
+    },
+    {
+      "name": "quad.right.torque_noise",
+      "dim": 3,
+      "default": 0.0,
+      "sigma": 0.0,
+      "rate": null
+    },
+    {
+      "name": "quad.back.force_noise",
+      "dim": 3,
+      "default": 0.0,
+      "sigma": 0.0,
+      "rate": null
+    },
+    {
+      "name": "quad.back.torque_noise",
+      "dim": 3,
+      "default": 0.0,
+      "sigma": 0.0,
+      "rate": null
+    },
+    {
+      "name": "quad.left.force_noise",
+      "dim": 3,
+      "default": 0.0,
+      "sigma": 0.0,
+      "rate": null
+    },
+    {
+      "name": "quad.left.torque_noise",
+      "dim": 3,
+      "default": 0.0,
+      "sigma": 0.0,
+      "rate": null
+    },
+    {
+      "name": "quad.imu.gyro_noise",
+      "dim": 3,
+      "default": 0.0,
+      "sigma": 0.01,
+      "rate": null
+    },
+    {
+      "name": "quad.imu.accel_noise",
+      "dim": 3,
+      "default": 0.0,
+      "sigma": 0.0,
+      "rate": null
+    },
+    {
+      "name": "quad.gps.position_noise",
+      "dim": 3,
+      "default": 0.0,
+      "sigma": 0.04,
+      "rate": null
+    }
+  ],
+  "params": [],
+  "measurements": {
+    "quad.imu.gyro": {
+      "dim": 3,
+      "rate": null
+    },
+    "quad.imu.accel": {
+      "dim": 3,
+      "rate": null
+    },
+    "quad.gps.position": {
+      "dim": 3,
+      "rate": null
+    }
+  },
+  "outputs": {},
+  "entryPoints": [
+    {
+      "method": "step",
+      "shim": "quad_step",
+      "inSize": 52,
+      "outSize": 22,
+      "in": [
+        {
+          "name": "x",
+          "kind": "state",
+          "off": 0,
+          "size": 13
+        },
+        {
+          "name": "u",
+          "kind": "control",
+          "off": 13,
+          "size": 4
+        },
+        {
+          "name": "noise",
+          "kind": "noise",
+          "off": 17,
+          "size": 33
+        },
+        {
+          "name": "dt",
+          "kind": "timestep",
+          "off": 50,
+          "size": 1
+        },
+        {
+          "name": "t",
+          "kind": "time",
+          "off": 51,
+          "size": 1
+        }
+      ],
+      "out": [
+        {
+          "name": "x",
+          "kind": "state",
+          "off": 0,
+          "size": 13,
+          "writesState": true
+        },
+        {
+          "name": "quad.imu.gyro",
+          "kind": "measurement",
+          "off": 13,
+          "size": 3
+        },
+        {
+          "name": "quad.imu.accel",
+          "kind": "measurement",
+          "off": 16,
+          "size": 3
+        },
+        {
+          "name": "quad.gps.position",
+          "kind": "measurement",
+          "off": 19,
+          "size": 3
+        }
+      ]
+    }
+  ]
+}
