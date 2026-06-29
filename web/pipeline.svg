@@ -3,9 +3,7 @@
     <style>
       .col   { fill:#5b6b7f; font-size:21px; font-weight:400; }
       .box   { fill:#ffffff; stroke:#3d85c6; stroke-width:1.5; }
-      .ghost { fill:#f4f8fd; stroke:#9bc0e8; stroke-width:1.5; stroke-dasharray:5 4; }
       .name  { fill:#1c2433; font-size:17px; font-weight:700; }
-      .ghostn{ fill:#6b7c90; font-size:16px; font-weight:700; }
       .sub   { fill:#5b6b7f; font-size:12px; }
       .arrow { fill:#d4e4f6; stroke:#3d85c6; stroke-width:1.3; }
     </style>
@@ -51,9 +49,9 @@
   <rect class="box" x="670" y="206" width="290" height="52" rx="9"/>
   <text class="name" x="815" y="228" text-anchor="middle">TargetCpp</text>
   <text class="sub"  x="815" y="246" text-anchor="middle">Eigen kernels + CMake</text>
-  <rect class="ghost" x="670" y="274" width="290" height="52" rx="9"/>
-  <text class="ghostn" x="815" y="296" text-anchor="middle">… add a backend</text>
-  <text class="sub"   x="815" y="314" text-anchor="middle">one generic Module lowering</text>
+  <rect class="box" x="670" y="274" width="290" height="52" rx="9"/>
+  <text class="name" x="815" y="296" text-anchor="middle">TargetWasm</text>
+  <text class="sub"  x="815" y="314" text-anchor="middle">browser bundle (kernels + JS)</text>
 
   <!-- divider -->
   <line x1="60" y1="362" x2="638" y2="362" stroke="#cdd8e6" stroke-width="1.5" stroke-dasharray="5 5"/>

@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from manta import Craft, Sim, TargetNumpy, TargetWasm, World
+from manta import EKF, LQR, Craft, Sim, TargetNumpy, TargetWasm, World
 from manta.fields import GravityField
 from manta.parts import IMU, Mass, PositionSensor, Thruster
 
@@ -196,7 +196,7 @@ def test_wasm_js_is_valid_esm(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 _NODE_HARNESS = r"""
-import { load } from "./drone_rt.mjs";
+import {{ load }} from "./drone_rt.mjs";
 const rt = await load();
 const sim = rt.sim();
 sim.state[{pos}] = 0.0; sim.state[{pos}+2] = 5.0;
@@ -300,3 +300,135 @@ def test_wasm_full_emscripten_roundtrip(tmp_path: Path):
     pos_ref, gps_ref = _numpy_reference()
     np.testing.assert_allclose(got["pos"], pos_ref, atol=1e-9)
     np.testing.assert_allclose(got["gps"], gps_ref, atol=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# 5. The Filter / Regulator views — EKF & LQR get the same lowering as Sim
+# ---------------------------------------------------------------------------
+
+def _ekf_world():
+    """`_hover_world` with sensor noise declared, so the EKF's per-sensor R is
+    nonsingular (a noiseless sensor bakes a zero R the first fold can't invert)."""
+    c = Craft("drone")
+    c.add(Mass("body", mass=1.5, moi=(0.05, 0.05, 0.08)))
+    c.add(Thruster("t", force=(0.0, 0.0, 1.0)))
+    c.add(IMU("g", gyro_noise_sigma=0.005, accel_noise_sigma=0.05,
+              gyro_bias_sigma=1e-4))
+    c.add(PositionSensor("gps", position_noise_sigma=0.02))
+    w = World(name="ekf_world")
+    w.add_field(GravityField(g=(0.0, 0.0, -9.81)))
+    w.add_craft(c)
+    return w
+
+
+def _lqr_world():
+    """A 3-thruster body: position + velocity controllable, attitude frozen."""
+    c = Craft("drone")
+    c.add(Mass("body", mass=1.5, moi=(0.05, 0.05, 0.08)))
+    c.add(Thruster("t", force=(0.0, 0.0, 1.0)))
+    c.add(Thruster("tx", force=(1.0, 0.0, 0.0)))
+    c.add(Thruster("ty", force=(0.0, 1.0, 0.0)))
+    w = World(name="lqr_world")
+    w.add_field(GravityField(g=(0.0, 0.0, -9.81)))
+    w.add_craft(c)
+    return w
+
+
+def _build_lqr():
+    return LQR(_lqr_world(),
+               x_ref={"drone": {"position": (0, 0, 10), "velocity": (0, 0, 0)}},
+               u_ref={"t.throttle": 1.5 * 9.81},
+               regulate=["drone.position", "drone.velocity"],
+               Q=np.diag([10, 10, 10, 1, 1, 1]), R=np.eye(3), dt=0.02)
+
+
+def _emcc_node(tmp_path, res, base, harness):
+    """Build the bundle with Emscripten and run `harness` under node, returning
+    its last stdout line parsed as JSON. Skips without the toolchain."""
+    if shutil.which("emcc") is None or shutil.which("node") is None:
+        pytest.skip("emcc + node required for the full WASM roundtrip")
+    p = subprocess.run(["sh", str(res.build_sh)], cwd=tmp_path,
+                       capture_output=True, text=True)
+    assert p.returncode == 0, p.stderr
+    # node loads `.js` as CommonJS; copy the ESM runtime to `.mjs` (its internal
+    # `./<base>.mjs` factory import resolves to the emcc output in the same dir).
+    (tmp_path / f"{base}_rt.mjs").write_text(res.js.read_text())
+    (tmp_path / "run.mjs").write_text(harness)
+    r = subprocess.run(["node", str(tmp_path / "run.mjs")], cwd=tmp_path,
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    return json.loads(r.stdout.strip().splitlines()[-1])
+
+
+def test_wasm_descriptor_carries_filter_and_regulator_state(tmp_path: Path):
+    """The descriptor exposes the held state a stateful view needs to seed
+    itself — the filter's `x`/`P` fields, the regulator's `x`/`x_ref` ports —
+    and the JS emits the matching typed views."""
+    ekf = TargetWasm(EKF(_ekf_world()), tmp_path / "ekf", class_name="E")
+    fields = {f["name"]: f for f in ekf.descriptor_obj["stateFields"]}
+    assert set(fields) == {"x", "P"}
+    assert fields["x"]["kind"] == "state"
+    assert fields["P"]["kind"] == "matrix"
+    n = ekf.descriptor_obj["ambientDim"]
+    t = ekf.descriptor_obj["tangentDim"]
+    assert fields["x"]["shape"] == [n] and len(fields["x"]["init"]) == n
+    assert fields["P"]["shape"] == [t, t] and len(fields["P"]["init"]) == t * t
+
+    lqr = TargetWasm(_build_lqr(), tmp_path / "lqr", class_name="R")
+    refs = {r["name"]: r for r in lqr.descriptor_obj["stateRefs"]}
+    assert set(refs) == {"x", "x_ref"}
+    assert refs["x_ref"]["dim"] == lqr.descriptor_obj["ambientDim"]
+
+    for res in (ekf, lqr):
+        js = res.js.read_text()
+        assert "export class Filter" in js and "export class Regulator" in js
+        assert "filter()" in js and "regulator()" in js
+
+
+def test_wasm_filter_roundtrip(tmp_path: Path):
+    """The `Filter` view (held `x`/`P`, `update` then `predict`) matches the
+    numpy filter end-to-end through Emscripten."""
+    u = {"t.throttle": 14.7}
+    gyro, gps = [0.01, 0.02, 0.03], [0.05, -0.03, 5.1]
+
+    ekf = TargetNumpy(EKF(_ekf_world()))
+    for _ in range(5):
+        ekf.update("g.gyro", gyro, u=u)
+        ekf.update("gps.position", gps, u=u)
+        ekf.predict(0.01, u=u)
+
+    res = TargetWasm(EKF(_ekf_world()), tmp_path, class_name="DroneEkf")
+    harness = """
+import { load } from "./droneekf_rt.mjs";
+const flt = (await load()).filter();
+const u = { "t.throttle": 14.7 };
+for (let i = 0; i < 5; i++) {
+  flt.update("g.gyro", [0.01, 0.02, 0.03], { u });
+  flt.update("gps.position", [0.05, -0.03, 5.1], { u });
+  flt.predict(0.01, { u });
+}
+console.log(JSON.stringify({ x: Array.from(flt.x), P: Array.from(flt.P) }));
+"""
+    got = _emcc_node(tmp_path, res, "droneekf", harness)
+    np.testing.assert_allclose(got["x"], ekf.x, atol=1e-9)
+    # JS P is the kernel's flat (column-major) covariance.
+    np.testing.assert_allclose(got["P"], ekf.P.ravel(order="F"), atol=1e-9)
+
+
+def test_wasm_regulator_roundtrip(tmp_path: Path):
+    """The `Regulator` view (`control(state)` over a held reference) matches
+    the numpy regulator end-to-end through Emscripten."""
+    reg = TargetNumpy(_build_lqr())
+    xt = reg.x_ref.copy()
+    xt[0] += 1.0; xt[1] += 2.0; xt[7] += 0.3        # off-setpoint pos + vel
+    u_ref = reg.u(xt)
+
+    res = TargetWasm(_build_lqr(), tmp_path, class_name="DroneLqr")
+    harness = f"""
+import {{ load, descriptor }} from "./dronelqr_rt.mjs";
+const reg = (await load()).regulator();
+const out = reg.control(Float64Array.from({json.dumps(xt.tolist())}));
+console.log(JSON.stringify(descriptor.inputs.map((f) => out[f.name])));
+"""
+    got = _emcc_node(tmp_path, res, "dronelqr", harness)
+    np.testing.assert_allclose(got, u_ref, atol=1e-9)

@@ -17,7 +17,7 @@ plus the JS that packs typed values into the WASM heap.
       <basename>_kernels.c / .h    CasADi flat-C kernels
       <basename>_abi.c             C-ABI shim (EMSCRIPTEN_KEEPALIVE)
       <basename>.descriptor.json   runtime layout descriptor
-      <basename>.js                ES-module runtime (Runtime + Sim)
+      <basename>.js                ES-module runtime (Runtime + Sim/Filter/Regulator)
       build.sh                     emcc -> <basename>.mjs + .wasm
 
 Run `./build.sh` (needs the Emscripten SDK) to produce the `.wasm`, then

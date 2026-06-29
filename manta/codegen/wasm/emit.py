@@ -13,7 +13,7 @@ Output directory layout::
         <basename>_kernels.h
         <basename>_abi.c       # the thin flat-double C ABI, KEEPALIVE-exported
         <basename>.descriptor.json
-        <basename>.js          # ES-module runtime (Runtime + Sim)
+        <basename>.js          # ES-module runtime (Runtime + Sim/Filter/Regulator)
         build.sh               # emcc -> <basename>.mjs + <basename>.wasm
 
 It dispatches only on the IR's types/roles; there is no per-transform code.

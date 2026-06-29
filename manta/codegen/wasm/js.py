@@ -8,9 +8,10 @@ and exposes two layers:
     a `{slotName: Float64Array | number}` map into the WASM heap per the
     descriptor's per-entry layout, invokes the shim, and unpacks every output
     slot back into a `{slotName: Float64Array}` map. Works for any Module.
-  * `runtime.sim()` → a `Sim` convenience mirroring the numpy view for a
-    THREADED simulation Module: a held flat state, `step(dt, {u})`, and
-    `reading(name)`.
+  * A typed convenience view per transform, each mirroring the matching numpy
+    view over the same shims — `runtime.sim()` (`Sim`: held state, `step` /
+    `reading`), `runtime.filter()` (`Filter`: held `x`/`P`, `predict` /
+    `update`), `runtime.regulator()` (`Regulator`: held reference, `control`).
 
 The JS contains no manta-specific logic — only the descriptor drives it — so
 this template is identical for every Module; only the embedded JSON differs.
@@ -35,6 +36,17 @@ export const descriptor = __DESCRIPTOR__;
 const byMethod = Object.fromEntries(
   descriptor.entryPoints.map((e) => [e.method, e]));
 
+const INPUT_NAMES = descriptor.inputs.map((f) => f.name);
+const DEFAULT_U = Object.fromEntries(
+  descriptor.inputs.map((f) => [f.name, f.default]));
+
+/** Measurement field name -> the update entry method that folds it. */
+const MEAS_ENTRY = {};
+for (const e of descriptor.entryPoints)
+  for (const s of e.in)
+    if (s.kind === "measurement") MEAS_ENTRY[s.name] = e.method;
+const MEAS_NAMES = Object.keys(MEAS_ENTRY);
+
 /** Resolve a field name given as a full dotted name or a unique suffix. */
 function resolveName(key, names, label) {
   if (names.includes(key)) return key;
@@ -42,6 +54,47 @@ function resolveName(key, names, label) {
   if (hits.length === 1) return hits[0];
   throw new Error(
     `${label} ${JSON.stringify(key)} is not a unique name in [${names}]`);
+}
+
+/** Pack `{input: value}` (full or unique-suffix names), overlaid on the
+ *  `base` defaults, into a flat control vector in descriptor field order. */
+function packControl(u, base) {
+  const merged = { ...base };
+  for (const [k, v] of Object.entries(u || {}))
+    merged[resolveName(k, INPUT_NAMES, "input")] = v;
+  const vec = [];
+  for (const f of descriptor.inputs) {
+    const v = merged[f.name];
+    if (f.dim === 1) vec.push(typeof v === "number" ? v : v[0]);
+    else for (let i = 0; i < f.dim; i++) vec.push(v[i]);
+  }
+  return Float64Array.from(vec);
+}
+
+/** Build a flat ambient state: a `Float64Array` is taken verbatim, otherwise
+ *  a `{slotName: value}` map (full or unique-suffix) is merged over `base`. */
+function packState(state, base) {
+  if (state instanceof Float64Array) return state;
+  const vec = Float64Array.from(base);
+  const names = descriptor.stateSlots.map((s) => s.name);
+  for (const [k, v] of Object.entries(state || {})) {
+    const s = descriptor.stateSlots.find(
+      (x) => x.name === resolveName(k, names, "state slot"));
+    if (s.dim === 1 && typeof v === "number") vec[s.off] = v;
+    else for (let i = 0; i < s.dim; i++) vec[s.off + i] = v[i];
+  }
+  return vec;
+}
+
+/** Unpack a flat control vector into `{input: value}` by descriptor order. */
+function unpackControl(u) {
+  const out = {};
+  let off = 0;
+  for (const f of descriptor.inputs) {
+    out[f.name] = f.dim === 1 ? u[off] : u.slice(off, off + f.dim);
+    off += f.dim;
+  }
+  return out;
 }
 
 /** The low-level flat-buffer runtime over the WASM module. */
@@ -72,7 +125,7 @@ export class Runtime {
     inHeap.fill(0);
     for (const s of entry.in) {
       const v = args[s.name];
-      if (v === undefined) continue; // unset TIME/NOISE/PARAMETER -> zeros
+      if (v === undefined || v === null) continue; // unset -> zeros
       if (typeof v === "number") inHeap[s.off] = v;
       else inHeap.set(v.subarray(0, s.size), s.off);
     }
@@ -90,6 +143,16 @@ export class Runtime {
   sim() {
     return new Sim(this);
   }
+
+  /** A predict/update Kalman-filter convenience view. */
+  filter() {
+    return new Filter(this);
+  }
+
+  /** A stateless control-law convenience view. */
+  regulator() {
+    return new Regulator(this);
+  }
 }
 
 /** Mirrors the numpy `NumpySim`: held flat state, `step(dt, {u})`,
@@ -99,28 +162,10 @@ export class Sim {
     this.rt = runtime;
     this.t = 0;
     this.state = Float64Array.from(descriptor.initialState);
-    this._inputNames = descriptor.inputs.map((f) => f.name);
-    this._u = {}; // held commands, full field name -> value
-    for (const f of descriptor.inputs) this._u[f.name] = f.default;
+    this._u = { ...DEFAULT_U }; // held commands, full field name -> value
     this._outputs = {};
     this._step = byMethod["step"];
     if (!this._step) throw new Error("Module exposes no `step` entry point");
-  }
-
-  /** Pack the held inputs (overlaid with this step's `u`) into a flat
-   *  control vector in descriptor field order. */
-  _packControl(u) {
-    const merged = { ...this._u };
-    for (const [k, v] of Object.entries(u || {})) {
-      merged[resolveName(k, this._inputNames, "input")] = v;
-    }
-    const vec = [];
-    for (const f of descriptor.inputs) {
-      const v = merged[f.name];
-      if (f.dim === 1) vec.push(typeof v === "number" ? v : v[0]);
-      else for (let i = 0; i < f.dim; i++) vec.push(v[i]);
-    }
-    return Float64Array.from(vec);
   }
 
   /** Advance the held state by `dt`, applying commands `u`. Returns `this`. */
@@ -128,7 +173,7 @@ export class Sim {
     const args = {};
     for (const s of this._step.in) {
       if (s.kind === "state") args[s.name] = this.state;
-      else if (s.kind === "control") args[s.name] = this._packControl(u);
+      else if (s.kind === "control") args[s.name] = packControl(u, this._u);
       else if (s.kind === "timestep") args[s.name] = dt;
       else if (s.kind === "time") args[s.name] = this.t;
       // noise / parameter left unset -> zeros (noiseless oracle / baked p)
@@ -155,6 +200,132 @@ export class Sim {
     const s = descriptor.stateSlots.find(
       (x) => x.name === resolveName(name, names, "state slot"));
     return this.state.slice(s.off, s.off + s.dim);
+  }
+}
+
+/** Mirrors the numpy `NumpyFilter`: a held `x`/`P` estimate with baked
+ *  per-sensor Joseph updates. You own the loop — update-then-predict:
+ *
+ *      for (const nm of sensors) flt.update(nm, sim.reading(nm), { u });
+ *      flt.predict(dt, { u });
+ */
+export class Filter {
+  constructor(runtime) {
+    this.rt = runtime;
+    if (!byMethod["predict"])
+      throw new Error("Module exposes no `predict` entry point");
+    const field = (n) => descriptor.stateFields.find((f) => f.name === n);
+    if (!field("x") || !field("P"))
+      throw new Error("Module is not a filter (no `x`/`P` state)");
+    this.x = Float64Array.from(field("x").init);
+    this.P = Float64Array.from(field("P").init);
+    this._x0 = this.x.slice();
+    this._P0 = this.P.slice();
+  }
+
+  // `x`/`P`/`Q` are threaded by name (as in numpy); everything else by kind.
+  _run(entry, { u = {}, dt = 0, t = 0, z = null, Q = null } = {}) {
+    const args = {};
+    for (const s of entry.in) {
+      if (s.name === "x") args.x = this.x;
+      else if (s.name === "P") args.P = this.P;
+      else if (s.name === "Q") args.Q = Q;
+      else if (s.kind === "control") args[s.name] = packControl(u, DEFAULT_U);
+      else if (s.kind === "timestep") args[s.name] = dt;
+      else if (s.kind === "time") args[s.name] = t;
+      else if (s.kind === "measurement") args[s.name] = z;
+    }
+    const out = this.rt.call(entry.method, args);
+    for (const s of entry.out) {
+      if (s.name === "x") this.x = out.x;
+      else if (s.name === "P") this.P = out.P;
+    }
+  }
+
+  /** Advance the estimate by `dt` under commands `u`. Pass a flat (column-
+   *  major) `Q` Float64Array to override the model's baked `L Σ Lᵀ`. */
+  predict(dt, { u = {}, t = 0, Q = null } = {}) {
+    const method = Q ? "predict_with_Q" : "predict";
+    if (!byMethod[method])
+      throw new Error(`Module exposes no \`${method}\` entry point`);
+    this._run(byMethod[method], { u, dt, t, Q });
+  }
+
+  /** Fold one measurement at the current state through its baked Joseph
+   *  kernel. `name` is a sensor name (full or unique-suffix). */
+  update(name, z, { u = {}, t = 0 } = {}) {
+    const full = resolveName(name, MEAS_NAMES, "sensor");
+    const za = z instanceof Float64Array
+      ? z : Float64Array.from(typeof z === "number" ? [z] : z);
+    this._run(byMethod[MEAS_ENTRY[full]], { u, t, z: za });
+  }
+
+  /** The held estimate slot `name` (full or unique-suffix) as a Float64Array. */
+  slot(name) {
+    const names = descriptor.stateSlots.map((s) => s.name);
+    const s = descriptor.stateSlots.find(
+      (x) => x.name === resolveName(name, names, "state slot"));
+    return this.x.slice(s.off, s.off + s.dim);
+  }
+
+  /** Reset the held estimate. `x` is a flat/`{slot: value}` estimate merged
+   *  over the model's init; `P` is a flat covariance. Resets both to the
+   *  model's init when called with no arguments. */
+  reset({ x = null, P = null } = {}) {
+    if (x === null && P === null) {
+      this.x = this._x0.slice();
+      this.P = this._P0.slice();
+      return;
+    }
+    if (x !== null) this.x = packState(x, this._x0);
+    if (P !== null)
+      this.P = P instanceof Float64Array ? P.slice() : Float64Array.from(P);
+  }
+}
+
+/** Mirrors the numpy `NumpyRegulator`: a stateless control law mapping a
+ *  state estimate to commands, holding the reference operating point it
+ *  regulates to. `retarget()` moves the reference (the gain K is NOT
+ *  re-solved — exact wherever the dynamics are invariant along the move). */
+export class Regulator {
+  constructor(runtime) {
+    this.rt = runtime;
+    this._ctrl = byMethod["control"];
+    if (!this._ctrl)
+      throw new Error("Module exposes no `control` entry point");
+    // Held reference point(s): every STATE-role port that isn't the live `x`.
+    this._refs = {};
+    for (const r of descriptor.stateRefs)
+      if (r.name !== "x") this._refs[r.name] = Float64Array.from(r.init);
+    this._refName = Object.keys(this._refs)[0]; // conventionally "x_ref"
+    this._xInit = (descriptor.stateRefs.find((r) => r.name === "x")
+      || { init: [] }).init;
+  }
+
+  /** The live reference point (flat Float64Array), or null if not retargetable. */
+  get xRef() {
+    return this._refName ? this._refs[this._refName].slice() : null;
+  }
+
+  /** Move the reference the law regulates to (flat or `{slot: value}`, merged
+   *  over the current reference). The gain K is NOT re-solved. */
+  retarget(state) {
+    if (!this._refName)
+      throw new Error("control law has no reference port — not retargetable");
+    this._refs[this._refName] = packState(state, this._refs[this._refName]);
+  }
+
+  /** Map a state estimate (flat or `{slot: value}`, merged over the live
+   *  reference) to `{input: value}`. */
+  control(state) {
+    const base = this._refName ? this._refs[this._refName] : this._xInit;
+    const x = packState(state, base);
+    const args = {};
+    for (const s of this._ctrl.in) {
+      if (s.name === "x") args.x = x;
+      else if (s.kind === "state") args[s.name] = this._refs[s.name];
+    }
+    return unpackControl(this.rt.call("control", args).u);
   }
 }
 

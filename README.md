@@ -245,6 +245,7 @@ of a Module — no per-transform code anywhere:
 | `TargetNumpy(x)` | any Module / transform | `NumpyRuntime` — surface derived from the Module's shape (sim `step`/`outputs`, filter `predict`/`update`, regulator `control`, recurrence `step`) |
 | `TargetCpp(x, out_dir, class_name)` | any Module / transform | C++ static lib: typed Eigen class over flat-C kernels (+ CMake) |
 | `TargetJax(x)` | any Module / transform (flat crafts) | `JaxModule` — every kernel as a jitted JAX function + a `lax.scan` rollout you can `jax.grad`/`jax.vmap` through (needs `pip install jax`; not a core dependency) |
+| `TargetWasm(x, out_dir, class_name)` | any Module / transform | browser bundle: the C++ backend's flat-C kernels behind a flat-double C ABI + Emscripten `build.sh`, a JSON descriptor, and an ES-module JS runtime (generic `Runtime.call` + typed `Sim`/`Filter`/`Regulator` views mirroring the numpy ones) |
 
 `TargetJax` lowers by expanding each kernel to a CasADi SX instruction
 tape and emitting equivalent JAX source (one line per scalar op) —
@@ -252,6 +253,13 @@ outputs match CasADi to machine precision, and `jax.grad` matches
 CasADi jacobians exactly. Limitation: kernels must SX-expand, so
 articulated (jointed) crafts — whose joint-space solve needs a
 runtime-pivoting Linsol — stay on numpy/C++.
+
+`TargetWasm` reuses `TargetCpp`'s exact math path (same densified flat-C
+kernels) and adds only the marshalling glue, so the numbers match every
+other backend bit-for-bit; it powers the live examples on
+[mantapilot.org](https://mantapilot.org). The emitted JS dispatches purely
+on the descriptor — no per-transform code — so `Sim`, `EKF`, and `LQR` all
+get the same browser-ready surface.
 
 Adding a backend (torch, raw embedded C) = a way to run/translate
 a `ca.Function` plus one generic `Module` lowering. Adding a transform
@@ -286,7 +294,9 @@ manta/                     library package
         numpy/             TargetNumpy + NumpyRuntime engine + the four
                            views (_sim/_filter/_recurrence/_regulator)
         cpp/               TargetCpp + the generic module_emit emitter
-tests/                     567 tests
+        jax/               TargetJax (CasADi SX tape → jitted JAX source)
+        wasm/              TargetWasm (flat-C kernels + C ABI + JS runtime)
+tests/                     618 tests
 examples/                  quickstart + physics/ + vehicles/
     _viz.py                rerun visualization helpers
     _control.py            keyboard (pynput) + scripted-fallback control

@@ -58,6 +58,22 @@ def build_descriptor(module, layouts, *, class_name: str,
                                 "off": slot.ambient_offset,
                                 "dim": slot.ambient_dim})
 
+    # Held state fields (e.g. the filter's `x` and covariance `P`) with their
+    # init, so a stateful JS view can seed itself; kind is normalized to match
+    # the entry-slot kinds ("manifold" -> "state"). Empty for stateless modules.
+    state_fields = []
+    if module.state is not None:
+        for f in module.state.fields:
+            state_fields.append({"name": f.name,
+                                 "kind": f.kind.replace("manifold", "state"),
+                                 "shape": list(f.shape),
+                                 "init": _num(f.init)})
+
+    # STATE-role ports (e.g. the regulator's live `x` and held `x_ref`) with
+    # their init operating point. Empty for sim/filter modules.
+    state_refs = [{"name": p.name, "dim": p.size, "init": _num(p.init)}
+                  for p in module.ports_by_role(Role.STATE)]
+
     outputs = {}
     for p in module.ports_by_role(Role.OUTPUT):
         outputs[p.name] = {"dim": sum(f.dim for f in p.fields),
@@ -74,6 +90,8 @@ def build_descriptor(module, layouts, *, class_name: str,
         "ambientDim": spec.ambient_dim if spec else 0,
         "tangentDim": spec.tangent_dim if spec else 0,
         "stateSlots": state_slots,
+        "stateFields": state_fields,
+        "stateRefs": state_refs,
         "initialState": (_num(module.initial_x)
                          if module.initial_x is not None else []),
         "inputs": _fields(u),
