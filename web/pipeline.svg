@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 540" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <style>
+      .col   { fill:#5b6b7f; font-size:21px; font-weight:400; }
+      .box   { fill:#ffffff; stroke:#3d85c6; stroke-width:1.5; }
+      .ghost { fill:#f4f8fd; stroke:#9bc0e8; stroke-width:1.5; stroke-dasharray:5 4; }
+      .name  { fill:#1c2433; font-size:17px; font-weight:700; }
+      .ghostn{ fill:#6b7c90; font-size:16px; font-weight:700; }
+      .sub   { fill:#5b6b7f; font-size:12px; }
+      .arrow { fill:#d4e4f6; stroke:#3d85c6; stroke-width:1.3; }
+    </style>
+  </defs>
+
+  <!-- column headers -->
+  <text class="col" x="60"  y="44">model</text>
+  <text class="col" x="350" y="44">transform</text>
+  <text class="col" x="670" y="44">targets</text>
+
+  <!-- model column -->
+  <rect class="box" x="60" y="70"  width="180" height="52" rx="9"/>
+  <text class="name" x="150" y="102" text-anchor="middle">Quadcopter</text>
+  <rect class="box" x="60" y="138" width="180" height="52" rx="9"/>
+  <text class="name" x="150" y="170" text-anchor="middle">Airplane</text>
+  <rect class="box" x="60" y="206" width="180" height="52" rx="9"/>
+  <text class="name" x="150" y="238" text-anchor="middle">Submarine</text>
+
+  <!-- model -> transform -->
+  <path class="arrow" d="M258 151 H294 V139 L318 164 L294 189 V177 H258 Z"/>
+
+  <!-- transform column -->
+  <rect class="box" x="350" y="70"  width="210" height="52" rx="9"/>
+  <text class="name" x="455" y="92"  text-anchor="middle">Sim</text>
+  <text class="sub"  x="455" y="110" text-anchor="middle">step the world</text>
+  <rect class="box" x="350" y="138" width="210" height="52" rx="9"/>
+  <text class="name" x="455" y="160" text-anchor="middle">EKF</text>
+  <text class="sub"  x="455" y="178" text-anchor="middle">predict &amp; update</text>
+  <rect class="box" x="350" y="206" width="210" height="52" rx="9"/>
+  <text class="name" x="455" y="228" text-anchor="middle">LQR</text>
+  <text class="sub"  x="455" y="246" text-anchor="middle">control law</text>
+
+  <!-- transform -> targets -->
+  <path class="arrow" d="M578 151 H614 V139 L638 164 L614 189 V177 H578 Z"/>
+
+  <!-- targets column -->
+  <rect class="box" x="670" y="70"  width="290" height="52" rx="9"/>
+  <text class="name" x="815" y="92"  text-anchor="middle">TargetNumpy</text>
+  <text class="sub"  x="815" y="110" text-anchor="middle">native-Python functions</text>
+  <rect class="box" x="670" y="138" width="290" height="52" rx="9"/>
+  <text class="name" x="815" y="160" text-anchor="middle">TargetJax</text>
+  <text class="sub"  x="815" y="178" text-anchor="middle">differentiable functions</text>
+  <rect class="box" x="670" y="206" width="290" height="52" rx="9"/>
+  <text class="name" x="815" y="228" text-anchor="middle">TargetCpp</text>
+  <text class="sub"  x="815" y="246" text-anchor="middle">Eigen kernels + CMake</text>
+  <rect class="ghost" x="670" y="274" width="290" height="52" rx="9"/>
+  <text class="ghostn" x="815" y="296" text-anchor="middle">… add a backend</text>
+  <text class="sub"   x="815" y="314" text-anchor="middle">one generic Module lowering</text>
+
+  <!-- divider -->
+  <line x1="60" y1="362" x2="638" y2="362" stroke="#cdd8e6" stroke-width="1.5" stroke-dasharray="5 5"/>
+
+  <!-- model-free lane -->
+  <text class="col" x="60" y="400">model-free methods</text>
+
+  <rect class="box" x="350" y="392" width="210" height="52" rx="9"/>
+  <text class="name" x="455" y="424" text-anchor="middle">PID</text>
+  <rect class="box" x="350" y="460" width="210" height="52" rx="9"/>
+  <text class="name" x="455" y="492" text-anchor="middle">Madgwick · Mahony</text>
+
+  <!-- model-free -> targets -->
+  <path class="arrow" d="M578 439 H614 V427 L638 452 L614 477 V465 H578 Z"/>
+</svg>

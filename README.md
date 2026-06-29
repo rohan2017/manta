@@ -1,4 +1,12 @@
-# manta
+<p align="center">
+  <a href="https://mantapilot.org">
+    <img src="web/manta-logo.svg" alt="manta" width="360">
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://mantapilot.org"><b>mantapilot.org</b></a>
+</p>
 
 A Python-first, CasADi-backed framework for small vehicles — drones,
 rockets, underwater vehicles, satellites — spanning rigid-body
@@ -14,23 +22,9 @@ Three layers, explicit at every boundary. The model is declarative; the
 over it, each owning its math and emitting a typed `Module` IR; a
 `Target*` lowers any Module to a backend.
 
-```
-Model            Transform            Target              Result
-─────────────────────────────────────────────────────────────────
-World        →   Sim(world)       →   TargetNumpy(sim) →  NumpyRuntime
-                  (linearized tick)                        .step() / .outputs()
-
-World        →   EKF(world)       →   TargetNumpy(ekf) →  NumpyRuntime
-                  (Kalman recursion,                       .update() / .predict()
-                   baked kernels)                          (you own the loop)
-
-World        →   LQR(world, …)    →   TargetNumpy(lqr) →  NumpyRuntime
-                  (Riccati → gain K,                       .control(state) → {input: u}
-                   baked control law)
-
-any of these →   .module()        →   TargetCpp(x, …)  →  <basename>.cpp/.hpp
-                                                           + flat-C kernels + CMake
-```
+<p align="center">
+  <img src="web/pipeline.svg" alt="model (Quadcopter, Airplane, Submarine) → transform (Sim, EKF, LQR; model-free PID, Madgwick/Mahony) → targets (TargetNumpy, TargetJax, TargetCpp, …)" width="880">
+</p>
 
 `Sim(world)`, `EKF(world)`, and `LQR(world, …)` are pure compile-time.
 Each writes its math symbolically over the shared `LinearizedSystem`
