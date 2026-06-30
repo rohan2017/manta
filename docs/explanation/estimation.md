@@ -8,6 +8,14 @@ over every craft and every state-bearing disturbance. Covariance and
 updates live in the tangent space, so orientation never leaves the unit
 quaternion.
 
+[`UKF(world)`][manta.UKF] is the **unscented** twin: same constructor, same
+held `x`/`P`, same auto-assembled `Q`/`R`, and the same emitted `Module`
+(so it lowers to every backend through the EKF's path). It replaces the
+EKF's linearized covariance push with a sigma-point sample of the
+*nonlinear* `f`/`h` retracted onto the manifold — no Jacobians. With the
+default tight sigma spread the two filters agree closely on a near-linear
+model.
+
 ## To cover
 
 - **Why error-state** — the rigid-body state lives on a manifold
@@ -31,5 +39,6 @@ quaternion.
 
 - Reference: [Transforms](../reference/transforms.md),
   [Estimation](../reference/estimation.md)
-- Code: `manta/estimation/ekf.py`, `manta/estimation/_kalman.py`
+- Code: `manta/estimation/ekf.py`, `manta/estimation/ukf.py`,
+  `manta/estimation/_kalman.py`
 - Tutorial: [camera interceptor](../tutorials/interceptor.md)

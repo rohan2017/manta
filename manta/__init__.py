@@ -55,6 +55,7 @@ from .sim import Sim
 from .planets import Planet
 from .couplings import Coupling
 from .estimation.ekf import EKF
+from .estimation.ukf import UKF
 from .estimation.imu_integrator import IMUIntegrator
 from .estimation.madgwick import Madgwick
 from .estimation.mahony import Mahony
@@ -66,7 +67,8 @@ from .fit import Fit, FitResult, NoiseFit, NoiseFitResult, Prior, Window
 from .rates import CommandLatch, RateGate
 
 __all__ = [
-    "ir", "Craft", "World", "Coupling", "Sim", "Planet", "EKF", "LQR", "PID",
+    "ir", "Craft", "World", "Coupling", "Sim", "Planet", "EKF", "UKF",
+    "LQR", "PID",
     "Madgwick", "Mahony", "IMUIntegrator", "RecurrenceBlock",
     "TargetNumpy", "TargetCpp", "TargetWasm", "TargetJax", "NoiseDriver",
     "Fit", "FitResult", "NoiseFit", "NoiseFitResult", "Prior", "Window",

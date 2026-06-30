@@ -1,6 +1,6 @@
-# Transforms — Sim, EKF, LQR
+# Transforms — Sim, EKF, UKF, LQR
 
-The three compile-time siblings. Each takes a `World`, writes its math
+The compile-time siblings. Each takes a `World`, writes its math
 symbolically over the shared linearized system, and emits a typed
 `Module`. Lower one with a [target](targets.md) to get a callable runtime.
 
@@ -11,6 +11,10 @@ symbolically over the shared linearized system, and emits a typed
 ## EKF
 
 ::: manta.EKF
+
+## UKF
+
+::: manta.UKF
 
 ## LQR
 

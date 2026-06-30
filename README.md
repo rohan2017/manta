@@ -18,7 +18,7 @@ embedded C++ via codegen.
 ## The pipeline
 
 Three layers, explicit at every boundary. The model is declarative; the
-**transforms** (`Sim`, `EKF`, `LQR`, the recurrence blocks) are siblings
+**transforms** (`Sim`, `EKF`, `UKF`, `LQR`, the recurrence blocks) are siblings
 over it, each owning its math and emitting a typed `Module` IR; a
 `Target*` lowers any Module to a backend.
 
@@ -26,7 +26,8 @@ over it, each owning its math and emitting a typed `Module` IR; a
   <img src="web/pipeline.svg" alt="model (Quadcopter, Airplane, Submarine) → transform (Sim, EKF, LQR; model-free PID, Madgwick/Mahony) → targets (TargetNumpy, TargetJax, TargetCpp, …)" width="880">
 </p>
 
-`Sim(world)`, `EKF(world)`, and `LQR(world, …)` are pure compile-time.
+`Sim(world)`, `EKF(world)`, `UKF(world)`, and `LQR(world, …)` are pure
+compile-time.
 Each writes its math symbolically over the shared `LinearizedSystem`
 (manifold-aware F / B / H / L over the compiled world tick) and emits a
 typed `Module` — state layout + named CasADi kernels + typed entry
@@ -190,6 +191,21 @@ state-bearing disturbance:
 Lower to `TargetNumpy(EKF(w))` for Python or `TargetCpp(EKF(w), ...)`
 for embedded.
 
+### UKF
+
+`UKF(world)` is the unscented twin — same constructor, same held `x`/`P`,
+same auto-assembled `Q`/`R`, and the **same emitted Module**, so it lowers
+to every backend (`TargetNumpy`/`Cpp`/`Jax`/`Wasm`) through the EKF's path
+with no new backend code. It replaces the linearized `F P Fᵀ` / `H P Hᵀ`
+push with a sigma-point sample of the *nonlinear* `f`/`h` retracted onto
+the manifold (no Jacobians), tuned by the standard scaled-UT `alpha`/`beta`/
+`kappa`. Drop-in for the `EKF` above:
+
+```python
+from manta import UKF, TargetNumpy
+ukf = TargetNumpy(UKF(w))        # identical predict/update surface
+```
+
 ### System identification (Fit)
 
 `Fit(world, parameters={...})` fits a model's physical parameters to
@@ -351,10 +367,11 @@ GPU-rendered Windows-native viewer from WSL). Shared helpers live in
 ## Status
 
 In active development. The public API (`World`, `Craft`, `Sim`, `EKF`,
-`LQR`, `TargetNumpy`, `TargetCpp`) is settled enough that the demos
-and 567 tests don't carry compat shims. The full deploy-to-robot path
-lowers to C++ — `TargetCpp` handles `Sim`, `EKF` (mutable state + Joseph
-update), and `LQR` (feed-forward control law), each verified against the
+`UKF`, `LQR`, `TargetNumpy`, `TargetCpp`) is settled enough that the demos
+and tests don't carry compat shims. The full deploy-to-robot path
+lowers to C++ — `TargetCpp` handles `Sim`, `EKF`/`UKF` (mutable state +
+covariance update), and `LQR` (feed-forward control law), each verified
+against the
 numpy backend by a compile-and-run roundtrip test. Open items:
 
 - **`iLQR` / `MPC`** — `LinearizedSystem` emits symbolic A/B/H, so

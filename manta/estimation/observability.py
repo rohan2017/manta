@@ -110,13 +110,16 @@ class ObservabilityReport:
 
 
 def _resolve_ir(ekf):
-    """Require the `EKF` transform (the runtime doesn't carry the IR)."""
+    """Require a filter transform carrying the IR (`EKF`/`UKF`); the runtime
+    view doesn't carry it. The analysis is the *linearized* observability of
+    the model's sensor set, so it applies to either filter unchanged."""
     from .ekf import EKF
-    if isinstance(ekf, EKF):
+    from .ukf import UKF
+    if isinstance(ekf, (EKF, UKF)):
         return ekf
     raise TypeError(
-        f"observability: expected the EKF transform (EKF(world, ...)), got "
-        f"{type(ekf).__name__}")
+        f"observability: expected the EKF/UKF transform (e.g. "
+        f"EKF(world, ...)), got {type(ekf).__name__}")
 
 
 def _operating_point(ekf, state) -> np.ndarray:
