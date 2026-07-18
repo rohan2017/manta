@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>build a Mako — manta</title>
+<meta name="description" content="Assemble a custom submarine from manta modules, then spawn it in a live ocean — simulated, estimated, and controlled by manta compiled to WebAssembly in your browser.">
+<link rel="icon" href="/manta.svg">
+<style>
+  :root {
+    --bg:        #d0e0e3;
+    --bg-deep:   #c3d6da;
+    --white:     #ffffff;
+    --ink:       #0d1417;
+    --ink-soft:  #46565d;
+    --navy:      #1c4587;
+    --blue:      #3d85c6;
+    --line:      rgba(28,69,135,.18);
+    --line-soft: rgba(28,69,135,.09);
+    --shadow:    24px 24px 60px -36px rgba(20,49,96,.45);
+    --sans: "Helvetica Neue", Helvetica, Arial, "Liberation Sans", sans-serif;
+    --mono: ui-monospace, "SF Mono", "Menlo", "Consolas", monospace;
+    --radius: 14px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: var(--sans); background: var(--bg); color: var(--ink);
+    line-height: 1.5; -webkit-font-smoothing: antialiased; overflow: hidden;
+  }
+  a { color: var(--navy); text-decoration: none; }
+  ::selection { background: var(--blue); color: #fff; }
+  button { font-family: var(--sans); }
+
+  /* ---------- nav (matches the homepage) ---------- */
+  header {
+    position: relative; z-index: 30;
+    background: rgba(208,224,227,.82);
+    backdrop-filter: saturate(140%) blur(10px);
+    border-bottom: 1px solid var(--line-soft);
+    padding: 0 20px;
+  }
+  nav { display: flex; align-items: center; justify-content: space-between; height: 56px; }
+  .brand { display: flex; align-items: center; gap: 10px; color: var(--ink); }
+  .brand .word { font-size: 21px; font-weight: 700; letter-spacing: -.018em; color: var(--navy); }
+  .brand .page {
+    font-family: var(--mono); font-size: 11px; color: var(--blue);
+    border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px;
+  }
+  .nav-links { display: flex; align-items: center; gap: 22px; }
+  .nav-links a { font-size: 14px; color: var(--ink-soft); }
+  .nav-links a:hover { color: var(--navy); }
+
+  /* ---------- app grid ---------- */
+  .app {
+    display: grid; grid-template-columns: 272px 1fr; height: calc(100vh - 56px);
+  }
+
+  /* ---------- palette ---------- */
+  .palette {
+    background: var(--white); border-right: 1px solid var(--line-soft);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  .palette .search { padding: 12px; border-bottom: 1px solid var(--line-soft); }
+  .palette .search input {
+    width: 100%; padding: 8px 12px; font: 13px var(--sans);
+    border: 1px solid var(--line); border-radius: 8px; outline: none;
+    background: var(--bg); color: var(--ink);
+  }
+  .palette .search input:focus { border-color: var(--blue); background: #fff; }
+  .palette .groups { overflow-y: auto; flex: 1; padding: 6px 12px 24px; }
+  .pgroup h3 {
+    font: 600 11px var(--mono); letter-spacing: .09em; text-transform: uppercase;
+    color: var(--blue); margin: 16px 2px 6px;
+  }
+  .pitem {
+    display: grid; grid-template-columns: 54px 1fr; gap: 10px; align-items: center;
+    padding: 8px; border: 1px solid var(--line-soft); border-radius: 10px;
+    margin-bottom: 8px; background: #fff; cursor: grab; user-select: none;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .pitem:hover { border-color: var(--blue); box-shadow: 0 8px 18px -12px rgba(28,69,135,.5); }
+  .pitem.dragging { opacity: .45; }
+  .pitem .icon {
+    width: 54px; height: 44px; border-radius: 7px; background: var(--bg);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .pitem .icon svg { width: 50px; height: 40px; overflow: visible; }
+  .pitem b { display: block; font-size: 13px; font-weight: 600; }
+  .pitem span { display: block; font-size: 11px; color: var(--ink-soft); line-height: 1.35; }
+
+  /* ---------- stage ---------- */
+  .stage { position: relative; min-width: 0; min-height: 0; }
+  .stage > section { position: absolute; inset: 0; }
+  #design-view { display: flex; flex-direction: column; }
+  #drive-view { display: none; }
+  body[data-mode="drive"] #design-view { display: none; }
+  body[data-mode="drive"] #drive-view { display: block; }
+
+  /* editor canvas */
+  .editor-wrap { flex: 1; position: relative; min-height: 0; }
+  #editor-svg { width: 100%; height: 100%; display: block; touch-action: none; }
+
+  /* editor svg element classes (module silhouettes — used by catalog.js;
+     dark-hull style matching the MakoModules design document) */
+  .mk-hull   { fill: #454c54; stroke: #23282d; stroke-width: .006; }
+  .mk-dark   { fill: #2b3036; stroke: #1b1f23; stroke-width: .004; }
+  .mk-mid    { fill: #5a636c; stroke: #2b3036; stroke-width: .004; }
+  .mk-cell   { fill: #4d5157; stroke: #33373c; stroke-width: .004; }
+  .mk-fin    { fill: #383f46; stroke: #23282d; stroke-width: .005; }
+  .mk-pod    { fill: #33393f; stroke: #1e2226; stroke-width: .005; }
+  .mk-bore   { fill: #22262a; }
+  .mk-blade  { fill: #737f88; stroke: #33393f; stroke-width: .003; }
+  .mk-glass  { fill: #10141a; stroke: #000; stroke-width: .003; }
+  .mk-slit   { fill: #22262a; stroke: none; }
+  .mk-window { fill: #7d8890; }
+  .mk-pay    { fill: #27b463; stroke: #157a41; stroke-width: .004; }
+  .mk-module.selected .mk-hull { stroke: #1c4587; stroke-width: .016; }
+  .mk-module { cursor: pointer; }
+  .mk-ghost { opacity: .5; pointer-events: none; }
+  .mk-ghost-bad { opacity: .28; filter: saturate(0); pointer-events: none; }
+  .spine-slot { fill: rgba(28,69,135,.12); stroke: var(--navy);
+                stroke-dasharray: .03 .022; }
+
+  /* editor bottom bar */
+  .editor-bar {
+    display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+    padding: 12px 18px; background: var(--white);
+    border-top: 1px solid var(--line-soft);
+  }
+  .stats { display: flex; gap: 16px; font: 12px var(--mono); color: var(--ink-soft); }
+  .stats b { color: var(--ink); font-weight: 600; }
+  .spawn-form { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+  .spawn-form label { font: 11px var(--mono); color: var(--ink-soft); display: flex;
+                      align-items: center; gap: 5px; }
+  .spawn-form input {
+    width: 62px; padding: 5px 7px; font: 12px var(--mono);
+    border: 1px solid var(--line); border-radius: 6px; background: #fff;
+  }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 9px 20px; border-radius: 9px; font-size: 14px; font-weight: 600;
+    border: 0; cursor: pointer; transition: transform .12s, box-shadow .12s;
+  }
+  .btn-primary { background: var(--navy); color: #fff;
+                 box-shadow: 0 12px 26px -14px rgba(28,69,135,.8); }
+  .btn-primary:hover { transform: translateY(-1px); }
+  .btn-primary:disabled { opacity: .55; cursor: wait; transform: none; }
+  .btn-ghost { color: var(--navy); border: 1px solid var(--line); background: var(--white); }
+  .btn-ghost[aria-pressed="true"] { color: #fff; background: var(--navy); }
+
+  /* config panel (right, floats over the editor) */
+  .config {
+    position: absolute; top: 16px; right: 16px; width: 280px; z-index: 5;
+    background: var(--white); border: 1px solid var(--line-soft);
+    border-radius: var(--radius); box-shadow: var(--shadow);
+    padding: 16px; display: none;
+  }
+  .config.open { display: block; }
+  .config h2 { font-size: 15px; letter-spacing: -.01em; }
+  .config .sub { font-size: 11.5px; color: var(--ink-soft); margin-bottom: 12px; }
+  .config .row { margin-bottom: 12px; }
+  .config .row label {
+    display: flex; justify-content: space-between; font: 11px var(--mono);
+    color: var(--ink-soft); margin-bottom: 4px;
+  }
+  .config .row label output { color: var(--ink); font-weight: 600; }
+  .config input[type="range"] { width: 100%; accent-color: var(--navy); }
+  .config .actions { display: flex; justify-content: space-between; margin-top: 14px; }
+  .config .remove { background: none; border: 0; color: #c23b3b; font-size: 12.5px;
+                    cursor: pointer; padding: 4px 0; }
+  .config .close { background: none; border: 0; color: var(--ink-soft);
+                   font-size: 12.5px; cursor: pointer; padding: 4px 0; }
+
+  /* toast / status */
+  .toast {
+    position: absolute; left: 50%; bottom: 84px; transform: translateX(-50%);
+    background: var(--ink); color: #fff; font-size: 13px; border-radius: 9px;
+    padding: 10px 18px; z-index: 20; display: none; max-width: 70%;
+  }
+  .toast.error { background: #7c2626; }
+  .toast.show { display: block; }
+
+  /* ---------- drive view ---------- */
+  #drive-view { background: #06121d; }
+  #viewer-canvas { width: 100%; height: 100%; display: block; touch-action: none; }
+  .drive-bar {
+    position: absolute; right: 16px; top: 16px; z-index: 6; display: flex; gap: 10px;
+  }
+  .drive-bar .btn-ghost { color: #dcebf5; border-color: rgba(220,235,245,.3);
+                          background: rgba(8,26,41,.55); }
+  /* bottom instrument strip: readouts | navball | controls */
+  .instruments {
+    position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%);
+    z-index: 6; display: flex; align-items: flex-end; gap: 18px;
+    pointer-events: none;
+  }
+  .instruments > * { pointer-events: auto; }
+  #navball-canvas { width: 150px; height: 150px; display: block;
+                    filter: drop-shadow(0 4px 14px rgba(0,0,0,.55)); }
+  .readouts {
+    font: 12px var(--mono); color: #dcebf5; letter-spacing: .04em;
+    text-shadow: 0 1px 6px rgba(0,0,0,.6); line-height: 1.75;
+    background: rgba(8,26,41,.55); border: 1px solid rgba(220,235,245,.14);
+    border-radius: 10px; padding: 10px 14px; min-width: 148px;
+    margin-bottom: 8px; white-space: pre;
+  }
+  .readouts b { color: #ffe08a; font-weight: 600; }
+  .drive-side { display: flex; flex-direction: column; gap: 8px;
+                margin-bottom: 8px; }
+  .drive-side .btn { padding: 7px 14px; font-size: 12.5px; }
+  #mode-btn { min-width: 118px; }
+  .vis-row { display: flex; align-items: center; gap: 8px;
+             font: 11px var(--mono); color: rgba(220,235,245,.8);
+             background: rgba(8,26,41,.55); border: 1px solid rgba(220,235,245,.14);
+             border-radius: 9px; padding: 6px 10px; }
+  .vis-row input[type=range] { width: 110px; accent-color: #7fb4d6; }
+  /* small fading warning above the instruments */
+  .key-warn {
+    position: absolute; left: 50%; bottom: 178px; transform: translateX(-50%);
+    z-index: 7; font: 12px var(--mono); color: #ffd27f; letter-spacing: .04em;
+    text-shadow: 0 1px 6px rgba(0,0,0,.7); opacity: 0;
+    transition: opacity .25s; pointer-events: none;
+  }
+  .key-warn.show { opacity: 1; }
+  /* keyboard controls popup */
+  .keys-pop {
+    position: absolute; right: 16px; bottom: 64px; z-index: 8; display: none;
+    background: rgba(8,26,41,.92); border: 1px solid rgba(220,235,245,.2);
+    border-radius: 12px; padding: 14px 18px; color: #dcebf5;
+    font: 12px var(--mono); line-height: 2; letter-spacing: .03em;
+  }
+  .keys-pop.open { display: block; }
+  .keys-pop kbd {
+    font: inherit; border: 1px solid rgba(220,235,245,.35); border-radius: 4px;
+    padding: 0 6px; margin: 0 2px;
+  }
+
+  @media (max-width: 900px) {
+    .app { grid-template-columns: 224px 1fr; }
+    .spawn-form label span { display: none; }
+  }
+</style>
+</head>
+<body data-mode="design">
+
+<header>
+  <nav>
+    <a class="brand" href="/" aria-label="manta home">
+      <span class="word">manta</span>
+      <span class="page">build a mako</span>
+    </a>
+    <div class="nav-links">
+      <a href="/docs/">docs</a>
+      <a href="https://github.com/rohan2017/manta">GitHub ↗</a>
+    </div>
+  </nav>
+</header>
+
+<div class="app">
+  <!-- module palette -->
+  <aside class="palette">
+    <div class="search">
+      <input id="palette-search" type="search" placeholder="Search modules…"
+             autocomplete="off" spellcheck="false">
+    </div>
+    <div class="groups" id="palette-groups"></div>
+  </aside>
+
+  <!-- stage -->
+  <div class="stage">
+    <!-- design mode -->
+    <section id="design-view">
+      <div class="editor-wrap">
+        <svg id="editor-svg" xmlns="http://www.w3.org/2000/svg"></svg>
+        <div class="config" id="config-panel"></div>
+        <div class="toast" id="toast"></div>
+      </div>
+      <div class="editor-bar">
+        <div class="stats" id="stats"></div>
+        <form class="spawn-form" id="spawn-form">
+          <label><span>x</span><input name="x" type="number" value="0" step="5"> m</label>
+          <label><span>y</span><input name="y" type="number" value="0" step="5"> m</label>
+          <label><span>depth</span><input name="depth" type="number" value="2" min="0.5"
+                 max="25" step="0.5"> m</label>
+          <label><span>heading</span><input name="heading_deg" type="number" value="0"
+                 step="15"> °</label>
+          <label><span>waves</span><input name="wave_amp" type="number" value="0.25"
+                 min="0" max="1.5" step="0.05"> m</label>
+          <label><span>λ</span><input name="wave_len" type="number" value="18"
+                 min="6" max="80" step="2"> m</label>
+          <label><span>vis</span><input name="visibility" type="number" value="55"
+                 min="0" max="100" step="5"> %</label>
+          <button class="btn btn-primary" id="spawn-btn" type="submit">Spawn ▸</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- drive mode -->
+    <section id="drive-view">
+      <canvas id="viewer-canvas"></canvas>
+      <div class="drive-bar">
+        <button class="btn btn-ghost" id="back-btn">◂ Editor</button>
+      </div>
+      <div class="key-warn" id="key-warn"></div>
+      <div class="instruments">
+        <div class="readouts" id="readouts"></div>
+        <canvas id="navball-canvas" width="150" height="150"></canvas>
+        <div class="drive-side">
+          <button class="btn btn-ghost" id="mode-btn">mode: manual</button>
+          <button class="btn btn-ghost" id="keys-btn">keyboard ⌨</button>
+          <div class="vis-row">
+            <span>vis</span>
+            <input type="range" id="vis-slider" min="0" max="100" value="55">
+          </div>
+        </div>
+      </div>
+      <div class="keys-pop" id="keys-pop">
+        <b>attitude</b><br>
+        <kbd>W</kbd>/<kbd>S</kbd> pitch down / up &nbsp;
+        <kbd>A</kbd>/<kbd>D</kbd> yaw left / right &nbsp;
+        <kbd>Q</kbd>/<kbd>E</kbd> roll<br>
+        <b>translation</b><br>
+        <kbd>↑</kbd>/<kbd>↓</kbd> surge &nbsp;
+        <kbd>←</kbd>/<kbd>→</kbd> strafe &nbsp;
+        <kbd>space</kbd>/<kbd>shift</kbd> rise / dive<br>
+        <b>other</b><br>
+        <kbd>M</kbd> cycle mode &nbsp; <kbd>L</kbd> light &nbsp;
+        mouse drag orbits · wheel zooms
+      </div>
+    </section>
+  </div>
+</div>
+
+<script type="module" src="/mako/main.js"></script>
+</body>
+</html>

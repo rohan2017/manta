@@ -10,6 +10,7 @@ The static site served at `mantapilot.org`. One assets-only Cloudflare Worker
 | `carousel.js` | the example-carousel controller (code blurbs + render boot) |
 | `lib/render.js` | shared Three.js helpers (scene, boxes, arrows, camera) |
 | `quad/`, `airplane/` | per-example live renders (WASM bundle + `demo.js`) |
+| `mako/` | the "build a Mako" submarine builder (see below) |
 | `manta.svg`, `manta-logo.svg` | brand logo (full / background-stripped) |
 | `demos.py` | the carousel's vehicle models (quad here, airplane reuses the example) |
 | `build_demos.py` | regenerate + compile the WASM bundles |
@@ -40,11 +41,42 @@ This emits the C ABI + kernels + JS runtime + descriptor for each vehicle, then
 compiles each to `<name>.mjs` + `<name>.wasm`. The `*_kernels.c` / `*_abi.c`
 build inputs are git-ignored (re-emitted); the runtime artifacts are tracked.
 
+## Build a Mako (`/mako/`)
+
+A drag-and-drop submarine builder: assemble modules (hull sections, thrusters,
+fins, sensors, ballast) in a 2D side-view editor, then **Spawn** — the compile
+server builds the manta `World` from the design, lowers `Sim` + `EKF` + `LQR`
+to WebAssembly with `TargetWasm`, and the browser drives the craft live with
+keyboard setpoints through the baked LQR. The EKF toggle shows a ghost craft
+estimating the state from the design's own sensors (GPS is water-gated, so it
+dead-reckons at depth and re-fixes on surfacing, like
+`examples/vehicles/submarine.py`).
+
+- Contract between client and server: `mako/SPEC.md`.
+- Client: `mako/catalog.js` (modules, icons, placement, 3D meshes),
+  `mako/editor.js`, `mako/viewer.js`, `mako/main.js`.
+- Server: `server/mako/` (stdlib-only). Run it for local dev — it serves
+  `web/` **and** the `POST /api/mako/spawn` endpoint:
+
+```sh
+source ~/emsdk/emsdk_env.sh          # emcc, needed to compile spawns
+.venv/bin/python -m server.mako      # http://localhost:8077/mako/
+```
+
+Compiled bundles land in `mako/builds/<design-hash>/` (git-ignored cache).
+In production, the same server runs behind the static host and only
+`/api/mako/spawn` needs routing to it. The 3D meshes are procedural stand-ins —
+each module's mesh builder in `catalog.js` can be swapped for a glTF load
+without touching placement.
+
 ## Local preview
 
 ```sh
 python3 -m http.server -d web 8099   # then open http://localhost:8099/
 ```
+
+(The homepage carousel works with any static server; the Mako builder's spawn
+button needs `server.mako` above.)
 
 ## Known follow-ups
 

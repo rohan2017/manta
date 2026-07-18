@@ -19,6 +19,10 @@ web/quad/*_kernels.c
 web/quad/*_kernels.h
 web/quad/*_abi.c
 
+# Per-design compiled bundles from the "build a Mako" spawn server —
+# a content-addressed cache, always regenerable.
+web/mako/builds/
+
 # Python
 .venv/
 venv/
