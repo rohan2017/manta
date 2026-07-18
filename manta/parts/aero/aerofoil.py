@@ -61,6 +61,14 @@ _RE_TRANS_HALFWIDTH: float = 0.6  # decades, half-width of the crossover blend
 _CLMAX_RE_LO: float = 2.0e4      # below here, the stall floor dominates
 _CLMAX_RE_HI: float = 1.0e6      # at/above here, the full reference CL_max
 _CLMAX_FLOOR_FRAC: float = 0.5   # CL_max never falls below this fraction
+# AoA regularization scale (m/s): below ~this much 2-D flow the atan2 pair
+# is blended toward "no incidence", so alpha reads smoothly zero at rest.
+# atan2's derivative is 0/0 at the origin, and the NaN poisons every
+# Jacobian above it (EKF F, LQR A/B) even though the wrench itself vanishes
+# as v² — the same class of guard as `soft_norm` / `smooth_max0`. The bias
+# this adds at speed is O(_ALPHA_V0³/v²): ~1e-4 rad at 1 m/s, nothing at
+# flight speed.
+_ALPHA_V0: float = 0.05
 
 
 def reynolds_number(density, speed, chord, viscosity):
@@ -188,7 +196,15 @@ class Aerofoil(Part):
 
         # Signed angle of attack about the chord line (wind = −v_rel, so a
         # positive AoA — wind from the +normal side — has v_normal < 0).
-        alpha = ca.atan2(-v_normal_mx, v_chord_mx)
+        # The chord argument carries a bleed (see _ALPHA_V0) so alpha reads
+        # smoothly zero through ZERO flow — atan2's branch point can't be
+        # removed (the ±π reverse-flow range needs its winding), but the
+        # bleed relocates it from v = 0, which every at-rest spawn and
+        # linearization hits exactly, to pure chord-reverse flow at
+        # ≈ 0.69·_ALPHA_V0 m/s — measure-zero and off the operating
+        # manifold, where the model is out of its validity range anyway.
+        bleed = _ALPHA_V0 ** 3 / (v2d_sq + _ALPHA_V0 ** 2)
+        alpha = ca.atan2(-v_normal_mx, v_chord_mx + bleed)
 
         # Reynolds number from the local fluid + chord, and the Re-scaled
         # stall ceiling / profile drag.
@@ -199,7 +215,15 @@ class Aerofoil(Part):
         # Effective zero-lift line including any flap shift.
         alpha_eff = alpha - (float(self.alpha_0) + d_alpha0)
 
+        # The sin() soft-clip is the stall model — but it is only physical
+        # up to its peak. Past ±π/2 the sine OSCILLATES with alpha, and a
+        # foil in deep sideslip (a spinning or tumbling craft) then produces
+        # erratic sign-flipping forces that destabilize controllers.
+        # Saturate at the peak instead: |CL| holds at CLmax_eff for all
+        # post-stall alpha — crude (real CL decays past stall) but monotone,
+        # bounded, and in flat-plate range; pre-stall behaviour is identical.
         x  = (float(self.CL_alpha) / CLmax_eff) * alpha_eff
+        x  = ca.fmax(-math.pi / 2, ca.fmin(math.pi / 2, x))
         sx = ca.sin(x)
         CL = CLmax_eff * sx
         # Induced drag scales with CL² (≈ CL²/(π·AR·e)); induced_k is that
