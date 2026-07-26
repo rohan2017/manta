@@ -11,7 +11,14 @@ controls + measurements to recover physical parameters.
 - Marking a `Parameter` promotable with a `manifold=` (thruster gains,
   `Mass.mass`, mount transforms).
 - Assembling [`Window`][manta.Window]s from a log (`x0`, `u`, `z`, `dt`).
-- Adding a [`Prior`][manta.Prior] for MAP regularization.
+- Adding a [`Prior`][manta.Prior] for MAP regularization — mean +
+  uncertainty in, posterior σ out (`post/prior ≈ 1` ⇒ the data never
+  informed that number).
+- Enforcing structure so the fit stays the declared vehicle:
+  [`Tied`][manta.Tied] for identical/mirrored parameters (four motors,
+  one gain), [`Free`][manta.Free] for shared geometry (one arm length
+  sourcing all four mount positions), `Prior(lower=, upper=)` for hard
+  physical bounds.
 - Running `Fit(world, parameters={...})`, reading `FitResult.converged`
   and the recovered values.
 - Fitting the **noise model** instead with [`NoiseFit`][manta.NoiseFit]

@@ -1,6 +1,6 @@
-"""Shared fitting declarations — `Prior`, `Window`, and the plumbing both
-fitters share: the `_FitBlock` decision-vector base, window-trace resolution,
-and result-table rendering."""
+"""Shared fitting declarations — `Prior`, `Tied`, `Free`, `Window` — and
+the plumbing both fitters share: the `_FitBlock` decision-vector base,
+bounds resolution, window-trace resolution, and result-table rendering."""
 
 from __future__ import annotations
 
@@ -30,10 +30,81 @@ class Prior:
                 constraint and makes pure scale ambiguities linear.
                 `NoiseFit` ignores this flag — noise σ is ALWAYS fit in
                 log-space, and `sigma` there is always relative.
+        lower — hard lower bound, AMBIENT space (a value, not a log).
+        upper — hard upper bound, ambient. Scalar or per-component.
+                Enforced as IPOPT box constraints — the sanity rails
+                that keep a physically absurd optimum off the table
+                (a thruster gain that can't exceed the motor's rating,
+                a mount that must stay inside the hull). The prior pulls
+                softly; bounds are walls. In `NoiseFit` they bound σ
+                itself. The declared/starting value must satisfy them.
     """
     sigma: float | tuple = None
     mean: float | tuple | None = None
     log: bool = False
+    lower: float | tuple | None = None
+    upper: float | tuple | None = None
+
+
+@dataclass(frozen=True)
+class Tied:
+    """Structural tie: this promoted parameter is a fixed affine function
+    of another fitted parameter (or a `Free` variable), not a decision
+    variable of its own — `p = scale · p_source + offset`, in AMBIENT
+    space (after any log-reparam of the source).
+
+    This is how symmetry is enforced rather than hoped for: identical
+    actuators share one gain, mirrored mounts share one geometry. Fewer
+    decision variables ⇒ better-conditioned fits, and every data point
+    that touches any tied copy informs the shared source.
+
+    Args:
+        source — name/suffix of the fitted parameter (or `Free` name)
+                 this one derives from. Must itself be a decision
+                 variable — chains of ties are not supported; tie all
+                 copies to the same source.
+        scale  — `None` (identity — identical copies), a scalar, a
+                 per-component sequence (elementwise, e.g. a mirror's
+                 sign flips `(-1, 1, 1)`), or a full
+                 `(target_dim, source_dim)` matrix (e.g. a scalar arm
+                 length mapped to a 3-vector mount position).
+        offset — additive constant: `None` (zero), scalar, or
+                 length-`target_dim`.
+
+    Examples::
+
+        # four identical motors — one fitted gain
+        "t1.force_quad": Prior(sigma=3.0),
+        "t2.force_quad": Tied("t1.force_quad"),
+
+        # mirrored mount across the y-z plane
+        "t2.transform": Tied("t1.transform", scale=(-1, 1, 1)),
+
+        # scalar arm length -> the four X-frame mount positions
+        "arm": Free(0.12, prior=Prior(sigma=0.02, lower=0.0)),
+        "t1.transform": Tied("arm", scale=[[1], [1], [0]]),
+        "t2.transform": Tied("arm", scale=[[-1], [1], [0]]),
+    """
+    source: str
+    scale: object = None
+    offset: object = None
+
+
+@dataclass(frozen=True)
+class Free:
+    """Auxiliary decision variable that is NOT a promoted parameter of
+    the model — it exists to be the source of `Tied` entries (a shared
+    arm length, a common incidence angle). Its key in `Fit(parameters=)`
+    is a fresh name, not a part parameter.
+
+    Args:
+        init  — starting value (scalar or vector); also the prior mean
+                unless the prior says otherwise.
+        prior — optional `Prior` (sigma/mean/log/bounds), same semantics
+                as for a promoted parameter.
+    """
+    init: object
+    prior: Prior | None = None
 
 
 @dataclass(frozen=True)
@@ -72,11 +143,53 @@ class _FitBlock:
     the DECISION space the solver works in (Fit's parameters, optionally
     log-space; NoiseFit's σ, always log-space). `init` seeds the solve.
 
-    Subclasses (`Fit._Block`, `NoiseFit._Channel`) populate the five shared
+    Subclasses (`Fit._Block`, `NoiseFit._Channel`) populate the shared
     slots below — using ONE naming scheme across both fitters — plus their own
-    mapping back to ambient values, labels, and metadata."""
+    mapping back to ambient values, labels, and metadata. `lower`/`upper` are
+    DECISION-space box bounds (±inf when unbounded), fed to IPOPT as
+    `lbx`/`ubx`; use `decision_bounds` to build them from a `Prior`."""
 
-    __slots__ = ("offset", "dim", "init", "prior_mean", "sigma")
+    __slots__ = ("offset", "dim", "init", "prior_mean", "sigma",
+                 "lower", "upper")
+
+
+def decision_bounds(prior: Prior | None, dim: int, ambient_init: np.ndarray,
+                    *, log: bool, full: str, who: str):
+    """A prior's ambient `lower`/`upper` as decision-space `(lo, hi)`
+    arrays (±inf where unbounded). Validates shape, ordering, and that the
+    starting value sits inside the box; with `log=True` a nonpositive
+    lower bound is vacuous (log-space is positive by construction)."""
+    lo = np.full(dim, -np.inf)
+    hi = np.full(dim, np.inf)
+    for name, given, dst in (("lower", getattr(prior, "lower", None), lo),
+                             ("upper", getattr(prior, "upper", None), hi)):
+        if prior is None or given is None:
+            continue
+        a = np.atleast_1d(np.asarray(given, dtype=float)).ravel()
+        if a.size == 1:
+            a = np.full(dim, a[0])
+        if a.size != dim:
+            raise ValueError(
+                f"{who}: Prior for {full!r}: {name} bound must be a scalar "
+                f"or length-{dim} sequence, got {given!r}.")
+        dst[:] = a
+    if np.any(lo >= hi):
+        raise ValueError(
+            f"{who}: Prior for {full!r}: bounds need lower < upper "
+            f"elementwise, got lower={lo}, upper={hi}.")
+    if np.any(ambient_init < lo) or np.any(ambient_init > hi):
+        raise ValueError(
+            f"{who}: Prior for {full!r}: starting value {ambient_init} "
+            f"violates its own bounds [{lo}, {hi}].")
+    if log:
+        if np.any(hi <= 0.0):
+            raise ValueError(
+                f"{who}: Prior for {full!r}: upper bound must be strictly "
+                f"positive with a log-space fit.")
+        lo = np.where(lo > 0.0, np.log(np.where(lo > 0.0, lo, 1.0)), -np.inf)
+        hi = np.where(np.isfinite(hi), np.log(np.where(hi > 0.0, hi, 1.0)),
+                      np.inf)
+    return lo, hi
 
 
 def prior_penalty(v: ca.MX, blocks: list, *, weight: float = 1.0) -> ca.MX:
@@ -95,12 +208,15 @@ def prior_penalty(v: ca.MX, blocks: list, *, weight: float = 1.0) -> ca.MX:
 def solve_blocks_nlp(name: str, x: ca.MX, loss: ca.MX, blocks: list, *,
                      verbose: bool, ipopt_options: dict | None):
     """Build the fitters' shared IPOPT solver, seed it from the blocks'
-    `init`, and solve. Returns `(x_opt, objective, stats)`."""
+    `init`, apply their box bounds, and solve. Returns
+    `(x_opt, objective, stats)`."""
     opts = {"ipopt.print_level": 5 if verbose else 0,
             "print_time": verbose, "ipopt.sb": "yes"}
     opts.update(ipopt_options or {})
     solver = ca.nlpsol(name, "ipopt", {"x": x, "f": loss}, opts)
-    sol = solver(x0=np.concatenate([b.init for b in blocks]))
+    sol = solver(x0=np.concatenate([b.init for b in blocks]),
+                 lbx=np.concatenate([b.lower for b in blocks]),
+                 ubx=np.concatenate([b.upper for b in blocks]))
     return np.asarray(sol["x"]).ravel(), sol["f"], solver.stats()
 
 

@@ -21,3 +21,14 @@ for a worked recipe.
 ::: manta.Window
 
 ::: manta.Prior
+
+## Structure
+
+Symmetry and sanity are declared, not hoped for: tie identical or
+mirrored parameters to one decision variable (`Tied`), introduce shared
+geometry as an auxiliary variable (`Free`), and wall off absurd values
+with `Prior(lower=, upper=)` box bounds.
+
+::: manta.Tied
+
+::: manta.Free

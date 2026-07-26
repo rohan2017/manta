@@ -11,7 +11,8 @@ import copy
 import numpy as np
 import pytest
 
-from manta import Craft, Fit, Prior, Sim, TargetNumpy, Window, World
+from manta import Craft, Fit, Free, Prior, Sim, TargetNumpy, Tied, Window, \
+    World
 from manta.fields import GravityField
 from manta.ir.frames import CraftFrame, PartFrame
 from manta.ir.types import Vec3
@@ -307,6 +308,128 @@ def test_log_prior_supports_vector_parameters():
     with pytest.raises(ValueError, match="strictly positive"):
         Fit(_drone(),
             parameters={"t1.transform": Prior(sigma=0.1, log=True)})
+
+
+def test_tied_parameters_share_one_decision_variable():
+    """Four identical thrusters fit ONE gain: t2..t4 are Tied to t1, so
+    the decision space has 3 components (one vec3), every window informs
+    the shared gain, and apply() writes the derived copies back too."""
+    windows = _record_windows(_drone(kf=11.0), n_win=2, K=40, seed=10)
+    model = _drone(kf=9.0)
+    fit = Fit(model, parameters={
+        "t1.force_quad": Prior(sigma=4.0),
+        **{f"t{i}.force_quad": Tied("t1.force_quad") for i in (2, 3, 4)},
+    })
+    res = fit.solve(windows, weights={"imu.gyro": 1e6, "imu.accel": 1e4})
+    assert len(res.labels) == 3               # one vec3, not four
+    for i in range(1, 5):
+        assert np.allclose(res.values[f"drone.t{i}.force_quad"],
+                           [0, 0, 11.0], atol=0.05), i
+    s = res.summary()
+    assert "← drone.t1.force_quad" in s
+    res.apply()
+    t3 = next(p for p in model.crafts[0].parts if p.name == "t3")
+    assert abs(t3.force_quad[2] - 11.0) < 0.05
+
+
+def test_free_arm_length_with_matrix_ties():
+    """The user's quadcopter symmetry: ONE scalar arm length (a `Free`
+    decision variable) sources all four X-frame mount positions through
+    fixed direction matrices — the fit can only slide the motors in and
+    out together, so the recovered geometry stays a quadcopter."""
+    windows = _record_windows(_drone(arm=0.15), n_win=3, K=50, seed=9)
+    model = _drone(arm=0.12)                  # 3 cm wrong everywhere
+    signs = {"t1": (1, 1), "t2": (-1, 1), "t3": (-1, -1), "t4": (1, -1)}
+    fit = Fit(model, parameters={
+        "arm": Free(0.12, prior=Prior(sigma=0.05, lower=0.0)),
+        **{f"{nm}.transform": Tied("arm", scale=[[sx], [sy], [0.0]])
+           for nm, (sx, sy) in signs.items()},
+    })
+    res = fit.solve(windows, weights={"imu.gyro": 1e6, "imu.accel": 1e4})
+    assert res.converged
+    assert abs(res.values["arm"] - 0.15) < 0.002
+    assert np.allclose(res.values["drone.t2.transform"],
+                       [-0.15, 0.15, 0.0], atol=0.002)
+    res.apply()
+    t4 = next(p for p in model.crafts[0].parts if p.name == "t4")
+    assert np.allclose(t4.transform, (0.15, -0.15, 0.0), atol=0.002)
+
+
+def test_mirror_tie_elementwise_scale():
+    """A per-component scale is a mirror map: t2's mount is t1's with the
+    x sign flipped, so fitting t1's position moves both symmetrically."""
+    windows = _record_windows(_drone(arm=0.12), n_win=3, K=50, seed=2)
+    model = _drone()
+    for nm in ("t1", "t2"):
+        p = next(q for q in model.crafts[0].parts if q.name == nm)
+        p.transform = (0.15 if nm == "t1" else -0.15, 0.12, 0.0)
+    fit = Fit(model, parameters={
+        "t1.transform": Prior(sigma=0.05),
+        "t2.transform": Tied("t1.transform", scale=(-1, 1, 1)),
+    })
+    res = fit.solve(windows, weights={"imu.gyro": 1e6, "imu.accel": 1e4})
+    assert np.allclose(res.values["drone.t1.transform"],
+                       [0.12, 0.12, 0.0], atol=0.003)
+    assert np.allclose(res.values["drone.t2.transform"],
+                       [-0.12, 0.12, 0.0], atol=0.003)
+
+
+def test_bounds_clamp_fitted_value():
+    """Prior(upper=) is a hard wall: truth kf=11 but the gain is capped
+    at 10 — the solve converges ON the bound instead of crossing it."""
+    windows = _record_windows(_drone(kf=11.0), n_win=2, K=40, seed=11)
+    model = _drone(kf=9.0)
+    fit = Fit(model, parameters={
+        "t1.force_quad": Prior(sigma=4.0, lower=-1.0,
+                               upper=(1.0, 1.0, 10.0)),
+        **{f"t{i}.force_quad": Tied("t1.force_quad") for i in (2, 3, 4)},
+    })
+    res = fit.solve(windows, weights={"imu.gyro": 1e6, "imu.accel": 1e4})
+    kf = res.values["drone.t1.force_quad"][2]
+    assert kf <= 10.0 + 1e-6
+    assert kf > 9.9                           # pushed onto the wall
+
+
+def test_tie_and_bound_validation():
+    """Config errors raise at construction, before any solve: bad tie
+    maps, chained ties, unknown sources, and self-violating bounds."""
+    with pytest.raises(ValueError, match="matrix scale"):
+        Fit(_drone(), parameters={
+            "arm": Free(0.1),
+            "t1.transform": Tied("arm", scale=[[1.0], [1.0]])})
+    with pytest.raises(ValueError, match="dim 1 != target dim 3"):
+        Fit(_drone(), parameters={
+            "body.mass": Prior(sigma=0.1),
+            "t1.transform": Tied("body.mass")})
+    with pytest.raises(ValueError, match="itself tied"):
+        Fit(_drone(), parameters={
+            "t1.force_quad": Prior(sigma=1.0),
+            "t2.force_quad": Tied("t1.force_quad"),
+            "t3.force_quad": Tied("t2.force_quad")})
+    with pytest.raises(KeyError, match="unknown source"):
+        Fit(_drone(), parameters={
+            "t1.force_quad": Prior(sigma=1.0),
+            "t2.force_quad": Tied("bogus.param")})
+    with pytest.raises(ValueError, match="violates its own bounds"):
+        Fit(_drone(), parameters={"body.mass": Prior(sigma=0.1, lower=2.0)})
+    with pytest.raises(ValueError, match="lower < upper"):
+        Fit(_drone(), parameters={
+            "body.mass": Prior(sigma=0.1, lower=1.0, upper=0.5)})
+    with pytest.raises(ValueError, match="fit nothing"):
+        Fit(_drone(), parameters={"arm": Free(0.1)})
+
+
+def test_log_prior_with_bounds():
+    """Ambient bounds compose with the log reparam: mass is fit in
+    log-space but bounded in kg, and the recovered value respects both."""
+    windows = _record_windows(_drone(mass=1.32, kf=11.0))
+    model = _drone(mass=1.5, kf=9.0)
+    fit = Fit(model, parameters={
+        "body.mass": Prior(sigma=0.2, log=True, lower=0.5, upper=3.0),
+        **{f"t{i}.force_quad": Prior(sigma=4.0) for i in range(1, 5)},
+    })
+    res = fit.solve(windows, weights={"imu.gyro": 1e6, "imu.accel": 1e4})
+    assert abs(res.values["drone.body.mass"] - 1.32) < 0.01
 
 
 def test_fit_recovers_moi_with_vector_log_prior():

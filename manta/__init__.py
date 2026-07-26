@@ -63,7 +63,8 @@ from .ir.state_spec import ALL, POSE, TWIST, SlotSet
 from .control import LQR, LQRSolution, PID
 from .recurrence import RecurrenceBlock
 from .codegen import NoiseDriver, TargetCpp, TargetJax, TargetNumpy, TargetWasm
-from .fit import Fit, FitResult, NoiseFit, NoiseFitResult, Prior, Window
+from .fit import (Fit, FitResult, Free, NoiseFit, NoiseFitResult, Prior,
+                  Tied, Window)
 from .rates import CommandLatch, RateGate
 
 __all__ = [
@@ -71,7 +72,8 @@ __all__ = [
     "LQR", "LQRSolution", "PID",
     "Madgwick", "Mahony", "IMUIntegrator", "RecurrenceBlock",
     "TargetNumpy", "TargetCpp", "TargetWasm", "TargetJax", "NoiseDriver",
-    "Fit", "FitResult", "NoiseFit", "NoiseFitResult", "Prior", "Window",
+    "Fit", "FitResult", "Free", "NoiseFit", "NoiseFitResult", "Prior",
+    "Tied", "Window",
     "RateGate", "CommandLatch",
     "SlotSet", "POSE", "TWIST", "ALL",
 ]

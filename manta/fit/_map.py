@@ -23,19 +23,33 @@ Gauss-Newton posterior `(JᵀJ + Σ₀⁻¹)⁻¹` says which parameters the dat
 actually informed: a posterior σ ≈ prior σ means that number came from
 your prior, not from the flight.
 
+Structure is enforced, not hoped for: `Tied` makes one promoted
+parameter a fixed affine function of another (identical actuators,
+mirrored mounts), `Free` introduces an auxiliary decision variable that
+only exists to source ties (a shared arm length), and `Prior(lower=,
+upper=)` puts hard box bounds around any decision variable. The fit
+then explores only configurations that are still the declared vehicle —
+a quadcopter stays a quadcopter — and every window that excites any
+tied copy informs the one shared source.
+
 Usage::
 
-    from manta.fit import Fit, Prior, Window
+    from manta.fit import Fit, Free, Prior, Tied, Window
 
     fit = Fit(world, parameters={
-        "t_fl.force_quad": Prior(sigma=3.0),
+        "t_fl.force_quad": Prior(sigma=3.0, upper=(0, 0, 25.0)),
+        "t_fr.force_quad": Tied("t_fl.force_quad"),       # identical
+        "arm":             Free(0.12, prior=Prior(sigma=0.02, lower=0.0)),
+        "t_fl.transform":  Tied("arm", scale=[[1], [1], [0]]),
+        "t_fr.transform":  Tied("arm", scale=[[1], [-1], [0]]),
         "body.mass":       Prior(sigma=0.05, log=True),   # ±5%
         "imu.transform":   Prior(sigma=0.02),             # ±2 cm
     })
     result = fit.solve(windows)
     print(result.summary())
-    result.apply()          # write fitted values back onto the parts;
-                            # a fresh Sim(world) bakes them in.
+    result.apply()          # write fitted values (tied ones derived)
+                            # back onto the parts; a fresh Sim(world)
+                            # bakes them in.
 
 Initial states: each window needs `x0`. For synthetic-recoverability
 runs, capture `sim.state` from the truth sim. For real logs without
@@ -58,9 +72,9 @@ from ..ir.module import PortRef, Role
 from ..ir._names import resolve_suffix
 from ..sim import Sim
 from ._common import (
-    Prior, Window, _FitBlock, convergence_line, format_table, laplace_sigma,
-    pack_u_trace, pack_x0, prior_penalty, resolve_traces, solve_blocks_nlp,
-    solver_converged,
+    Free, Prior, Tied, Window, _FitBlock, convergence_line, decision_bounds,
+    format_table, laplace_sigma, pack_u_trace, pack_x0, prior_penalty,
+    resolve_traces, solve_blocks_nlp, solver_converged,
 )
 
 
@@ -112,6 +126,9 @@ class _Block(_FitBlock):
                     f"or length-{dim} sequence, got {prior.sigma!r}.")
             self.sigma = sig
 
+        self.lower, self.upper = decision_bounds(
+            prior, dim, declared, log=self.log, full=full, who="Fit")
+
     def p_of_v(self, v_blk: ca.MX) -> ca.MX:
         """Decision slice → parameter values (ambient)."""
         return ca.exp(v_blk) if self.log else v_blk
@@ -125,6 +142,54 @@ class _Block(_FitBlock):
         return [f"{self.full}[{i}]" for i in range(self.dim)]
 
 
+def _tie_map(t: Tied, tgt_dim: int, src_dim: int, *,
+             target: str) -> tuple[np.ndarray, np.ndarray]:
+    """A `Tied` spec as an explicit affine map `(A, b)`:
+    `p_target = A @ p_source + b`, with every shorthand normalized."""
+    if t.scale is None:
+        if src_dim != tgt_dim:
+            raise ValueError(
+                f"Fit: Tied {target!r}: no scale given, but source "
+                f"{t.source!r} has dim {src_dim} != target dim {tgt_dim}.")
+        A = np.eye(tgt_dim)
+    else:
+        a = np.asarray(t.scale, dtype=float)
+        if a.ndim == 0:
+            if src_dim != tgt_dim:
+                raise ValueError(
+                    f"Fit: Tied {target!r}: scalar scale needs source dim "
+                    f"== target dim, got {src_dim} != {tgt_dim}.")
+            A = float(a) * np.eye(tgt_dim)
+        elif a.ndim == 1:
+            if not (src_dim == tgt_dim == a.size):
+                raise ValueError(
+                    f"Fit: Tied {target!r}: per-component scale must have "
+                    f"length {tgt_dim} == source dim {src_dim}, got "
+                    f"{a.size}.")
+            A = np.diag(a)
+        elif a.ndim == 2:
+            if a.shape != (tgt_dim, src_dim):
+                raise ValueError(
+                    f"Fit: Tied {target!r}: matrix scale must be "
+                    f"({tgt_dim}, {src_dim}), got {a.shape}.")
+            A = a
+        else:
+            raise ValueError(
+                f"Fit: Tied {target!r}: scale must be a scalar, vector, "
+                f"or matrix, got ndim={a.ndim}.")
+    if t.offset is None:
+        b = np.zeros(tgt_dim)
+    else:
+        b = np.atleast_1d(np.asarray(t.offset, dtype=float)).ravel()
+        if b.size == 1:
+            b = np.full(tgt_dim, b[0])
+        if b.size != tgt_dim:
+            raise ValueError(
+                f"Fit: Tied {target!r}: offset must be a scalar or "
+                f"length-{tgt_dim} sequence, got {t.offset!r}.")
+    return A, b
+
+
 # ---------------------------------------------------------------------------
 # FitResult
 # ---------------------------------------------------------------------------
@@ -133,9 +198,13 @@ class FitResult:
     """Fitted values + Gauss-Newton posterior diagnostics.
 
     Attributes:
-        values          — `{full param name: fitted value}` (float for
-                          scalars, ndarray for vectors).
-        labels          — one entry per fitted scalar component.
+        values          — `{name: fitted value}` (float for scalars,
+                          ndarray for vectors) — every promoted
+                          parameter (tied ones derived through their
+                          affine map) plus every `Free` variable.
+        labels          — one entry per fitted scalar component of the
+                          DECISION vector (tied parameters don't appear;
+                          their source does).
         log_scale       — per-component bool; True ⇒ the sigmas below
                           are RELATIVE (log-space).
         prior_sigma     — per-component prior σ (inf = no prior).
@@ -152,22 +221,36 @@ class FitResult:
                           `RuntimeWarning` was emitted), not an optimum.
     """
 
-    def __init__(self, blocks, v_opt, JtJ, objective, stats, world) -> None:
+    def __init__(self, blocks, fields, tie_sources, v_opt, p_opt, JtJ,
+                 objective, stats, world) -> None:
         self._blocks = blocks
+        self._fields = fields              # [(full, dim)] in port order
+        self._tie_sources = tie_sources    # {tied full: source name}
         self._world = world
         self.v = np.asarray(v_opt, dtype=float).ravel()
+        self._p = np.asarray(p_opt, dtype=float).ravel()
         self.JtJ = JtJ
         self.objective = float(objective)
         self.stats = stats
         self.converged = solver_converged(stats, who="Fit")
 
+        # Every promoted parameter's ambient value (tied ones included),
+        # sliced off the assembled parameter vector…
         self.values: dict[str, object] = {}
+        off = 0
+        for full, dim in fields:
+            theta = self._p[off:off + dim]
+            self.values[full] = float(theta[0]) if dim == 1 else theta
+            off += dim
+        # …plus the Free variables (decision-only, not in the port).
+        promoted = {full for full, _ in fields}
         self.labels: list[str] = []
         self.log_scale: list[bool] = []
         prior_sig = []
         for b in blocks:
             theta = b.theta_of_v(self.v[b.offset:b.offset + b.dim])
-            self.values[b.full] = float(theta[0]) if b.dim == 1 else theta
+            if b.full not in promoted:
+                self.values[b.full] = float(theta[0]) if b.dim == 1 else theta
             self.labels += b.labels()
             self.log_scale += [b.log] * b.dim
             prior_sig.append(b.sigma)
@@ -194,27 +277,29 @@ class FitResult:
         return out
 
     def apply(self) -> None:
-        """Write the fitted values back onto the world's Part instances.
-        A transform built afterwards (`Sim(world)`, `EKF(world)`, a C++
+        """Write the fitted values — tied parameters derived through
+        their affine maps — back onto the world's Part instances. A
+        transform built afterwards (`Sim(world)`, `EKF(world)`, a C++
         deploy) bakes them in as constants."""
         if not self.converged:
             warnings.warn(
                 "FitResult.apply: the solve did NOT converge — writing the "
                 "failed solve's final iterate onto the parts.",
                 RuntimeWarning, stacklevel=2)
-        for b in self._blocks:
-            craft_name, part_name, pname = b.full.split(".", 2)
+        for full, dim in self._fields:
+            craft_name, part_name, pname = full.split(".", 2)
             craft = next(c for c in self._world.crafts
                          if c.name == craft_name)
             part = next(p for p in craft.parts if p.name == part_name)
-            theta = b.theta_of_v(self.v[b.offset:b.offset + b.dim])
+            theta = np.atleast_1d(self.values[full])
             setattr(part, pname,
-                    float(theta[0]) if b.dim == 1 else tuple(theta))
+                    float(theta[0]) if dim == 1 else tuple(theta))
 
     def summary(self) -> str:
         """Per-component table: fitted value, prior σ vs posterior σ.
         `post/prior ≈ 1` flags a component the data did not inform —
-        its fitted value is your prior talking, not the flight."""
+        its fitted value is your prior talking, not the flight. Tied
+        parameters follow, showing their derived values and source."""
         rows = [("parameter", "fitted", "prior σ", "post σ", "post/prior")]
         i = 0
         for b in self._blocks:
@@ -231,6 +316,14 @@ class FitResult:
                               else f"{post:.3g}{unit}"),
                              ratio))
                 i += 1
+        for full, dim in self._fields:
+            src = self._tie_sources.get(full)
+            if src is None:
+                continue
+            theta = np.atleast_1d(self.values[full])
+            for j in range(dim):
+                lbl = full if dim == 1 else f"{full}[{j}]"
+                rows.append((lbl, f"{theta[j]:.6g}", f"← {src}", "", ""))
         return (convergence_line(self.converged, self.stats) + "\n"
                 + format_table(rows))
 
@@ -250,32 +343,112 @@ class Fit:
     Args:
         world      — the model. Finalized by the internal `Sim`; the
                      fit never mutates it (until `result.apply()`).
-        parameters — `{param name/suffix: Prior | None}`. Names resolve
-                     against the model's promotable Parameters
-                     (`<craft>.<part>.<param>`); `None` = flat prior
-                     (only safe for parameters the data fully observes).
+        parameters — `{name: Prior | Tied | Free | None}`. `Prior`/`None`
+                     keys resolve against the model's promotable
+                     Parameters (`<craft>.<part>.<param>`); `None` =
+                     flat prior (only safe for parameters the data
+                     fully observes). A `Tied` key is promoted but
+                     derives from another entry's decision variable; a
+                     `Free` key is a fresh auxiliary name (not a model
+                     parameter) that exists to source ties.
     """
 
     def __init__(self, world, parameters: dict) -> None:
+        for k, spec in parameters.items():
+            if spec is not None and not isinstance(spec, (Prior, Tied, Free)):
+                raise TypeError(
+                    f"Fit: parameters[{k!r}] must be Prior, Tied, Free, or "
+                    f"None, got {type(spec).__name__}.")
+        free_specs = {k: v for k, v in parameters.items()
+                      if isinstance(v, Free)}
+        promoted_keys = [k for k in parameters if k not in free_specs]
+        if not promoted_keys:
+            raise ValueError(
+                "Fit: no promotable parameters named — Free variables "
+                "alone fit nothing.")
+
         self.world = world
-        self.sim = Sim(world, parameters=list(parameters))
+        self.sim = Sim(world, parameters=promoted_keys)
         self.module = self.sim.module()
         self._spec = self.module.spec
         port = self.module.port("params")
         fulls = [f.name for f in port.fields]
         by_full = {resolve_suffix(k, fulls, label="parameter", who="Fit"): v
-                   for k, v in parameters.items()}
+                   for k, v in parameters.items() if k not in free_specs}
+        self._fields = [(f.name, f.dim) for f in port.fields]
 
+        # Decision blocks: one per non-tied promoted parameter (in port
+        # order == kernel `p` layout), then one per Free variable.
         self._blocks: list[_Block] = []
+        self._block_by_name: dict[str, _Block] = {}
         off = 0
-        for f in port.fields:           # port order == kernel `p` layout
-            self._blocks.append(_Block(
-                f.name, f.dim, off,
-                np.asarray(f.default, dtype=float).ravel(),
-                by_full.get(f.name)))
+        for f in port.fields:
+            if isinstance(by_full.get(f.name), Tied):
+                continue
+            blk = _Block(f.name, f.dim, off,
+                         np.asarray(f.default, dtype=float).ravel(),
+                         by_full.get(f.name))
+            self._blocks.append(blk)
+            self._block_by_name[f.name] = blk
             off += f.dim
+        for name, fr in free_specs.items():
+            if name in {f.name for f in port.fields}:
+                raise ValueError(
+                    f"Fit: Free name {name!r} collides with a promoted "
+                    f"parameter of the same name.")
+            init = np.atleast_1d(np.asarray(fr.init, dtype=float)).ravel()
+            blk = _Block(name, init.size, off, init, fr.prior)
+            self._blocks.append(blk)
+            self._block_by_name[name] = blk
+            off += init.size
         self.n_v = off
+
+        # Resolve ties: target field → (source block, A, b), ambient.
+        sources = list(self._block_by_name)
+        self._ties: dict[str, tuple] = {}
+        for f in port.fields:
+            spec = by_full.get(f.name)
+            if not isinstance(spec, Tied):
+                continue
+            try:
+                src_full = resolve_suffix(spec.source, sources,
+                                          label="tie source", who="Fit")
+            except KeyError:
+                tied_names = [n for n, s in by_full.items()
+                              if isinstance(s, Tied)]
+                try:
+                    resolve_suffix(spec.source, tied_names,
+                                   label="tie source", who="Fit")
+                except KeyError:
+                    raise KeyError(
+                        f"Fit: Tied {f.name!r}: unknown source "
+                        f"{spec.source!r}. Available: {sorted(sources)}")
+                raise ValueError(
+                    f"Fit: Tied {f.name!r}: source {spec.source!r} is "
+                    f"itself tied — chains are not supported; tie every "
+                    f"copy to the same free source.")
+            src = self._block_by_name[src_full]
+            A, b = _tie_map(spec, f.dim, src.dim, target=f.name)
+            self._ties[f.name] = (src, A, b)
         self._stepk_cache: dict[int, ca.Function] = {}
+
+    # ------------------------------------------------------------------
+
+    def _p_of_v(self, v: ca.MX) -> ca.MX:
+        """Assemble the kernel's ambient parameter vector (port order)
+        from the decision vector: own blocks map through their reparam,
+        tied fields through their source's ambient value."""
+        def ambient(blk):
+            return blk.p_of_v(v[blk.offset:blk.offset + blk.dim])
+        cols = []
+        for name, _dim in self._fields:
+            tie = self._ties.get(name)
+            if tie is None:
+                cols.append(ambient(self._block_by_name[name]))
+            else:
+                src, A, b = tie
+                cols.append(ca.DM(A) @ ambient(src) + ca.DM(b))
+        return ca.vertcat(*cols)
 
     # ------------------------------------------------------------------
 
@@ -296,8 +469,7 @@ class Fit:
             raise ValueError("Fit.solve: needs at least one Window.")
 
         v = ca.MX.sym("v", self.n_v, 1)
-        p = ca.vertcat(*[b.p_of_v(v[b.offset:b.offset + b.dim])
-                         for b in self._blocks])
+        p = self._p_of_v(v)
 
         meas_names = [pt.name for pt in
                       self.module.ports_by_role(Role.MEASUREMENT)]
@@ -325,8 +497,12 @@ class Fit:
         J = np.asarray(ca.DM(J_fn(v_opt)))
         JtJ = J.T @ J
 
-        return FitResult(self._blocks, v_opt, JtJ, objective,
-                         stats, self.world)
+        p_fn = ca.Function("p", [v], [p])
+        p_opt = np.asarray(ca.DM(p_fn(v_opt))).ravel()
+        tie_sources = {full: src.full
+                       for full, (src, _A, _b) in self._ties.items()}
+        return FitResult(self._blocks, self._fields, tie_sources, v_opt,
+                         p_opt, JtJ, objective, stats, self.world)
 
     # ------------------------------------------------------------------
 

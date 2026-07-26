@@ -219,7 +219,15 @@ sensor readings, MAP-regularized by per-parameter Gaussian priors:
 ```python
 fit = Fit(world, parameters={
     "body.mass":     Prior(sigma=0.05, log=True),   # weighed: ±5%
-    "t1.force_quad": Prior(sigma=4.0),              # datasheet: loose
+    "t1.force_quad": Prior(sigma=4.0, upper=(0, 0, 25.0)),  # motor rating
+    "t2.force_quad": Tied("t1.force_quad"),         # identical motors
+    "t3.force_quad": Tied("t1.force_quad"),
+    "t4.force_quad": Tied("t1.force_quad"),
+    "arm":           Free(0.12, prior=Prior(sigma=0.02, lower=0.0)),
+    "t1.transform":  Tied("arm", scale=[[1], [1], [0]]),    # one arm
+    "t2.transform":  Tied("arm", scale=[[-1], [1], [0]]),   # length, four
+    "t3.transform":  Tied("arm", scale=[[-1], [-1], [0]]),  # mounts
+    "t4.transform":  Tied("arm", scale=[[1], [-1], [0]]),
     "imu.transform": Prior(sigma=0.10),             # lever arm: ±10 cm
 })
 result = fit.solve(windows, weights={"imu.gyro": 1/σg**2,
@@ -227,6 +235,13 @@ result = fit.solve(windows, weights={"imu.gyro": 1/σg**2,
 print(result.summary())     # fitted values + prior σ vs posterior σ
 result.apply()              # bake fitted values back into the model
 ```
+
+Structure is enforced, not hoped for: `Tied` pins symmetric parameters
+to one decision variable (an affine map covers mirrored mounts and
+shared scalars like the arm length above, via `Free`), and
+`Prior(lower=, upper=)` walls off physically absurd optima — so the
+fitted model stays the declared vehicle and generalizes across a fleet
+instead of memorizing one airframe's data.
 
 Gradients are exact (the oracle `step` kernel folded over each window
 via `mapaccum`), IPOPT solves the NLP, and the Gauss-Newton posterior

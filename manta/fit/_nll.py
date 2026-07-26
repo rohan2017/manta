@@ -52,9 +52,9 @@ from ..ir.state_spec import flatten_nested
 from ..ir._names import resolve_suffix
 from ..linearization import LinearizedSystem
 from ._common import (
-    Prior, Window, _FitBlock, convergence_line, format_table, laplace_sigma,
-    pack_u_trace, pack_x0, prior_penalty, resolve_traces, solve_blocks_nlp,
-    solver_converged,
+    Prior, Window, _FitBlock, convergence_line, decision_bounds,
+    format_table, laplace_sigma, pack_u_trace, pack_x0, prior_penalty,
+    resolve_traces, solve_blocks_nlp, solver_converged,
 )
 
 
@@ -97,6 +97,10 @@ class _Channel(_FitBlock):
             raise ValueError(
                 f"NoiseFit: Prior.sigma for {self.alias!r} must be "
                 f"positive (relative, log-space).")
+        # Prior.lower/upper bound σ itself (ambient); log-space decision.
+        self.lower, self.upper = decision_bounds(
+            prior, 1, np.array([start]), log=True, full=self.alias,
+            who="NoiseFit")
 
 
 class NoiseFitResult:
