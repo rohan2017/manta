@@ -432,3 +432,32 @@ console.log(JSON.stringify(descriptor.inputs.map((f) => out[f.name])));
 """
     got = _emcc_node(tmp_path, res, "dronelqr", harness)
     np.testing.assert_allclose(got, u_ref, atol=1e-9)
+
+
+def test_wasm_regulator_reprogram_roundtrip(tmp_path: Path):
+    """A re-solved operating point crosses the wire as plain JSON and the
+    JS `Regulator` flies it identically to the numpy one — the check that
+    `K` survives the row-major/column-major boundary intact (it is
+    rectangular, so a transpose would not go unnoticed)."""
+    lqr = _build_lqr()
+    sol = lqr.resolve_at(x_ref={"drone": {"position": (3.0, 1.0, 12.0)}},
+                         Q=np.eye(lqr.K.shape[1]) * 250.0)
+    reg = TargetNumpy(lqr)
+    reg.reprogram(sol)
+    xt = sol.x_ref.copy()
+    xt[0] += 1.0; xt[1] += 2.0; xt[7] += 0.3
+    u_ref = reg.u(xt)
+
+    res = TargetWasm(_build_lqr(), tmp_path, class_name="DroneLqr")
+    payload = json.dumps({"K": sol.K.tolist(),            # array of ROWS
+                          "u_ff": sol.u_ff.tolist(),
+                          "x_ref": sol.x_ref.tolist()})
+    harness = f"""
+import {{ load, descriptor }} from "./dronelqr_rt.mjs";
+const reg = (await load()).regulator();
+reg.reprogram({payload});
+const out = reg.control(Float64Array.from({json.dumps(xt.tolist())}));
+console.log(JSON.stringify(descriptor.inputs.map((f) => out[f.name])));
+"""
+    got = _emcc_node(tmp_path, res, "dronelqr", harness)
+    np.testing.assert_allclose(got, u_ref, atol=1e-9)

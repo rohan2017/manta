@@ -10,7 +10,7 @@ runtime via `Target*`.
     `recurrence` block (no world needed), lowered by the same backends.
 """
 
-from .lqr import LQR
+from .lqr import LQR, LQRSolution
 from .pid import PID
 
-__all__ = ["LQR", "PID"]
+__all__ = ["LQR", "LQRSolution", "PID"]

@@ -292,33 +292,80 @@ def _param_name(a, ctx) -> str:
     return _port_abi(ctx.port(a.name), ctx).name
 
 
-def _ref_overload(ep, ctx) -> str | None:
-    """An inline convenience overload omitting trailing secondary
-    STATE-role args (an LQR's movable `x_ref`): they delegate to
-    `State{}`, whose member defaults ARE the Module's built operating
-    point. Inline body, not a default argument — a default argument may
-    not use a nested class's member initializers before the enclosing
-    class is complete."""
+def _default_expr(port, ctx) -> str | None:
+    """The C++ expression for a port's built-in default, or None if it has
+    none. A secondary STATE port delegates to `State{}`, whose member
+    defaults ARE the Module's built operating point; a MATRIX port with an
+    `init` (an LQR's gain / feed-forward) delegates to the emitted
+    `<name>_default()` accessor."""
+    if port.role is Role.STATE and port is not ctx.x_port:
+        return "State{}"
+    if port.role is Role.MATRIX and port.init is not None:
+        return f"{_ident(port.name)}_default()"
+    return None
+
+
+def _defaulted_matrices(ctx) -> list:
+    """MATRIX ports carrying a built-in default, in declaration order."""
+    return [p for p in ctx.m.ports_by_role(Role.MATRIX) if p.init is not None]
+
+
+def _matrix_default_decls(ctx) -> list[str]:
+    """Header declarations for each defaulted MATRIX port's accessor."""
+    return [f"    static const {_mat_type(*p.shape)}& "
+            f"{_ident(p.name)}_default();" for p in _defaulted_matrices(ctx)]
+
+
+def _matrix_default_defs(ctx, q: str) -> list[str]:
+    """Source definitions for the defaulted-MATRIX accessors — a function
+    with a static local, so the constant lives in the object file and the
+    header stays free of data."""
+    L: list[str] = []
+    for p in _defaulted_matrices(ctx):
+        tp = _mat_type(*p.shape)
+        M = np.asarray(p.init, dtype=float).reshape(p.shape)
+        # Eigen's comma initializer is ROW-major; `.data()` (what the
+        # kernel call hands over) is column-major. Feeding rows here and
+        # letting Eigen store it is what keeps the two consistent.
+        body = ", ".join(repr(float(v)) for v in M.reshape(-1))
+        name = _ident(p.name)
+        L += [f"const {tp}& {q}::{name}_default() {{",
+              f"    static const {tp} v = ({tp}() << {body}).finished();",
+              "    return v;", "}", ""]
+    return L
+
+
+def _ref_overloads(ep, ctx) -> list[str]:
+    """Inline convenience overloads omitting trailing args that carry a
+    built-in default — an LQR's movable `x_ref`, gain and feed-forward.
+
+    One per drop depth, longest first, so every prefix stays callable:
+    `control(x, x_ref, K)` retargets with the built gain, `control(x)`
+    flies the built operating point outright. Inline bodies, not default
+    arguments: a default argument may not use a nested class's member
+    initializers before the enclosing class is complete."""
     args = list(ep.args)
-    dropped = 0
+    defaults: list[str] = []
     while args and isinstance(args[-1], PortRef):
-        port = ctx.port(args[-1].name)
-        if port.role is Role.STATE and port is not ctx.x_port:
-            args.pop()
-            dropped += 1
-        else:
+        expr = _default_expr(ctx.port(args[-1].name), ctx)
+        if expr is None:
             break
-    if not dropped:
-        return None
-    sub = replace(ep, args=tuple(args))
-    params = ", ".join(_params(sub, ctx, decl=True))
-    names = (["x"] if (not ctx.held
-                       and any(isinstance(a, StateRef) for a in args))
-             else [])
-    names += [_param_name(a, ctx) for a in args if isinstance(a, PortRef)]
-    call = ", ".join(names + ["State{}"] * dropped)
-    return (f"{_ret_type(ep, ctx)} {ep.method}({params}){_const(ep, ctx)} "
-            f"{{ return {ep.method}({call}); }}")
+        args.pop()
+        defaults.insert(0, expr)
+
+    out: list[str] = []
+    for k in range(1, len(defaults) + 1):
+        kept = list(ep.args)[:len(ep.args) - k]
+        sub = replace(ep, args=tuple(kept))
+        params = ", ".join(_params(sub, ctx, decl=True))
+        names = (["x"] if (not ctx.held
+                           and any(isinstance(a, StateRef) for a in kept))
+                 else [])
+        names += [_param_name(a, ctx) for a in kept if isinstance(a, PortRef)]
+        call = ", ".join(names + defaults[len(defaults) - k:])
+        out.append(f"{_ret_type(ep, ctx)} {ep.method}({params})"
+                   f"{_const(ep, ctx)} {{ return {ep.method}({call}); }}")
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -533,10 +580,12 @@ def emit_module_cpp(module, out_dir, *, class_name: str,
         H.append("")
     elif ctx.spec is not None:
         H += ["    State initial_state() const { return State{}; }", ""]
+    H += _matrix_default_decls(ctx)
+    if _defaulted_matrices(ctx):
+        H.append("")
     for ep in entries:
         H.append(f"    {_method_decl(ep, ctx)};")
-        ov = _ref_overload(ep, ctx)
-        if ov is not None:
+        for ov in _ref_overloads(ep, ctx):
             H.append(f"    {ov}")
     H += ["};", "", f"}}  // namespace {namespace}"]
     (out_dir / f"{base}.hpp").write_text("\n".join(H) + "\n")
@@ -551,6 +600,7 @@ def emit_module_cpp(module, out_dir, *, class_name: str,
         C += S.unpack_state_lines(ctx.spec, q) + [""]
     if ctx.u_port is not None:
         C += _pack_fields_fn("Inputs", ctx.u_port, q, "pack_inputs") + [""]
+    C += _matrix_default_defs(ctx, q)
     if ctx.held:
         init = ["x = State{};"]
         for mf in ctx.mats:

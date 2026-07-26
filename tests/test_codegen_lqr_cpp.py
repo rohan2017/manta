@@ -59,9 +59,34 @@ int main() {
     auto u3 = lqr.control(x, ref);
     std::printf("u3 %.17g %.17g %.17g\n",
                 u3.c_tx_throttle, u3.c_ty_throttle, u3.c_tz_throttle);
+
+    // Reprogram: a gain re-solved in Python, handed over as data.
+    Eigen::Matrix<double, 3, 6> K;
+    K << __K__;
+    Eigen::Matrix<double, 3, 1> uff;
+    uff << __UFF__;
+    auto u4 = lqr.control(x, ref, K, uff);
+    std::printf("u4 %.17g %.17g %.17g\n",
+                u4.c_tx_throttle, u4.c_ty_throttle, u4.c_tz_throttle);
+
+    // The emitted defaults ARE the built solve, so spelling them out
+    // must reproduce the plain retarget above exactly.
+    auto u5 = lqr.control(x, ref, manta_gen::FfLqr::K_default(),
+                          manta_gen::FfLqr::u_ff_default());
+    std::printf("u5 %.17g %.17g %.17g\n",
+                u5.c_tx_throttle, u5.c_ty_throttle, u5.c_tz_throttle);
     return 0;
 }
 """
+
+
+def _harness_src(sol) -> str:
+    """The harness with a re-solved gain baked in as Eigen literals (the
+    comma initializer is ROW-major, so feed C-order)."""
+    def rows(a):
+        return ", ".join(repr(float(v)) for v in np.asarray(a).reshape(-1))
+    return (HARNESS_SRC.replace("__K__", rows(sol.K))
+            .replace("__UFF__", rows(sol.u_ff)))
 
 
 def test_lqr_python_cpp_roundtrip(tmp_path: Path):
@@ -87,8 +112,10 @@ def test_lqr_python_cpp_roundtrip(tmp_path: Path):
         p = subprocess.run(cmd, capture_output=True, text=True)
         assert p.returncode == 0, p.stderr
 
+    sol = lqr.resolve_at(x_ref={"c": {"position": (1.0, -1.0, 12.0)}},
+                         Q=np.eye(6) * 500.0)
     h_src = tmp_path / "harness_main.cpp"
-    h_src.write_text(HARNESS_SRC)
+    h_src.write_text(_harness_src(sol))
     binary = tmp_path / "harness"
     p = subprocess.run(
         [cxx, "-std=c++17", "-O2", f"-I{eigen_inc}", f"-I{tmp_path}",
@@ -114,6 +141,17 @@ def test_lqr_python_cpp_roundtrip(tmp_path: Path):
     np.testing.assert_allclose(cpp["u3"], [u3_np[k] for k in order], atol=1e-9)
     # Sanity: at the setpoint the command is the trim (0, 0, M·G).
     np.testing.assert_allclose(cpp["u2"], [0.0, 0.0, M * G], atol=1e-6)
+
+    # A gain re-solved in Python flies identically on the C++ side — the
+    # check that K survives the row-major/column-major boundary (it is
+    # rectangular, so a transpose would not go unnoticed).
+    lqr_np.reprogram(sol)
+    u4_np = lqr_np.control({"c": {"position": (3.0, -2.0, 7.0),
+                                  "velocity": (0.1, 0.2, -0.3)}})
+    np.testing.assert_allclose(cpp["u4"], [u4_np[k] for k in order], atol=1e-9)
+    assert not np.allclose(cpp["u4"], cpp["u3"])      # a different gain
+    # Spelling out the emitted defaults reproduces the plain retarget.
+    np.testing.assert_allclose(cpp["u5"], cpp["u3"], atol=1e-12)
 
 
 def test_target_cpp_lqr_emits_files(tmp_path: Path):

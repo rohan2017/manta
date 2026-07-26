@@ -11,7 +11,8 @@ and exposes two layers:
   * A typed convenience view per transform, each mirroring the matching numpy
     view over the same shims — `runtime.sim()` (`Sim`: held state, `step` /
     `reading`), `runtime.filter()` (`Filter`: held `x`/`P`, `predict` /
-    `update`), `runtime.regulator()` (`Regulator`: held reference, `control`).
+    `update`), `runtime.regulator()` (`Regulator`: held operating point,
+    `control` / `retarget` / `reprogram`).
 
 The JS contains no manta-specific logic — only the descriptor drives it — so
 this template is identical for every Module; only the embedded JSON differs.
@@ -283,10 +284,35 @@ export class Filter {
   }
 }
 
+/** Flatten a matrix given as an array of ROWS into the column-major order the
+ *  kernel buffer uses; a flat array of the right length passes through (it is
+ *  already column-major, as `descriptor.matrixPorts[].init` is). */
+function packMatrix(v, shape, name) {
+  const [rows, cols] = shape;
+  if (Array.isArray(v) && Array.isArray(v[0])) {
+    if (v.length !== rows || v[0].length !== cols)
+      throw new Error(
+        `${name}: expected ${rows}x${cols}, got ${v.length}x${v[0].length}`);
+    const out = new Float64Array(rows * cols);
+    for (let c = 0; c < cols; c++)
+      for (let r = 0; r < rows; r++) out[c * rows + r] = v[r][c];
+    return out;
+  }
+  const flat = v instanceof Float64Array ? v.slice() : Float64Array.from(v);
+  if (flat.length !== rows * cols)
+    throw new Error(
+      `${name}: expected ${rows * cols} values, got ${flat.length}`);
+  return flat;
+}
+
 /** Mirrors the numpy `NumpyRegulator`: a stateless control law mapping a
- *  state estimate to commands, holding the reference operating point it
- *  regulates to. `retarget()` moves the reference (the gain K is NOT
- *  re-solved — exact wherever the dynamics are invariant along the move). */
+ *  state estimate to commands, holding the operating point it flies about —
+ *  the reference plus every MATRIX-role coefficient the law takes as data
+ *  (an LQR's gain `K` and feed-forward `u_ff`), each defaulting to the built
+ *  solve. `retarget()` moves the reference alone and does NOT re-solve the
+ *  gain (exact only where the dynamics are invariant along the move — a
+ *  translation, not a heading change); `reprogram()` installs a whole
+ *  re-solved operating point, e.g. one fetched from a retarget service. */
 export class Regulator {
   constructor(runtime) {
     this.rt = runtime;
@@ -300,11 +326,29 @@ export class Regulator {
     this._refName = Object.keys(this._refs)[0]; // conventionally "x_ref"
     this._xInit = (descriptor.stateRefs.find((r) => r.name === "x")
       || { init: [] }).init;
+    // Law coefficients supplied as data; defaults are the built solve.
+    this._coeffs = {};
+    this._shapes = {};
+    for (const m of descriptor.matrixPorts || [])
+      if (m.init) {
+        this._coeffs[m.name] = Float64Array.from(m.init);
+        this._shapes[m.name] = m.shape;
+      }
   }
 
   /** The live reference point (flat Float64Array), or null if not retargetable. */
   get xRef() {
     return this._refName ? this._refs[this._refName].slice() : null;
+  }
+
+  /** The live feedback gain, flat column-major, or null if the law has none. */
+  get gain() {
+    return this._coeffs.K ? this._coeffs.K.slice() : null;
+  }
+
+  /** The live feed-forward command, or null if the law has none. */
+  get uFf() {
+    return this._coeffs.u_ff ? this._coeffs.u_ff.slice() : null;
   }
 
   /** Move the reference the law regulates to (flat or `{slot: value}`, merged
@@ -313,6 +357,26 @@ export class Regulator {
     if (!this._refName)
       throw new Error("control law has no reference port — not retargetable");
     this._refs[this._refName] = packState(state, this._refs[this._refName]);
+  }
+
+  /** Install a re-solved operating point: gain, feed-forward and reference
+   *  together (a gain is only valid about the point it was solved at). Takes
+   *  a manta `LQRSolution` straight off the wire — `{K, u_ff, x_ref}`, with
+   *  `K` either an array of rows (what `K.tolist()` serializes to) or a flat
+   *  column-major array. camelCase keys (`uFf`, `xRef`) are accepted too. */
+  reprogram(solution) {
+    const K = solution.K;
+    const uFf = solution.u_ff !== undefined ? solution.u_ff : solution.uFf;
+    const xRef = solution.x_ref !== undefined ? solution.x_ref : solution.xRef;
+    if (K === undefined || uFf === undefined || xRef === undefined)
+      throw new Error(
+        "reprogram: solution needs K, u_ff and x_ref (a manta LQRSolution)");
+    for (const [name, v] of [["K", K], ["u_ff", uFf]]) {
+      if (!this._shapes[name])
+        throw new Error(`control law has no ${name} port — not reprogrammable`);
+      this._coeffs[name] = packMatrix(v, this._shapes[name], name);
+    }
+    this.retarget(xRef instanceof Float64Array ? xRef : Float64Array.from(xRef));
   }
 
   /** Map a state estimate (flat or `{slot: value}`, merged over the live
@@ -324,6 +388,8 @@ export class Regulator {
     for (const s of this._ctrl.in) {
       if (s.name === "x") args.x = x;
       else if (s.kind === "state") args[s.name] = this._refs[s.name];
+      else if (s.kind === "matrix" && this._coeffs[s.name])
+        args[s.name] = this._coeffs[s.name];
     }
     return unpackControl(this.rt.call("control", args).u);
   }

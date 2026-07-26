@@ -129,7 +129,10 @@ class Role(Enum):
                         point after it (an LQR's `x`, `x_ref`).
     * ``OUTPUT``      — a named readout bundle (a recurrence's outputs);
                         `fields` name the components.
-    * ``MATRIX``      — a plain matrix value (a covariance `Q`, a Jacobian).
+    * ``MATRIX``      — a plain matrix value (a covariance `Q`, a Jacobian,
+                        an LQR's gain `K`). With an `init` it is a
+                        coefficient the caller may replace but need not
+                        supply; without one the caller must always pass it.
     * ``PARAMETER``   — the tunable physical-parameter vector `p`; `fields`
                         name each promoted Parameter (with its declared
                         value as default), so a caller that doesn't fit
@@ -176,7 +179,9 @@ class Port:
     shape: tuple[int, ...] = ()
     fields: tuple[PortField, ...] = ()
     manifold: Any = None       # StateSpec, for role == STATE
-    init: Any = None           # reference vector, for role == STATE
+    init: Any = None           # the port's default value: a reference
+                               # vector (STATE) or a coefficient an
+                               # unsupplied argument falls back to (MATRIX)
     rate: float | None = None  # MEASUREMENT: declared sample rate (Hz)
 
     @property

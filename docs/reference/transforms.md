@@ -20,6 +20,14 @@ symbolically over the shared linearized system, and emits a typed
 
 ::: manta.LQR
 
+### LQRSolution
+
+One Riccati solve as plain data — what `LQR.resolve_at` returns and a
+regulator's `reprogram()` installs. See
+[moving the operating point](../explanation/control.md#moving-the-operating-point).
+
+::: manta.LQRSolution
+
 ## PID
 
 ::: manta.PID

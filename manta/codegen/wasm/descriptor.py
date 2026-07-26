@@ -36,6 +36,23 @@ def _num(v):
     return float(v)
 
 
+def _mat(v, shape):
+    """A MATRIX port's default as a flat COLUMN-MAJOR list.
+
+    That is the order the generated kernel's flat `double` buffer uses —
+    CasADi stores dense matrices column-major, and the C++ backend hands
+    over Eigen's `.data()`, which agrees. `_num` ravels row-major (right
+    for a vector, wrong for a rectangular gain), so transpose here rather
+    than leave a silently mis-ordered K on the JS side."""
+    rows, cols = (list(shape) + [1, 1])[:2]
+    flat = _num(v)
+    if len(flat) != rows * cols:            # pragma: no cover - shape guard
+        raise ValueError(
+            f"matrix port default has {len(flat)} values, expected "
+            f"{rows}×{cols}")
+    return [flat[r * cols + c] for c in range(cols) for r in range(rows)]
+
+
 def _slot(s):
     d = {"name": s.name, "kind": s.kind, "off": s.off, "size": s.size}
     if s.writes_state:
@@ -74,6 +91,14 @@ def build_descriptor(module, layouts, *, class_name: str,
     state_refs = [{"name": p.name, "dim": p.size, "init": _num(p.init)}
                   for p in module.ports_by_role(Role.STATE)]
 
+    # MATRIX-role ports supplied as data (an LQR's gain `K` and feed-forward
+    # `u_ff`), with the built solve as their default. `init` is null for a
+    # matrix the caller must always supply (an EKF's process noise `Q`).
+    matrix_ports = [{"name": p.name, "shape": list(p.shape),
+                     "init": (_mat(p.init, p.shape)
+                              if p.init is not None else None)}
+                    for p in module.ports_by_role(Role.MATRIX)]
+
     outputs = {}
     for p in module.ports_by_role(Role.OUTPUT):
         outputs[p.name] = {"dim": sum(f.dim for f in p.fields),
@@ -92,6 +117,7 @@ def build_descriptor(module, layouts, *, class_name: str,
         "stateSlots": state_slots,
         "stateFields": state_fields,
         "stateRefs": state_refs,
+        "matrixPorts": matrix_ports,
         "initialState": (_num(module.initial_x)
                          if module.initial_x is not None else []),
         "inputs": _fields(u),

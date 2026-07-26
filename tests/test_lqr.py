@@ -13,6 +13,7 @@ import casadi as ca
 from manta import World, Craft, Sim, LQR, TargetNumpy
 from manta.fields import GravityField
 from manta.parts import Mass, Thruster
+from manta.ir.module import Role
 from manta.ir.state_spec import StateSpec
 from manta.linearization import LinearizedSystem
 
@@ -157,6 +158,170 @@ def test_control_maps_to_named_inputs():
     # At the setpoint the command is exactly the trim (tz = m·g, others 0).
     assert u["c.tz.throttle"] == pytest.approx(M * G, abs=1e-6)
     assert u["c.tx.throttle"] == pytest.approx(0.0, abs=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# Re-solving at a new operating point (`resolve_at` / `reprogram`)
+# ---------------------------------------------------------------------------
+
+def test_law_takes_gain_and_feed_forward_as_data():
+    """The affine law's coefficients are Ports, not baked constants, and
+    every one defaults to the built solve."""
+    lqr, _ = _lqr()
+    m = lqr.module()
+    K, u_ff = m.port("K"), m.port("u_ff")
+    assert (K.role, K.shape) == (Role.MATRIX, (3, 6))
+    assert (u_ff.role, u_ff.shape) == (Role.MATRIX, (3, 1))
+    np.testing.assert_allclose(K.init, lqr.K)
+    np.testing.assert_allclose(np.ravel(u_ff.init), lqr.u_ref)
+    # Defaulted: a regulator that never reprograms flies the built law.
+    ctrl = TargetNumpy(lqr)
+    np.testing.assert_allclose(ctrl.gain, lqr.K)
+    np.testing.assert_allclose(ctrl.u_ff, lqr.u_ref)
+
+
+def test_resolve_at_reproduces_the_built_solve():
+    lqr, _ = _lqr()
+    sol = lqr.resolve_at()
+    np.testing.assert_allclose(sol.K, lqr.K, atol=1e-12)
+    np.testing.assert_allclose(sol.u_ff, lqr.u_ref, atol=1e-12)
+    np.testing.assert_allclose(sol.x_ref, lqr.x_ref, atol=1e-12)
+
+
+def test_resolve_at_leaves_the_gain_alone_under_translation():
+    """Translation IS a symmetry of these dynamics — the re-solve must
+    land on the same gain, only the reference moves."""
+    lqr, _ = _lqr()
+    sol = lqr.resolve_at(x_ref={"c": {"position": (3.0, 1.0, 12.0)}})
+    np.testing.assert_allclose(sol.K, lqr.K, atol=1e-10)
+    np.testing.assert_allclose(sol.x_ref[:3], [3.0, 1.0, 12.0])
+
+
+def test_resolve_at_takes_a_new_trim_and_cost():
+    lqr, _ = _lqr()
+    sol = lqr.resolve_at(u_ref={"tz.throttle": M * G + 1.0})
+    assert sol.u_ff[lqr.input_names.index("c.tz.throttle")] == \
+        pytest.approx(M * G + 1.0)
+    tight = lqr.resolve_at(Q=np.eye(6) * 1e4)
+    assert np.linalg.norm(tight.K) > np.linalg.norm(lqr.K)
+    assert np.max(np.abs(tight.closed_loop_eigs)) < 1.0
+    assert np.array_equal(lqr.K, lqr.resolve_at().K)      # `self` untouched
+
+
+def test_resolve_at_rejects_a_frozen_slot():
+    """The unregulated complement is baked into A/B as a constant, so a
+    µs re-evaluation cannot honour a move there — say so, don't ignore it."""
+    lqr, _ = _lqr()
+    with pytest.raises(ValueError, match="not regulated"):
+        lqr.resolve_at(x_ref={"c": {"orientation": (0.0, 0.0, 0.0, 1.0)}})
+    # Naming a frozen slot at its EXISTING value is a no-op, not an error.
+    lqr.resolve_at(x_ref={"c": {"orientation": (1.0, 0.0, 0.0, 0.0)}})
+
+
+def test_resolve_at_rejects_an_unknown_slot():
+    """A typo'd retarget must not look like a no-op."""
+    lqr, _ = _lqr()
+    with pytest.raises(ValueError, match="unknown state slot"):
+        lqr.resolve_at(x_ref={"c": {"positon": (1.0, 2.0, 3.0)}})
+
+
+def test_reprogram_installs_gain_trim_and_reference_together():
+    lqr, _ = _lqr()
+    ctrl = TargetNumpy(lqr)
+    sol = lqr.resolve_at(x_ref={"c": {"position": (3.0, 1.0, 12.0)}},
+                         Q=np.eye(6) * 1e3)
+    ctrl.reprogram(sol)
+    np.testing.assert_allclose(ctrl.gain, sol.K)
+    np.testing.assert_allclose(ctrl.u_ff, sol.u_ff)
+    np.testing.assert_allclose(ctrl.x_ref, sol.x_ref)
+    # At the re-solved setpoint the command is exactly the new trim.
+    u = ctrl.control({"c": {"position": (3.0, 1.0, 12.0), "velocity": (0, 0, 0)}})
+    assert u["c.tz.throttle"] == pytest.approx(M * G, abs=1e-6)
+
+
+def test_reprogram_rejects_a_non_solution():
+    lqr, _ = _lqr()
+    ctrl = TargetNumpy(lqr)
+    with pytest.raises(TypeError, match="missing"):
+        ctrl.reprogram(object())
+
+
+# --- the case a bare retarget gets wrong: a heading change -----------------
+
+YAW180 = np.array([0.0, 0.0, 0.0, 1.0])        # (w,x,y,z): 180° about z
+GOAL = np.array([6.0, 0.0, 10.0])
+REG6 = ["c.position", "c.velocity", "c.orientation", "c.angular_velocity"]
+
+
+def _flyer6():
+    """Fully-actuated free-flyer: BODY-frame force + torque on every axis,
+    so the actuator→world map depends on attitude (that dependence is
+    exactly what a baked gain gets wrong after a heading change)."""
+    c = Craft("c")
+    c.add(Mass("body", mass=M, moi=(0.5, 0.5, 0.5)))
+    for n, f in (("tx", (1, 0, 0)), ("ty", (0, 1, 0)), ("tz", (0, 0, 1))):
+        c.add(Thruster(n, force=f))
+    for n, t in (("rx", (1, 0, 0)), ("ry", (0, 1, 0)), ("rz", (0, 0, 1))):
+        c.add(Thruster(n, torque=t))
+    w = World().add_field(GravityField(g=(0, 0, -G)))
+    w.add_craft(c, position=(0, 0, 10))
+    return w
+
+
+def _lqr6():
+    w = _flyer6()
+    return LQR(w, x_ref={"c": {"position": (0, 0, 10)}},
+               u_ref={"tz.throttle": M * G}, regulate=REG6,
+               Q=np.diag([10, 10, 10, 1, 1, 1, 10, 10, 10, 1, 1, 1]),
+               R=np.eye(6) * 0.1, dt=0.02), w
+
+
+def _fly_to_yawed_goal(lqr, w, *, reprogram: bool, steps: int = 2000):
+    """Fly to a goal 6 m away with the craft ALREADY at the target heading
+    — attitude error is zero throughout, so this isolates the gain's frame
+    from the (genuinely nonlinear) large-attitude transient."""
+    target = {"c": {"position": tuple(GOAL), "orientation": tuple(YAW180)}}
+    ctrl = TargetNumpy(lqr)
+    if reprogram:
+        ctrl.reprogram(lqr.resolve_at(x_ref=target))
+    else:
+        ctrl.retarget(target)
+    sim = TargetNumpy(Sim(w))
+    sim.state["c"]["orientation"] = YAW180.copy()
+    for _ in range(steps):
+        for full, v in ctrl.control(sim.state).items():
+            owner, rest = full.split(".", 1)
+            sim.state[owner][rest] = v
+        sim.step(0.02)
+        if not np.all(np.isfinite(np.asarray(sim.state["c"]["position"]))):
+            break
+    p = np.asarray(sim.state["c"]["position"], dtype=float).ravel()
+    return float(np.linalg.norm(p - GOAL))
+
+
+def test_retarget_alone_is_wrong_after_a_heading_change():
+    """The documented failure: K is solved in WORLD-frame position error,
+    so it permanently encodes the actuator→world map at the solve
+    attitude. Retargeted 180° in yaw, the position feedback is POSITIVE
+    and the craft flees."""
+    lqr, w = _lqr6()
+    assert _fly_to_yawed_goal(lqr, w, reprogram=False) > 1e3
+
+
+def test_resolve_at_fixes_a_heading_change():
+    lqr, w = _lqr6()
+    assert _fly_to_yawed_goal(lqr, w, reprogram=True) < 1e-3
+
+
+def test_resolve_at_finds_a_genuinely_different_gain_at_a_new_heading():
+    """Same stability, different frame — a yaw is a symmetry of the
+    dynamics, so the spectrum is preserved while K itself rotates."""
+    lqr, _ = _lqr6()
+    sol = lqr.resolve_at(x_ref={"c": {"position": tuple(GOAL),
+                                      "orientation": tuple(YAW180)}})
+    assert np.abs(sol.K - lqr.K).max() > 1.0
+    assert np.max(np.abs(sol.closed_loop_eigs)) == \
+        pytest.approx(np.max(np.abs(lqr.closed_loop_eigs)), abs=1e-6)
 
 
 # ---------------------------------------------------------------------------

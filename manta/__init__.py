@@ -60,7 +60,7 @@ from .estimation.imu_integrator import IMUIntegrator
 from .estimation.madgwick import Madgwick
 from .estimation.mahony import Mahony
 from .ir.state_spec import ALL, POSE, TWIST, SlotSet
-from .control import LQR, PID
+from .control import LQR, LQRSolution, PID
 from .recurrence import RecurrenceBlock
 from .codegen import NoiseDriver, TargetCpp, TargetJax, TargetNumpy, TargetWasm
 from .fit import Fit, FitResult, NoiseFit, NoiseFitResult, Prior, Window
@@ -68,7 +68,7 @@ from .rates import CommandLatch, RateGate
 
 __all__ = [
     "ir", "Craft", "World", "Coupling", "Sim", "Planet", "EKF", "UKF",
-    "LQR", "PID",
+    "LQR", "LQRSolution", "PID",
     "Madgwick", "Mahony", "IMUIntegrator", "RecurrenceBlock",
     "TargetNumpy", "TargetCpp", "TargetWasm", "TargetJax", "NoiseDriver",
     "Fit", "FitResult", "NoiseFit", "NoiseFitResult", "Prior", "Window",

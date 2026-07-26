@@ -55,12 +55,14 @@ def resolve_args(module: Module, ep, values: dict,
     applying the defaults every interpreted backend shares: any arg named in
     `values` comes from there (a caller threading its own state supplies the
     `StateRef` names too); an unsupplied `StateRef` falls back to
-    `state_lookup(name)`, an unsupplied TIME port to `time_default` and an
-    unsupplied PARAMETER port to `param_default()`. Any other unsupplied
-    PortRef is a KeyError, and a `values` key naming no argument of `ep` is
-    a TypeError — a typo'd key must never be silently ignored. (The C++
-    backend emits typed source instead and does not use this; the JAX
-    rollout walks roles symbolically for `lax.scan`.)"""
+    `state_lookup(name)`, an unsupplied TIME port to `time_default`, an
+    unsupplied PARAMETER port to `param_default()`, and any other
+    unsupplied port that declares an `init` to that declared default (an
+    LQR's gain and feed-forward, which default to its built solve). Any
+    other unsupplied PortRef is a KeyError, and a `values` key naming no
+    argument of `ep` is a TypeError — a typo'd key must never be silently
+    ignored. (The C++ backend emits typed source instead and does not use
+    this; the JAX rollout walks roles symbolically for `lax.scan`.)"""
     args = []
     used = set()
     for a in ep.args:
@@ -76,6 +78,8 @@ def resolve_args(module: Module, ep, values: dict,
             args.append(time_default)
         elif port.role is Role.PARAMETER:
             args.append(param_default())
+        elif port.init is not None:
+            args.append(port.init)
         else:
             raise KeyError(
                 f"{module.name}.{ep.method}: missing value for port "

@@ -20,7 +20,7 @@ exactly the surface its Module shape implies — nothing else:
                         `state`.
   * `NumpyRegulator` (`_regulator`)   — THREADED + a ``control`` entry.
                         `u(x)`, `control(state_dict)`, `retarget`,
-                        `x_ref`.
+                        `reprogram`, `x_ref`, `gain`, `u_ff`.
 
 `NoiseDriver` (`_noise`) drives the oracle's NOISE port; `_compile`
 holds the optional cc-compiled-kernel path.
