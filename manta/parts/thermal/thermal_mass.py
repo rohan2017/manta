@@ -18,10 +18,12 @@ symmetric link (W/K): each side gains `k·(T_other − T_self)`, so the
 exchange conserves energy by construction. The coefficient *is* the
 joint: a metal bracket is a high-k link, a plastic standoff a low-k
 link, a heat pipe an extremely-high-k link (give the pipe its own
-`ThermalMass` in the chain if its capacitance matters). Multiple links
-between the same pair sum — parallel heat paths. Links join nodes on
-the *same craft* (thermal structure is craft structure; validated at
-compile).
+`ThermalMass` in the chain if its capacitance matters). One `connect`
+call wires both directions; parallel heat paths between the same pair
+are extra `connect` calls *from the same endpoint* (a reciprocal
+`b.connect(a, …)` raises — it would silently double the conductance).
+Links join nodes on the *same craft* (thermal structure is craft
+structure; validated at `World.finalize()`).
 
 **Ambient exchange** — with `ambient_conductance > 0` the node leaks to
 a boundary temperature chosen by `ambient=`:
@@ -72,13 +74,8 @@ from ...ir.frames import PartFrame
 from ...ir.types import Scalar, Vec3
 from ...ir.wrench import Wrench
 from .._declarations import Input, Parameter, PartUpdate, State, WhiteNoise
-from .._trace import is_promoted
+from .._trace import scalar_mx as _mx
 from ..base import Part
-
-
-def _mx(value) -> ca.MX:
-    """Raw-MX read of a possibly-promoted / trace-bound scalar."""
-    return value._mx if is_promoted(value) else ca.MX(float(value))
 
 
 def _root_of(part: Part) -> Part:
@@ -165,9 +162,11 @@ class ThermalMass(Part):
                 f"dissipated_heat() — a heat source must implement "
                 f"`dissipated_heat() -> MX` (watts).")
         self._source = source
-        # (other_node, conductance) pairs; each link is registered on
-        # BOTH endpoints so each side's balance sees the exchange.
-        self._links: list[tuple["ThermalMass", float]] = []
+        # (other_node, conductance, initiated) triples; each link is
+        # registered on BOTH endpoints so each side's balance sees the
+        # exchange, and `initiated` records which side made the
+        # `connect` call — the reciprocal-call guard keys on it.
+        self._links: list[tuple["ThermalMass", float, bool]] = []
 
     # ---- per-instance I/O (camera precedent) --------------------------
 
@@ -186,9 +185,13 @@ class ThermalMass(Part):
 
     def connect(self, other: "ThermalMass", *,
                 conductance: float) -> "ThermalMass":
-        """Register a symmetric conduction link to `other` (W/K).
-        Multiple links between the same pair sum (parallel paths).
-        Returns self for chaining."""
+        """Register a symmetric conduction link to `other` (W/K). One
+        call wires BOTH directions — do not also call
+        `other.connect(self, ...)`; the natural-looking reciprocal call
+        would silently double the conductance, so it raises instead.
+        Deliberate parallel heat paths are still expressed by calling
+        `connect` again *from the same endpoint*. Returns self for
+        chaining."""
         who = f"ThermalMass {self.name!r}.connect"
         if not isinstance(other, ThermalMass):
             raise TypeError(
@@ -200,13 +203,21 @@ class ThermalMass(Part):
         if k <= 0.0:
             raise ValueError(
                 f"{who}: conductance must be > 0 W/K, got {conductance!r}")
-        self._links.append((other, k))
-        other._links.append((self, k))
+        if any(o is other and not initiated
+               for o, _, initiated in self._links):
+            raise ValueError(
+                f"{who}: {other.name!r} already connected this pair from "
+                f"its side — one connect() call wires both directions, "
+                f"and a reciprocal call would double the conductance. "
+                f"For a deliberate parallel path, call connect() again "
+                f"from the same endpoint that made the first call.")
+        self._links.append((other, k, True))
+        other._links.append((self, k, False))
         return self
 
     @property
     def links(self) -> tuple[tuple["ThermalMass", float], ...]:
-        return tuple(self._links)
+        return tuple((o, k) for o, k, _ in self._links)
 
     # ---- compile-time validation --------------------------------------
 
@@ -218,6 +229,15 @@ class ThermalMass(Part):
                 f"tree. Thermal links and heat sources must live on the "
                 f"same craft — cross-craft heat exchange isn't modeled.")
 
+    def on_world_finalize(self, world, craft) -> None:
+        """Validate the thermal network's structure once, at finalize —
+        before any tracing — instead of erroring mid-trace: every linked
+        node and the heat source must ride this node's craft."""
+        for other, _, _ in self._links:
+            self._require_same_craft(other, "linked node")
+        if self._source is not None:
+            self._require_same_craft(self._source, "heat source")
+
     # ---- tick ---------------------------------------------------------
 
     def update(self, ctx) -> PartUpdate:
@@ -226,12 +246,12 @@ class ThermalMass(Part):
 
         q_dot = _mx(self.heat_input) + _mx(self.heat_noise)
 
-        for other, k in self._links:
-            self._require_same_craft(other, "linked node")
+        # Structure (same-craft links/source) was validated by
+        # `on_world_finalize` — the trace only builds the balance.
+        for other, k, _ in self._links:
             q_dot = q_dot + k * (_mx(other.temperature) - T)
 
         if self._source is not None:
-            self._require_same_craft(self._source, "heat source")
             q_dot = q_dot + self._source.dissipated_heat()
 
         g_amb = float(self.declared_value("ambient_conductance"))
@@ -262,8 +282,7 @@ class ThermalMass(Part):
                 T_amb = _mx(self.ambient_temperature)
             q_dot = q_dot + g_amb * (T_amb - T)
 
-        dt_mx = ctx.dt._mx if hasattr(ctx.dt, "_mx") else ca.MX(float(ctx.dt))
-        T_next = T + dt_mx * q_dot / C
+        T_next = T + _mx(ctx.dt) * q_dot / C
 
         zero = Vec3[PartFrame].constant((0.0, 0.0, 0.0))
         return PartUpdate(wrench=Wrench(force=zero, torque=zero),

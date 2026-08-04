@@ -149,6 +149,50 @@ def test_motor_rejects_nonpositive_constants():
         Motor("m", torque_constant=-1.0)
 
 
+def test_joint_subclass_extra_state_survives():
+    """A joint subclass declaring its OWN state (beyond the DOF pair)
+    keeps it: only the DOF slots are integrated centrally, everything
+    else follows the normal part-state path. Regression: the world tick
+    once skipped ALL states on an ArticulatedJoint, so an extra slot was
+    declared as a graph input but never emitted — a KeyError deep in the
+    linearization engine, contradicting joint.py's 'a new actuation
+    model is just another RevoluteDOF subclass' promise."""
+    import math
+
+    from manta.ir.types import Scalar
+    from manta.parts._declarations import State
+    from manta.parts._trace import scalar_mx
+
+    class RevCounter(Motor):
+        """Motor with an output-shaft revolution counter state."""
+        revs = State(init=0.0, manifold="R1")
+
+        def update(self, ctx):
+            base = super().update(ctx)
+            rate = scalar_mx(self.rate)
+            revs = scalar_mx(self.revs)
+            base.new_state["revs"] = Scalar(
+                revs + scalar_mx(ctx.dt) * rate / (2.0 * math.pi))
+            return base
+
+    c = Craft("rig")
+    c.add(Mass("body", mass=50.0, moi=(10.0, 10.0, 10.0)))
+    m = c.add(RevCounter("m", axis=(0.0, 0.0, 1.0),
+                         torque_constant=K_T, resistance=RES))
+    m.add(Mass("rotor", mass=0.1, moi=(0.001, 0.001, J_Z),
+               transform=(0.0, 0.0, 0.05)))
+    w = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
+    w.add_craft(c)
+
+    sim = TargetNumpy(Sim(w))
+    for _ in range(200):
+        sim.step(0.01, u={"m.voltage": 1.0})
+    revs = float(sim.state["rig"]["m.revs"])
+    rate = float(sim.state["rig"]["m.rate"])
+    assert rate > 1.0, "motor did not spin up"
+    assert revs > 0.0, "extra state never integrated"
+
+
 def test_motor_parameters_are_promotable():
     """torque_constant / resistance promote to a live params port for
     system ID."""

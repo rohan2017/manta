@@ -95,6 +95,17 @@ class ProjectiveCamera(Part):
         # declarations and update.
         self._targets: tuple = ()
 
+    def on_world_finalize(self, world, craft) -> None:
+        """Point the camera at every optical ellipsoid it can see — all
+        but its own craft's. A camera with no OpticalField registered
+        fails the `requires_fields` check at transform build; here we
+        just skip target wiring."""
+        from ...fields.optical import OpticalField
+        optical = world.get_field(OpticalField)
+        if optical is not None:
+            self.set_targets(e for e in optical.ellipsoids
+                             if e.source_craft is not craft)
+
     def set_targets(self, targets) -> None:
         """Point the camera: fix the compile-time set of ellipsoids it
         measures. Called once by `World.finalize()` before

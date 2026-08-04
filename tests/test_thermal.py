@@ -333,6 +333,22 @@ def test_cross_craft_link_raises():
         Sim(w)
 
 
+def test_reciprocal_connect_raises():
+    """One connect() call wires both directions; the natural-looking
+    reciprocal call from the other endpoint would silently double the
+    conductance, so it raises. Parallel paths from the SAME endpoint
+    still sum."""
+    a = ThermalMass("a")
+    b = ThermalMass("b")
+    a.connect(b, conductance=5.0)
+    with pytest.raises(ValueError, match="already connected"):
+        b.connect(a, conductance=5.0)
+    # Deliberate parallel path from the same endpoint is fine.
+    a.connect(b, conductance=2.0)
+    assert [k for _, k in a.links] == [5.0, 2.0]
+    assert [k for _, k in b.links] == [5.0, 2.0]
+
+
 def test_connect_validation():
     a = ThermalMass("a")
     with pytest.raises(ValueError, match="itself"):

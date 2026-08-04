@@ -97,3 +97,12 @@ def is_promoted(value) -> bool:
     bound State/Input/Noise) on the active trace. The single sniff every
     compile-time read site keys its symbolic-vs-numeric branch on."""
     return hasattr(value, "_mx")
+
+
+def scalar_mx(value):
+    """A possibly-promoted scalar attribute (or `ctx.dt`) as a raw MX
+    node: the bound symbol when promoted, else a constant. The single
+    home of the promoted-scalar read idiom — every part's compile-time
+    scalar read goes through this instead of hand-rolling the branch."""
+    import casadi as ca
+    return value._mx if is_promoted(value) else ca.MX(float(value))

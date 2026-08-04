@@ -9,6 +9,47 @@ from manta.parts import RevoluteJoint, Mass
 
 
 # ---------------------------------------------------------------------------
+# Part-tree name uniqueness
+# ---------------------------------------------------------------------------
+
+def test_duplicate_part_name_raises():
+    """Duplicate names anywhere in one craft's tree are refused at add():
+    every lookup (state keys, sensors, parameters) is by name and would
+    silently take the first match."""
+    c = Craft("d")
+    c.add(Mass("body", mass=1.0))
+    with pytest.raises(ValueError, match="unique"):
+        c.add(Mass("body", mass=2.0))
+    # ...including across branches: root "wheel_m" vs a joint's child.
+    j = c.add(RevoluteJoint("wheel"))
+    j.add(Mass("wheel_m", mass=0.1))
+    with pytest.raises(ValueError, match="unique"):
+        c.add(Mass("wheel_m", mass=0.2))
+    # Same name on DIFFERENT crafts is fine (uniqueness is per tree).
+    c2 = Craft("e")
+    c2.add(Mass("body", mass=1.0))
+
+
+def test_field_source_without_emits_field_raises():
+    """A FieldSource subclass that forgets `emits_field` gets a named
+    error at finalize — not an AttributeError from inside the error
+    message that was trying to report it."""
+    from manta.parts.field_source.base import FieldSource
+
+    class Sloppy(FieldSource):
+        def make_disturbance(self, craft, offset):  # pragma: no cover
+            raise AssertionError("never reached")
+
+    c = Craft("d")
+    c.add(Mass("body", mass=1.0))
+    c.add(Sloppy("src"))
+    w = World().add_field(GravityField().add_uniform((0.0, 0.0, -9.81)))
+    w.add_craft(c)
+    with pytest.raises(TypeError, match="emits_field"):
+        w.finalize()
+
+
+# ---------------------------------------------------------------------------
 # Multi-craft world: independent free-falls
 # ---------------------------------------------------------------------------
 

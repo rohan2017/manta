@@ -212,16 +212,20 @@ def _plumb_field_disturbances(fields, dt, trace) -> list[tuple[str, Any]]:
         for dist in field._disturbances:
             if not isinstance(dist, Disturbance):
                 continue
-            sdecls = dist.state_declarations()
-            ndecls = dist.noise_declarations()
-            if not sdecls and not ndecls:
-                continue
+            # Uniqueness is checked for every disturbance, stateless ones
+            # included — a stateless duplicate is the same authoring
+            # mistake, just one that would otherwise surface only when a
+            # State/Noise channel is later added to the class.
             if dist.name in seen_names:
                 raise ValueError(
                     f"compile_world_tick: duplicate disturbance name "
                     f"{dist.name!r}. Disturbance names must be unique "
                     f"within a world.")
             seen_names.add(dist.name)
+            sdecls = dist.state_declarations()
+            ndecls = dist.noise_declarations()
+            if not sdecls and not ndecls:
+                continue
 
             prefix = f"{dist.name}."
 
@@ -437,21 +441,25 @@ def _run_part_updates(craft, prefix, kin_states, fields_tuple, dt, t,
             part, result)
 
         # A joint's DOF/rate are emitted by the central integrator (its
-        # update() is a no-op), so skip them here to avoid emitting
-        # stale (un-integrated) values.
+        # update() is a no-op for them), so skip exactly those slots —
+        # any OTHER state a joint subclass declares (a motor's own
+        # integrator, a wear counter) is emitted like every part's.
         decls = part.state_declarations()
-        if not isinstance(part, ArticulatedJoint):
-            for sname in decls:
-                val = new_state.get(sname, state_input_nodes[part][sname])
-                # SO(3) state: defensively renormalize the quaternion so
-                # multi-tick integration doesn't drift off the unit
-                # sphere — mirrors the rigid-body orientation handling.
-                # A Part integrates such a slot via SO3Manifold().boxplus,
-                # which already returns a (frame-tagged) Quat.
-                if decls[sname].manifold.kind == "quat":
-                    val = val.normalize()
-                new_state_outputs.append(
-                    (prefix + f"{part.name}.{sname}", val))
+        dof_names = (set(part.dof_state_names())
+                     if isinstance(part, ArticulatedJoint) else set())
+        for sname in decls:
+            if sname in dof_names:
+                continue
+            val = new_state.get(sname, state_input_nodes[part][sname])
+            # SO(3) state: defensively renormalize the quaternion so
+            # multi-tick integration doesn't drift off the unit
+            # sphere — mirrors the rigid-body orientation handling.
+            # A Part integrates such a slot via SO3Manifold().boxplus,
+            # which already returns a (frame-tagged) Quat.
+            if decls[sname].manifold.kind == "quat":
+                val = val.normalize()
+            new_state_outputs.append(
+                (prefix + f"{part.name}.{sname}", val))
 
         for oname, oval in outputs.items():
             sensor_outputs.append((prefix + f"{part.name}.{oname}", oval))

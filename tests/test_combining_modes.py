@@ -162,3 +162,37 @@ def test_averaged_and_additive_compose():
     assert rho == 1.2
     # averaged mean of (0,6,0),(0,0,9) = (0,3,4.5); + additive (3,0,0).
     np.testing.assert_allclose(v, (3.0, 3.0, 4.5), atol=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# combining validation — a typo must raise, not vanish from the physics
+# ---------------------------------------------------------------------------
+
+def test_typo_combining_kwarg_raises():
+    import pytest
+    with pytest.raises(ValueError, match="combining"):
+        _Const(density=1000.0, combining="Baseline")
+
+
+def test_typo_combining_class_attr_raises():
+    """A subclass fixing `combining` as a class attribute (the documented
+    way) is validated at construction too — a typo'd class attr once made
+    the fluid silently vanish (density 0, no error)."""
+    import pytest
+
+    class _Regime(_Const):
+        combining = "Baseline"          # typo'd capital
+
+    with pytest.raises(ValueError, match="combining"):
+        _Regime(density=1000.0, combining=None)
+
+
+def test_mutated_combining_raises_at_composition():
+    """Even an instance mutated AFTER construction fails loudly when the
+    field composes, instead of dropping out of every bucket."""
+    import pytest
+    d = _Const(density=1000.0, combining="baseline", name="sea")
+    ff = FluidField().add(d)
+    d.combining = "Baseline"
+    with pytest.raises(ValueError, match="unknown combining"):
+        _eval(ff)

@@ -48,13 +48,8 @@ import math
 import casadi as ca
 
 from .._declarations import Input, Parameter
-from .._trace import is_promoted
+from .._trace import scalar_mx as _mx
 from .joint import RevoluteDOF
-
-
-def _mx(value) -> ca.MX:
-    """Raw-MX read of a possibly-promoted scalar attribute."""
-    return value._mx if is_promoted(value) else ca.MX(float(value))
 
 
 class Motor(RevoluteDOF):
@@ -121,14 +116,12 @@ class Motor(RevoluteDOF):
         return i
 
     def applied_dof_force(self):
-        """Electrical shaft torque + viscous damping, as a raw MX scalar
-        — this joint's generalized-force row entry (see the base class
-        for the reaction-bookkeeping argument)."""
-        _, rate_name = self.dof_state_names()
-        rate_mx = _mx(getattr(self, rate_name))
+        """Electrical shaft torque on top of the base viscous damping, as
+        a raw MX scalar — this joint's generalized-force row entry (see
+        the base class for the reaction-bookkeeping argument)."""
         k = _mx(self.torque_constant)
         G = float(self.declared_value("gear_ratio"))
-        return G * k * self._current_mx() - float(self.damping) * rate_mx
+        return super().applied_dof_force() + G * k * self._current_mx()
 
     def dissipated_heat(self) -> ca.MX:
         """Winding copper loss i²·R (W) — the `ThermalMass` heat-source

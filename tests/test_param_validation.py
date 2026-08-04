@@ -36,10 +36,18 @@ def test_craft_world_planet_names_rejected():
 
 
 def test_disturbance_name_rejected_and_autoname_ok():
+    from manta.fields import GravityField
     with pytest.raises(ValueError, match="not a valid identifier"):
         UniformGravity((0.0, 0.0, -9.81), name="g-field")
-    # Auto-generated names are identifier-safe.
-    assert UniformGravity((0.0, 0.0, -9.81)).name.isidentifier()
+    # Auto-names are assigned at Field.add — deterministic per field
+    # (`<ClassName>_<index>`), never a function of how many disturbances
+    # the process happened to construct earlier — and identifier-safe.
+    g = GravityField()
+    d0, d1 = UniformGravity((0, 0, -9.81)), UniformGravity((0, 0, -1.62))
+    assert d0.name is None                     # deferred until registration
+    g.add(d0).add(d1)
+    assert d0.name == "UniformGravity_0" and d1.name == "UniformGravity_1"
+    assert d0.name.isidentifier()
 
 
 # ---------------------------------------------------------------------------

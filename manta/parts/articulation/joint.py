@@ -59,7 +59,7 @@ import numpy as np
 from ...ir.frames import PartFrame
 from ...ir.types import Vec3
 from .._declarations import Input, Parameter, PartUpdate, State, unit_axis
-from .._trace import declared_attr, is_promoted
+from .._trace import declared_attr, scalar_mx
 from ..base import CompositePart
 from ...ir.wrench import Wrench
 
@@ -90,27 +90,23 @@ def _offset_from(ancestor, descendant) -> np.ndarray:
 
 class ArticulatedJoint(CompositePart):
     """Base of the 1-DOF joint family. Holds everything DOF-type-agnostic
-    (axis, mode, damping, subtree-geometry snapshots, the no-op update);
-    `RevoluteJoint` / `PrismaticJoint` declare their own DOF states and
-    actuator input/limit.
+    (axis, damping, subtree-geometry snapshots, the no-op update);
+    concrete DOF types declare their own states, and actuation models
+    (`CommandedDOF`, `Motor`) layer their effort on top of the damping-
+    only `applied_dof_force` here. A kinematic base like `RevoluteDOF`
+    deliberately carries no actuation vocabulary — `mode`, commands, and
+    stall limits exist only on classes where they are real.
 
     Parameters:
         axis          — input-frame unit vector along the DOF axis.
                         Default (0, 0, 1).
-        mode          — "passive" or "saturating". Default "passive".
         damping       — viscous DOF friction coefficient. Default 0.
     """
 
     axis:          tuple = Parameter((0.0, 0.0, 1.0))
-    mode:          str   = Parameter(_PASSIVE)
     damping:       float = Parameter(0.0)
 
     def __init__(self, name: str, **overrides) -> None:
-        mode = overrides.get("mode", _PASSIVE)
-        if mode not in _MODES:
-            raise ValueError(
-                f"{type(self).__name__} {name!r}: mode must be one of "
-                f"{_MODES}, got {mode!r}")
         super().__init__(name, **overrides)
         # The kinematic pass and the joint-space rows both assume a unit
         # axis — normalize once here (a zero axis is a config error).
@@ -128,33 +124,21 @@ class ArticulatedJoint(CompositePart):
         hook instead of hard-coding names."""
         raise NotImplementedError
 
-    def _actuator_cmd(self):
-        """The bound command Input (torque_cmd / force_cmd)."""
-        raise NotImplementedError
-
-    def _stall_limit(self) -> float:
-        """Saturating-mode clamp magnitude (stall_torque / stall_force)."""
-        raise NotImplementedError
-
     # ----- generalized applied force ----------------------------------------
 
-    def applied_dof_force(self):
-        """Actuator (clamped, saturating mode only) + viscous damping, as
-        a raw MX scalar — the internal body↔subtree exchange entering
-        this joint's generalized-force row. Its reaction on the body
-        needs no explicit bookkeeping: it lives in the mass-matrix
-        coupling of the joint-space solve."""
+    def _dof_rate_mx(self) -> ca.MX:
+        """The DOF rate state as a raw MX scalar (promotion-aware)."""
         _, rate_name = self.dof_state_names()
-        rate_attr = getattr(self, rate_name)
-        rate_mx = (rate_attr._mx if is_promoted(rate_attr)
-                   else ca.MX(float(rate_attr)))
-        f = -float(self.damping) * rate_mx
-        if self.mode == _SATURATING:
-            stall = float(self._stall_limit())
-            cmd = self._actuator_cmd()
-            cmd_mx = cmd._mx if is_promoted(cmd) else ca.MX(float(cmd))
-            f = f + ca.fmin(ca.fmax(cmd_mx, -stall), stall)
-        return f
+        return scalar_mx(getattr(self, rate_name))
+
+    def applied_dof_force(self):
+        """Viscous damping only, as a raw MX scalar — the internal
+        body↔subtree exchange entering this joint's generalized-force
+        row. Actuation models (`CommandedDOF`, `Motor`) call `super()`
+        and add their effort on top. The reaction on the body needs no
+        explicit bookkeeping: it lives in the mass-matrix coupling of
+        the joint-space solve."""
+        return -float(self.damping) * self._dof_rate_mx()
 
     # ----- subtree geometry (numeric rest-pose snapshots) -------------------
 
@@ -214,6 +198,46 @@ class ArticulatedJoint(CompositePart):
                           new_state={})
 
 
+class CommandedDOF(ArticulatedJoint):
+    """Direct-command actuation, shared by `RevoluteJoint` and
+    `PrismaticJoint`: a `mode` (passive | saturating) and, in saturating
+    mode, a command clamped to the stall limit, applied on top of the
+    base damping.
+
+    Parameters:
+        mode          — "passive" or "saturating". Default "passive".
+    """
+
+    mode: str = Parameter(_PASSIVE)
+
+    def __init__(self, name: str, **overrides) -> None:
+        super().__init__(name, **overrides)
+        # Post-super read so a subclass overriding the declared default
+        # is validated too (a pre-super `overrides.get` would silently
+        # validate the base default instead).
+        mode = self.declared_value("mode")
+        if mode not in _MODES:
+            raise ValueError(
+                f"{type(self).__name__} {name!r}: mode must be one of "
+                f"{_MODES}, got {mode!r}")
+
+    def _actuator_cmd(self):
+        """The bound command Input (torque_cmd / force_cmd)."""
+        raise NotImplementedError
+
+    def _stall_limit(self) -> float:
+        """Saturating-mode clamp magnitude (stall_torque / stall_force)."""
+        raise NotImplementedError
+
+    def applied_dof_force(self):
+        f = super().applied_dof_force()
+        if self.mode == _SATURATING:
+            stall = float(self._stall_limit())
+            cmd_mx = scalar_mx(self._actuator_cmd())
+            f = f + ca.fmin(ca.fmax(cmd_mx, -stall), stall)
+        return f
+
+
 class RevoluteDOF(ArticulatedJoint):
     """The revolute *kinematic* DOF — rotation about `axis`, state
     (`angle`, `rate`). Carries no actuation model of its own; the
@@ -236,7 +260,7 @@ class RevoluteDOF(ArticulatedJoint):
         return ("angle", "rate")
 
 
-class RevoluteJoint(RevoluteDOF):
+class RevoluteJoint(RevoluteDOF, CommandedDOF):
     """1-DOF revolute joint with an axial rotor (set of Mass children).
 
     Parameters:
@@ -268,7 +292,7 @@ class RevoluteJoint(RevoluteDOF):
         return self.stall_torque
 
 
-class PrismaticJoint(ArticulatedJoint):
+class PrismaticJoint(CommandedDOF):
     """1-DOF prismatic (sliding) joint carrying a subtree of Mass children.
 
     Parameters:

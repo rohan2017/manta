@@ -327,3 +327,15 @@ def test_noise_R_is_sigma_squared_identity():
                                 (0.01 ** 2) * np.eye(3))
     np.testing.assert_allclose(imu.noise_R("accel_noise"),
                                 (0.1  ** 2) * np.eye(3))
+
+
+def test_negative_noise_sigma_raises():
+    """A typo'd minus sign on a noise sigma must raise at construction:
+    `is_active` gates on sigma > 0 (no noise injected) while `noise_R`
+    squares it into a nonzero R — a filter tuned for noise that isn't
+    there, silently."""
+    import pytest
+
+    from manta.parts import IMU
+    with pytest.raises(ValueError, match="gyro_noise_sigma"):
+        IMU("imu", gyro_noise_sigma=-0.01)

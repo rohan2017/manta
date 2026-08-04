@@ -107,6 +107,13 @@ class World:
         for p in self._planets:
             p.register_disturbances(self)
         self._register_field_sources()
+        # Per-part resolution hooks, after the fields are fully assembled
+        # (planets + field sources registered) so a hook can read them.
+        # This is the generic slot — no part-type isinstance ladder here.
+        for entry in self._crafts:
+            craft = entry["craft"]
+            for part in craft.parts:
+                part.on_world_finalize(self, craft)
         self._resolve_planet_state_overrides()
         self._finalized = True
         return self
@@ -308,17 +315,24 @@ class World:
         craft-anchored disturbance to its target field. The field must
         already be registered — a source CONTRIBUTES to a field, it does
         not provide one; using a `GravitySource` with no `GravityField`
-        registered is a configuration error. Then point every camera
-        at the optical ellipsoids it can see (all but its own craft's).
-        Runs once, from `finalize()`."""
+        registered is a configuration error. Runs once, from
+        `finalize()` (before the per-part `on_world_finalize` hooks, so
+        a hook sees the fully-assembled fields)."""
         from .parts.field_source.base import FieldSource, cumulative_offset
-        from .parts.sensor.camera import ProjectiveCamera
-        from .fields.optical import OpticalField
 
         for craft in self.crafts:
             for part in craft.parts:
                 if not isinstance(part, FieldSource):
                     continue
+                if part.emits_field is None:
+                    # Validate before use — the error message itself
+                    # dereferences emits_field.__name__ below.
+                    raise TypeError(
+                        f"World '{self.name}': FieldSource subclass "
+                        f"{type(part).__name__}('{part.name}') declares no "
+                        f"`emits_field`. A field source must set "
+                        f"`emits_field` to the Field subclass its "
+                        f"disturbance contributes to.")
                 field = self.get_field(part.emits_field)
                 if field is None:
                     raise ValueError(
@@ -329,18 +343,6 @@ class World:
                         f"{part.emits_field.__name__} to the world first.")
                 field.add(part.make_disturbance(
                     craft, cumulative_offset(part)))
-
-        # Point each camera at every ellipsoid it can see (all but its own
-        # craft's). A camera with no OpticalField registered fails the
-        # `requires_fields` check below; here we just skip target wiring.
-        optical = self.get_field(OpticalField)
-        if optical is not None:
-            for craft in self.crafts:
-                for part in craft.parts:
-                    if isinstance(part, ProjectiveCamera):
-                        part.set_targets(
-                            e for e in optical.ellipsoids
-                            if e.source_craft is not craft)
 
     def _resolve_planet_state_overrides(self) -> None:
         """Walk every craft entry and replace any `PlanetState`-wrapped

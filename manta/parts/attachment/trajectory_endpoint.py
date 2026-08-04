@@ -117,17 +117,19 @@ class TrajectoryEndpoint(Part):
             raise ValueError(
                 f"{type(self).__name__}({name!r}): mass must be >= 0.")
 
-    def update(self, ctx) -> PartUpdate:
+    def on_world_finalize(self, world, craft) -> None:
         # The control law treats PartFrame ≡ CraftFrame (the reference
-        # quaternion is reinterpreted into PartFrame below). A nested
-        # endpoint (under a joint/composite) silently breaks that —
-        # reject it here, at compile time.
+        # quaternion is reinterpreted into PartFrame in update()). A
+        # nested endpoint (under a joint/composite) silently breaks that
+        # — reject it at finalize, before any tracing.
         if not isinstance(self.parent, RootPart):
             raise ValueError(
                 f"{type(self).__name__}({self.name!r}): must be mounted "
                 f"directly on the craft root (got parent "
                 f"'{self.parent.name if self.parent else None}'). The "
                 f"SE(3) spring law assumes PartFrame ≡ CraftFrame.")
+
+    def update(self, ctx) -> PartUpdate:
         sample = self.trajectory(ctx.t)
         if not isinstance(sample, TrajectorySample):
             raise TypeError(

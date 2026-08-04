@@ -187,6 +187,10 @@ class Noise(_Declaration):
         self.signal_manifold = manifold_from_shortcut(
             signal_manifold, frame=frame)
         self.sigma = float(sigma)
+        if self.sigma < 0.0:
+            raise ValueError(
+                f"{type(self).__name__}: sigma must be >= 0, "
+                f"got {sigma!r}")
 
     # ---- Manifolds (resolved at synthesis time for the late-bound
     # frame default; the canonical form just returns self.signal_manifold

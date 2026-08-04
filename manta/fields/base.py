@@ -22,7 +22,6 @@ Disturbance reuses the same machinery.
 
 from __future__ import annotations
 
-import itertools
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -56,11 +55,13 @@ def anchored_pose(craft, offset_body):
     return pos + quat.apply(off), quat
 
 
-# Global counter for default disturbance names. Disturbances participate
-# in the IR state vector by name, so unique names are required when more
-# than one is registered. The user can pass `name="..."` explicitly; the
-# default is `<ClassName>_<counter>`.
-_DISTURBANCE_NAME_COUNTER = itertools.count()
+# Disturbances participate in the IR state vector by name, so unique
+# names are required when more than one is registered. The user can pass
+# `name="..."` explicitly; otherwise the name is assigned at
+# `Field.add()` time as `<ClassName>_<index within the field>` — a
+# deterministic function of the model, not of construction order across
+# the process (a global counter here once made two identical scripts
+# produce different state keys).
 
 
 class Disturbance(DeclarationHost, ABC):
@@ -116,16 +117,22 @@ class Disturbance(DeclarationHost, ABC):
                  membership=None,
                  **overrides: Any) -> None:
         from ..ir.module import check_name
-        self.name = check_name(
-            name if name is not None else (
-                f"{type(self).__name__}_{next(_DISTURBANCE_NAME_COUNTER)}"),
-            who=type(self).__name__)
+        # `None` defers naming to `Field.add()`, which assigns a
+        # deterministic per-field default (`<ClassName>_<index>`).
+        self.name = (check_name(name, who=type(self).__name__)
+                     if name is not None else None)
         if combining is not None:
-            if combining not in ("additive", "averaged", "baseline"):
-                raise ValueError(
-                    f"Disturbance: combining must be 'additive', "
-                    f"'averaged', or 'baseline'; got {combining!r}")
             self.combining = combining
+        # Validate the EFFECTIVE value — a subclass setting the class
+        # attribute (the documented way to fix a mode) must be checked
+        # too: a typo'd class-level `combining` would otherwise drop the
+        # disturbance from every composition bucket silently (a fluid
+        # regime vanishing → density 0, no error).
+        if self.combining not in ("additive", "averaged", "baseline"):
+            raise ValueError(
+                f"{type(self).__name__}: combining must be 'additive', "
+                f"'averaged', or 'baseline'; got {self.combining!r} "
+                f"(set via the class attribute or the combining= kwarg)")
         if membership is not None:
             self._membership = membership
         self._apply_declarations(overrides)
@@ -181,7 +188,15 @@ class Field:
         return tuple(self._disturbances)
 
     def add(self, disturbance: Disturbance) -> "Field":
-        """Register a disturbance with this field. Returns self for chaining."""
+        """Register a disturbance with this field. Returns self for chaining.
+
+        A disturbance constructed without an explicit `name` is named
+        HERE — `<ClassName>_<index among same-class disturbances of this
+        field>` — so default names depend only on registration order
+        within the field, never on how many disturbances the process
+        happened to construct earlier (they become IR state-vector keys;
+        two identical scripts must produce identical keys)."""
+        from ..ir.module import check_name
         if not isinstance(disturbance, Disturbance):
             raise TypeError(
                 f"{type(self).__name__}.add: expected Disturbance, got "
@@ -192,6 +207,12 @@ class Field:
                 f"{type(disturbance).__name__} produces "
                 f"{disturbance.field_value_shape!r}, not "
                 f"{self.value_shape!r}")
+        if disturbance.name is None:
+            n = sum(1 for d in self._disturbances
+                    if type(d) is type(disturbance))
+            disturbance.name = check_name(
+                f"{type(disturbance).__name__}_{n}",
+                who=type(disturbance).__name__)
         self._disturbances.append(disturbance)
         return self
 

@@ -150,9 +150,21 @@ class FluidField(SuperposedField):
         if not self._disturbances:
             return self._zero_value()
 
-        baselines = [d for d in self._disturbances if d.combining == "baseline"]
-        averaged  = [d for d in self._disturbances if d.combining == "averaged"]
-        additive  = [d for d in self._disturbances if d.combining == "additive"]
+        buckets: dict[str, list] = {
+            "baseline": [], "averaged": [], "additive": []}
+        for d in self._disturbances:
+            if d.combining not in buckets:
+                # Construction validates `combining`, but an instance
+                # mutated afterwards would otherwise just vanish from
+                # every bucket — silent physics loss.
+                raise ValueError(
+                    f"{type(self).__name__}: disturbance {d.name!r} has "
+                    f"unknown combining mode {d.combining!r} (must be "
+                    f"'additive', 'averaged', or 'baseline').")
+            buckets[d.combining].append(d)
+        baselines = buckets["baseline"]
+        averaged = buckets["averaged"]
+        additive = buckets["additive"]
 
         # Baseline regimes: layered alpha-composite override in insertion
         # order. base ← (1 − w)·base + w·contribution.

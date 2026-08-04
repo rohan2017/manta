@@ -40,7 +40,7 @@ import casadi as ca
 from ...ir.types import Scalar
 from ...ir.wrench import Wrench
 from .._declarations import Input, Parameter, PartUpdate, State
-from .._trace import is_promoted
+from .._trace import scalar_mx as _as_mx
 from .aerofoil import Aerofoil
 
 
@@ -57,12 +57,6 @@ def _flap_effectiveness(E: float) -> tuple[float, float]:
     tau = (math.pi - theta_h + math.sin(theta_h)) / math.pi
     cm_delta = math.sin(theta_h) * (math.cos(theta_h) - 1.0) / 2.0
     return tau, cm_delta
-
-
-def _as_mx(attr):
-    """A State/Input attribute as a raw MX — symbolic if promoted, else a
-    constant from its numeric value."""
-    return attr._mx if is_promoted(attr) else ca.MX(float(attr))
 
 
 class ControlSurface(Aerofoil):
@@ -147,8 +141,7 @@ class ControlSurface(Aerofoil):
                      + float(self.Ch_delta) * delta))
         ddelta = (servo + H_aero) / float(self.hinge_damping)
 
-        dt_mx = ctx.dt._mx if hasattr(ctx.dt, "_mx") else ca.MX(float(ctx.dt))
-        new_delta = delta + ddelta * dt_mx
+        new_delta = delta + ddelta * _as_mx(ctx.dt)
         lim = float(self.max_deflection)
         new_delta = ca.fmin(ca.fmax(new_delta, -lim), lim)
 

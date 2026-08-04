@@ -117,8 +117,16 @@ class DeclarationHost:
             setattr(self, attr_name, value)
             if isinstance(decl, Noise):
                 sigma_key = f"{attr_name}_sigma"
-                setattr(self, sigma_key,
-                        float(overrides.get(sigma_key, decl.sigma)))
+                sigma = float(overrides.get(sigma_key, decl.sigma))
+                if sigma < 0.0:
+                    # A typo'd minus sign would otherwise split the
+                    # filter from the truth silently: `is_active` gates
+                    # on σ > 0 (no noise injected) while `noise_R`
+                    # squares it into a nonzero R.
+                    raise ValueError(
+                        f"{type(self).__name__}({self.name!r}): "
+                        f"{sigma_key} must be >= 0, got {sigma!r}")
+                setattr(self, sigma_key, sigma)
 
     # The declaration accessors are INSTANCE methods: the default set is
     # class-scoped, but a host whose I/O is decided per instance (e.g. a
@@ -260,6 +268,24 @@ class Part(DeclarationHost):
         raise NotImplementedError(
             f"{type(self).__name__}: must override update(self, ctx)")
 
+    def on_world_finalize(self, world, craft) -> None:
+        """Compile-time resolution hook — called once per part by
+        `World.finalize()`, after planets and field sources have
+        registered their disturbances, with the world and this part's
+        craft. The generic slot for anything a part can only do against
+        the *finished* model:
+
+          * resolve cross-craft wiring (a camera collecting the optical
+            ellipsoids it can see),
+          * validate structural invariants that need the complete part
+            tree (a thermal link's same-craft check, a root-mount
+            requirement)
+
+        so a user-authored part gets the same compile-time treatment as
+        the stock ones — no `isinstance` ladder in `World.finalize`.
+        Default: no-op. Raise to reject a bad configuration at
+        finalize time (before any tracing) rather than mid-trace."""
+
     # --- Introspection ----------------------------------------------------
 
     def __repr__(self) -> str:
@@ -303,6 +329,25 @@ class CompositePart(Part):
                 f"{type(self).__name__}('{self.name}').add: child "
                 f"'{child.name}' is already attached to "
                 f"'{child.parent.name}'.")
+        # Names must be unique across the WHOLE part tree, not just among
+        # siblings: every lookup (state keys, tick signature, tether
+        # endpoints, parameter resolution) is by name and silently takes
+        # the first match — a duplicate two branches apart would alias
+        # state or pick the wrong part with no error. Check here, where
+        # the mistake is made, not in the compile that trips over it.
+        root = self
+        while root.parent is not None:
+            root = root.parent
+        existing = {p.name for p in root.walk()}
+        incoming = ([p.name for p in child.walk()]
+                    if isinstance(child, CompositePart) else [child.name])
+        dup = existing.intersection(incoming)
+        if dup:
+            raise ValueError(
+                f"{type(self).__name__}('{self.name}').add: part name(s) "
+                f"{sorted(dup)} already exist in this part tree. Part "
+                f"names must be unique per craft — every name lookup "
+                f"(state, sensors, parameters) would silently alias.")
         child.parent = self
         self._children.append(child)
         return child
