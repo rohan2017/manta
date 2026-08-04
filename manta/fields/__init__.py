@@ -41,7 +41,7 @@ from .fluid   import (
     below_surface, within_sphere,
 )
 from .mag     import BodyDipoleMag, DipoleMag, MagField, UniformMag
-from .collision import CollisionField, HalfSpace, Sphere
+from .collision import CollisionField, HalfSpace, Heightfield, Sphere
 from .optical import (
     BodySemanticEllipsoid, OpticalField, SemanticEllipsoid,
 )
@@ -55,6 +55,6 @@ __all__ = [
     "below_surface", "within_sphere",
     "CraftWindBubble",
     "MagField", "UniformMag", "DipoleMag", "BodyDipoleMag",
-    "CollisionField", "HalfSpace", "Sphere",
+    "CollisionField", "HalfSpace", "Heightfield", "Sphere",
     "OpticalField", "SemanticEllipsoid", "BodySemanticEllipsoid",
 ]

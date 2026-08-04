@@ -299,3 +299,94 @@ def test_halfspace_rejects_zero_normal():
     import pytest
     with pytest.raises(ValueError, match="normal"):
         HalfSpace(origin=(0, 0, 0), normal=(0, 0, 0))
+
+
+# ---------------------------------------------------------------------------
+# Heightfield terrain
+# ---------------------------------------------------------------------------
+
+def test_heightfield_penetration_on_inclined_plane():
+    """A plane encoded as a heightfield is reproduced EXACTLY by the
+    B-spline (splines reproduce polynomials up to their degree), so the
+    contact math has closed-form expectations.
+
+    h(x, y) = 0.1·x. At p = (10, 0, 0.5): surface height 1.0, vertical
+    excess e = 0.5. Normal direction (−0.1, 0, 1)/√1.01; perpendicular
+    depth = e/√1.01 = 0.49752; outward vector = depth·n̂ =
+    (−0.049505, 0, 0.495050).
+    """
+    from manta.fields import Heightfield
+
+    x = np.arange(21, dtype=float)          # 0..20, dx = 1
+    y = np.arange(11, dtype=float)
+    H = 0.1 * x[:, None] + 0.0 * y[None, :]
+    hf = Heightfield(H, x0=0.0, y0=0.0, dx=1.0, dy=1.0)
+
+    p = Vec3[WorldFrame].constant((10.0, 0.0, 0.5))
+    out = np.asarray(ca.evalf(hf.contribute_at_sym(p, ca.MX(0.0))._mx)).ravel()
+    np.testing.assert_allclose(out, [-0.0495050, 0.0, 0.4950495],
+                               atol=1e-6)
+
+    # Above the surface: zero.
+    p_up = Vec3[WorldFrame].constant((10.0, 0.0, 2.0))
+    out_up = np.asarray(
+        ca.evalf(hf.contribute_at_sym(p_up, ca.MX(0.0))._mx)).ravel()
+    np.testing.assert_allclose(out_up, 0.0, atol=1e-9)
+
+    # Surface queries agree with the encoded plane.
+    assert np.isclose(hf.height_at(7.3, 4.2), 0.73, atol=1e-9)
+    alt = float(ca.evalf(hf.altitude_of_sym(
+        Vec3[WorldFrame].constant((7.3, 4.2, 5.0))._mx)))
+    assert np.isclose(alt, 5.0 - 0.73, atol=1e-9)
+
+
+def test_ball_rests_on_heightfield_terrain():
+    """A ball dropped onto terrain settles at the local surface height
+    minus the m·g/k compression. The terrain is non-trivial (a ramp
+    region raises part of the grid) but flat where the ball lands, so
+    the equilibrium is exact — slope contact math is pinned separately
+    by the inclined-plane worked example (viscous tangential friction
+    never fully stops creep on a slope, so a sloped resting site would
+    test the friction model, not the terrain)."""
+    from manta.fields import CollisionField
+
+    m, g, k = 1.0, 9.81, 1e5
+    x = np.arange(21, dtype=float)
+    y = np.arange(21, dtype=float)
+    H = 2.0 + 0.2 * np.clip(x[:, None] - 14.0, 0.0, None) \
+        + 0.0 * y[None, :]                            # flat, ramp at x>14
+
+    w = World().add_field(GravityField().add_uniform((0, 0, -g)))
+    cf = CollisionField()
+    hf = cf.add_heightfield(H, x0=0.0, y0=0.0, dx=1.0, dy=1.0)
+    w.add_field(cf)
+
+    cr = Craft("ball")
+    cr.add(Mass("body", mass=m, moi=(0.01, 0.01, 0.01)))
+    # damping high enough (ζ ≈ 0.5) that the bounce train dies well
+    # inside the 5 s run — the equilibrium itself is damping-blind.
+    cr.add(Collider("contact", stiffness=k, damping=300.0))
+    w.add_craft(cr, position=(7.0, 10.0, 2.5))        # over the flat part
+    cw = TargetNumpy(Sim(w))
+    for _ in range(5000):
+        cw.step(0.001)
+
+    xf, yf, zf = (float(v) for v in cw.state["ball"]["position"])
+    surface = hf.height_at(xf, yf)                    # 2.0 on the flat
+    assert np.isclose(surface, 2.0, atol=1e-6)
+    assert np.isclose(zf, surface - m * g / k, atol=2e-4), (
+        f"settled z={zf}, surface={surface}")
+    assert abs(cw.state["ball"]["velocity"][2]) < 1e-3
+
+
+def test_heightfield_validation():
+    import pytest
+
+    from manta.fields import Heightfield
+
+    with pytest.raises(ValueError, match="4 samples"):
+        Heightfield(np.zeros((3, 8)))
+    with pytest.raises(ValueError, match="spacing"):
+        Heightfield(np.zeros((8, 8)), dx=0.0)
+    with pytest.raises(ValueError, match="non-finite"):
+        Heightfield(np.full((8, 8), np.nan))

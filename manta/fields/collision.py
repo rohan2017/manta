@@ -29,6 +29,7 @@ for the EKF predict step to stay sane near contact.
 from __future__ import annotations
 
 import casadi as ca
+import numpy as np
 
 from ..ir.frames import WorldFrame
 from ..ir.types import Vec3
@@ -73,6 +74,17 @@ class CollisionField(SuperposedField):
         """Attach a solid-sphere obstacle (e.g. a planet surface).
         Returns self."""
         return self.add(Sphere(center=center, radius=radius))
+
+    def add_heightfield(self, heights, *,
+                        x0: float = 0.0, y0: float = 0.0,
+                        dx: float = 1.0, dy: float = 1.0
+                        ) -> "Heightfield":
+        """Attach gridded solid terrain `z = h(x, y)` (bathymetry, a
+        ground DEM). Returns the `Heightfield` (not self) so the caller
+        can keep it for `height_at` queries."""
+        hf = Heightfield(heights, x0=x0, y0=y0, dx=dx, dy=dy)
+        self.add(hf)
+        return hf
 
 
 class HalfSpace(Disturbance):
@@ -163,3 +175,116 @@ class Sphere(Disturbance):
 
     def __repr__(self) -> str:
         return f"<Sphere center={self.center} radius={self.radius}>"
+
+
+class Heightfield(Disturbance):
+    """Solid terrain below a gridded height surface `z = h(x, y)` —
+    bathymetry for a UUV, a DEM for a ground vehicle. World frame, z-up,
+    solid everywhere below the surface.
+
+    The grid is interpolated with a cubic B-spline (`ca.interpolant`),
+    so the surface — and, crucially, its GRADIENT, which supplies the
+    contact normal — is smooth across cell boundaries (a bilinear
+    surface has normal jumps at every cell edge, which a contact spring
+    turns into force chatter). Penetration is the vertical excess
+    projected onto the local surface normal (exact for a plane, the
+    standard near-surface approximation for gentle terrain):
+
+        e        = h(x, y) − z                       (vertical excess)
+        n_unnorm = (−∂h/∂x, −∂h/∂y, 1)
+        depth    = smooth_max0(e / |n_unnorm|)       (⊥ distance)
+        value    = depth · n_unnorm / |n_unnorm|     (outward vector)
+
+    Two contracts to respect:
+
+      * **Coverage** — the spline extrapolates polynomially outside the
+        grid, which diverges fast; the grid must cover the operating
+        area with margin. Size it generously; memory is cheap.
+      * **Backend reach** — interpolant nodes are MX-only (no SX
+        expansion), so a Heightfield world is for the numpy/C++
+        targets: `TargetJax` refuses it loudly and `Fit` warns and
+        takes the interpreted path. This is the accepted trade for
+        real terrain in the tick.
+
+    The same grid should back any *acoustic* raycasting numerically
+    (shiver's sim) — one dataset, two views; keep the returned
+    `Heightfield` and share its `heights` array.
+
+    Args:
+        heights — 2D array-like, shape (nx, ny): `heights[i, j]` is the
+                  surface height at `(x0 + i·dx, y0 + j·dy)`. Cubic
+                  B-spline needs at least 4 samples per axis.
+        x0, y0  — world coordinates of grid corner `heights[0, 0]`, m.
+        dx, dy  — grid spacing, m (> 0).
+    """
+
+    field_value_shape = _VEC3_W
+
+    def __init__(self, heights, *,
+                 x0: float = 0.0, y0: float = 0.0,
+                 dx: float = 1.0, dy: float = 1.0,
+                 name: str | None = None) -> None:
+        super().__init__(name=name)
+        H = np.asarray(heights, dtype=float)
+        if H.ndim != 2 or H.shape[0] < 4 or H.shape[1] < 4:
+            raise ValueError(
+                f"Heightfield: heights must be a 2D grid with at least "
+                f"4 samples per axis (cubic B-spline support); got shape "
+                f"{H.shape}.")
+        if not np.all(np.isfinite(H)):
+            raise ValueError("Heightfield: heights contain non-finite "
+                             "values.")
+        if dx <= 0.0 or dy <= 0.0:
+            raise ValueError(
+                f"Heightfield: grid spacing must be > 0; got dx={dx!r}, "
+                f"dy={dy!r}.")
+        self.heights = H
+        self.x0, self.y0 = float(x0), float(y0)
+        self.dx, self.dy = float(dx), float(dy)
+        xg = self.x0 + self.dx * np.arange(H.shape[0])
+        yg = self.y0 + self.dy * np.arange(H.shape[1])
+        # ca.interpolant data layout: first grid axis varies fastest —
+        # heights[i, j] ↔ d[i + nx·j] is Fortran ravel order.
+        self._h = ca.interpolant(
+            "heightfield_h", "bspline",
+            [xg.tolist(), yg.tolist()],
+            H.ravel(order="F").tolist())
+        xy = ca.MX.sym("xy", 2)
+        self._grad = ca.Function("heightfield_grad", [xy],
+                                 [ca.jacobian(self._h(xy), xy)])
+
+    # ---- surface queries (symbolic + numeric) -------------------------
+
+    def height_at_sym(self, x: ca.MX, y: ca.MX) -> ca.MX:
+        """Surface height h(x, y) as an MX expression — for in-tick
+        consumers (an altitude output, a terrain-following law)."""
+        return self._h(ca.vertcat(x, y))
+
+    def height_at(self, x: float, y: float) -> float:
+        """Numeric h(x, y) — the spline the contact actually feels
+        (which is NOT bit-identical to the raw grid between samples)."""
+        return float(self._h(ca.DM([float(x), float(y)])))
+
+    def altitude_of_sym(self, point) -> ca.MX:
+        """Signed height of a world point above the surface (MX):
+        `z − h(x, y)` — negative below terrain."""
+        p = point._mx if hasattr(point, "_mx") else point
+        return p[2] - self._h(ca.vertcat(p[0], p[1]))
+
+    # ---- collision contribution ---------------------------------------
+
+    def contribute_at_sym(self, point, t):
+        p = point._mx
+        xy = ca.vertcat(p[0], p[1])
+        e = self._h(xy) - p[2]                       # vertical excess
+        g = self._grad(xy)                           # (1×2) [∂h/∂x ∂h/∂y]
+        n_unnorm = ca.vertcat(-g[0, 0], -g[0, 1], ca.MX(1.0))
+        n_mag = soft_norm(n_unnorm)
+        depth = smooth_max0(e / n_mag, _SMOOTH_EPS_SQ)
+        out_mx = (n_unnorm / n_mag) * depth
+        return _VEC3_W.from_mx(out_mx)
+
+    def __repr__(self) -> str:
+        nx, ny = self.heights.shape
+        return (f"<Heightfield {nx}x{ny} origin=({self.x0}, {self.y0}) "
+                f"spacing=({self.dx}, {self.dy})>")
