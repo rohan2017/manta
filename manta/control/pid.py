@@ -73,8 +73,15 @@ class PID(RecurrenceBlock):
             integ = x["integral"] + err * dt
             if i_lim is not None:
                 integ = ca.fmin(ca.fmax(integ, -i_lim), i_lim)
-            # Derivative on measurement; zeroed on the first step via `primed`.
-            d_meas = x["primed"] * (u["measurement"] - x["prev_measurement"]) / dt
+            # Derivative on measurement; zeroed on the first step via
+            # `primed`, and at dt == 0 (a paused/stalled driving loop) —
+            # the bare division there is 0·inf = NaN, which poisons the
+            # command. At dt = 0 the block degrades to P + held-I.
+            d_rate = ca.if_else(
+                dt > 0,
+                (u["measurement"] - x["prev_measurement"]) / ca.fmax(dt, 1e-300),
+                0.0)
+            d_meas = x["primed"] * d_rate
             cmd = kp_ * err + ki_ * integ - kd_ * d_meas
             if o_lim is not None:
                 cmd = ca.fmin(ca.fmax(cmd, -o_lim), o_lim)

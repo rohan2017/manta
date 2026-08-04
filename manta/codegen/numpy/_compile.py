@@ -29,6 +29,22 @@ _EXTERNAL_CACHE_LOCK = threading.Lock()
 _MAX_INSTR = 3000
 
 
+def _cache_dir() -> str:
+    """The compiled-kernel cache directory — per-user, not the shared
+    `$TMPDIR/manta_compiled`: these `.so`s get `dlopen`ed, and a fixed
+    world-writable path would let any local user pre-place a library at
+    a predictable location (and made the dir unusable for the second
+    user to touch it). `$XDG_CACHE_HOME` when set, else `~/.cache`,
+    else a uid-scoped tempdir."""
+    base = os.environ.get("XDG_CACHE_HOME")
+    if not base:
+        home = os.path.expanduser("~")
+        base = (os.path.join(home, ".cache") if home != "~"
+                else os.path.join(tempfile.gettempdir(),
+                                  f"manta-{os.getuid()}"))
+    return os.path.join(base, "manta", "compiled")
+
+
 def _compiled_functions(functions: dict[str, Any]) -> dict[str, Any]:
     """Return externals keyed the same as `functions`, or `functions`
     unchanged if it's too big to bother / no C compiler is available."""
@@ -40,13 +56,14 @@ def _compiled_functions(functions: dict[str, Any]) -> dict[str, Any]:
         for f in functions.values():
             cg.add(f)
         cg.generate(tmp + os.sep)
-        src = open(os.path.join(tmp, "mod.c")).read()
+        with open(os.path.join(tmp, "mod.c")) as fh:
+            src = fh.read()
         key = hashlib.sha1(src.encode()).hexdigest()[:16]
         with _EXTERNAL_CACHE_LOCK:
             if key in _EXTERNAL_CACHE:
                 return _EXTERNAL_CACHE[key]
-            cache_dir = os.path.join(tempfile.gettempdir(), "manta_compiled")
-            os.makedirs(cache_dir, exist_ok=True)
+            cache_dir = _cache_dir()
+            os.makedirs(cache_dir, mode=0o700, exist_ok=True)
             so_path = os.path.join(cache_dir, f"mod_{key}.so")
             try:
                 if not os.path.exists(so_path):

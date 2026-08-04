@@ -246,6 +246,31 @@ class Module:
     def __post_init__(self) -> None:
         object.__setattr__(self, "functions",
                            MappingProxyType(dict(self.functions)))
+        # `entry_ident` (dot → underscore) is not injective over dotted
+        # names — `a_b.c` and `a.b_c` both flatten to `a_b_c`, which
+        # would alias two entry points / kernel symbols / C++ methods
+        # with no compile error. Reject the collision at construction,
+        # where the offending names are still visible.
+        seen: dict[str, str] = {}
+        for ep in self.entry_points:
+            flat = entry_ident(ep.method)
+            if flat in seen and seen[flat] != ep.method:
+                raise ValueError(
+                    f"Module {self.name!r}: entry points "
+                    f"{seen[flat]!r} and {ep.method!r} both flatten to "
+                    f"{flat!r} (dot→underscore) — rename a craft/part so "
+                    f"the generated symbols cannot alias.")
+            seen[flat] = ep.method
+        seen.clear()
+        for p in self.ports:
+            flat = entry_ident(p.name)
+            if flat in seen and seen[flat] != p.name:
+                raise ValueError(
+                    f"Module {self.name!r}: ports {seen[flat]!r} and "
+                    f"{p.name!r} both flatten to {flat!r} "
+                    f"(dot→underscore) — rename a craft/part so the "
+                    f"generated symbols cannot alias.")
+            seen[flat] = p.name
 
     def port(self, name: str) -> Port:
         for p in self.ports:
