@@ -53,8 +53,8 @@ from ..ir._names import resolve_suffix
 from ..linearization import LinearizedSystem
 from ._common import (
     Prior, Window, _FitBlock, convergence_line, decision_bounds,
-    format_table, laplace_sigma, pack_u_trace, pack_x0, prior_penalty,
-    resolve_traces, solve_blocks_nlp, solver_converged,
+    expand_or_none, format_table, laplace_sigma, pack_u_trace, pack_x0,
+    prior_penalty, resolve_traces, solve_blocks_nlp, solver_converged,
 )
 
 
@@ -72,8 +72,14 @@ class _Channel(_FitBlock):
         # The user-facing name is the DECLARATION name (`gyro_bias`),
         # not the driver-input name (`gyro_bias_driver`).
         self.decl_name = next(
-            n for n, d in spec.owner.noise_declarations().items()
-            if d.driver_input_name(n) == spec.name)
+            (n for n, d in spec.owner.noise_declarations().items()
+             if d.driver_input_name(n) == spec.name), None)
+        if self.decl_name is None:
+            raise KeyError(
+                f"NoiseFit: noise-vector slot {spec.full!r} matches no "
+                f"Noise declaration on {type(spec.owner).__name__}"
+                f"('{getattr(spec.owner, 'name', '?')}') — declarations: "
+                f"{sorted(spec.owner.noise_declarations())}.")
         self.alias = (spec.full[:-len("_driver")]
                       if spec.full.endswith("_driver") else spec.full)
 
@@ -109,7 +115,12 @@ class NoiseFitResult:
     `prior_sigma` / `posterior_sigma` are RELATIVE (log-space) widths;
     posterior ≈ prior means the data didn't inform that σ. `converged`
     is IPOPT's success flag — False ⇒ the values are the failed solve's
-    final iterate (a `RuntimeWarning` was emitted), not an optimum."""
+    final iterate (a `RuntimeWarning` was emitted), not an optimum.
+    `expanded` records whether the NLL ran SX-expanded (False = a Linsol
+    node kept it on the slower interpreted MX path; a `RuntimeWarning`
+    said so at solve time)."""
+
+    expanded: bool = True
 
     def __init__(self, channels, s_opt, hessian, objective, stats,
                  world) -> None:
@@ -349,15 +360,20 @@ class NoiseFit:
         # ½‖(s − s̄)/σ‖² prior (skipped for flat-prior channels).
         total = total + prior_penalty(s, self.channels, weight=0.5)
 
-        s_opt, objective, stats = solve_blocks_nlp(
+        s_opt, objective, stats, expanded = solve_blocks_nlp(
             "noise_fit", s, total, self.channels,
             verbose=verbose, ipopt_options=ipopt_options)
 
+        # The Laplace Hessian rides the same folded graph as the NLL —
+        # expand it too (the single most expensive one-shot evaluation).
         H_fn = ca.Function("H", [s], [ca.hessian(total, s)[0]])
+        H_fn = expand_or_none(H_fn) or H_fn
         hessian = np.asarray(ca.DM(H_fn(s_opt)))
 
-        return NoiseFitResult(self.channels, s_opt, hessian, objective,
-                              stats, self.world)
+        res = NoiseFitResult(self.channels, s_opt, hessian, objective,
+                             stats, self.world)
+        res.expanded = expanded
+        return res
 
     # ------------------------------------------------------------------
 

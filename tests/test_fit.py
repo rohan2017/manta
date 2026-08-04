@@ -439,8 +439,11 @@ def test_expand_off_matches_default():
 
 def test_fit_falls_back_when_nlp_cannot_expand():
     """A jointed craft's joint-space solve rides on the default `Linsol`,
-    which has no `eval_sx` — SX expansion raises. The fitter must quietly
-    take the MX path instead of failing the solve."""
+    which has no `eval_sx` — SX expansion raises. The fitter must take
+    the MX path instead of failing the solve, and it must SAY so: a
+    RuntimeWarning at solve time and `result.expanded == False` (the MX
+    path is an order of magnitude slower per IPOPT iteration — a user
+    should never discover that by profiling)."""
     from manta.parts import RevoluteJoint
 
     def jointed(force_z):
@@ -466,10 +469,22 @@ def test_fit_falls_back_when_nlp_cannot_expand():
         Z.append(truth.outputs()["rover"]["imu.gyro"].copy())
     win = [Window(x0=x0, u={"t.throttle": 0.6},
                   z={"imu.gyro": np.array(Z)}, dt=DT)]
-    res = Fit(jointed(1.6),
-              parameters={"t.force": Prior(sigma=1.0)}).solve(win)
+    with pytest.warns(RuntimeWarning, match="cannot SX-expand"):
+        res = Fit(jointed(1.6),
+                  parameters={"t.force": Prior(sigma=1.0)}).solve(win)
+    assert res.expanded is False
     assert res.converged
     assert np.isfinite(res.values["rover.t.force"]).all()
+
+
+def test_fit_records_expanded_flag():
+    """A plain (Linsol-free) fit runs SX-expanded and says so."""
+    windows = _record_windows(_drone(mass=1.32, kf=11.0))
+    res = Fit(_drone(mass=1.5, kf=9.0), parameters={
+        "body.mass": Prior(sigma=0.5),
+        **{f"t{i}.force_quad": Prior(sigma=4.0) for i in range(1, 5)},
+    }).solve(windows, weights={"imu.gyro": 1e6, "imu.accel": 1e4})
+    assert res.expanded is True
 
 
 def test_log_prior_with_bounds():

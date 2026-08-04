@@ -205,34 +205,59 @@ def prior_penalty(v: ca.MX, blocks: list, *, weight: float = 1.0) -> ca.MX:
     return term
 
 
+def expand_or_none(fn: ca.Function):
+    """`fn.expand()`, or None when the graph cannot lower to SX (a
+    Linsol-bearing joint-space solve). The fitters route every hot
+    Function (the NLP and the posterior diagnostics) through this so the
+    expanded/interpreted decision is made — and reported — once."""
+    try:
+        return fn.expand()
+    except RuntimeError:
+        return None
+
+
 def solve_blocks_nlp(name: str, x: ca.MX, loss: ca.MX, blocks: list, *,
                      verbose: bool, ipopt_options: dict | None):
     """Build the fitters' shared IPOPT solver, seed it from the blocks'
     `init`, apply their box bounds, and solve. Returns
-    `(x_opt, objective, stats)`.
+    `(x_opt, objective, stats, expanded)`.
 
     The NLP is SX-expanded when the graph allows it — a windowed
     `mapaccum` loss is thousands of scalar ops that IPOPT evaluates
     (with its exact Hessian) at every iteration, and expanding cuts that
-    by an order of magnitude or more. Not every graph can: a craft whose
-    joint-space solve rides on the default `Linsol` has no `eval_sx`, so
-    the expansion is attempted and quietly dropped when it raises. Pass
-    `ipopt_options={"expand": False}` to force the MX path."""
+    by an order of magnitude or more. Expandability is probed ONCE on
+    the loss Function (cheap to fail: the probe raises at the first
+    Linsol node, before any solver construction) and the expanded graph
+    is reused for the solver — no double construction on either path.
+    A graph that cannot expand (a craft whose joint-space solve rides
+    the default `Linsol`) warns and takes the MX path, and the returned
+    `expanded` flag records which path ran so results can carry it.
+    Pass `ipopt_options={"expand": False}` to force the MX path."""
     opts = {"ipopt.print_level": 5 if verbose else 0,
             "print_time": verbose, "ipopt.sb": "yes"}
     opts.update(ipopt_options or {})
+    expanded = False
     nlp = {"x": x, "f": loss}
     if opts.pop("expand", True):
-        try:
-            solver = ca.nlpsol(name, "ipopt", nlp, {**opts, "expand": True})
-        except RuntimeError:
-            solver = ca.nlpsol(name, "ipopt", nlp, opts)
-    else:
-        solver = ca.nlpsol(name, "ipopt", nlp, opts)
+        f_sx = expand_or_none(ca.Function(f"{name}_f", [x], [loss]))
+        if f_sx is None:
+            warnings.warn(
+                f"{name}: the loss graph cannot SX-expand (a Linsol "
+                f"joint-space solve keeps it MX) — IPOPT will evaluate "
+                f"the interpreted MX graph, typically an order of "
+                f"magnitude slower per iteration. The fit still "
+                f"converges to the same optimum.",
+                RuntimeWarning, stacklevel=3)
+        else:
+            v = ca.SX.sym("v", x.numel())
+            nlp = {"x": v, "f": f_sx(v)}
+            expanded = True
+    solver = ca.nlpsol(name, "ipopt", nlp, opts)
     sol = solver(x0=np.concatenate([b.init for b in blocks]),
                  lbx=np.concatenate([b.lower for b in blocks]),
                  ubx=np.concatenate([b.upper for b in blocks]))
-    return np.asarray(sol["x"]).ravel(), sol["f"], solver.stats()
+    return (np.asarray(sol["x"]).ravel(), sol["f"], solver.stats(),
+            expanded)
 
 
 def solver_converged(stats: dict, *, who: str) -> bool:

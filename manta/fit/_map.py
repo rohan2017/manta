@@ -73,8 +73,8 @@ from ..ir._names import resolve_suffix
 from ..sim import Sim
 from ._common import (
     Free, Prior, Tied, Window, _FitBlock, convergence_line, decision_bounds,
-    format_table, laplace_sigma, pack_u_trace, pack_x0, prior_penalty,
-    resolve_traces, solve_blocks_nlp, solver_converged,
+    expand_or_none, format_table, laplace_sigma, pack_u_trace, pack_x0,
+    prior_penalty, resolve_traces, solve_blocks_nlp, solver_converged,
 )
 
 
@@ -219,7 +219,14 @@ class FitResult:
         converged       — IPOPT's success flag; False ⇒ the values below
                           are the failed solve's final iterate (a
                           `RuntimeWarning` was emitted), not an optimum.
+        expanded        — True when the NLP ran SX-expanded; False means
+                          the loss graph kept a Linsol node and IPOPT
+                          evaluated the (order-of-magnitude slower)
+                          interpreted MX graph (a `RuntimeWarning` said
+                          so at solve time).
     """
+
+    expanded: bool = True
 
     def __init__(self, blocks, fields, tie_sources, v_opt, p_opt, JtJ,
                  objective, stats, world) -> None:
@@ -287,10 +294,22 @@ class FitResult:
                 "failed solve's final iterate onto the parts.",
                 RuntimeWarning, stacklevel=2)
         for full, dim in self._fields:
-            craft_name, part_name, pname = full.split(".", 2)
-            craft = next(c for c in self._world.crafts
-                         if c.name == craft_name)
-            part = next(p for p in craft.parts if p.name == part_name)
+            try:
+                craft_name, part_name, pname = full.split(".", 2)
+            except ValueError:
+                raise ValueError(
+                    f"FitResult.apply: parameter name {full!r} does not "
+                    f"fit the `craft.part.param` shape.") from None
+            craft = next((c for c in self._world.crafts
+                          if c.name == craft_name), None)
+            part = (None if craft is None else
+                    next((p for p in craft.parts if p.name == part_name),
+                         None))
+            if part is None:
+                raise KeyError(
+                    f"FitResult.apply: no part {craft_name}.{part_name} "
+                    f"in this world for fitted parameter {full!r} — was "
+                    f"the world rebuilt since the fit?")
             theta = np.atleast_1d(self.values[full])
             setattr(part, pname,
                     float(theta[0]) if dim == 1 else tuple(theta))
@@ -490,13 +509,16 @@ class Fit:
         # MAP prior term (skipped for flat-prior components).
         loss = loss + prior_penalty(v, self._blocks)
 
-        v_opt, objective, stats = solve_blocks_nlp(
+        v_opt, objective, stats, expanded = solve_blocks_nlp(
             "fit", v, loss, self._blocks,
             verbose=verbose, ipopt_options=ipopt_options)
 
-        # Data-only Gauss-Newton information JᵀJ at the solution.
+        # Data-only Gauss-Newton information JᵀJ at the solution. The
+        # Jacobian rides the same mapaccum graph as the loss — expand it
+        # too (it is the single most expensive one-shot evaluation here).
         r = ca.vertcat(*residuals) if residuals else ca.MX.zeros(0, 1)
         J_fn = ca.Function("J", [v], [ca.jacobian(r, v)])
+        J_fn = expand_or_none(J_fn) or J_fn
         J = np.asarray(ca.DM(J_fn(v_opt)))
         JtJ = J.T @ J
 
@@ -504,8 +526,10 @@ class Fit:
         p_opt = np.asarray(ca.DM(p_fn(v_opt))).ravel()
         tie_sources = {full: src.full
                        for full, (src, _A, _b) in self._ties.items()}
-        return FitResult(self._blocks, self._fields, tie_sources, v_opt,
-                         p_opt, JtJ, objective, stats, self.world)
+        res = FitResult(self._blocks, self._fields, tie_sources, v_opt,
+                        p_opt, JtJ, objective, stats, self.world)
+        res.expanded = expanded
+        return res
 
     # ------------------------------------------------------------------
 
