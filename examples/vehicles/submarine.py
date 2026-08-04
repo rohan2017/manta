@@ -87,6 +87,8 @@ class SurfaceGPS(PositionSensor):
     `wet` is a smooth 0..1 from the local fluid density (seawater → 1, air →
     0), so the example can gate the position fix on surfacing."""
 
+    requires_fields = [FluidField]
+
     wet = Output()
 
     def update(self, ctx):

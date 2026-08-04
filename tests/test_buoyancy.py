@@ -138,21 +138,20 @@ def test_buoy_rises_when_displaced_weight_greater_than_craft_weight():
     assert cw.state["balloon"]["position"][2] > 10.0   # rose
 
 
-def test_no_fluid_field_means_no_buoyancy():
-    """Without a FluidField registered the buoy contributes nothing —
-    the craft free-falls as if there were no fluid at all."""
+def test_point_buoy_requires_fluid_field():
+    """A PointBuoy with no FluidField registered is a configuration
+    error, caught at transform build — not a silently sinking buoy.
+    ("Out of the water" is a membership question, not a missing-field
+    question — the field must exist.)"""
+    import pytest
     g = (0.0, 0.0, -9.81)
     w = World().add_field(GravityField().add_uniform(g))    # no fluid added
     c = Craft("freefall")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
-    c.add(PointBuoy("buoy", volume=1.0))   # would normally float a lot
+    c.add(PointBuoy("buoy", volume=1.0))
     w.add_craft(c, position=(0, 0, 10))
-    cw = TargetNumpy(Sim(w))
-
-    for _ in range(500):
-        cw.step(0.001)
-    # Free-fall: z = 10 - 0.5·9.81·0.25 = 10 - 1.22625 = 8.77375.
-    assert np.isclose(cw.state["freefall"]["position"][2], 8.77375, atol=1e-4)
+    with pytest.raises(ValueError, match="FluidField"):
+        Sim(w)
 
 
 def test_buoy_offset_produces_righting_torque():

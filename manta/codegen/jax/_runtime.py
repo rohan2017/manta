@@ -12,10 +12,10 @@ pure function, and (for a sim oracle) a `lax.scan` rollout you can
     loss = lambda p: jnp.sum((rollout(x0, U, N0, p, dt, 0.0)[1][s] - Z)**2)
     g = jax.grad(loss)(params)                # exact, end-to-end
 
-Limitations: kernels must SX-expand — flat (joint-free) crafts only;
-a jointed craft's joint-space solve keeps a runtime-pivoting Linsol
-node and raises when that kernel is first used (translation is lazy
-per kernel, so the rest of the Module stays usable).
+Jointed crafts are supported: a kernel whose joint-space solve keeps a
+runtime-pivoting Linsol node (and so cannot SX-expand whole) is cut at
+the solve nodes and recomposed around `jnp.linalg.solve` — see
+`_translate.py`. Translation stays lazy per kernel.
 """
 
 from __future__ import annotations

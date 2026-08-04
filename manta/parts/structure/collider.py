@@ -49,6 +49,8 @@ class Collider(Part):
                     0 → frictionless contact (the prior behaviour).
     """
 
+    requires_fields = [CollisionField]
+
     stiffness: float = Parameter(5e3)
     damping:   float = Parameter(50.0)
     friction:  tuple = Parameter((0.0, 0.0, 0.0))

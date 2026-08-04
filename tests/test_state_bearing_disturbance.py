@@ -22,8 +22,7 @@ from manta.fields import (
 )
 from manta.ir.frames import WorldFrame
 from manta.ir.types import Vec3
-from manta.parts import Mass
-from manta.parts import RandomWalkNoise
+from manta.parts import Mass, RandomWalkNoise, State
 
 
 class WindBias(Disturbance):
@@ -114,6 +113,78 @@ def test_ekf_state_dict_nests_disturbance_state():
     assert "velocity" in sd["wind"]
     # Seeded at zero.
     np.testing.assert_allclose(sd["wind"]["velocity"], np.zeros(3),
+                               atol=1e-12)
+
+
+class SteadyWind(Disturbance):
+    """A constant wind velocity held as a plain Vec3 State slot (no
+    noise) — exercises non-scalar disturbance-declared State."""
+    field_value_shape = FluidState
+    velocity = State((1.0, -2.0, 0.5), manifold="R3")
+
+    def contribute_at_sym(self, point, t):
+        return FluidState(
+            density=ca.MX(0.0),
+            pressure=ca.MX(0.0),
+            temperature=ca.MX(0.0),
+            viscosity=ca.MX(0.0),
+            velocity=Vec3[WorldFrame].from_mx(self.velocity._mx),
+        )
+
+
+def _build_vec_state_world():
+    w = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
+    ff = FluidField()
+    ff.add(SteadyWind(name="steady"))
+    w.add_field(ff)
+    c = Craft("drone")
+    c.add(Mass("body", mass=1.0))
+    w.add_craft(c, position=(0.0, 0.0, 5.0))
+    return w, c
+
+
+def test_vec_disturbance_state_compiles_and_seeds():
+    """A Vec3 State on a disturbance compiles; the initial state dict
+    carries the declared init as a 3-vector."""
+    w, _ = _build_vec_state_world()
+    cw = TargetNumpy(Sim(w))
+    init = cw.initial_state()
+    assert "steady" in init
+    np.testing.assert_allclose(init["steady"]["velocity"],
+                               (1.0, -2.0, 0.5))
+
+
+def test_vec_disturbance_state_is_identity_passthrough():
+    """Plain (noiseless) vector State holds its value across steps, and
+    a runtime override sticks."""
+    w, _ = _build_vec_state_world()
+    cw = TargetNumpy(Sim(w))
+    for _ in range(10):
+        cw.step(0.01)
+    np.testing.assert_allclose(cw.state["steady"]["velocity"],
+                               (1.0, -2.0, 0.5), atol=1e-12)
+    cw.state["steady"]["velocity"] = np.array([3.0, 0.0, 0.0])
+    cw.step(0.01)
+    np.testing.assert_allclose(cw.state["steady"]["velocity"],
+                               (3.0, 0.0, 0.0), atol=1e-12)
+
+
+def test_vec_disturbance_state_spec_slot():
+    from manta.ir.state_spec import StateSpec
+    w, _ = _build_vec_state_world()
+    spec = StateSpec.from_world(w)
+    slot = spec.slot("steady.velocity")
+    assert slot.ambient_dim == 3
+    assert slot.tangent_dim == 3
+    assert slot.manifold.kind == "vec"
+
+
+def test_vec_disturbance_state_reaches_ekf():
+    w, _ = _build_vec_state_world()
+    ekf = TargetNumpy(EKF(w))
+    sd = ekf.state_dict()
+    assert "steady" in sd
+    np.testing.assert_allclose(sd["steady"]["velocity"], (1.0, -2.0, 0.5),
                                atol=1e-12)
 
 

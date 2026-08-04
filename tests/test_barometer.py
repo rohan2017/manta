@@ -57,14 +57,17 @@ def test_barometer_reads_hydrostatic_pressure_underwater():
     assert abs(_read_pressure(w) - expected) < 1e-3
 
 
-def test_barometer_with_no_fluid_reads_zero():
-    """No FluidField registered → zero pressure (the empty-field default)."""
+def test_barometer_requires_fluid_field():
+    """A Barometer with no FluidField registered is a configuration
+    error, caught at transform build — not a zero reading."""
+    import pytest
     w = World()
     c = Craft("probe")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(Barometer("baro"))
     w.add_craft(c, position=(0.0, 0.0, 100.0))
-    assert _read_pressure(w) == 0.0
+    with pytest.raises(ValueError, match="FluidField"):
+        Sim(w)
 
 
 def test_noisy_barometer_is_an_ekf_sensor():

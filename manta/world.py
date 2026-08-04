@@ -44,6 +44,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
+
 from .craft import Craft
 from .fields import Field
 
@@ -290,7 +292,12 @@ class World:
                     continue
                 init: dict[str, Any] = {}
                 for sname, sdecl in sdecls.items():
-                    init[sname] = float(sdecl.init)
+                    # Mirror Craft.initial_state: scalar slots as float,
+                    # vec/quat slots as ndarray.
+                    if sdecl.manifold.kind == "scalar":
+                        init[sname] = float(sdecl.init)
+                    else:
+                        init[sname] = np.asarray(sdecl.init, dtype=float)
                 for nname, ndecl in ndecls.items():
                     init.update(ndecl.initial_state_entries(nname, dist))
                 out[dist.name] = init

@@ -16,7 +16,10 @@ from ..ir.wrench import Wrench
 from .structure.mass import Mass
 from .structure.point_buoy import PointBuoy
 from .structure.collider import Collider
-from .articulation.joint import ArticulatedJoint, PrismaticJoint, RevoluteJoint
+from .articulation.joint import (ArticulatedJoint, PrismaticJoint,
+                                 RevoluteDOF, RevoluteJoint)
+from .articulation.motor import Motor
+from .thermal.thermal_mass import ThermalMass
 from .sensor.imu import IMU
 from .sensor.magnetometer import Magnetometer
 from .sensor.position_sensor import PositionSensor
@@ -41,8 +44,9 @@ __all__ = [
     "Parameter", "Input", "Output", "State", "PartUpdate",
     "Noise", "WhiteNoise", "RandomWalkNoise", "unit_axis",
     "Wrench",
-    "Mass", "PointBuoy", "Collider",
-    "ArticulatedJoint", "PrismaticJoint", "RevoluteJoint",
+    "Mass", "PointBuoy", "Collider", "ThermalMass",
+    "ArticulatedJoint", "Motor", "PrismaticJoint", "RevoluteDOF",
+    "RevoluteJoint",
     "IMU", "VelocitySensor", "Magnetometer", "PositionSensor", "Barometer",
     "ProjectiveCamera", "BBoxCamera", "CentroidCamera",
     "Thruster",

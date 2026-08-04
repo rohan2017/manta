@@ -79,7 +79,7 @@ def symbolic_inertia_rollup(root_part, *, param_subs=()) -> dict:
 
     Raises ValueError if total (declared) mass is zero.
     """
-    from ..parts.articulation.joint import PrismaticJoint, RevoluteJoint
+    from ..parts.articulation.joint import PrismaticJoint, RevoluteDOF
     from ..parts._trace import is_promoted
     from ..parts.base import CompositePart
 
@@ -111,7 +111,7 @@ def symbolic_inertia_rollup(root_part, *, param_subs=()) -> dict:
         R_craft_from_input_mx = R_craft_from_parent_output_mx
 
         r_out_in_craft_mx = r_part_in_craft_mx
-        if isinstance(part, RevoluteJoint):
+        if isinstance(part, RevoluteDOF):
             axis_mx = ca.MX(np.asarray(part.axis, dtype=float).reshape(3, 1))
             angle_attr = part.angle
             angle_mx = (angle_attr._mx if is_promoted(angle_attr)

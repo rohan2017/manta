@@ -37,7 +37,9 @@ def test_at_rest_length_zero_force():
 
 
 def test_stretched_spring_pulls_crafts_together():
-    """Start crafts farther apart than rest length → spring pulls them in."""
+    """Start crafts farther apart than rest length → the taut tether
+    pulls them in; once inside rest length it goes slack, so the final
+    separation is at most rest length (never pushed back out)."""
     L_rest = 5.0
     L_init = 7.0
     a = _make_craft("a")
@@ -55,12 +57,14 @@ def test_stretched_spring_pulls_crafts_together():
     pa = np.array(cw.state["a"]["position"]).ravel()
     pb = np.array(cw.state["b"]["position"]).ravel()
     dist = np.linalg.norm(pb - pa)
-    # With damping the system settles to rest length.
-    assert np.isclose(dist, L_rest, atol=0.05)
+    # The pull happened, and the slack rope never pushed them back apart.
+    assert dist < L_init - 0.5
+    assert dist <= L_rest + 0.05
 
 
-def test_compressed_spring_pushes_crafts_apart():
-    """Start crafts closer than rest length → spring pushes them apart."""
+def test_slack_tether_exerts_no_force():
+    """Start crafts closer than rest length → the tether is slack and
+    exerts exactly zero force; nothing moves."""
     L_rest = 5.0
     L_init = 3.0
     a = _make_craft("a")
@@ -77,8 +81,31 @@ def test_compressed_spring_pushes_crafts_apart():
 
     pa = np.array(cw.state["a"]["position"]).ravel()
     pb = np.array(cw.state["b"]["position"]).ravel()
-    dist = np.linalg.norm(pb - pa)
-    assert np.isclose(dist, L_rest, atol=0.05)
+    np.testing.assert_allclose(pa, np.zeros(3), atol=1e-12)
+    np.testing.assert_allclose(pb, (L_init, 0, 0), atol=1e-12)
+
+
+def test_damper_cannot_push_while_taut():
+    """Barely taut with B closing fast: the raw spring+damper sum is
+    strongly compressive, but a rope can't push — the tension clamp
+    holds the force at ~zero instead of shoving A away from B."""
+    a = _make_craft("a")
+    b = _make_craft("b")
+    w = World()
+    w.add_craft(a, position=(0, 0, 0))
+    # Stretch = 0.1 m (spring +1 N), closing at 10 m/s (damper −50 N).
+    w.add_craft(b, position=(5.1, 0, 0), velocity=(-10.0, 0, 0))
+    w.add_coupling(Tether(a, "hook", b, "hook",
+                          stiffness=10.0, damping=5.0, rest_length=5.0))
+    cw = TargetNumpy(Sim(w))
+
+    cw.step(0.001)
+
+    va = np.array(cw.state["a"]["velocity"]).ravel()
+    # A pushed away from B would move in −x. Old rigid-spring model:
+    # Δv_a ≈ −49 N · 1 ms = −0.049 m/s. Clamped: essentially nothing.
+    assert va[0] > -1e-6
+    assert abs(va[0]) < 1e-3
 
 
 def test_momentum_conservation_no_external_forces():
@@ -118,7 +145,8 @@ def test_damping_dissipates_relative_motion():
                           stiffness=50.0, damping=10.0, rest_length=5.0))
     cw = TargetNumpy(Sim(w))
 
-    # Run with damping.
+    # Run with damping. Elastic PE only accrues while taut (slack rope
+    # stores nothing).
     energies = []
     for i in range(3000):
         cw.step(0.001)
@@ -128,7 +156,8 @@ def test_damping_dissipates_relative_motion():
             pa = np.array(cw.state["a"]["position"]).ravel()
             pb = np.array(cw.state["b"]["position"]).ravel()
             ke = 0.5 * (np.dot(va, va) + np.dot(vb, vb))
-            pe = 0.5 * 50.0 * (np.linalg.norm(pb - pa) - 5.0) ** 2
+            stretch = max(0.0, np.linalg.norm(pb - pa) - 5.0)
+            pe = 0.5 * 50.0 * stretch ** 2
             energies.append(ke + pe)
 
     # Energy should be monotonically decreasing (with some tolerance for

@@ -1,12 +1,27 @@
-"""Tether — spring-damper between two TetherEndpoint Parts.
+"""Tether — slack-capable spring-damper between two TetherEndpoint Parts.
 
-  F = -k·(L − L_rest) · r̂   −   c · (v_rel · r̂) · r̂
+  T_raw = k·(L − L_rest) + c·(v_rel · r̂)
+  T     = w_taut(L − L_rest) · w_tension(T_raw) · T_raw        (T ≥ 0-ish)
+  F_on_A = +T · r̂,   F_on_B = −T · r̂
 
 where L is the instantaneous distance between endpoints in the world
-frame, r̂ is the unit vector from A to B, v_rel is the relative anchor-
-frame velocity of B's endpoint minus A's endpoint. The force is applied
-to A in the direction r̂ (pulling A toward B when stretched and
-extending v_rel · r̂ > 0), with equal-and-opposite F on B.
+frame, r̂ is the unit vector from A to B, and v_rel is the relative
+anchor-frame velocity of B's endpoint minus A's endpoint. A tether is a
+rope, not a rod: it transmits **tension only**. Two compact-support
+gates (`hermite_blend`) enforce that:
+
+  * `w_taut` — zero whenever the tether is slack by more than
+    `slack_smoothing` metres. A slack rope exerts no force at all —
+    neither spring push nor damper drag.
+  * `w_tension` — zero whenever the raw spring+damper sum would be
+    compressive (a strong damper during rapid approach cannot shove the
+    crafts apart; the rope just goes momentarily slack).
+
+Both gates have compact support, so outside their blend bands the force
+is exactly zero — a slack tether contributes nothing to the graph's
+value or Jacobian. Inside the bands the transition is C¹ (the same
+`smoothstep` the fluid regime layering relies on), keeping EKF/LQR
+Jacobians regular at the taut/slack boundary.
 
 Each endpoint Part on the craft has a `Part.transform` giving the
 attachment offset in body frame. The Tether reads both transforms,
@@ -19,31 +34,36 @@ produce the correct torques on each craft automatically.
 
 from __future__ import annotations
 
+import casadi as ca
+
 from ..ir.frames import WorldFrame, CraftFrame
 from ..ir.types import Vec3
 from ..ir.wrench import Wrench
-from ..smoothing import soft_norm
+from ..smoothing import hermite_blend, soft_norm
 from .base import Coupling
 
 
 class Tether(Coupling):
-    """Linear spring-damper tether between two TetherEndpoint Parts.
+    """Slack-capable spring-damper tether between two TetherEndpoint Parts.
 
     Args:
         craft_a, craft_b       — the two coupled crafts (Craft instances).
         endpoint_a, endpoint_b — names of the TetherEndpoint Parts on
                                   craft_a / craft_b (strings).
-        stiffness              — spring constant k, N/m.
-        damping                — damper constant c, N·s/m.
-        rest_length            — natural length L_rest, m. The spring
-                                  exerts zero force at exactly this
-                                  separation.
+        stiffness              — spring constant k, N/m (taut only).
+        damping                — damper constant c, N·s/m (taut only).
+        rest_length            — natural length L_rest, m. Slack below,
+                                  taut above.
+        slack_smoothing        — half-width, m, of the C¹ blend band
+                                  around the taut/slack boundary (and,
+                                  scaled by k, of the tension-only
+                                  clamp). 0 ⇒ hard switches.
 
-    Convention: tension positive — when L > rest_length the tether pulls
-    A toward B (and B toward A). Compression (L < rest_length) pushes
-    them apart, mimicking a rigid rod. For a string that goes slack,
-    set stiffness=0 below rest_length using a custom subclass — the v1
-    Tether models a rigid spring (no slack).
+    Convention: tension only. When L > rest_length the tether pulls A
+    toward B (and B toward A), the damper resisting length rate; the
+    net force is clamped so it can never push. When L < rest_length the
+    tether is slack and exerts exactly zero force — the crafts move
+    freely until the rope tautens again.
     """
 
     def __init__(self,
@@ -54,7 +74,8 @@ class Tether(Coupling):
                  *,
                  stiffness: float,
                  damping: float = 0.0,
-                 rest_length: float = 0.0) -> None:
+                 rest_length: float = 0.0,
+                 slack_smoothing: float = 1e-3) -> None:
         self._craft_a = craft_a
         self._craft_b = craft_b
         self.endpoint_a_name = str(endpoint_a)
@@ -62,6 +83,7 @@ class Tether(Coupling):
         self.stiffness = float(stiffness)
         self.damping   = float(damping)
         self.rest_length = float(rest_length)
+        self.slack_smoothing = float(slack_smoothing)
         # Resolve endpoints now — a bad name fails here, at the line that
         # wrote it, not at compile. Add endpoint Parts before the Tether.
         self.endpoint_a = self._find_endpoint(craft_a, self.endpoint_a_name)
@@ -152,10 +174,20 @@ class Tether(Coupling):
         # Tension positive when stretched; positive v_along means A and
         # B moving apart (damper resists that).
         stretch = L - self.rest_length
-        v_along = v_rel.dot(r_hat)
-        F_mag = self.stiffness * stretch + self.damping * v_along
+        v_along_mx = ca.dot(v_rel._mx, r_hat_mx)
+        T_raw = self.stiffness * stretch + self.damping * v_along_mx
 
-        # Force on A is along +r̂ (toward B) when stretched/separating.
+        # Rope, not rod: two compact-support gates. w_taut kills the
+        # whole force when slack (a slack rope neither springs nor
+        # damps); w_tension kills a compressive net sum (a hard damper
+        # during rapid approach must not push — the rope goes slack
+        # instead). Compact support ⇒ exactly zero outside the bands.
+        w_taut = hermite_blend(stretch, self.slack_smoothing)
+        w_tension = hermite_blend(
+            T_raw, self.stiffness * self.slack_smoothing)
+        F_mag = w_taut * w_tension * T_raw
+
+        # Force on A is along +r̂ (toward B) when taut and stretched.
         F_on_a_anchor = r_hat * F_mag
         F_on_b_anchor = F_on_a_anchor * (-1.0)
 

@@ -15,7 +15,14 @@ column-major (CasADi layout); each output's nonzeros scatter back into
 its dense shape through the sparsity pattern's triplets.
 
 Kernels containing runtime-pivoting Linsol nodes (a jointed craft's
-joint-space solve) cannot expand — `translate` raises with the reason.
+joint-space solve) cannot SX-expand whole. For those, `translate` cuts
+the (fully inlined) MX graph at each `OP_SOLVE` node instead: the
+pieces between solves become plain SX-expandable stage kernels, and the
+solves themselves are mapped to `jnp.linalg.solve` — LAPACK's
+partially-pivoted LU, the same class of runtime-pivoting solve CasADi's
+Linsol performs, so a configuration-degenerate joint-space matrix is
+handled the same way. The composed function is jitted / differentiated
+as one program (JAX differentiates through `linalg.solve` natively).
 """
 
 from __future__ import annotations
@@ -83,15 +90,23 @@ def translate(fn: ca.Function, *, jit: bool = True):
     The result takes `fn.n_in()` array-likes (any shape; flattened
     column-major to the kernel's layout) and returns a tuple of
     `fn.n_out()` dense `jnp` arrays in the kernel's output shapes.
+
+    A kernel that cannot SX-expand because it contains Linsol solve
+    nodes (a jointed craft) is cut at those nodes and recomposed around
+    `jnp.linalg.solve` — see `_translate_around_solves`.
     """
     try:
         sx = fn.expand()
     except Exception as e:                       # Linsol nodes, etc.
-        raise NotImplementedError(
-            f"TargetJax: kernel {fn.name()!r} cannot expand to SX "
-            f"(typically a jointed craft's runtime-pivoting joint-space "
-            f"solve). Underlying error: {e}") from e
+        wrapper = _translate_around_solves(fn, cause=e)
+        return jax.jit(wrapper) if jit else wrapper
+    wrapper = _translate_sx(sx, fn.name())
+    return jax.jit(wrapper) if jit else wrapper
 
+
+def _translate_sx(sx: ca.Function, name: str):
+    """The SX-tape walk: emit one Python line per scalar instruction and
+    exec it into a function over flattened args (unjitted)."""
     src = ["def _kernel(args):"]
     out_exprs: list[list[str | None]] = [
         [None] * sx.nnz_out(j) for j in range(sx.n_out())]
@@ -118,7 +133,7 @@ def translate(fn: ca.Function, *, jit: bool = True):
             src.append(f"    w{o[0]} = {expr}")
         else:
             raise NotImplementedError(
-                f"TargetJax: kernel {fn.name()!r} uses unsupported CasADi "
+                f"TargetJax: kernel {name!r} uses unsupported CasADi "
                 f"op code {op} — extend the tables in jax/_translate.py.")
 
     rets = []
@@ -153,11 +168,138 @@ def translate(fn: ca.Function, *, jit: bool = True):
     def wrapper(*args):
         if len(args) != sx.n_in():
             raise TypeError(
-                f"{fn.name()}: expected {sx.n_in()} argument(s) "
+                f"{name}: expected {sx.n_in()} argument(s) "
                 f"({[sx.name_in(i) for i in range(sx.n_in())]}), "
                 f"got {len(args)}.")
         flat = [jnp.asarray(a, dtype=jnp.float64).T.ravel() for a in args]
         return kernel(flat)
 
-    wrapper.__name__ = f"jax_{fn.name()}"
-    return jax.jit(wrapper) if jit else wrapper
+    wrapper.__name__ = f"jax_{name}"
+    return wrapper
+
+
+# ---------------------------------------------------------------------------
+# Linsol-bearing kernels: cut the MX graph at solve nodes
+# ---------------------------------------------------------------------------
+
+def _postorder(exprs):
+    """Iterative post-order walk of an MX DAG (deps before dependents),
+    deduplicated by node identity."""
+    seen: set[int] = set()
+    order: list[ca.MX] = []
+    stack = [(e, False) for e in exprs]
+    while stack:
+        n, done = stack.pop()
+        if done:
+            order.append(n)
+            continue
+        h = hash(n)
+        if h in seen:
+            continue
+        seen.add(h)
+        stack.append((n, True))
+        for i in range(n.n_dep()):
+            stack.append((n.dep(i), False))
+    return order
+
+# Call-node inlining rounds. Each round inlines one nesting level; manta
+# kernels nest at most (entry → world tick), so 32 is a generous bound
+# against a substitution that fails to make progress.
+_MAX_INLINE_ROUNDS = 32
+
+
+def _inline_calls(outs: list[ca.MX]) -> list[ca.MX]:
+    """Replace every embedded function-call node in `outs` with its
+    callee's inlined body (repeatedly, until no call nodes remain), so
+    solve nodes buried in nested functions surface in one flat graph."""
+    for _ in range(_MAX_INLINE_ROUNDS):
+        nodes = _postorder(outs)
+        calls = {hash(n): n for n in nodes if n.is_call()}
+        if not calls:
+            return outs
+        inlined = {
+            h: c.which_function().call(
+                [c.dep(i) for i in range(c.n_dep())], True, False)
+            for h, c in calls.items()}
+        old, new = [], []
+        multi: set[int] = set()
+        # Multi-output calls are read through output-selector nodes.
+        for n in nodes:
+            if n.is_output() and hash(n.dep(0)) in inlined:
+                h = hash(n.dep(0))
+                old.append(n)
+                new.append(inlined[h][n.which_output()])
+                multi.add(h)
+        # Single-output calls ARE the value node.
+        for h, c in calls.items():
+            if h not in multi:
+                old.append(c)
+                new.append(inlined[h][0])
+        outs = ca.graph_substitute(outs, old, new)
+    raise NotImplementedError(
+        "TargetJax: function-call inlining did not converge — the kernel "
+        "embeds calls nested deeper than expected.")
+
+
+def _translate_around_solves(fn: ca.Function, *, cause: Exception):
+    """Lower a kernel whose whole-graph SX expansion failed.
+
+    Inline the kernel to one flat MX graph and cut it at every
+    `OP_SOLVE` (Linsol) node — the reason a jointed craft's tick cannot
+    expand. Each cut piece is a plain SX-expandable kernel; the solves
+    are re-emitted as `jnp.linalg.solve` between them:
+
+        stage_i : (args, x_0..x_{i-1}) -> A_i, b_i     (SX-translated)
+        x_i     = jnp.linalg.solve(A_i, b_i)
+        post    : (args, x_0..x_{n-1}) -> outputs      (SX-translated)
+
+    Solves are cut in dependency order, so a solve whose A/b depend on
+    an earlier solve's result reads it as a stage argument. A node
+    carrying CasADi's internal transpose flag (`Solve<Tr=true>`, from
+    autodiffed graphs) solves against Aᵀ. If the graph contains no
+    solve nodes the original expansion failure had some other cause —
+    re-raise it.
+    """
+    ins = [ca.MX.sym(fn.name_in(i), fn.sparsity_in(i))
+           for i in range(fn.n_in())]
+    outs = _inline_calls(list(fn.call(ins, True, False)))
+    solves = [n for n in _postorder(outs) if n.op() == ca.OP_SOLVE]
+    if not solves:
+        raise NotImplementedError(
+            f"TargetJax: kernel {fn.name()!r} cannot expand to SX and "
+            f"contains no Linsol solve nodes to cut around. "
+            f"Underlying error: {cause}") from cause
+
+    x_syms: list[ca.MX] = []
+    stage_fns = []
+    for i, s in enumerate(solves):
+        b_raw, A_raw = s.dep(0), s.dep(1)   # Solve node: dep0 = b, dep1 = A
+        if s.info().get("tr", False):        # Solve<Tr=true>: x = Aᵀ \ b
+            A_raw = A_raw.T
+        if x_syms:
+            A_raw, b_raw = ca.graph_substitute(
+                [A_raw, b_raw], solves[:i], x_syms)
+        stage = ca.Function(f"{fn.name()}_linsol_stage{i}",
+                            ins + x_syms,
+                            [ca.densify(A_raw), ca.densify(b_raw)])
+        stage_fns.append(_translate_sx(stage.expand(), stage.name()))
+        x_syms.append(ca.MX.sym(f"linsol_x{i}", *s.shape))
+
+    post = ca.Function(f"{fn.name()}_linsol_post", ins + x_syms,
+                       ca.graph_substitute(outs, solves, x_syms))
+    post_fn = _translate_sx(post.expand(), post.name())
+    n_in = fn.n_in()
+    name = fn.name()
+
+    def wrapper(*args):
+        if len(args) != n_in:
+            raise TypeError(
+                f"{name}: expected {n_in} argument(s), got {len(args)}.")
+        xs: list = []
+        for stage in stage_fns:
+            A, b = stage(*args, *xs)
+            xs.append(jnp.linalg.solve(A, b))
+        return post_fn(*args, *xs)
+
+    wrapper.__name__ = f"jax_{name}"
+    return wrapper

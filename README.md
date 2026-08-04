@@ -130,7 +130,18 @@ scope:
 
 Stock parts: `Mass`, `PointBuoy`, `Collider`, `Thruster` (polynomial
 in throttle), `RevoluteJoint` and `PrismaticJoint` (1-DOF joints, with Mass children for
-rotors), `DragSurface`, `Aerofoil` (Re-aware, with the `naca()` helper)
+rotors), `Motor` (voltage-commanded DC motor on a revolute DOF:
+back-EMF torque-speed rolloff, current limit, gearbox),
+`ThermalMass` (lumped thermal node — a purely coefficient-based heat
+network, no spatial field: conduction links via `connect(other,
+conductance=…)` where the W/K coefficient *is* the joint — metal
+bracket, plastic standoff, heat pipe; an `ambient_conductance` leak to
+either a scriptable `ambient_temperature` input or, with
+`ambient="fluid"`, the FluidField's temperature at the part's position
+— a hull node feels the water it is in; and a `source=` hook that reads
+any part's `dissipated_heat()` — a Motor's i²R winding loss heats its
+node with no extra wiring),
+`DragSurface`, `Aerofoil` (Re-aware, with the `naca()` helper)
 and `ControlSurface`, `IMU` (gyro+accel, with Kalibr 4-parameter noise
 model), `VelocitySensor`, `Magnetometer`, `PositionSensor`, `Barometer`,
 `TetherEndpoint`.
@@ -275,15 +286,17 @@ of a Module — no per-transform code anywhere:
 |---|---|---|
 | `TargetNumpy(x)` | any Module / transform | `NumpyRuntime` — surface derived from the Module's shape (sim `step`/`outputs`, filter `predict`/`update`, regulator `control`, recurrence `step`) |
 | `TargetCpp(x, out_dir, class_name)` | any Module / transform | C++ static lib: typed Eigen class over flat-C kernels (+ CMake) |
-| `TargetJax(x)` | any Module / transform (flat crafts) | `JaxModule` — every kernel as a jitted JAX function + a `lax.scan` rollout you can `jax.grad`/`jax.vmap` through (needs `pip install jax`; not a core dependency) |
+| `TargetJax(x)` | any Module / transform | `JaxModule` — every kernel as a jitted JAX function + a `lax.scan` rollout you can `jax.grad`/`jax.vmap` through (needs `pip install jax`; not a core dependency) |
 | `TargetWasm(x, out_dir, class_name)` | any Module / transform | browser bundle: the C++ backend's flat-C kernels behind a flat-double C ABI + Emscripten `build.sh`, a JSON descriptor, and an ES-module JS runtime (generic `Runtime.call` + typed `Sim`/`Filter`/`Regulator` views mirroring the numpy ones) |
 
 `TargetJax` lowers by expanding each kernel to a CasADi SX instruction
 tape and emitting equivalent JAX source (one line per scalar op) —
 outputs match CasADi to machine precision, and `jax.grad` matches
-CasADi jacobians exactly. Limitation: kernels must SX-expand, so
-articulated (jointed) crafts — whose joint-space solve needs a
-runtime-pivoting Linsol — stay on numpy/C++.
+CasADi jacobians exactly. Articulated (jointed) crafts — whose
+joint-space solve keeps a runtime-pivoting Linsol node that can't
+SX-expand — are handled by cutting the graph at each solve node and
+recomposing around `jnp.linalg.solve` (LAPACK's pivoted LU, the same
+class of solve), so they lower and differentiate like everything else.
 
 `TargetWasm` reuses `TargetCpp`'s exact math path (same densified flat-C
 kernels) and adds only the marshalling glue, so the numbers match every

@@ -140,19 +140,17 @@ def test_offset_drag_surface_produces_torque():
     assert abs(omega[1]) < 1e-9
 
 
-def test_no_fluid_field_means_no_drag():
-    """Without a FluidField registered the drag surface contributes
-    nothing — craft cruises forever."""
+def test_drag_surface_requires_fluid_field():
+    """A DragSurface with no FluidField registered is a configuration
+    error, caught at transform build — not a silently drag-free hull."""
+    import pytest
     w = World().add_field(GravityField().add_uniform((0, 0, 0)))    # no fluid
     c = Craft("cruise")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
-    c.add(DragSurface.isotropic_quadratic("hull", area=1.0, drag_coefficient=10.0))   # massive A·Cd
+    c.add(DragSurface.isotropic_quadratic("hull", area=1.0, drag_coefficient=10.0))
     w.add_craft(c, velocity=(1.0, 0.0, 0.0))
-    cw = TargetNumpy(Sim(w))
-    for _ in range(1000):
-        cw.step(0.001)
-    vx = float(np.array(cw.state["cruise"]["velocity"]).ravel()[0])
-    assert np.isclose(vx, 1.0, atol=1e-9)
+    with pytest.raises(ValueError, match="FluidField"):
+        Sim(w)
 
 
 # ---------------------------------------------------------------------------

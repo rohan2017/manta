@@ -131,6 +131,8 @@ class Aerofoil(Part):
                        induced_k ≈ 1/(π·AR·e) (≈0.05 for an AR-6 wing).
     """
 
+    requires_fields = [FluidField]
+
     area:        float = Parameter(0.1)
     chord:       float = Parameter(0.2)
     chord_axis:  tuple = Parameter((1.0, 0.0, 0.0))

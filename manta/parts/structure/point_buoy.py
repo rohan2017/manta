@@ -41,6 +41,8 @@ class PointBuoy(Part):
     response).
     """
 
+    requires_fields = [FluidField, GravityField]
+
     volume: float = Parameter(1e-3)     # m³
 
     def __init__(self, name: str, **overrides) -> None:

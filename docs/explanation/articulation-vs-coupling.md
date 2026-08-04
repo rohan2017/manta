@@ -100,11 +100,12 @@ clamp and viscous damping. (See [parts](parts.md) and
 
 **A coupling is a force.** There is no constraint — the two bodies are
 free, and the only thing holding them together is the wrench you compute.
-A `Tether` is a spring-damper: if you make the spring very stiff it
-*approximates* a rigid link, but it is never exactly rigid, and a stiff
-spring is a stiff ODE (small `dt`, possible ringing). In exchange you get
-two genuinely independent bodies that can separate, swing freely, wrap, go
-slack — things a 1-DOF joint cannot represent. Because the wrench is
+A `Tether` is a tension-only spring-damper — taut it pulls, slack it
+exerts nothing, and it can never push. If you make the spring very stiff
+it *approximates* a rigid cable, but it is never exactly rigid, and a
+stiff spring is a stiff ODE (small `dt`, possible ringing). In exchange
+you get two genuinely independent bodies that can separate, swing
+freely, wrap, go slack — things a 1-DOF joint cannot represent. Because the wrench is
 evaluated from both crafts' states at once, a coupling **fuses the two
 crafts into one compiled tick** (and, downstream, into one joint EKF block
 if you filter across them).

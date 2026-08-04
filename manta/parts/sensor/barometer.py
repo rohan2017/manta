@@ -49,6 +49,8 @@ class Barometer(Part):
                smooth function.
     """
 
+    requires_fields = [FluidField]
+
     rate: float = Parameter(None)
 
     pressure_noise = WhiteNoise("R1", sigma=0.0)

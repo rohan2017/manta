@@ -124,6 +124,8 @@ class DragSurface(Part):
     # declaration machinery sees a well-typed slot at class scope; the
     # actual value is always set by __init__ from `force`/`force_tensors`
     # (resp. torque variants), so this default never reaches update().
+    requires_fields = [FluidField]
+
     force_tensors:  tuple = Parameter((np.zeros((3, 3)),))
     torque_tensors: tuple = Parameter((np.zeros((3, 3)),))
 

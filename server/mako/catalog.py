@@ -157,6 +157,8 @@ class SurfaceGPS(PositionSensor):
     `wet` is a smooth 0..1 from the local fluid density (seawater → 1, air →
     0) — a submerged antenna gets no fix."""
 
+    requires_fields = [FluidField]
+
     wet = Output()
 
     def update(self, ctx):

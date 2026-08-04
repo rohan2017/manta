@@ -154,16 +154,17 @@ def test_magnetometer_reads_rotated_field_under_craft_rotation():
         (0.0, -1.0, 0.0), atol=1e-9)
 
 
-def test_magnetometer_with_no_field_reads_zero():
+def test_magnetometer_requires_mag_field():
+    """A magnetometer with no MagField to read is a configuration
+    error, caught at transform build — not a zero reading."""
+    import pytest
     c = Craft("nomag")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(Magnetometer("m"))
     w = World().add_field(GravityField(g=(0, 0, 0)))
     w.add_craft(c)
-    sim = TargetNumpy(Sim(w))
-    sim.step(0.001)
-    np.testing.assert_allclose(np.array(sim.outputs()["nomag"]["m.B"]).ravel(),
-                               np.zeros(3), atol=1e-12)
+    with pytest.raises(ValueError, match="MagField"):
+        Sim(w)
 
 
 def test_magnetometer_picks_up_dipole_at_local_position():

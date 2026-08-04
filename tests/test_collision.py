@@ -77,20 +77,18 @@ def test_multiple_obstacles_superpose_at_corner():
 # Collider Part dynamics
 # ---------------------------------------------------------------------------
 
-def test_no_collision_field_means_no_contact_force():
-    """Without a CollisionField registered, a Collider on a free-falling
-    body has no effect — the body just free-falls."""
+def test_collider_requires_collision_field():
+    """A Collider with no CollisionField registered is a configuration
+    error, caught at transform build — not a silently inert part."""
+    import pytest
     g = (0.0, 0.0, -9.81)
     w = World().add_field(GravityField().add_uniform(g))
     c = Craft("ball")
     c.add(Mass("body", mass=1.0, moi=(0.01, 0.01, 0.01)))
     c.add(Collider("contact", stiffness=1e5, damping=10.0))
     w.add_craft(c, position=(0, 0, 5))
-    cw = TargetNumpy(Sim(w))
-    for _ in range(500):
-        cw.step(0.001)
-    # Free-fall from z=5 for 0.5s: z = 5 - 0.5·g·t² = 5 - 1.22625 = 3.774.
-    assert np.isclose(cw.state["ball"]["position"][2], 3.774, atol=1e-3)
+    with pytest.raises(ValueError, match="CollisionField"):
+        Sim(w)
 
 
 def test_ball_rests_on_ground_at_compression_equilibrium():

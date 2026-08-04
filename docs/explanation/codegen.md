@@ -21,7 +21,8 @@ generic lowering of a Module.
   C ABI + a JS runtime + an Emscripten build, so a Module runs in the
   browser. Reuses the C++ backend's math path verbatim; adds only the
   marshalling glue.
-- **`TargetJax`** — a jitted `lax.scan` rollout (flat crafts).
+- **`TargetJax`** — a jitted `lax.scan` rollout (jointed crafts lower
+  via a `jnp.linalg.solve` cut at their Linsol nodes).
 - **Identical loops across backends** — the property that makes
   "develop in Python, deploy in C++" work.
 

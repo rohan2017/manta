@@ -11,7 +11,7 @@ framework expresses each child's TickContext in its own moving frame and
 rotates its emitted wrench back to the body — so a part needs no
 awareness of being on a joint.
 
-Two concrete DOF types:
+Concrete DOF types:
 
   * `RevoluteJoint`  — rotation about `axis`; state (`angle`, `rate`),
                        commanded via `torque_cmd` (clamped to
@@ -19,6 +19,17 @@ Two concrete DOF types:
   * `PrismaticJoint` — translation along `axis`; state (`displacement`,
                        `rate`), commanded via `force_cmd` (clamped to
                        `stall_force` in saturating mode).
+  * `Motor` (`motor.py`) — a revolute DOF driven by a voltage-commanded
+                       DC-motor electrical model (back-EMF torque-speed
+                       rolloff, winding resistance, current limit,
+                       gearbox) instead of a direct torque command.
+
+The revolute *kinematics* (angle/rate state, the axis rotation the
+kinematic and inertia passes compose) live in `RevoluteDOF`;
+`RevoluteJoint` and `Motor` are alternative actuation models on top of
+it. The framework's joint dispatch keys on `RevoluteDOF` /
+`PrismaticJoint`, so a new actuation model is just another
+`RevoluteDOF` subclass overriding `applied_dof_force()`.
 
 Dynamics: the joint class supplies NO dynamics formulas of its own. The
 world tick assembles the craft's full joint-space system — the
@@ -38,9 +49,6 @@ Modes (both DOF types):
   * "saturating"  — commanded effort clipped to the stall limit, applied
                     on top of the external axial term.
 
-The name `Motor` stays reserved for a future part that models real
-motor dynamics (back-EMF, thermal limits, current/voltage curves) on
-top of a RevoluteJoint.
 """
 
 from __future__ import annotations
@@ -206,7 +214,29 @@ class ArticulatedJoint(CompositePart):
                           new_state={})
 
 
-class RevoluteJoint(ArticulatedJoint):
+class RevoluteDOF(ArticulatedJoint):
+    """The revolute *kinematic* DOF — rotation about `axis`, state
+    (`angle`, `rate`). Carries no actuation model of its own; the
+    framework's joint dispatch (kinematic pass, inertia rollup,
+    rest-pose snapshot) keys on this class, so every subclass —
+    `RevoluteJoint` (direct torque command) and `Motor` (DC electrical
+    model) — inherits the exact same articulated dynamics and differs
+    only in `applied_dof_force()`.
+
+    State:
+        angle         — joint angle, rad.
+        rate          — joint angular rate (rotor spin relative to body),
+                        rad/s.
+    """
+
+    angle = State(init=0.0, manifold="R1")
+    rate  = State(init=0.0, manifold="R1")
+
+    def dof_state_names(self) -> tuple[str, str]:
+        return ("angle", "rate")
+
+
+class RevoluteJoint(RevoluteDOF):
     """1-DOF revolute joint with an axial rotor (set of Mass children).
 
     Parameters:
@@ -230,12 +260,6 @@ class RevoluteJoint(ArticulatedJoint):
 
     stall_torque: float = Parameter(1.0)
     torque_cmd:   float = Input(default=0.0)
-
-    angle = State(init=0.0, manifold="R1")
-    rate  = State(init=0.0, manifold="R1")
-
-    def dof_state_names(self) -> tuple[str, str]:
-        return ("angle", "rate")
 
     def _actuator_cmd(self):
         return self.torque_cmd

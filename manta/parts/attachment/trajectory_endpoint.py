@@ -41,7 +41,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from ...fields import GravityField
+from ...fields import GravityField, gravity_at
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.manifold import SO3Manifold
 from ...ir.types import Quat, Vec3
@@ -166,7 +166,7 @@ class TrajectoryEndpoint(Part):
         # Feedforward: cancel gravity and track linear acceleration exactly.
         m = float(self.mass)
         if m > 0.0:
-            g_world = ctx.field(GravityField).value_at_sym(p, ctx.t)
+            g_world = gravity_at(ctx, p)
             F_world = F_world + a_ref * m - g_world * m
 
         # --- rotate the world-frame wrench into the part frame -----------

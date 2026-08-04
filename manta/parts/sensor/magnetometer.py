@@ -5,8 +5,9 @@ WorldFrame, rotates the result into the sensor's frame. That's exactly
 what a 3-axis fluxgate magnetometer reads when the craft is oriented in
 the field.
 
-With no MagField registered, `ctx.field(MagField)` returns an empty
-field (zero everywhere); the magnetometer reads zero. `ctx.position` is
+A magnetometer with no MagField to read is a configuration error —
+the part declares `requires_fields = [MagField]`, validated when the
+first transform is built. `ctx.position` is
 already the sensor's mount-point in WorldFrame (the kinematic pass
 composes it through the part's `transform` and any joints above it), so
 the field is sampled there directly — for spatially uniform B this is
@@ -41,6 +42,8 @@ class Magnetometer(Part):
                   PositionSensor's `position_noise` does. Defaults to 0
                   (a clean reading).
     """
+
+    requires_fields = [MagField]
 
     B_noise = WhiteNoise("R3", frame=PartFrame, sigma=0.0)
 

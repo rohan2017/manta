@@ -144,20 +144,63 @@ def test_deploy_module_lowering():
                        np.array(ref).ravel(), atol=1e-12)
 
 
-def test_jointed_craft_raises_on_first_kernel_use():
-    """Translation is lazy per kernel: lowering a jointed craft's Module
-    succeeds; the untranslatable (Linsol-bearing) kernel raises only when
-    it is first used."""
+def _spinner_world():
+    """A jointed craft — its tick carries runtime-pivoting Linsol solve
+    nodes that cannot SX-expand whole."""
     c = Craft("spinner")
     c.add(Mass("body", mass=1.0, moi=(0.01, 0.01, 0.01)))
     j = c.add(RevoluteJoint("wheel", mode="passive"))
     j.add(Mass("rotor", mass=0.1, moi=(0.001, 0.001, 0.01),
                transform=(0.05, 0.0, 0.0)))
     w = World().add_field(GravityField(g=(0, 0, -9.81)))
-    w.add_craft(c, position=(0, 0, 10))
-    jm = JaxModule(Sim(w).module())          # construction is fine
-    with pytest.raises(NotImplementedError, match="expand"):
-        jm.kernel(jm.module.entry("step").fn)
+    w.add_craft(c, position=(0, 0, 10), **{"wheel.rate": 3.0})
+    return w
+
+
+def test_jointed_craft_step_parity():
+    """A jointed craft's Linsol-bearing step kernel lowers via the
+    solve-node cut (`jnp.linalg.solve`) and matches CasADi bit-tight
+    over a multi-step trajectory."""
+    w = _spinner_world()
+    mod = Sim(w).module()
+    jm = JaxModule(mod)
+    step_jx = jm.kernel("step")
+    step_ca = mod.functions["step"]
+
+    x_j = np.asarray(jm.initial_state())
+    x_c = x_j.copy()
+    u = np.zeros(mod.port("u").size)
+    noise = np.zeros(mod.port("noise").size)
+    dt = 0.002
+    for k in range(50):
+        t = k * dt
+        x_j = np.array(step_jx(x_j, u, noise, dt, t)[0]).ravel()
+        x_c = np.array(step_ca(x_c, u, noise, dt, t)).ravel()
+    assert np.allclose(x_j, x_c, atol=1e-9)
+    # The joint actually moved (the solve did real work).
+    from manta.ir.state_spec import StateSpec
+    spec = StateSpec.from_world(w)
+    slot = spec.slot("spinner.wheel.angle")
+    assert abs(x_j[slot.ambient_offset]) > 1e-3
+
+
+def test_jointed_craft_grad_is_finite():
+    """jax.grad flows through the jnp.linalg.solve cut."""
+    jax_ = pytest.importorskip("jax")
+    w = _spinner_world()
+    mod = Sim(w).module()
+    jm = JaxModule(mod)
+    step_jx = jm.kernel("step")
+    u = np.zeros(mod.port("u").size)
+    noise = np.zeros(mod.port("noise").size)
+
+    def loss(x0):
+        out = step_jx(x0, u, noise, 0.002, 0.0)[0]
+        return jnp.sum(out ** 2)
+
+    g = jax_.grad(loss)(jnp.asarray(jm.initial_state()))
+    assert bool(jnp.all(jnp.isfinite(g)))
+    assert float(jnp.max(jnp.abs(g))) > 0.0
 
 
 def test_call_unknown_value_key_raises():

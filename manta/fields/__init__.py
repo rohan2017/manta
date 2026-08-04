@@ -31,10 +31,10 @@ User-facing surface::
     World().add_field(g_field).add_craft(...)
 """
 
-from .base import Disturbance, Field
+from .base import Disturbance, Field, SuperposedField
 from .gravity import (
     BodyPointMassGravity, GravityField, J2Gravity, PointMassGravity,
-    UniformGravity,
+    UniformGravity, gravity_at,
 )
 from .fluid   import (
     CurrentFlow, FluidField, FluidState, UniformFluid, WeatherPatch,
@@ -48,9 +48,9 @@ from .optical import (
 from .wind_bubble import CraftWindBubble
 
 __all__ = [
-    "Disturbance", "Field",
+    "Disturbance", "Field", "SuperposedField",
     "GravityField", "UniformGravity", "PointMassGravity", "J2Gravity",
-    "BodyPointMassGravity",
+    "BodyPointMassGravity", "gravity_at",
     "FluidField", "FluidState", "UniformFluid", "CurrentFlow", "WeatherPatch",
     "below_surface", "within_sphere",
     "CraftWindBubble",

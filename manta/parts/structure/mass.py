@@ -5,7 +5,7 @@ inertia aggregation via parallel-axis lifts at world-compile time.
 
 from __future__ import annotations
 
-from ...fields import GravityField
+from ...fields import GravityField, gravity_at
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Scalar, Vec3
 from .._declarations import Parameter
@@ -28,9 +28,9 @@ class Mass(Part):
     Gravity contribution is applied automatically whenever a
     `GravityField` is registered on the world: `F = m · g(p_world)`,
     sampled at the part's anchor position. With no `GravityField`
-    registered, `ctx.field(GravityField)` returns an empty default and
-    the contribution is identically zero — no special-case opt-out
-    needed.
+    registered the contribution is explicitly zero (`gravity_at`
+    branches on `ctx.has_field`) — a free-space world is legitimate,
+    not a configuration error.
 
     The part's spatial location is set via its `transform` parameter
     (inherited from Part). Aggregation at the Craft level rolls these
@@ -65,8 +65,7 @@ class Mass(Part):
         # non-uniform fields (e.g. point-mass gravity) correctly for a part
         # mounted at a non-zero transform. Gravity in the part's own frame
         # via ctx.orientation; the framework rotates the wrench to body.
-        g_world = ctx.field(GravityField).value_at_sym(
-            ctx.position[WorldFrame], ctx.t)
+        g_world = gravity_at(ctx, ctx.position[WorldFrame])
         g_part  = ctx.orientation.conjugate().apply(g_world)
         # `mass` is promotable — Scalar.coerce passes a promoted (tunable)
         # symbol through and bakes the plain float otherwise.

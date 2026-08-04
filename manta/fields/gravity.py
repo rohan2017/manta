@@ -52,6 +52,20 @@ class GravityField(SuperposedField):
         return self.add(UniformGravity(g_vec))
 
 
+def gravity_at(ctx, point):
+    """g(point) if a GravityField is registered, else the zero vector.
+
+    The explicit optional-gravity branch for parts that are legitimate
+    in free space (Mass, IMU, TrajectoryEndpoint): a world with no
+    GravityField means zero-g on purpose, not a configuration error.
+    Parts whose physics *requires* gravity declare
+    `requires_fields = [GravityField]` and call `ctx.field` directly.
+    """
+    if ctx.has_field(GravityField):
+        return ctx.field(GravityField).value_at_sym(point, ctx.t)
+    return _VEC3_W.constant((0.0, 0.0, 0.0))
+
+
 class UniformGravity(Disturbance):
     """Position-independent gravity vector. The standard default for
     sims that don't care about altitude variation.

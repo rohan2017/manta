@@ -26,7 +26,7 @@ no lag.
 
 from __future__ import annotations
 
-from ...fields import GravityField
+from ...fields import GravityField, gravity_at
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3
 from .._declarations import Output, PartUpdate, RandomWalkNoise, WhiteNoise
@@ -61,10 +61,10 @@ class IMU(Part):
         # frame. Read the inertial (WorldFrame) quantities and rotate into
         # the sensor's own frame via ctx.orientation — for a root-mounted IMU
         # that frame is the body frame; on a rotor it spins with the joint.
-        # Gravity at the mount point folds to zero with no GravityField.
-        # Bias/noise live in the sensor frame.
-        g_world = ctx.field(GravityField).value_at_sym(
-            ctx.position[WorldFrame], ctx.t)
+        # Gravity at the mount point is explicitly zero with no
+        # GravityField (zero-g worlds are legitimate — `gravity_at`
+        # branches on ctx.has_field). Bias/noise live in the sensor frame.
+        g_world = gravity_at(ctx, ctx.position[WorldFrame])
         R_part_from_world = ctx.orientation.conjugate()
         omega_sensor = R_part_from_world.apply(ctx.angular_velocity[WorldFrame])
         accel_sensor = R_part_from_world.apply(

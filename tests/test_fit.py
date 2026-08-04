@@ -99,8 +99,10 @@ def test_unknown_parameter_raises():
 
 def test_non_promotable_parameter_raises():
     # `force_tensors` is a plain Parameter (no manifold) — not promotable.
+    from manta.fields import FluidField, UniformFluid
     from manta.parts import DragSurface
     world = _drone()
+    world.add_field(FluidField().add(UniformFluid(density=1.225)))
     world.crafts[0].add(DragSurface.isotropic_quadratic(
         "hull", area=0.05, drag_coefficient=1.0))
     with pytest.raises(KeyError):

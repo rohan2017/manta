@@ -132,13 +132,22 @@ class TickContext:
                              wrenches/reads); exposed for advanced use.
 
     Field access:
-      ctx.field(FieldCls) → registered field of that class, or an empty
-      default instance if none is registered. The empty default's
-      `value_at_sym(p, t)` returns the zero contribution, so a part can
-      call `ctx.field(GravityField).value_at_sym(p, t)` regardless of
-      whether a GravityField is attached to the world. Parts that need a
-      field present declare `requires_fields` (validated at transform
-      build) instead of probing at tick time.
+      ctx.has_field(FieldCls) → True iff a field of that class (or a
+      subclass) is registered with the world. ctx.field(FieldCls) →
+      that registered instance; raises if none is registered — there is
+      NO silent empty-field default. A part whose physics needs the
+      field present declares `requires_fields = [FieldCls]` (validated
+      at transform build, so `ctx.field` cannot fail); a part for which
+      the field is genuinely optional branches explicitly::
+
+          if ctx.has_field(GravityField):
+              g = ctx.field(GravityField).value_at_sym(p, ctx.t)
+          else:
+              g = Vec3[WorldFrame].constant((0.0, 0.0, 0.0))
+
+      Both work for user-authored Field subclasses — lookup is by
+      isinstance against the world's registered fields, never against a
+      built-in list of field kinds.
 
     Note on the acceleration fields: these reflect the **current**
     tick's Newton-Euler output (`α`, `a_origin`) lifted to this part's
@@ -200,17 +209,29 @@ class TickContext:
             yield from self._world.fields
         yield from self._fields
 
+    def has_field(self, cls: type) -> bool:
+        """True iff a field of type `cls` (or a subclass) is registered
+        with the world. The explicit presence check for parts whose
+        field is optional — pair with `field(cls)` inside the branch."""
+        return any(isinstance(f, cls) for f in self._iter_fields())
+
     def field(self, cls: type):
-        """Return the registered field of type `cls` (or subclass), or
-        an empty default instance `cls()` if none is registered. Calling
-        `value_at_sym` on the empty default returns the field's zero
-        value, so a part can write
-            `ctx.field(GravityField).value_at_sym(p, t)`
-        unconditionally — missing field ⇒ zero contribution."""
+        """Return the registered field of type `cls` (or subclass).
+
+        Raises ValueError if none is registered — there is no silent
+        empty-field default. Either declare the field on the part
+        (`requires_fields = [cls]`, validated at transform build) so
+        this can't fail, or guard the query with `ctx.has_field(cls)`.
+        """
         for f in self._iter_fields():
             if isinstance(f, cls):
                 return f
-        return cls()
+        raise ValueError(
+            f"ctx.field({cls.__name__}): no {cls.__name__} is registered "
+            f"with this world. Either add_field one, declare "
+            f"`requires_fields = [{cls.__name__}]` on the part (so the "
+            f"transform validates it up front), or make the query "
+            f"conditional with `ctx.has_field({cls.__name__})`.")
 
 
 # ---------------------------------------------------------------------------
@@ -243,7 +264,7 @@ def _aggregate_inertials(root_part: Part) -> dict[str, Any]:
     construction) — so a Mass riding a gimbal lands at the right
     craft-frame position, mirroring the symbolic rollup's geometry.
     """
-    from .parts.articulation.joint import PrismaticJoint, RevoluteJoint
+    from .parts.articulation.joint import PrismaticJoint, RevoluteDOF
     from .parts._trace import declared_attr
     from .parts.base import CompositePart
 
@@ -261,7 +282,7 @@ def _aggregate_inertials(root_part: Part) -> dict[str, Any]:
         R_in = R_parent_out
 
         r_out, R_out = r, R_in
-        if isinstance(part, RevoluteJoint):
+        if isinstance(part, RevoluteDOF):
             angle = float(declared_attr(part, "angle", 0.0))
             R_out = R_in @ _np_axis_angle_rotation(part.axis, angle)
         elif isinstance(part, PrismaticJoint):

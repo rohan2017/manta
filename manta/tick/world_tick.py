@@ -83,13 +83,8 @@ def compile_world_tick(world,
         <craft_name>.<part>.<input>      (per-part Input slots, input-only)
     Plus a shared `dt` input. Sensor outputs use the same prefix.
     """
-    from ..fields import (CollisionField, FluidField, GravityField, MagField)
     crafts = list(world.crafts) if crafts is None else list(crafts)
     couplings = list(world._couplings)
-    gravity_field = world.get_field(GravityField) or GravityField()
-    fluid_field = world.get_field(FluidField) or FluidField()
-    mag_field = world.get_field(MagField) or MagField()
-    collision_field = world.get_field(CollisionField) or CollisionField()
 
     if not crafts:
         raise ValueError("compile_world_tick: needs at least one craft.")
@@ -139,11 +134,11 @@ def compile_world_tick(world,
 
         # Pass 0b: plumb State/Noise declarations on field disturbances.
         # These bindings need to be in scope BEFORE any part's update()
-        # queries a field.
-        all_fields = [gravity_field, fluid_field, mag_field,
-                      collision_field]
+        # queries a field. Every registered field is walked — including
+        # user-authored Field subclasses; there is no built-in list of
+        # field kinds anywhere in the tick.
         dist_state_outputs = _plumb_field_disturbances(
-            all_fields, dt, trace)
+            world.fields, dt, trace)
 
         # Pass 1: per-craft trace. The rigid-body state symbols are
         # already created (Pass 0a); the per-craft helper picks them up
@@ -153,8 +148,7 @@ def compile_world_tick(world,
         per_craft: dict[int, CraftTrace] = {}
         for craft in crafts:
             per_craft[id(craft)] = _trace_craft_pass1(
-                craft, gravity_field, fluid_field, mag_field, dt, t,
-                trace, collision_field=collision_field, world=world,
+                craft, dt, t, trace, world=world,
                 tunable_params=tunable, promoted=promoted)
         unknown_params = tunable - promoted
         if unknown_params:
@@ -231,14 +225,12 @@ def _plumb_field_disturbances(fields, dt, trace) -> list[tuple[str, Any]]:
 
             prefix = f"{dist.name}."
 
-            # User-declared State slots: input → identity passthrough.
-            # (Disturbance state advances only via paired RW Noise.)
+            # User-declared State slots: input → identity passthrough,
+            # any manifold kind — the manifold builds its own typed
+            # input (scalar/vec/quat) and the passthrough is
+            # kind-agnostic. (Disturbance state advances only via
+            # paired RW Noise.)
             for sname, sdecl in sdecls.items():
-                if sdecl.manifold.kind != "scalar":
-                    raise NotImplementedError(
-                        f"{type(dist).__name__}('{dist.name}'): State "
-                        f"manifold kind {sdecl.manifold.kind!r} not yet "
-                        f"supported on disturbance-declared state.")
                 sym = sdecl.manifold.ir_input(
                     prefix + sname, default_frame=WorldFrame)
                 trace.bind(dist, sname, sym)
@@ -555,13 +547,9 @@ class CraftTrace:
 
 
 def _trace_craft_pass1(craft,
-                       gravity_field,
-                       fluid_field,
-                       mag_field,
                        dt,
                        t,
                        trace,
-                       collision_field=None,
                        world=None,
                        tunable_params: set | None = None,
                        promoted: set | None = None) -> CraftTrace:
@@ -586,10 +574,6 @@ def _trace_craft_pass1(craft,
     # the a/α a part reads must be a compile-time placeholder).
     a_world_sym = ca.MX.sym(f"{craft.name}_a_world", 3, 1)
     alpha_sym    = ca.MX.sym(f"{craft.name}_alpha", 3, 1)
-
-    if collision_field is None:
-        from ..fields import CollisionField as _CF
-        collision_field = _CF()
 
     # Promote tunable parameters FIRST: the kinematic pass (transform)
     # and the inertia rollup (mass) below must see the bound symbols.
@@ -625,7 +609,10 @@ def _trace_craft_pass1(craft,
         joint_dof_accels=joint_accel_syms)
     inertia = symbolic_inertia_rollup(craft.root, param_subs=param_subs)
 
-    fields_tuple = (gravity_field, fluid_field, mag_field, collision_field)
+    # Fields reach every ctx through `world` — nothing is materialized
+    # per tick, so `ctx.has_field` / `ctx.field` see exactly the
+    # world's registry (user-authored Field subclasses included).
+    fields_tuple = ()
 
     # Per-craft TickContext (root view) for couplings to read. The root's
     # own frame IS CraftFrame, so its frame-indexed views + body attitude
@@ -826,7 +813,8 @@ def _integrate_angular_momentum(prefix, js, inertia, ang_vel, alpha,
         # its axis (ω_axis and q̇ enter only as their sum) — runtime
         # pivoting resolves the null space benignly, a fixed factorization
         # does not. Cost: a jointed craft's tick has Linsol nodes and
-        # cannot SX-expand (TargetJax supports flat crafts only).
+        # cannot SX-expand whole (TargetJax cuts the graph at these
+        # nodes and maps them to jnp.linalg.solve — see jax/_translate).
         # Recover the new velocities from the ADVANCED configuration's
         # mass matrix: next tick rebuilds p = A(q⁺)·u⁺, so solving with
         # the advanced A makes the momentum flow consistent — solving
