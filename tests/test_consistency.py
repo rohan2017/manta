@@ -47,6 +47,26 @@ def test_nees_unknown_sensor_raises():
         nees(_hover_world(), sensors=["gps.positio"], **_KW)
 
 
+def test_nees_accepts_ukf():
+    """`estimator=UKF` audits the sigma-point filter's covariance — the
+    filter whose moments differ from the EKF's is exactly the one whose
+    consistency needs checking. A shorter run than the EKF cases: this
+    pins the plumbing (UKF accepted, report sane), not a verdict."""
+    from manta import UKF
+    rep = nees(_hover_world(), estimator=UKF,
+               dt=0.01, steps=120, control={"t.throttle": M * G},
+               runs=4, seed=0)
+    assert rep.dof == 12
+    assert np.isfinite(rep.anees) and rep.anees > 0
+
+
+def test_nees_bad_P0_raises():
+    """A non-PD P0 fails with a named error at the door, not a bare
+    LinAlgError from inside the ensemble loop."""
+    with pytest.raises(ValueError, match="positive-definite"):
+        nees(_hover_world(), P0=np.diag([-1.0] + [0.1] * 11), **_KW)
+
+
 def test_zero_process_noise_is_overconfident():
     rep = nees(_hover_world(), Q=np.zeros((12, 12)), **_KW)
     assert not rep.consistent

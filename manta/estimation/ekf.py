@@ -43,16 +43,13 @@ from __future__ import annotations
 import casadi as ca
 import numpy as np
 
-from ..ir.module import (
-    EntryPoint, Hosting, Module, Port, PortField, PortRef, Role, StateField,
-    StateLayout, StateRef, entry_ident,
-)
-from ..ir.state_spec import StateSpec, flatten_nested
-from ..ir._names import resolve_suffix
+from ..ir.module import Module, entry_ident
+from ..ir.state_spec import StateSpec
 from ..linearization import LinearizedSystem
-from ._kalman import (
-    joseph_update, lin_cov, require_active_R, symmetrize,
+from ._assembly import (
+    emit_filter_module, initial_ambient, prepared_sensors, resolve_u,
 )
+from ._kalman import joseph_update, lin_cov, symmetrize
 
 
 class EKF:
@@ -107,75 +104,25 @@ class EKF:
             ["x", "P", "Q", "u", "dt", "t"], ["x_new", "P_new"])
 
         # per-sensor Joseph update (the shared `joseph_update` kernel —
-        # see estimation/_kalman.py). A measurement is dt-independent, so
-        # dt is eliminated here (substituted to 0) — the kernel honestly
-        # takes only (x, P, z, u, t).
-        init_flat = flatten_nested(world._initial_state_dict())
-        x0 = spec.pack_any(init_flat)
+        # see estimation/_kalman.py). `prepared_sensors` eliminates dt and
+        # refuses σ=0 sensors — the kernel honestly takes only
+        # (x, P, z, u, t).
+        x0 = initial_ambient(world, spec)
         zero_dt = ca.MX.zeros(1, 1)
         updates: dict[str, ca.Function] = {}
-        for full, s in sys.sensors.items():
-            z = ca.MX.sym("z", s.dim)
-            h = ca.substitute(s.h_sym, dt, zero_dt)
-            H = ca.substitute(s.H_sym, dt, zero_dt)
-            L_h = (ca.substitute(s.L_h_sym, dt, zero_dt)
-                   if s.L_h_sym is not None and sys.Sigma is not None
-                   else None)
-            R = lin_cov(L_h, ca.DM(sys.Sigma) if L_h is not None else None,
-                        s.dim)
-            # Refuse a σ=0 sensor (R ≡ 0 → singular S on the second fold).
-            R_fn = ca.Function("R0", [x, u, t], [R])
-            require_active_R(R, R_fn, ca.vertcat(x, u, t),
-                             x0=x0, u_defaults=sys.u_defaults, spec=spec,
-                             full=full, who="EKF")
-            x_upd, P_upd, _, _ = joseph_update(x, P, h, H, R, z, spec)
-            updates[full] = ca.Function(
-                f"ekf_update_{entry_ident(full)}",
-                [x, P, z, u, t], [x_upd, P_upd],
+        for ps in prepared_sensors(sys, spec, x0=x0, who="EKF"):
+            H = ca.substitute(sys.sensors[ps.full].H_sym, dt, zero_dt)
+            x_upd, P_upd, _, _ = joseph_update(x, P, ps.h, H, ps.R, ps.z,
+                                               spec)
+            updates[ps.full] = ca.Function(
+                f"ekf_update_{entry_ident(ps.full)}",
+                [x, P, ps.z, u, t], [x_upd, P_upd],
                 ["x", "P", "z", "u", "t"], ["x_new", "P_new"])
 
-        # ---- the typed Module -------------------------------------------
-        fields = (
-            StateField("x", "manifold", (spec.ambient_dim,),
-                       init=x0, manifold=spec),
-            StateField("P", "matrix", (n_tan, n_tan),
-                       init=np.eye(n_tan) * 1e-2),
-        )
-        ports = [
-            Port("u", Role.CONTROL, (len(sys.input_names),), fields=tuple(
-                PortField(n, 1, float(sys.input_defaults[n]),
-                          rate=sys.sample_rates.get(n))
-                for n in sys.input_names)),
-            Port("dt", Role.TIMESTEP),
-            Port("t", Role.TIME),
-            Port("Q", Role.MATRIX, (n_tan, n_tan)),
-        ]
-        functions = {"predict": predict_fn, "predict_with_Q": predict_q_fn}
-        entries = [
-            EntryPoint("predict", "predict",
-                       (StateRef("x"), StateRef("P"), PortRef("u"),
-                        PortRef("dt"), PortRef("t")),
-                       writes=("x", "P")),
-            EntryPoint("predict_with_Q", "predict_with_Q",
-                       (StateRef("x"), StateRef("P"), PortRef("Q"),
-                        PortRef("u"), PortRef("dt"), PortRef("t")),
-                       writes=("x", "P")),
-        ]
-        for full, s in sys.sensors.items():
-            ident = entry_ident(full)
-            ports.append(Port(full, Role.MEASUREMENT, (s.dim,),
-                              rate=sys.sample_rates.get(full)))
-            functions[f"update_{ident}"] = updates[full]
-            entries.append(EntryPoint(
-                f"update_{ident}", f"update_{ident}",
-                (StateRef("x"), StateRef("P"), PortRef(full),
-                 PortRef("u"), PortRef("t")),
-                writes=("x", "P")))
-
-        self._module = Module(
-            name=f"{world.name}_ekf", state=StateLayout(fields),
-            ports=tuple(ports), functions=functions,
-            entry_points=tuple(entries), hosting=Hosting.HELD)
+        self._module = emit_filter_module(
+            sys, spec, name=f"{world.name}_ekf", x0=x0,
+            predict_fn=predict_fn, predict_q_fn=predict_q_fn,
+            updates=updates)
 
     def module(self) -> Module:
         """The typed `Module` IR a backend lowers."""
@@ -192,14 +139,7 @@ class EKF:
 
     def _build_u(self, u: dict[str, float] | None) -> np.ndarray:
         """Resolve `u` to a flat input vector (full or suffix names)."""
-        names = self.sys.input_names
-        out = self.sys.u_defaults.copy()
-        if u:
-            index = {n: i for i, n in enumerate(names)}
-            for k, v in u.items():
-                full = resolve_suffix(k, names, label="input", who="EKF")
-                out[index[full]] = float(v)
-        return out
+        return resolve_u(self.sys, u, who="EKF")
 
     def observability(self, **kwargs):
         """Local observability of the chosen sensor set at an operating

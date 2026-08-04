@@ -137,8 +137,8 @@ def nees(world, *, dt: float, steps: int,
          P0: np.ndarray | None = None, Q: np.ndarray | None = None,
          observable_basis: np.ndarray | None = None,
          runs: int = 20, seed: int = 0, warmup: int | None = None,
-         alpha: float = 0.05) -> NEESReport:
-    """Monte-Carlo NEES consistency check for `EKF(world)`.
+         alpha: float = 0.05, estimator=None) -> NEESReport:
+    """Monte-Carlo NEES consistency check for a filter over `world`.
 
     Each run jitters the truth with the model's process noise (a
     `NoiseDriver`) and the measurements with their R, draws the initial
@@ -167,21 +167,36 @@ def nees(world, *, dt: float, steps: int,
         runs, seed — ensemble size and base RNG seed.
         warmup   — steps to skip before recording (default `steps // 5`).
         alpha    — significance for the band (default 0.05 ⇒ 95%).
+        estimator — the filter under test: an `EKF`/`UKF` instance over
+                   this world, or a class/callable applied to it (default
+                   `EKF`). Consistency of a UKF's covariance is exactly
+                   the case worth auditing — its sigma-point moments are
+                   not the EKF's Jacobian push.
     """
     import casadi as ca
     from ..codegen.numpy import NoiseDriver, TargetNumpy
     from ..sim import Sim
     from .ekf import EKF
-    from .observability import resolve_sensor_set
+    from .observability import _resolve_ir, resolve_sensor_set
 
-    sim_ir, ekf_ir = Sim(world), EKF(world)
+    if estimator is None:
+        estimator = EKF
+    ekf_ir = _resolve_ir(estimator if not callable(estimator)
+                         else estimator(world))
+    sim_ir = Sim(world)
     spec = ekf_ir.spec
     n = spec.tangent_dim
     if warmup is None:
         warmup = steps // 5
     if P0 is None:
         P0 = np.eye(n) * 0.1
-    L0 = np.linalg.cholesky(P0)
+    try:
+        L0 = np.linalg.cholesky(P0)
+    except np.linalg.LinAlgError as exc:
+        raise ValueError(
+            f"nees: P0 must be symmetric positive-definite (the initial "
+            f"estimate is drawn from N(truth, P0)); "
+            f"np.linalg.cholesky failed: {exc}") from exc
 
     xa, xb = ca.MX.sym("xa", spec.ambient_dim), ca.MX.sym("xb", spec.ambient_dim)
     boxminus = ca.Function("bm", [xa, xb], [spec.boxminus_sym(xa, xb)])

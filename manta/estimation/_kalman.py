@@ -158,23 +158,44 @@ def unscented_weights(n: int, alpha: float, beta: float, kappa: float):
       * `gamma = √(n+lam)`                  — the sigma-point spread.
 
     `w_m` sums to 1; `w_c` need not (only its weighting of mean-centered
-    deviations matters). The canonical small-α default makes the spread
-    tiny, so the transform reduces to the EKF's Jacobian push in the linear
-    limit."""
+    deviations matters).
+
+    Raises for `n + lam <= 0` (imaginary spread). Beware the textbook
+    "small α" (e.g. 1e-3) at robotics-sized `n`: it drives `w_c[0]` toward
+    `−n/α²` (≈ −10⁶ at n=13) — a huge negative central weight that makes
+    the summed covariances indefinite under roundoff — while shrinking the
+    spread to `α√(n+κ)`·σ, at which point the "nonlinear sampling" is a
+    noisy finite difference. `α = 1` keeps every covariance weight
+    positive; the UKF warns when a chosen tuning does not."""
     lam = alpha ** 2 * (n + kappa) - n
     c = n + lam
+    if c <= 0.0:
+        raise ValueError(
+            f"unscented_weights: n + lam = {c:.3g} <= 0 for n={n}, "
+            f"alpha={alpha}, kappa={kappa} — the sigma spread √(n+λ) is "
+            f"imaginary. Use alpha in (0, 1] with kappa >= 0 (alpha=1, "
+            f"kappa=0 is the robust default).")
     w0 = 1.0 / (2.0 * c)
     w_m = [lam / c] + [w0] * (2 * n)
     w_c = [lam / c + (1.0 - alpha ** 2 + beta)] + [w0] * (2 * n)
     return lam, w_m, w_c, math.sqrt(c)
 
 
-def sigma_deltas(P: ca.MX, gamma: float, n: int) -> list[ca.MX]:
+def sigma_deltas(P: ca.MX, gamma: float, n: int, *,
+                 jitter: float = 0.0) -> list[ca.MX]:
     """The `2n+1` tangent-space sigma offsets `δ_0…δ_{2n}` of covariance `P`:
     `δ_0 = 0`, then `±γ` times each column of the lower-Cholesky factor
     (`P = L Lᵀ`). `chol_lower` keeps these scalar-unrolled so the whole UKF
-    C-codegens and SX-expands exactly like the EKF."""
-    L = chol_lower(P, n)
+    C-codegens and SX-expands exactly like the EKF.
+
+    `P` here is an *iterated* covariance — many folds of roundoff away from
+    the SPD-by-construction matrices `chol_lower` was written for — so
+    `jitter > 0` (units: variance) adds `jitter·I` before factoring and
+    floors the pivots at `jitter`, turning a marginally-indefinite `P` into
+    a regularized factor instead of an all-NaN one."""
+    if jitter > 0.0:
+        P = P + jitter * ca.MX.eye(n)
+    L = chol_lower(P, n, floor=jitter)
     cols = [ca.vertcat(*[L[r][c] if c <= r else ca.MX.zeros(1, 1)
                          for r in range(n)])
             for c in range(n)]
@@ -233,7 +254,15 @@ def ut_update(x: ca.MX, P: ca.MX, deltas: list[ca.MX],
         C  = Σ w_cᵢ δᵢ (zᵢ − ẑ)ᵀ                    (cross cov)
         K  = C S⁻¹                                   (ldl solve — S is SPD)
         x⁺ = x ⊞ K (z − ẑ)                           (manifold boxplus)
-        P⁺ = P − K S Kᵀ                              (re-symmetrized)
+        P⁺ = Σ w_cᵢ (δᵢ − K dzᵢ)(δᵢ − K dzᵢ)ᵀ + K R Kᵀ
+
+    The covariance uses the sigma-point Joseph form — the updated tangent
+    deviations `δᵢ − K dzᵢ` re-summarized, plus the gain-shaped measurement
+    noise. It is algebraically identical to the textbook `P − K S Kᵀ`
+    (since `Σ w_c δδᵀ = P` exactly and `C = K S`), but as a weighted sum of
+    outer products it stays PSD under roundoff whenever every `w_c ≥ 0` —
+    the subtractive form does not, and a UKF covariance that goes
+    indefinite NaNs at the next sigma factorization.
 
     `deltas` are the prior tangent sigma offsets (so `xᵢ ⊟ x = δᵢ` exactly);
     `measured[i] = h(x ⊞ δᵢ)`. Returns `(x_new, P_new, nu, S)` to match
@@ -251,5 +280,9 @@ def ut_update(x: ca.MX, P: ca.MX, deltas: list[ca.MX],
     K = spd_solve(S, C.T).T                     # C S⁻¹ (S SPD)
     nu = z - z_pred
     x_new = spec.boxplus_sym(x, K @ nu)
-    P_new = symmetrize(P - K @ S @ K.T)
+    d_upd = [deltas[i] - K @ dz[i] for i in range(len(dz))]
+    P_new = w_c[0] * (d_upd[0] @ d_upd[0].T)
+    for i in range(1, len(d_upd)):
+        P_new = P_new + w_c[i] * (d_upd[i] @ d_upd[i].T)
+    P_new = symmetrize(P_new + K @ R @ K.T)
     return x_new, P_new, nu, S

@@ -28,9 +28,20 @@ def _square_dim(A: ca.MX, *, op: str) -> int:
     return A.shape[0]
 
 
-def chol_lower(A: ca.MX, n: int | None = None) -> "list[list[ca.MX]]":
+def chol_lower(A: ca.MX, n: int | None = None, *,
+               floor: float = 0.0) -> "list[list[ca.MX]]":
     """Lower-triangular Cholesky factor of an n×n SPD `A`, as a list-of-
-    lists of scalar MX (row-major, j ≤ i). `n` defaults to `A.shape[0]`."""
+    lists of scalar MX (row-major, j ≤ i). `n` defaults to `A.shape[0]`.
+
+    `floor > 0` clamps each diagonal pivot to at least `floor` before the
+    sqrt (units: those of `A`'s diagonal). For a comfortably-PD `A` the
+    clamp never engages and the factor is exact; for an `A` that roundoff
+    has pushed indefinite (a covariance after many folds) it degrades to a
+    regularized factor instead of poisoning the graph with NaN — a negative
+    pivot would otherwise `sqrt` to NaN and every later column divides by
+    it. Callers whose `A` is SPD *by construction* (inertia solve,
+    S = HPHᵀ + R) keep the exact default; callers factoring an *iterated*
+    covariance (the UKF's sigma spread) should pass their jitter."""
     if n is None:
         n = _square_dim(A, op="chol_lower")
     L = [[None] * n for _ in range(n)]
@@ -39,7 +50,11 @@ def chol_lower(A: ca.MX, n: int | None = None) -> "list[list[ca.MX]]":
             acc = A[i, j]
             for k in range(j):
                 acc = acc - L[i][k] * L[j][k]
-            L[i][j] = ca.sqrt(acc) if i == j else acc / L[j][j]
+            if i == j:
+                L[i][j] = ca.sqrt(ca.fmax(acc, floor) if floor > 0.0
+                                  else acc)
+            else:
+                L[i][j] = acc / L[j][j]
     return L
 
 

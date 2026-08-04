@@ -223,7 +223,8 @@ def observability_trajectory(world, *, dt: float, steps: int,
                              control: "Callable | dict | None" = None,
                              sensors: list[str] | None = None,
                              samples: int = 30,
-                             rtol: float = 1e-6) -> ObservabilityReport:
+                             rtol: float = 1e-6,
+                             estimator=None) -> ObservabilityReport:
     """Observability accumulated **over a trajectory**, not at one point.
 
     Local `observability()` is evaluated at a single operating point, where
@@ -240,13 +241,20 @@ def observability_trajectory(world, *, dt: float, steps: int,
 
     Args mirror `nees`/`observability`: `control` is `{name: value}` or a
     `t -> {name: value}` callable; `sensors` restricts the suite; `samples`
-    caps how many trajectory points are linearized.
+    caps how many trajectory points are linearized. `estimator` picks the
+    filter transform carrying the linearized IR — an `EKF`/`UKF` instance
+    over this world, or a class/callable applied to it (default `EKF`);
+    the analysis itself is linearized either way.
     """
     from ..codegen.numpy import TargetNumpy
     from ..sim import Sim
     from .ekf import EKF
 
-    sim_ir, ekf_ir = Sim(world), EKF(world)
+    if estimator is None:
+        estimator = EKF
+    ekf_ir = _resolve_ir(estimator if not callable(estimator)
+                         else estimator(world))
+    sim_ir = Sim(world)
     spec = ekf_ir.spec
     n = spec.tangent_dim
     sim = TargetNumpy(sim_ir)

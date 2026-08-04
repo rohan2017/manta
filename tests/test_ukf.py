@@ -79,8 +79,19 @@ def test_ukf_predict_alone_matches_tick():
 
 
 def test_ukf_matches_ekf_on_linear_problem():
-    """Free fall + a 3-axis position sensor is fully linear, so the UKF and
-    EKF run identical recursions — state and covariance agree to ~1e-8."""
+    """Free fall + a 3-axis position sensor, with the manifold blocks
+    quiesced: the excited position/velocity subspace is genuinely linear,
+    so the unscented transform is exact there and the UKF and EKF run
+    identical recursions — state and covariance agree to numerical noise
+    at the default (finite) sigma spread.
+
+    The manifold blocks (orientation tangent 3:6, angular velocity 9:12 —
+    the tick couples them into the closure, so `track` cannot carve them
+    off) get 1e-8 prior variance: at σ=1 those blocks are NOT linear —
+    sigma points spread ~√3 rad across SO(3), where the UT's saturating
+    covariance and the EKF's unbounded Jacobian push genuinely differ.
+    Exact parity is only an honest claim while the curved directions stay
+    quiescent."""
     rng = np.random.default_rng(3)
 
     def world(name):
@@ -94,8 +105,10 @@ def test_ukf_matches_ekf_on_linear_problem():
     ukf = TargetNumpy(UKF(world("uk")))
     ekf = TargetNumpy(EKF(world("ek")))
     for f in (ukf, ekf):
-        f.reset(state={"d": {"position": np.zeros(3)}},
-                P=np.eye(f.spec.tangent_dim))
+        P0 = np.eye(f.spec.tangent_dim)
+        P0[3:6, 3:6] = np.eye(3) * 1e-8      # orientation tangent
+        P0[9:12, 9:12] = np.eye(3) * 1e-8    # angular velocity
+        f.reset(state={"d": {"position": np.zeros(3)}}, P=P0)
 
     truth = TargetNumpy(Sim(world("tr")))
     for _ in range(500):
@@ -190,9 +203,13 @@ def test_ukf_attitude_converges_via_magnetometer():
 
 
 def test_ukf_attitude_matches_ekf():
-    """On the same attitude problem the UKF and EKF land on the same
-    estimate — the unscented update is the linearized one in the small-spread
-    limit, manifold transport included."""
+    """On the same attitude problem the UKF and EKF land on (essentially)
+    the same estimate. Agreement here is close but not bitwise: at the
+    default √3·σ sigma spread the unscented moments genuinely sample the
+    manifold curvature the EKF linearizes away, so the two filters differ
+    at the curvature scale — a few 1e-5 in the quaternion — not to
+    machine epsilon (that regime only exists in the degenerate small-α
+    limit where the UKF is a finite-difference EKF)."""
     def run(Filt, name):
         rng = np.random.default_rng(0)
         truth = TargetNumpy(Sim(_attitude_world(name + "_tr")[0]))
@@ -213,8 +230,60 @@ def test_ukf_attitude_matches_ekf():
 
     q_u, P_u = run(UKF, "u")
     q_e, P_e = run(EKF, "e")
-    assert abs(abs(float(np.dot(q_u, q_e))) - 1.0) < 1e-6
-    assert np.allclose(P_u, P_e, atol=1e-6)
+    assert abs(abs(float(np.dot(q_u, q_e))) - 1.0) < 1e-4
+    assert np.allclose(P_u, P_e, atol=1e-5)
+
+
+# ---------------------------------------------------------------------------
+# Numerical robustness — the jitter backstop and the weight guards
+# ---------------------------------------------------------------------------
+
+def test_ukf_survives_marginally_indefinite_P():
+    """A P that roundoff has pushed marginally indefinite (one tiny
+    negative eigenvalue) must not NaN the filter: the sigma factorization
+    jitters and floors its pivots, so predict/update stay finite and P
+    recovers PSD. This is the exact cliff the unguarded Cholesky fell off:
+    sqrt(-1e-12) = NaN poisons every later column, then x and P forever."""
+    c = Craft("d")
+    c.add(Mass("body", mass=1.0))
+    c.add(PositionSensor("gps", position_noise_sigma=0.05))
+    w = World(name="jit").add_field(GravityField(g=(0.0, 0.0, -9.81)))
+    w.add_craft(c)
+
+    ukf = TargetNumpy(UKF(w))
+    n = ukf.spec.tangent_dim
+    P_bad = np.eye(n) * 1e-2
+    P_bad[0, 0] = -1e-12                     # marginally indefinite
+    ukf.reset(P=P_bad)
+    ukf.predict(0.01)
+    ukf.update("gps.position", np.zeros(3))
+    assert np.all(np.isfinite(ukf.P)), "jitter backstop failed: P has NaN"
+    assert np.all(np.isfinite(ukf.state_dict()["d"]["position"]))
+    assert np.linalg.eigvalsh(ukf.P).min() > 0.0
+
+
+def test_ukf_degenerate_weights_raise():
+    """`n + lam <= 0` makes the sigma spread imaginary — refused loudly at
+    construction, not NaN'd at runtime."""
+    c = Craft("d")
+    c.add(Mass("body", mass=1.0))
+    c.add(PositionSensor("gps", position_noise_sigma=0.05))
+    w = World(name="deg").add_field(GravityField(g=(0, 0, -9.81)))
+    w.add_craft(c)
+    with pytest.raises(ValueError, match="imaginary"):
+        UKF(w, alpha=1e-3, kappa=-100.0)
+
+
+def test_ukf_explicit_negative_weight_tuning_warns():
+    """An explicit small-alpha tuning (the old degenerate default) still
+    builds, but warns that the covariance sums lose their PSD guarantee."""
+    c = Craft("d")
+    c.add(Mass("body", mass=1.0))
+    c.add(PositionSensor("gps", position_noise_sigma=0.05))
+    w = World(name="warn").add_field(GravityField(g=(0, 0, -9.81)))
+    w.add_craft(c)
+    with pytest.warns(RuntimeWarning, match="negative central covariance"):
+        UKF(w, alpha=1e-3)
 
 
 # ---------------------------------------------------------------------------
