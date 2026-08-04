@@ -65,14 +65,56 @@ class NumpySim(NumpyRuntime):
     @property
     def state(self) -> dict[str, dict[str, Any]]:
         """The held nested state (lazy-seeded; mutate in place to set
-        commands or override slots)."""
+        commands or override slots).
+
+        Aliasing rule: the OWNER DICTS stay live across steps (holding
+        `st = sim.state['craft']` keeps working), but the slot VALUES are
+        replaced each step — a reference to `sim.state['c']['position']`
+        goes stale after `step()`; read through the dict, don't cache the
+        array. Unknown keys are rejected at the next `step()` (a typo'd
+        slot would otherwise be a silent no-op)."""
         if self._sim_state is None:
             self._sim_state = self.initial_state()
         return self._sim_state
 
     @state.setter
     def state(self, value: dict) -> None:
+        if not isinstance(value, dict):
+            raise TypeError(
+                f"{type(self).__name__}.state: expected a nested "
+                f"{{owner: {{slot: value}}}} dict, got "
+                f"{type(value).__name__}")
+        flat = flatten_nested(value)
+        missing = [s.name for s in self._spec.slots if s.name not in flat]
+        if missing:
+            raise ValueError(
+                f"{type(self).__name__}.state: assigned dict is missing "
+                f"state slot(s) {missing}. Assignment replaces the whole "
+                f"state — mutate `sim.state[owner][slot]` to override "
+                f"individual slots.")
+        self._check_state_keys(flat)
         self._sim_state = value
+
+    def _known_state_keys(self) -> set[str]:
+        """Every legitimate flat key of the state dict: manifold slots,
+        command inputs, and noise placeholders."""
+        if not hasattr(self, "_known_keys"):
+            keys = {s.name for s in self._spec.slots}
+            keys.update(f.name for f in self._u_fields())
+            if self._noise_port is not None:
+                keys.update(f.name for f in self._noise_port.fields)
+            self._known_keys: set[str] = keys
+        return self._known_keys
+
+    def _check_state_keys(self, flat: dict) -> None:
+        """Refuse unknown keys — a typo'd slot (`positon`) silently
+        ignored by `pack_any` looks exactly like a physics bug."""
+        unknown = set(flat) - self._known_state_keys()
+        if unknown:
+            raise KeyError(
+                f"{type(self).__name__}: unknown state key(s) "
+                f"{sorted(unknown)}. Known slots/inputs/noise: "
+                f"{sorted(self._known_state_keys())}")
 
     # ---- step ----------------------------------------------------------
 
@@ -107,6 +149,7 @@ class NumpySim(NumpyRuntime):
     def _advance(self, state: dict, dt: float, t: float,
                  u: dict[str, Any] | None = None) -> dict:
         flat = flatten_nested(state)
+        self._check_state_keys(flat)
         self._state["x"] = self._spec.pack_any(flat)
         u = self._pack_u(flat, u)
         ep = self.module.entry("step")
@@ -145,7 +188,7 @@ class NumpySim(NumpyRuntime):
         if n <= 1 or self._driver is not None:
             for k in range(int(n)):
                 self.step(dt, t=None if t is None else t + k * dt, u=u)
-            return self._sim_state
+            return self.state          # property: seeds when n == 0
         t0 = self._t if t is None else t
         self._sim_state = self._advance_n(self.state, float(dt), int(n), t0, u)
         self._t = t0 + n * float(dt)

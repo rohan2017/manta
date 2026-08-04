@@ -71,7 +71,12 @@ class NumpyRuntime:
         self._state: dict[str, np.ndarray] = {}
         for f in module.state.fields:
             a = np.asarray(f.init, dtype=float)
-            self._state[f.name] = (a.reshape(f.shape) if f.kind == "matrix"
+            # Always copy: the Module is shared, immutable IR — a view
+            # here would alias every runtime built from the same
+            # transform onto one array (and let a runtime mutate the
+            # Module's init in place).
+            self._state[f.name] = (a.reshape(f.shape).copy()
+                                   if f.kind == "matrix"
                                    else a.reshape(-1).copy())
 
         self._u_port = module.sole_port(Role.CONTROL)
