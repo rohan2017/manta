@@ -274,6 +274,83 @@ def test_wasm_js_runtime_plumbing(tmp_path: Path):
     np.testing.assert_allclose(got["gps"], [0.5, 0.0, 5.0], atol=1e-12)
 
 
+_PARAM_STUB_FACTORY = r"""
+export default async function () {
+  const buf = new ArrayBuffer(1 << 16);
+  const HEAPF64 = new Float64Array(buf);
+  let top = 16;
+  return {
+    HEAPF64,
+    _malloc(n) { const p = top; top += n; return p; },
+    _free() {},
+    ccall(_shim, _ret, _types, [inPtr, outPtr]) {
+      const L = globalThis.__LAYOUT;
+      const i = inPtr / 8, o = outPtr / 8;
+      for (let k = 0; k < L.amb; k++) HEAPF64[o + k] = HEAPF64[i + k];
+      // Mirror the promoted-parameter slot into gps[0], so the harness can
+      // see exactly what parameter value reached the kernel.
+      HEAPF64[o + L.gps] = HEAPF64[i + L.param];
+      return 0;
+    },
+  };
+}
+"""
+
+_PARAM_STUB_HARNESS = r"""
+import { load, descriptor } from "./drone_rt.mjs";
+const step = descriptor.entryPoints.find((e) => e.method === "step");
+globalThis.__LAYOUT = {
+  amb: descriptor.ambientDim,
+  param: step.in.find((s) => s.kind === "parameter").off,
+  gps: step.out.find((s) => s.name.endsWith("gps.position")).off,
+};
+const sim = (await load()).sim();
+sim.step(0.005);
+const baked = sim.reading("gps.position")[0];
+sim.setParameters({ "body.mass": 2.5 });
+sim.step(0.005);
+const overridden = sim.reading("gps.position")[0];
+let typoThrew = false;
+try { sim.setParameters({ "body.mas": 3.0 }); } catch (e) { typoThrew = true; }
+let unknownArgThrew = false;
+try { sim.rt.call("step", { bogus: 1.0 }); } catch (e) { unknownArgThrew = true; }
+let sizeThrew = false;
+try {
+  sim.rt.call("step", { x: Float64Array.from([1.0]) });
+} catch (e) { sizeThrew = true; }
+console.log(JSON.stringify({ baked, overridden, typoThrew,
+                             unknownArgThrew, sizeThrew }));
+"""
+
+
+def test_wasm_js_params_reach_kernel(tmp_path: Path):
+    """Promoted parameters must reach the kernel at their DECLARED defaults
+    (regression: the JS runtime never read `descriptor.params`, so a
+    parameterized browser sim silently ran with p = 0), `setParameters`
+    must override them, and the strict-marshalling contract must hold:
+    typo'd names, unknown arg keys, and size mismatches all throw."""
+    if shutil.which("node") is None:
+        pytest.skip("node not on PATH")
+    res = TargetWasm(Sim(_hover_world(), parameters=["body.mass"]),
+                     tmp_path, class_name="Drone")
+    assert [f["name"] for f in res.descriptor_obj["params"]] \
+        == ["drone.body.mass"]
+    (tmp_path / "drone.mjs").write_text(_PARAM_STUB_FACTORY)
+    (tmp_path / "drone_rt.mjs").write_text(res.js.read_text())
+    (tmp_path / "harness.mjs").write_text(_PARAM_STUB_HARNESS)
+
+    p = subprocess.run(["node", str(tmp_path / "harness.mjs")], cwd=tmp_path,
+                       capture_output=True, text=True)
+    assert p.returncode == 0, p.stderr
+    got = json.loads(p.stdout.strip().splitlines()[-1])
+    assert got["baked"] == pytest.approx(1.5), \
+        "declared parameter default did not reach the kernel"
+    assert got["overridden"] == pytest.approx(2.5)
+    assert got["typoThrew"], "typo'd parameter name silently accepted"
+    assert got["unknownArgThrew"], "unknown call() arg silently dropped"
+    assert got["sizeThrew"], "wrong-size call() value silently truncated"
+
+
 def test_wasm_full_emscripten_roundtrip(tmp_path: Path):
     if shutil.which("emcc") is None or shutil.which("node") is None:
         pytest.skip("emcc + node required for the full WASM roundtrip")

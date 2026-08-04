@@ -41,11 +41,22 @@ const INPUT_NAMES = descriptor.inputs.map((f) => f.name);
 const DEFAULT_U = Object.fromEntries(
   descriptor.inputs.map((f) => [f.name, f.default]));
 
+const PARAM_NAMES = descriptor.params.map((f) => f.name);
+const DEFAULT_PARAMS = Object.fromEntries(
+  descriptor.params.map((f) => [f.name, f.default]));
+
 /** Measurement field name -> the update entry method that folds it. */
 const MEAS_ENTRY = {};
 for (const e of descriptor.entryPoints)
   for (const s of e.in)
-    if (s.kind === "measurement") MEAS_ENTRY[s.name] = e.method;
+    if (s.kind === "measurement") {
+      if (MEAS_ENTRY[s.name] !== undefined)
+        throw new Error(
+          `descriptor: measurement ${JSON.stringify(s.name)} is consumed ` +
+          `by both ${MEAS_ENTRY[s.name]} and ${e.method} — update() ` +
+          `dispatch would be ambiguous`);
+      MEAS_ENTRY[s.name] = e.method;
+    }
 const MEAS_NAMES = Object.keys(MEAS_ENTRY);
 
 /** Resolve a field name given as a full dotted name or a unique suffix. */
@@ -57,19 +68,71 @@ function resolveName(key, names, label) {
     `${label} ${JSON.stringify(key)} is not a unique name in [${names}]`);
 }
 
-/** Pack `{input: value}` (full or unique-suffix names), overlaid on the
- *  `base` defaults, into a flat control vector in descriptor field order. */
-function packControl(u, base) {
+/** Pack `{name: value}` (full or unique-suffix names), overlaid on the
+ *  `base` defaults, into a flat vector over `fields` in descriptor order. */
+function packFields(overrides, base, fields, names, label) {
   const merged = { ...base };
-  for (const [k, v] of Object.entries(u || {}))
-    merged[resolveName(k, INPUT_NAMES, "input")] = v;
+  for (const [k, v] of Object.entries(overrides || {}))
+    merged[resolveName(k, names, label)] = v;
   const vec = [];
-  for (const f of descriptor.inputs) {
+  for (const f of fields) {
     const v = merged[f.name];
     if (f.dim === 1) vec.push(typeof v === "number" ? v : v[0]);
     else for (let i = 0; i < f.dim; i++) vec.push(v[i]);
   }
   return Float64Array.from(vec);
+}
+
+/** Pack `{input: value}` overlaid on the `base` command defaults. */
+function packControl(u, base) {
+  return packFields(u, base, descriptor.inputs, INPUT_NAMES, "input");
+}
+
+/** Pack `{parameter: value}` overlaid on the `base` promoted-parameter
+ *  defaults. The declared defaults ARE the baked model values — leaving a
+ *  parameter slot unset would run the physics with p = 0, not "baked p". */
+function packParams(overrides, base) {
+  return packFields(overrides, base, descriptor.params, PARAM_NAMES,
+                    "parameter");
+}
+
+/** A seeded Gaussian noise source mirroring the numpy `NoiseDriver`: an
+ *  independent N(0, sigma^2) draw per active (sigma > 0) noise channel per
+ *  step. Attach with `sim.attachDriver(new NoiseDriver(seed))`; without one
+ *  the sim is a noiseless oracle (the declared sigmas are inert). */
+export class NoiseDriver {
+  constructor(seed = 0) {
+    this._s = seed >>> 0;
+    this._spare = null;
+  }
+  _uniform() { // mulberry32
+    this._s = (this._s + 0x6d2b79f5) >>> 0;
+    let z = this._s;
+    z = Math.imul(z ^ (z >>> 15), z | 1);
+    z ^= z + Math.imul(z ^ (z >>> 7), z | 61);
+    return (((z ^ (z >>> 14)) >>> 0) + 0.5) / 4294967296;
+  }
+  _normal() { // Box-Muller
+    if (this._spare !== null) {
+      const v = this._spare;
+      this._spare = null;
+      return v;
+    }
+    const r = Math.sqrt(-2 * Math.log(this._uniform()));
+    const a = 2 * Math.PI * this._uniform();
+    this._spare = r * Math.sin(a);
+    return r * Math.cos(a);
+  }
+  /** Flat draw over the descriptor's noise fields (zeros where sigma = 0). */
+  sample() {
+    const vec = [];
+    for (const f of descriptor.noise) {
+      const sigma = f.sigma || 0;
+      for (let i = 0; i < f.dim; i++)
+        vec.push(sigma > 0 ? sigma * this._normal() : 0);
+    }
+    return Float64Array.from(vec);
+  }
 }
 
 /** Build a flat ambient state: a `Float64Array` is taken verbatim, otherwise
@@ -116,19 +179,40 @@ export class Runtime {
     return b;
   }
 
-  /** Call entry `method` with `{slotName: Float64Array | number}`; returns
-   *  `{slotName: Float64Array}` for every output slot. */
+  /** Call entry `method` with `{slotName: Float64Array | Array | number}`;
+   *  returns `{slotName: Float64Array}` for every output slot. Strict: an
+   *  unknown arg key throws (a typo'd slot name must not be a silent
+   *  no-op), and a value whose length disagrees with the slot's size
+   *  throws (silent truncation / zero-padding reads as a physics bug).
+   *  A slot left unset stays zero-filled — the documented base. */
   call(method, args = {}) {
     const entry = byMethod[method];
     if (!entry) throw new Error(`no entry point ${JSON.stringify(method)}`);
+    const slotNames = new Set(entry.in.map((s) => s.name));
+    for (const k of Object.keys(args))
+      if (!slotNames.has(k))
+        throw new Error(
+          `${method}: unknown arg ${JSON.stringify(k)}; slots: ` +
+          `[${entry.in.map((s) => s.name)}]`);
     const { inPtr, outPtr } = this._buffers(entry);
     const inHeap = new Float64Array(this.M.HEAPF64.buffer, inPtr, entry.inSize);
     inHeap.fill(0);
     for (const s of entry.in) {
       const v = args[s.name];
       if (v === undefined || v === null) continue; // unset -> zeros
-      if (typeof v === "number") inHeap[s.off] = v;
-      else inHeap.set(v.subarray(0, s.size), s.off);
+      if (typeof v === "number") {
+        if (s.size !== 1)
+          throw new Error(
+            `${method}: ${s.name} expects ${s.size} values, got a scalar`);
+        inHeap[s.off] = v;
+      } else {
+        const arr = v instanceof Float64Array ? v : Float64Array.from(v);
+        if (arr.length !== s.size)
+          throw new Error(
+            `${method}: ${s.name} expects ${s.size} values, got ` +
+            `${arr.length}`);
+        inHeap.set(arr, s.off);
+      }
     }
     this.M.ccall(entry.shim, "number", ["number", "number"], [inPtr, outPtr]);
     const outHeap = new Float64Array(
@@ -138,6 +222,17 @@ export class Runtime {
       out[s.name] = outHeap.slice(s.off, s.off + s.size);
     }
     return out;
+  }
+
+  /** Free the per-entry WASM heap buffers. Call when done with a runtime a
+   *  page churns through (each entry's buffers are malloc'd once and would
+   *  otherwise live as long as the WASM instance). */
+  dispose() {
+    for (const b of Object.values(this._bufs)) {
+      this.M._free(b.inPtr);
+      this.M._free(b.outPtr);
+    }
+    this._bufs = {};
   }
 
   /** A THREADED simulation-oracle convenience view. */
@@ -164,9 +259,26 @@ export class Sim {
     this.t = 0;
     this.state = Float64Array.from(descriptor.initialState);
     this._u = { ...DEFAULT_U }; // held commands, full field name -> value
+    this._params = { ...DEFAULT_PARAMS }; // promoted-parameter overrides
+    this._driver = null;
     this._outputs = {};
     this._step = byMethod["step"];
     if (!this._step) throw new Error("Module exposes no `step` entry point");
+  }
+
+  /** Override promoted-parameter values (full or unique-suffix names);
+   *  every subsequent step uses them. Mirrors numpy `set_parameters`. */
+  setParameters(values) {
+    for (const [k, v] of Object.entries(values || {}))
+      this._params[resolveName(k, PARAM_NAMES, "parameter")] = v;
+  }
+
+  /** Attach a `NoiseDriver` so every active (sigma > 0) noise channel is
+   *  sampled each step — truth becomes noisy with the declared sigmas.
+   *  Without one the sim is a noiseless oracle. Returns the driver. */
+  attachDriver(driver) {
+    this._driver = driver;
+    return driver;
   }
 
   /** Advance the held state by `dt`, applying commands `u`. Returns `this`. */
@@ -175,9 +287,13 @@ export class Sim {
     for (const s of this._step.in) {
       if (s.kind === "state") args[s.name] = this.state;
       else if (s.kind === "control") args[s.name] = packControl(u, this._u);
+      else if (s.kind === "parameter")
+        args[s.name] = packParams({}, this._params);
+      else if (s.kind === "noise" && this._driver)
+        args[s.name] = this._driver.sample();
       else if (s.kind === "timestep") args[s.name] = dt;
       else if (s.kind === "time") args[s.name] = this.t;
-      // noise / parameter left unset -> zeros (noiseless oracle / baked p)
+      // noise without a driver stays zero (noiseless oracle)
     }
     const out = this.rt.call("step", args);
     this._outputs = {};
@@ -230,8 +346,16 @@ export class Filter {
     for (const s of entry.in) {
       if (s.name === "x") args.x = this.x;
       else if (s.name === "P") args.P = this.P;
-      else if (s.name === "Q") args.Q = Q;
+      else if (s.name === "Q") {
+        if (Q === null)
+          throw new Error(
+            `${entry.method}: matrix port Q has no built default — ` +
+            `supply it (a zero-filled Q is not "baked Q")`);
+        args.Q = Q;
+      }
       else if (s.kind === "control") args[s.name] = packControl(u, DEFAULT_U);
+      else if (s.kind === "parameter")
+        args[s.name] = packParams({}, DEFAULT_PARAMS);
       else if (s.kind === "timestep") args[s.name] = dt;
       else if (s.kind === "time") args[s.name] = t;
       else if (s.kind === "measurement") args[s.name] = z;
@@ -388,8 +512,16 @@ export class Regulator {
     for (const s of this._ctrl.in) {
       if (s.name === "x") args.x = x;
       else if (s.kind === "state") args[s.name] = this._refs[s.name];
-      else if (s.kind === "matrix" && this._coeffs[s.name])
+      else if (s.kind === "matrix") {
+        if (!this._coeffs[s.name])
+          throw new Error(
+            `control: matrix port ${JSON.stringify(s.name)} has no built ` +
+            `default — reprogram() it before calling (a zero matrix is ` +
+            `not a control law)`);
         args[s.name] = this._coeffs[s.name];
+      }
+      else if (s.kind === "parameter")
+        args[s.name] = packParams({}, DEFAULT_PARAMS);
     }
     return unpackControl(this.rt.call("control", args).u);
   }
