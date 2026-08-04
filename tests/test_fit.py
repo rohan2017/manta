@@ -421,6 +421,57 @@ def test_tie_and_bound_validation():
         Fit(_drone(), parameters={"arm": Free(0.1)})
 
 
+def test_expand_off_matches_default():
+    """The NLP is SX-expanded for speed by default. That is a graph
+    representation, not a change of problem: the MX path must land on
+    the same optimum."""
+    windows = _record_windows(_drone(kf=11.0), n_win=2, K=40, seed=12)
+    params = {"t1.force_quad": Prior(sigma=4.0),
+              **{f"t{i}.force_quad": Tied("t1.force_quad")
+                 for i in (2, 3, 4)}}
+    w = {"imu.gyro": 1e6, "imu.accel": 1e4}
+    fast = Fit(_drone(kf=9.0), parameters=params).solve(windows, weights=w)
+    slow = Fit(_drone(kf=9.0), parameters=params).solve(
+        windows, weights=w, ipopt_options={"expand": False})
+    assert np.allclose(fast.values["drone.t1.force_quad"],
+                       slow.values["drone.t1.force_quad"], atol=1e-6)
+
+
+def test_fit_falls_back_when_nlp_cannot_expand():
+    """A jointed craft's joint-space solve rides on the default `Linsol`,
+    which has no `eval_sx` — SX expansion raises. The fitter must quietly
+    take the MX path instead of failing the solve."""
+    from manta.parts import RevoluteJoint
+
+    def jointed(force_z):
+        c = Craft("rover")
+        c.add(Mass("body", mass=4.0, moi=(0.4, 0.5, 0.6)))
+        c.add(Thruster("t", force=(0.0, 0.0, force_z),
+                       transform=(0.3, 0.0, 0.0)))
+        wheel = RevoluteJoint("wheel", mode="passive", axis=(0, 0, 1.0))
+        wheel.add(Mass("disk", mass=0.3, moi=(4e-3, 6e-3, 8e-3)))
+        c.add(wheel)
+        c.add(IMU("imu"))
+        w = World()
+        w.add_field(GravityField(g=(0, 0, -9.81)))
+        w.add_craft(c, position=(0, 0, 10.0))
+        return w
+
+    truth = TargetNumpy(Sim(jointed(1.0)))
+    x0 = copy.deepcopy(truth.state)
+    Z = []
+    for _ in range(25):
+        truth.state["rover"]["t.throttle"] = 0.6
+        truth.step(DT)
+        Z.append(truth.outputs()["rover"]["imu.gyro"].copy())
+    win = [Window(x0=x0, u={"t.throttle": 0.6},
+                  z={"imu.gyro": np.array(Z)}, dt=DT)]
+    res = Fit(jointed(1.6),
+              parameters={"t.force": Prior(sigma=1.0)}).solve(win)
+    assert res.converged
+    assert np.isfinite(res.values["rover.t.force"]).all()
+
+
 def test_log_prior_with_bounds():
     """Ambient bounds compose with the log reparam: mass is fit in
     log-space but bounded in kg, and the recovered value respects both."""

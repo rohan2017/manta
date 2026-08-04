@@ -316,14 +316,17 @@ class FitResult:
                               else f"{post:.3g}{unit}"),
                              ratio))
                 i += 1
+        # Tied parameters carry no decision variable of their own, so
+        # they get ONE row each (the derived vector, not a component per
+        # line) naming the source that does.
         for full, dim in self._fields:
             src = self._tie_sources.get(full)
             if src is None:
                 continue
             theta = np.atleast_1d(self.values[full])
-            for j in range(dim):
-                lbl = full if dim == 1 else f"{full}[{j}]"
-                rows.append((lbl, f"{theta[j]:.6g}", f"← {src}", "", ""))
+            val = (f"{theta[0]:.6g}" if dim == 1
+                   else "[" + " ".join(f"{v:.4g}" for v in theta) + "]")
+            rows.append((full, val, f"← {src}", "", ""))
         return (convergence_line(self.converged, self.stats) + "\n"
                 + format_table(rows))
 

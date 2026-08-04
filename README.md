@@ -376,6 +376,7 @@ a self-running scripted fallback so they work unattended):
 
 # system identification — headless, no rerun needed
 .venv/bin/python -m examples.vehicles.sysid_drone        # Fit + NoiseFit: thrust/mass/mounts/σ from IMU logs
+.venv/bin/python -m examples.vehicles.sysid_quad_tied    # Tied/Free: fit a DESIGN, then predict a second airframe
 ```
 
 Visualized demos need the rerun SDK (`.venv/bin/pip install rerun-sdk`); pass

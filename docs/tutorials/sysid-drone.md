@@ -23,8 +23,29 @@ transforms) to a recorded log using [`Fit`][manta.Fit].
 python -m examples.vehicles.sysid_drone
 ```
 
+## Structured fits — `examples/vehicles/sysid_quad_tied.py`
+
+The companion demo fits a symmetric X-quad as a *design* rather than an
+airframe: one [`Free`][manta.Free] arm length sourcing all four mount
+positions, one thrust curve and one yaw coefficient shared by four
+rotors via [`Tied`][manta.Tied], and `Prior(lower=, upper=)` sanity
+rails — 40 decision variables collapsed to 7. It then fits the same log
+with everything free and scores both models on a *second airframe*
+neither has seen. The unstructured fit wins the training log and loses
+the fleet test, which is the whole argument for tying.
+
+It also shows two things that are not about the fitter at all: designing
+excitation per mixer axis (a dedicated yaw doublet is what makes the
+drag coefficient identifiable), and why inertia and arm length must not
+be freed together (the gyro sees only their product).
+
+```bash
+python -m examples.vehicles.sysid_quad_tied
+```
+
 ## Source material
 
-- Code: `examples/vehicles/sysid_drone.py`
+- Code: `examples/vehicles/sysid_drone.py`,
+  `examples/vehicles/sysid_quad_tied.py`
 - Reference: [System identification](../reference/fit.md)
 - How-to: [Fit parameters from a log](../how-to/fit-parameters.md)

@@ -209,11 +209,26 @@ def solve_blocks_nlp(name: str, x: ca.MX, loss: ca.MX, blocks: list, *,
                      verbose: bool, ipopt_options: dict | None):
     """Build the fitters' shared IPOPT solver, seed it from the blocks'
     `init`, apply their box bounds, and solve. Returns
-    `(x_opt, objective, stats)`."""
+    `(x_opt, objective, stats)`.
+
+    The NLP is SX-expanded when the graph allows it — a windowed
+    `mapaccum` loss is thousands of scalar ops that IPOPT evaluates
+    (with its exact Hessian) at every iteration, and expanding cuts that
+    by an order of magnitude or more. Not every graph can: a craft whose
+    joint-space solve rides on the default `Linsol` has no `eval_sx`, so
+    the expansion is attempted and quietly dropped when it raises. Pass
+    `ipopt_options={"expand": False}` to force the MX path."""
     opts = {"ipopt.print_level": 5 if verbose else 0,
             "print_time": verbose, "ipopt.sb": "yes"}
     opts.update(ipopt_options or {})
-    solver = ca.nlpsol(name, "ipopt", {"x": x, "f": loss}, opts)
+    nlp = {"x": x, "f": loss}
+    if opts.pop("expand", True):
+        try:
+            solver = ca.nlpsol(name, "ipopt", nlp, {**opts, "expand": True})
+        except RuntimeError:
+            solver = ca.nlpsol(name, "ipopt", nlp, opts)
+    else:
+        solver = ca.nlpsol(name, "ipopt", nlp, opts)
     sol = solver(x0=np.concatenate([b.init for b in blocks]),
                  lbx=np.concatenate([b.lower for b in blocks]),
                  ubx=np.concatenate([b.upper for b in blocks]))
