@@ -301,3 +301,57 @@ def test_weather_patch_callable_curve():
         T_base = float(ca.evalf(isa_temperature(alt, T0, L)))
         np.testing.assert_allclose(_scalar(w, pt, "temperature"),
                                    T_base + 0.01 * alt, rtol=1e-6)
+
+
+def test_wave_pressure_attenuates_with_depth():
+    """Linear-wave dynamic pressure: P = P_surf + ρ·g·d_mean +
+    ρ·g·A·e^{−k·d}·cos(kξ − ωt) — the oscillation a submerged pressure
+    sensor feels decays with depth; the hydrostatic mean does not care
+    about the instantaneous surface.
+
+    Hand-derived (A=1 m, λ=100 m ⇒ k=0.062832; g0 = μ/R² = 9.79828;
+    ρg = 1025·9.79828 = 10043.2 Pa/m):
+      d= 2 m: e^{−0.12566} = 0.88192 → amplitude 8857 Pa
+      d=30 m: e^{−1.88496} = 0.15195 → amplitude 1526 Pa   (detectable
+              by a good depth sensor — and 6.6× SMALLER than the naive
+              column to the instantaneous surface would claim)
+      ratio d30/d2 = e^{−k·28} = 0.17230
+    """
+    wv = SeaWaves(amplitude=1.0, wavelength=100.0)
+    earth, w = _wave_world(waves=wv)
+    k = 2 * np.pi / wv.wavelength
+    g0 = earth.gravity_mu / earth.planet_radius**2
+    omega = k * np.sqrt(g0 * wv.wavelength / (2 * np.pi))
+    rho = earth.water_density
+    period = 2 * np.pi / omega
+
+    def sweep(depth):
+        ps = [_scalar(w, (0.0, 0.0, -depth), "pressure", t)
+              for t in np.linspace(0.0, period, 128, endpoint=False)]
+        return (max(ps) - min(ps)) / 2.0, float(np.mean(ps))
+
+    amp2, _ = sweep(2.0)
+    amp30, mean30 = sweep(30.0)
+
+    np.testing.assert_allclose(amp2, rho * g0 * np.exp(-k * 2.0),
+                               rtol=2e-3)
+    np.testing.assert_allclose(amp30, rho * g0 * np.exp(-k * 30.0),
+                               rtol=2e-3)
+    # The attenuation LAW, independent of the ρg prefactor.
+    np.testing.assert_allclose(amp30 / amp2, np.exp(-k * 28.0), rtol=2e-3)
+    # Mean pressure is the column to the MEAN surface (dynamic term
+    # averages out over a period).
+    P0 = earth.air_density * R_AIR * earth.sea_level_temperature
+    np.testing.assert_allclose(mean30, P0 + rho * g0 * 30.0, rtol=1e-4)
+
+
+def test_flat_sea_pressure_unchanged():
+    """No waves ⇒ the equivalent pressure depth is the plain hydrostatic
+    column — the correction is invisible for a flat sea."""
+    earth, w = _wave_world(waves=None)
+    g0 = earth.gravity_mu / earth.planet_radius**2
+    P0 = earth.air_density * R_AIR * earth.sea_level_temperature
+    for d in (5.0, 50.0):
+        np.testing.assert_allclose(
+            _scalar(w, (0.0, 0.0, -d), "pressure"),
+            P0 + earth.water_density * g0 * d, rtol=1e-6)

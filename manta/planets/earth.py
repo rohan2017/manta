@@ -53,7 +53,11 @@ class SeaWaves:
     fluid carries the matching first-order orbital velocity — particles
     circle with radius `amplitude` at the surface, decaying as e^{k·z}
     with depth — so drag surfaces and foils feel the moving water, not
-    just the moving boundary.
+    just the moving boundary. The pressure carries the matching
+    depth-attenuated dynamic term `ρ·g·η·e^{k·z}` on top of the mean
+    hydrostatic column, so a submerged pressure sensor sees the waves
+    at the physically correct (depth-filtered) amplitude — the signal a
+    wave-detecting barometer works with.
 
     `direction` is a planet-frame vector (normalized; its radial
     component at the point of interest should be ~0). The wave is a
@@ -254,9 +258,27 @@ class Earth(Planet):
             eta = waves.amplitude * ca.cos(k_wave * xi - omega_wave * t)
             return alt_mean - eta
 
-        def _depth(p_planet, t):
-            """Depth (m, positive downward) below the sea surface."""
-            return ca.fmax(0.0, -_signed_altitude(p_planet, t))
+        def _pressure_depth(p_planet, t):
+            """Equivalent pressure depth (m): the hydrostatic column to
+            the MEAN surface plus the wave dynamic term attenuated by
+            depth — `P = P_surf + ρ·g·(d_mean + η·e^{−k·d_mean})`, the
+            first-order (linear wave theory) pressure under a deep-water
+            wave. The naive column to the *instantaneous* surface
+            (`d = −signed_altitude`) is wrong at depth: it makes a
+            submerged pressure sensor feel the full surface amplitude
+            at any depth, where physically the dynamic term decays as
+            `e^{−k·d}` — at 30 m under a 100 m wave that is a 6.6×
+            over-prediction, exactly the signal a wave-detecting
+            barometer would be tuned against. In the splash zone
+            (|alt| ≲ a) the exponent clamps to 0 and the two forms
+            agree. The exponent clamp mirrors `ocean_velocity_fn`."""
+            alt_mean = soft_norm(p_planet) - R_planet
+            if waves is None:
+                return ca.fmax(0.0, -alt_mean)
+            xi    = ca.dot(p_planet, dir_dm)
+            eta   = waves.amplitude * ca.cos(k_wave * xi - omega_wave * t)
+            decay = ca.exp(k_wave * ca.fmin(alt_mean, 0.0))
+            return ca.fmax(0.0, eta * decay - alt_mean)
 
         def _surface_height_world(point, t):
             """Signed altitude above the surface for a WORLD-frame query
@@ -294,7 +316,7 @@ class Earth(Planet):
                           lapse_rate=L,
                           gas_constant=R_AIR,
                           name=f"{self.name}_air"))
-        ff.add(Ocean(self, _depth,
+        ff.add(Ocean(self, _pressure_depth,
                      surface_gravity=g0,
                      water_density=rho_w,
                      surface_pressure=P0,
