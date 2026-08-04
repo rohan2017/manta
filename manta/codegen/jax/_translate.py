@@ -20,19 +20,37 @@ the (fully inlined) MX graph at each `OP_SOLVE` node instead: the
 pieces between solves become plain SX-expandable stage kernels, and the
 solves themselves are mapped to `jnp.linalg.solve` — LAPACK's
 partially-pivoted LU, the same class of runtime-pivoting solve CasADi's
-Linsol performs, so a configuration-degenerate joint-space matrix is
-handled the same way. The composed function is jitted / differentiated
-as one program (JAX differentiates through `linalg.solve` natively).
+Linsol performs. One honest difference: on a genuinely singular matrix
+(a configuration-degenerate joint-space system) CasADi's Linsol raises,
+while `jnp.linalg.solve` under jit returns inf/NaN and the scan keeps
+going — guard training rollouts with `jnp.isfinite` checks if the craft
+can reach degenerate configurations. The composed function is jitted /
+differentiated as one program (JAX differentiates through
+`linalg.solve` natively).
 """
 
 from __future__ import annotations
+
+import warnings
 
 import casadi as ca
 
 import jax
 import jax.numpy as jnp
 
-jax.config.update("jax_enable_x64", True)   # manta kernels are float64
+
+def _require_x64() -> None:
+    """Ensure float64 tracing before any kernel is built. manta kernels
+    are float64 physics — float32 would silently corrupt them — but
+    flipping a process-global JAX flag as an *import* side effect is not
+    this module's call; do it at first use, and say so."""
+    if not jax.config.jax_enable_x64:
+        warnings.warn(
+            "TargetJax: enabling jax_enable_x64 (manta kernels are float64 "
+            "physics; float32 would silently corrupt them). Set "
+            "jax.config.update('jax_enable_x64', True) at startup to make "
+            "this explicit.", RuntimeWarning, stacklevel=3)
+        jax.config.update("jax_enable_x64", True)
 
 
 # Binary/unary scalar ops, by CasADi OP code → source template.
@@ -95,23 +113,42 @@ def translate(fn: ca.Function, *, jit: bool = True):
     nodes (a jointed craft) is cut at those nodes and recomposed around
     `jnp.linalg.solve` — see `_translate_around_solves`.
     """
+    _require_x64()
+    # RuntimeError is what CasADi raises for an inexpandable graph
+    # (Linsol nodes). Anything else is a genuine bug and must surface
+    # as itself, not be silently rerouted into the solve-cut path.
     try:
         sx = fn.expand()
-    except Exception as e:                       # Linsol nodes, etc.
+    except RuntimeError as e:                    # Linsol nodes
         wrapper = _translate_around_solves(fn, cause=e)
         return jax.jit(wrapper) if jit else wrapper
     wrapper = _translate_sx(sx, fn.name())
     return jax.jit(wrapper) if jit else wrapper
 
 
+_INSTR_WARN = 100_000
+
+
 def _translate_sx(sx: ca.Function, name: str):
     """The SX-tape walk: emit one Python line per scalar instruction and
     exec it into a function over flattened args (unjitted)."""
+    n_instr = sx.n_instructions()
+    if n_instr > _INSTR_WARN:
+        # One source line per instruction: CPython must parse it and JAX
+        # must trace it. There is no interpreted fallback here (unlike
+        # the numpy compile path's cap), so warn instead of failing —
+        # but the user should know why the first call takes minutes.
+        warnings.warn(
+            f"TargetJax: kernel {name!r} expands to {n_instr} scalar "
+            f"instructions — emitted as one {n_instr}-line Python "
+            f"function; expect a long parse/trace on first call. "
+            f"Consider a smaller tracked state or the C++ target.",
+            RuntimeWarning, stacklevel=2)
     src = ["def _kernel(args):"]
     out_exprs: list[list[str | None]] = [
         [None] * sx.nnz_out(j) for j in range(sx.n_out())]
 
-    for k in range(sx.n_instructions()):
+    for k in range(n_instr):
         op = sx.instruction_id(k)
         o = sx.instruction_output(k)
         i = sx.instruction_input(k)
@@ -184,7 +221,13 @@ def _translate_sx(sx: ca.Function, name: str):
 
 def _postorder(exprs):
     """Iterative post-order walk of an MX DAG (deps before dependents),
-    deduplicated by node identity."""
+    deduplicated by node identity.
+
+    Dedup keys on `hash(n)`: CasADi's MX hash falls back to the shared
+    node pointer, so structurally-distinct live nodes never collide, and
+    holding every visited node in `order` keeps them alive (no address
+    reuse) for the duration of the walk — an undocumented but load-
+    bearing property of the binding."""
     seen: set[int] = set()
     order: list[ca.MX] = []
     stack = [(e, False) for e in exprs]
@@ -259,6 +302,10 @@ def _translate_around_solves(fn: ca.Function, *, cause: Exception):
     autodiffed graphs) solves against Aᵀ. If the graph contains no
     solve nodes the original expansion failure had some other cause —
     re-raise it.
+
+    Singularity semantics differ from CasADi here (see the module
+    docstring): a degenerate A yields inf/NaN under jit, not an
+    exception.
     """
     ins = [ca.MX.sym(fn.name_in(i), fn.sparsity_in(i))
            for i in range(fn.n_in())]
@@ -274,7 +321,28 @@ def _translate_around_solves(fn: ca.Function, *, cause: Exception):
     stage_fns = []
     for i, s in enumerate(solves):
         b_raw, A_raw = s.dep(0), s.dep(1)   # Solve node: dep0 = b, dep1 = A
-        if s.info().get("tr", False):        # Solve<Tr=true>: x = Aᵀ \ b
+        # Sanity-check the (undocumented) CasADi dep ordering we rely
+        # on: A square, b shaped like the solution. A silent reversal
+        # would produce transposed physics with no error.
+        if (A_raw.shape[0] != A_raw.shape[1]
+                or tuple(b_raw.shape) != tuple(s.shape)):
+            raise NotImplementedError(
+                f"TargetJax: solve node {i} of kernel {fn.name()!r} has "
+                f"deps b{tuple(b_raw.shape)}, A{tuple(A_raw.shape)} for "
+                f"solution {tuple(s.shape)} — CasADi's Solve-node dep "
+                f"layout differs from the (b, A) ordering this cut "
+                f"assumes. Check the installed CasADi version.")
+        info = s.info()
+        if "tr" not in info:
+            # `.get("tr", False)` here would silently solve against A
+            # instead of Aᵀ if CasADi ever renames the flag — wrong
+            # numbers, no error. Demand it.
+            raise NotImplementedError(
+                f"TargetJax: solve node of kernel {fn.name()!r} carries "
+                f"no 'tr' flag in info() ({sorted(info)}) — the "
+                f"installed CasADi's Solve-node metadata differs from "
+                f"what this cut relies on.")
+        if info["tr"]:                       # Solve<Tr=true>: x = Aᵀ \ b
             A_raw = A_raw.T
         if x_syms:
             A_raw, b_raw = ca.graph_substitute(

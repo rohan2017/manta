@@ -97,13 +97,24 @@ class JaxModule:
         return jnp.asarray(np.asarray(x0, dtype=float))
 
     def param_defaults(self) -> jnp.ndarray:
-        """The PARAMETER port's declared values (empty if none)."""
+        """The PARAMETER port's declared values (empty if none). A scalar
+        default on a multi-dim field broadcasts, matching the numpy
+        runtime's packing — without it the vector silently came up
+        short."""
         ports = self.module.ports_by_role(Role.PARAMETER)
         if not ports:
             return jnp.zeros(0)
-        return jnp.concatenate([
-            jnp.asarray(np.asarray(f.default, dtype=float).ravel())
-            for f in ports[0].fields])
+        chunks = []
+        for f in ports[0].fields:
+            a = np.asarray(f.default, dtype=float).ravel()
+            if a.size == 1 and f.dim > 1:
+                a = np.full(f.dim, a[0])
+            elif a.size != f.dim:
+                raise ValueError(
+                    f"{self.module.name}: parameter {f.name!r} declares "
+                    f"dim {f.dim} but its default has {a.size} value(s).")
+            chunks.append(jnp.asarray(a))
+        return jnp.concatenate(chunks)
 
     # ---- rollout ---------------------------------------------------------
 
@@ -120,6 +131,14 @@ class JaxModule:
         produced by the step taken FROM state k (the manta data
         convention); `x_traj` rows are the K post-step states."""
         ep = self.module.entry("step")
+        if len(ep.writes) != 1:
+            # The scan carries outs[0] as THE state; a two-write module
+            # (a filter's x and P) would silently mis-slice.
+            raise ValueError(
+                f"{self.module.name}: make_rollout() drives a sim-oracle "
+                f"`step` with exactly one written state; this module's "
+                f"step writes {list(ep.writes)}. Use call()/kernel() for "
+                f"filter-shaped modules.")
         step = self.kernel(ep.fn)
         has_params = any(
             isinstance(a, PortRef)

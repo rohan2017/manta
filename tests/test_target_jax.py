@@ -4,6 +4,10 @@ import numpy as np
 import pytest
 
 jax = pytest.importorskip("jax")
+# The recommended usage: opt into float64 explicitly at startup. (Without
+# this, TargetJax enables it at first use with a RuntimeWarning — manta
+# kernels are float64 physics.)
+jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp                                    # noqa: E402
 
 import casadi as ca                                        # noqa: E402
