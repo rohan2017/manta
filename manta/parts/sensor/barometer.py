@@ -9,8 +9,9 @@ ISA profile.
 `ctx.position` is already the sensor's own world-frame position (the
 kinematic pass composed it from the body state and the chain of
 `Part.transform` / joint rotations above the sensor), so the part code is
-a one-line field query — the same pattern as `PointBuoy`. With no
-FluidField registered the reading is zero.
+a one-line field query — the same pattern as `PointBuoy`. A world with no
+FluidField is a configuration error (`requires_fields`), rejected when
+the first transform is built.
 
 This is the pressure sibling of `VelocitySensor`/`PositionSensor`; a
 `Thermometer` (reading `FluidState.temperature`) and a `FlowSensor`

@@ -13,7 +13,9 @@ the relative-wind vector in CraftFrame:
 direction-preserving quadratic drag, etc.). A_k, B_k are 3×3 matrices.
 ρ is queried from the registered FluidField at the part's mount point
 each tick, so the user-provided A_k / B_k tensors are "per unit fluid
-density." With no FluidField registered, ρ = 0 → zero force.
+density." A world with no FluidField is a configuration error
+(`requires_fields`), rejected when the first transform is built — a
+vacuum test world simply omits the DragSurface.
 
 Constructor styles match Thruster's:
 

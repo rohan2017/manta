@@ -7,9 +7,10 @@ single sample with displacement volume V at the part's mount offset.
   F = -ρ(p) · V · g(p)
 
 evaluated at the buoy's world-frame position. ρ comes from the
-registered FluidField; g from the registered GravityField. With no
-FluidField registered, ρ defaults to zero → no buoyancy contribution
-(useful for in-vacuum sanity tests). With Part.transform set to a
+registered FluidField; g from the registered GravityField. A world with
+no FluidField is a configuration error (`requires_fields`), rejected
+when the first transform is built — an in-vacuum sanity world simply
+omits the buoy. With Part.transform set to a
 non-zero offset, the framework's wrench-at-offset lift rolls the force
 up into the parent's torque automatically.
 

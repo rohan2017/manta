@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3
-from .._declarations import Output, PartUpdate, WhiteNoise
+from .._declarations import Output, Parameter, PartUpdate, WhiteNoise
 from ..base import Part
 from ...ir.wrench import Wrench
 
@@ -29,16 +29,21 @@ class VelocitySensor(Part):
     """Body-frame linear-velocity sensor.
 
     Outputs:
-        velocity : Vec3[CraftFrame] — body-frame velocity (R^T·v_anchor).
-                                      The craft's inertial (ground-
+        velocity : Vec3[PartFrame] — the craft's inertial (ground-
                                       relative) velocity in the sensor's
-                                      own case frame.
+                                      own case frame (R^T·v_anchor). For
+                                      a root-mounted sensor that frame
+                                      coincides with CraftFrame; on a
+                                      rotor it spins with the joint.
 
     Noise channel (set σ to engage):
         velocity_noise — vec3 white, per-tick m/s. Becomes the EKF's
                          measurement R, exactly as PositionSensor's
                          `position_noise`. Defaults to 0 (an ideal read).
     """
+
+    #: Measurement rate, Hz. `None` ⇒ every tick (family-uniform knob).
+    rate: float = Parameter(None)
 
     velocity_noise = WhiteNoise("R3", frame=PartFrame, sigma=0.0)
 
@@ -54,4 +59,5 @@ class VelocitySensor(Part):
         return PartUpdate(
             wrench=Wrench(force=zero_v, torque=zero_v),
             outputs={"velocity": v_sensor + self.velocity_noise},
+            rates={"velocity": self.rate},
         )

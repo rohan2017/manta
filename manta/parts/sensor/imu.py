@@ -1,11 +1,12 @@
-"""IMU — gyro + accelerometer (body-frame specific force).
+"""IMU — gyro + accelerometer (sensor-frame specific force).
 
-Outputs:
-  * `gyro`  (Vec3[CraftFrame]) — body angular velocity ω + bias + white.
-  * `accel` (Vec3[CraftFrame]) — body-frame specific force
-                                  f = a_body − g_body, + bias + white.
-                                  Zero in free fall; +1g upward when
-                                  stationary on the ground.
+Outputs (both in the SENSOR's own frame, `Vec3[PartFrame]` — for a
+root-mounted IMU that coincides with the body frame; on a rotor it spins
+with the joint):
+  * `gyro`  — inertial angular velocity ω + bias + white.
+  * `accel` — specific force f = a − g, + bias + white.
+              Zero in free fall; +1g upward when stationary on the
+              ground.
 
 Noise channels (Kalibr 4-parameter model — set σ to engage each):
 
@@ -29,7 +30,9 @@ from __future__ import annotations
 from ...fields import GravityField, gravity_at
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3
-from .._declarations import Output, PartUpdate, RandomWalkNoise, WhiteNoise
+from .._declarations import (
+    Output, Parameter, PartUpdate, RandomWalkNoise, WhiteNoise,
+)
 from ..base import Part
 from ...ir.wrench import Wrench
 
@@ -46,6 +49,12 @@ class IMU(Part):
     The two RW channels add bias state slots that the EKF can estimate;
     skip them by leaving sigma at 0.
     """
+
+    #: Measurement rate, Hz. `None` (default) ⇒ a fresh reading every
+    #: tick; set it so `rate_gate`s and the EKF's declared sample rates
+    #: see the real sensor cadence — same knob as `Barometer`/
+    #: `PositionSensor` (the sensor family shares it uniformly).
+    rate: float = Parameter(None)
 
     gyro_noise  = WhiteNoise(     "R3", frame=PartFrame, sigma=0.0)
     accel_noise = WhiteNoise(     "R3", frame=PartFrame, sigma=0.0)
@@ -79,4 +88,5 @@ class IMU(Part):
                           + self.accel_bias
                           + self.accel_noise),
             },
+            rates={"gyro": self.rate, "accel": self.rate},
         )

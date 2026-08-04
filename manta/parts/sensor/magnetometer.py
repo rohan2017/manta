@@ -20,7 +20,7 @@ from __future__ import annotations
 from ...fields import MagField
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3
-from .._declarations import Output, PartUpdate, WhiteNoise
+from .._declarations import Output, Parameter, PartUpdate, WhiteNoise
 from ..base import Part
 from ...ir.wrench import Wrench
 
@@ -29,12 +29,12 @@ class Magnetometer(Part):
     """3-axis magnetometer.
 
     Outputs:
-        B : Vec3[CraftFrame] — magnetic flux density at the sensor
+        B : Vec3[PartFrame] — magnetic flux density at the sensor
                                 position, in the sensor's own frame. SI
                                 units (Tesla). For a sensor mounted
-                                directly on the craft root that frame is
-                                CraftFrame; on a joint rotor it spins
-                                with the rotor.
+                                directly on the craft root that frame
+                                coincides with CraftFrame; on a joint
+                                rotor it spins with the rotor.
 
     Noise channel (set σ to engage):
         B_noise — vec3 white, per-tick Tesla. Becomes the EKF's
@@ -44,6 +44,9 @@ class Magnetometer(Part):
     """
 
     requires_fields = [MagField]
+
+    #: Measurement rate, Hz. `None` ⇒ every tick (family-uniform knob).
+    rate: float = Parameter(None)
 
     B_noise = WhiteNoise("R3", frame=PartFrame, sigma=0.0)
 
@@ -64,4 +67,5 @@ class Magnetometer(Part):
         return PartUpdate(
             wrench=Wrench(force=zero_v, torque=zero_v),
             outputs={"B": B_sensor + self.B_noise},
+            rates={"B": self.rate},
         )
