@@ -28,7 +28,8 @@ Standard usage::
     drone = Craft("drone")
     drone.add(Mass("body", mass=1.5))
     drone.add(Thruster("t", force=(0,0,1)))
-    drone.add(IMU("imu", gyro_noise_sigma=0.005, gyro_bias_sigma=1e-4))
+    drone.add(IMU("imu", gyro_noise_sigma=0.005, gyro_bias_sigma=1e-4,
+                  accel_noise_sigma=0.05))   # every EKF sensor needs σ>0
 
     w = World().add_field(GravityField(g=(0,0,-9.81)))
     w.add_craft(drone, position=(0,0,5))
@@ -48,7 +49,9 @@ The low-level IR (`manta.ir`) is still exported for advanced use
 through the World/Target API above.
 """
 
-from . import ir
+__version__ = "0.1.0"   # keep in lockstep with pyproject.toml
+
+from . import ir, smoothing
 from .craft import Craft
 from .world import World
 from .sim import Sim
@@ -68,7 +71,9 @@ from .fit import (Fit, FitResult, Free, NoiseFit, NoiseFitResult, Prior,
 from .rates import CommandLatch, RateGate
 
 __all__ = [
-    "ir", "Craft", "World", "Coupling", "Sim", "Planet", "EKF", "UKF",
+    "__version__",
+    "ir", "smoothing", "Craft", "World", "Coupling", "Sim", "Planet",
+    "EKF", "UKF",
     "LQR", "LQRSolution", "PID",
     "Madgwick", "Mahony", "IMUIntegrator", "RecurrenceBlock",
     "TargetNumpy", "TargetCpp", "TargetWasm", "TargetJax", "NoiseDriver",

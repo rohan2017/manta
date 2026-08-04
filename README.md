@@ -61,13 +61,15 @@ sim = TargetNumpy(Sim(w))
 ekf = TargetNumpy(EKF(w))
 
 # Run. The sim runtime holds the state: mutate `sim.state`, step by dt.
+# The filter loop is update-then-predict: a reading sampled at the
+# interval start belongs against the current (pre-predict) state.
 sim.state["drone"]["t.throttle"] = 1.5 * 9.81       # hover
 for t in np.arange(0, 3, 0.005):
     sim.step(0.005, t=t)                            # advance truth
     reading = sim.outputs()                         # sensor readings, this step
+    ekf.update("imu.gyro", reading["drone"]["imu.gyro"], t=t)
+    ekf.update("gps.position", reading["drone"]["gps.position"], t=t)
     ekf.predict(dt=0.005, t=t, u={"t.throttle": 1.5 * 9.81})
-    ekf.update("imu.gyro", reading["drone"]["imu.gyro"])
-    ekf.update("gps.position", reading["drone"]["gps.position"])
 
 print(ekf.state_dict()["drone"]["position"])
 ```
@@ -331,7 +333,8 @@ manta/                     library package
     fields/                Field + Disturbance + stock + CraftWindBubble
     planets/               Planet base, Earth, PlanetFrameFluid, PlanetState
     couplings/             Coupling ABC + Tether
-    estimation/            EKF + StateSpec + observability/NEES + filters
+    estimation/            EKF/UKF + observability/NEES + recurrence filters
+                           (state layout — StateSpec — lives in ir/, not here)
     control/               LQR + PID
     codegen/               Backends (one generic Module lowering per target)
         target.py          as_module — the backend entry-point contract
@@ -340,7 +343,7 @@ manta/                     library package
         cpp/               TargetCpp + the generic module_emit emitter
         jax/               TargetJax (CasADi SX tape → jitted JAX source)
         wasm/              TargetWasm (flat-C kernels + C ABI + JS runtime)
-tests/                     618 tests
+tests/                     700+ tests (`pytest -q`; count moves — don't pin it)
 examples/                  quickstart + physics/ + vehicles/
     _viz.py                rerun visualization helpers
     _control.py            keyboard (pynput) + scripted-fallback control

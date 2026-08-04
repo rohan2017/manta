@@ -21,8 +21,11 @@ dependencies = [
 [project.optional-dependencies]
 # JAX codegen backend (TargetJax).
 jax = ["jax>=0.10", "jaxlib>=0.10"]
-# Running the examples/ vehicles and physics demos.
-examples = ["matplotlib>=3.10", "scipy>=1.17", "rerun-sdk>=0.33"]
+# Running the examples/ vehicles and physics demos: rerun for the viz,
+# pynput for the global `--keyboard` mode. (No matplotlib/scipy — nothing
+# in the repo imports them; consistency.py carries its own χ² quantiles
+# precisely to avoid scipy.)
+examples = ["rerun-sdk>=0.33", "pynput>=1.7"]
 # Building this documentation site.
 docs = [
     "mkdocs-material>=9.5",
@@ -35,8 +38,12 @@ dev = ["pytest>=9.0", "pytest-xdist>=3.8"]
 packages = ["manta"]
 
 [tool.pytest.ini_options]
-# Run in parallel by default (pytest-xdist). Override with `-n0` to serialize.
-addopts = "-n auto"
+# Run in parallel by default (pytest-xdist), but cap the worker count:
+# CasADi-heavy tests (EKF/UKF/Fit graph construction + SX expansion) peak
+# at 1-3 GB EACH, and `-n auto` on a many-core box spawns one per core —
+# 16 workers OOM'd a 15 GB WSL VM twice (kernel OOM-killer, 2026-08-04).
+# 8 workers bounds the peak near ~8 GB. Override with `-n0` to serialize.
+addopts = "-n auto --maxprocesses=8"
 markers = [
     "slow: long-running fits, Monte-Carlo, or fine-dt convergence sweeps",
     "cpp: shells out to a C/C++ compiler (codegen roundtrips)",

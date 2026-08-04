@@ -10,6 +10,12 @@ Public surface:
   * Wrench        — frame-tagged (force, torque) pair.
   * Graph         — context manager + compile / jacobian / summary.
   * FrameError    — raised on frame-tag mismatch with source-location info.
+  * Module        — the typed transform↔backend contract (`Module`,
+                    `StateLayout`/`StateField`, `Port`/`PortField`, `Role`,
+                    `EntryPoint`, `StateRef`/`PortRef`, `Hosting`,
+                    `entry_ident`) — every transform emits one and every
+                    target lowers one; a custom backend imports it from
+                    here.
 """
 
 from .frames import (
@@ -28,6 +34,10 @@ from .state_spec import (
 )
 from .wrench import Wrench
 from .graph import Graph
+from .module import (
+    EntryPoint, Hosting, Module, Port, PortField, PortRef, Role,
+    StateField, StateLayout, StateRef, entry_ident,
+)
 
 __all__ = [
     "Frame",
@@ -39,4 +49,6 @@ __all__ = [
     "resolve_slotset",
     "Wrench",
     "Graph",
+    "Module", "StateLayout", "StateField", "Port", "PortField", "Role",
+    "EntryPoint", "StateRef", "PortRef", "Hosting", "entry_ident",
 ]
