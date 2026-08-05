@@ -64,6 +64,7 @@ from ..ir._rotation import (
     R_from_axis_angle,
     quat_from_axis_angle,
     quat_mul,
+    quat_to_rotmat,
     rotate_vec_by_quat,
 )
 from ..ir.frames import WorldFrame, CraftFrame, ParentFrame, PartFrame
@@ -218,6 +219,14 @@ def _attr_mx(value) -> ca.MX:
     return value._mx if is_promoted(value) else ca.MX(float(value))
 
 
+def _attr_quat(value) -> ca.MX:
+    """A static mount `orientation`: a bound SO3 symbol when promoted
+    (mount-misalignment sysid), else the declared wxyz constant."""
+    if is_promoted(value):
+        return value._mx
+    return ca.MX(list(float(v) for v in value))
+
+
 # ---------------------------------------------------------------------------
 # Pass
 # ---------------------------------------------------------------------------
@@ -349,8 +358,20 @@ def _compute_child_state(parent_state: KinematicState, parent_part, child,
     offset_in_craft = parent_state.R_craft_from_output @ transform
     r_in_craft = parent_state.r_out_in_craft + offset_in_craft
 
-    # Mount doesn't rotate, so child's INPUT frame = parent's OUTPUT.
-    R_craft_from_input = parent_state.R_craft_from_output
+    # Static mount rotation: the child's INPUT frame is the parent's
+    # OUTPUT frame turned by the child's own `orientation` (part axes →
+    # parent output axes). Identity for almost every part, so the fast
+    # path skips the compose entirely rather than multiplying by I on
+    # every part of every tick.
+    if child.mounted_upright:
+        R_craft_from_input = parent_state.R_craft_from_output
+        q_world_from_input = parent_state.q_world_from_output
+    else:
+        q_mount = _attr_quat(child.mount_rotation)
+        R_craft_from_input = (parent_state.R_craft_from_output
+                              @ quat_to_rotmat(q_mount))
+        q_world_from_input = quat_mul(
+            parent_state.q_world_from_output, q_mount)
 
     # ----- position + velocity of child's origin, world coords ---------
     offset_world = rotate_vec_by_quat(
@@ -363,7 +384,7 @@ def _compute_child_state(parent_state: KinematicState, parent_part, child,
                       + ca.cross(omega_parent_world, offset_world))
 
     # ----- child input-frame ω + orientation ----------------------------
-    q_world_from_input = parent_state.q_world_from_output
+    # (q_world_from_input was composed with the mount rotation above.)
     omega_input = parent_state.omega_output
     # Body-relative ω/α of the INPUT frame equal the parent's OUTPUT-frame
     # relative values (the mount is rigid).

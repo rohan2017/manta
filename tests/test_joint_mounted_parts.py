@@ -8,6 +8,7 @@ transfer alone misses. These tests pin both against closed-form values.
 """
 
 import numpy as np
+import pytest
 
 from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField, MagField, FluidField
@@ -179,3 +180,117 @@ def test_rotor_dragsurface_drag_tracks_rotor_frame():
     # Isotropic drag opposes motion: decelerates +x, no lateral kick.
     assert v[0] < V0
     np.testing.assert_allclose(v[1:], (0.0, 0.0), atol=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# Static mount orientation
+# ---------------------------------------------------------------------------
+
+def test_rotated_thruster_pushes_along_its_rotated_axis():
+    """A thruster declaring +x thrust, mounted yawed 90°, pushes the
+    craft along +y. Before static mount rotations existed, the only way
+    to say this was to hand-rotate the thrust vector in the config —
+    which duplicates the geometry and silently diverges from whatever
+    the mixer believes."""
+    import numpy as np
+
+    from manta import Craft, Sim, TargetNumpy, World
+    from manta.fields import GravityField
+    from manta.parts import Mass, Thruster
+
+    half = np.sqrt(0.5)
+    c = Craft("boat")
+    c.add(Mass("body", mass=10.0, moi=(1.0, 1.0, 1.0)))
+    c.add(Thruster("t", force=(10.0, 0.0, 0.0),
+                   mount_rotation=(half, 0.0, 0.0, half)))    # +90° yaw
+    w = World().add_field(GravityField(g=(0, 0, 0)))
+    w.add_craft(c, **{"t.throttle": 1.0})
+    sim = TargetNumpy(Sim(w))
+    for _ in range(100):
+        sim.step(0.001)
+
+    # 10 N on 10 kg for 0.1 s.
+    v = np.asarray(sim.state["boat"]["velocity"], dtype=float)
+    assert v[1] == pytest.approx(0.1, abs=1e-4), "thrust should be along +y"
+    assert abs(v[0]) < 1e-9, "nothing should remain along +x"
+
+
+def test_rotated_sensor_reads_its_own_frame():
+    """A gyro mounted on its side reports the craft's rate in the
+    SENSOR's axes, not the hull's. This is the whole point of a static
+    mount rotation for sensors: the measurement function should not
+    have to undo a frame the framework knows about."""
+    import numpy as np
+
+    from manta import Craft, Sim, TargetNumpy, World
+    from manta.fields import GravityField
+    from manta.parts import IMU, Mass
+
+    half = np.sqrt(0.5)
+    c = Craft("d")
+    c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
+    c.add(IMU("upright", gyro_noise_sigma=0.0))
+    # Rolled +90° about x, so the sensor's own +y points along the
+    # hull's +z — which is the axis the craft is turning about.
+    c.add(IMU("rolled", gyro_noise_sigma=0.0,
+              mount_rotation=(half, half, 0.0, 0.0)))
+    w = World().add_field(GravityField(g=(0, 0, 0)))
+    w.add_craft(c, angular_velocity=(0.0, 0.0, 2.0))       # yaw rate
+    sim = TargetNumpy(Sim(w))
+    sim.step(0.001)
+
+    up = np.asarray(sim.reading("upright.gyro"), dtype=float)
+    rolled = np.asarray(sim.reading("rolled.gyro"), dtype=float)
+    np.testing.assert_allclose(up, [0.0, 0.0, 2.0], atol=1e-6)
+    # The same physical rotation, read on the rolled sensor's own +y.
+    np.testing.assert_allclose(rolled, [0.0, 2.0, 0.0], atol=1e-6)
+
+
+def test_mount_rotation_composes_through_a_joint():
+    """A rotated part on a rotating joint composes both — the joint
+    angle and the static mount, in that order."""
+    import numpy as np
+
+    from manta import Craft, Sim, TargetNumpy, World
+    from manta.fields import GravityField
+    from manta.parts import IMU, Mass, RevoluteJoint
+
+    half = np.sqrt(0.5)
+    c = Craft("rig")
+    c.add(Mass("body", mass=50.0, moi=(5.0, 5.0, 5.0)))
+    j = c.add(RevoluteJoint("j", axis=(0.0, 0.0, 1.0), mode="passive"))
+    j.add(Mass("rotor", mass=0.5, moi=(0.01, 0.01, 0.02)))
+    j.add(IMU("on_rotor", gyro_noise_sigma=0.0,
+              mount_rotation=(half, half, 0.0, 0.0)))          # rolled +90°
+    w = World().add_field(GravityField(g=(0, 0, 0)))
+    w.add_craft(c, angular_velocity=(0.0, 0.0, 1.0))
+    sim = TargetNumpy(Sim(w))
+    sim.step(0.001)
+
+    # Body spins about +z; the rolled sensor reads it on its own +y,
+    # exactly as it would on the hull — the joint sits at angle 0 here,
+    # so the mount rotation is what does the work, composed on top of
+    # the joint's (identity) rotation rather than instead of it.
+    g = np.asarray(sim.reading("on_rotor.gyro"), dtype=float)
+    np.testing.assert_allclose(g, [0.0, 1.0, 0.0], atol=1e-6)
+
+
+def test_root_mount_pose_is_locked_to_identity():
+    """A rotated root would silently redefine what "body frame" means
+    for every state, sensor and wrench on the craft."""
+    from manta.parts.base import RootPart
+
+    r = RootPart("root")
+    assert r.mounted_upright
+    assert r.transform == (0.0, 0.0, 0.0)
+
+
+def test_orientation_is_validated_and_normalized():
+    from manta.parts import Mass
+
+    m = Mass("b", mass=1.0, mount_rotation=(2.0, 0.0, 0.0, 0.0))
+    assert m.mount_rotation == pytest.approx((1.0, 0.0, 0.0, 0.0))
+    with pytest.raises(ValueError, match="non-zero quaternion"):
+        Mass("b", mass=1.0, mount_rotation=(0.0, 0.0, 0.0, 0.0))
+    with pytest.raises(ValueError, match="wxyz quaternion"):
+        Mass("b", mass=1.0, mount_rotation=(1.0, 0.0, 0.0))
