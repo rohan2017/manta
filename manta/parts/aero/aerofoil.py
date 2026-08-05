@@ -113,10 +113,12 @@ class Aerofoil(Part):
         chord        — m. Mean aerodynamic chord; the Reynolds reference
                        length (and, for a `ControlSurface`, the wing chord
                        a flap is measured against).
-        chord_axis   — body-frame unit vector along the chord (leading →
-                       trailing edge). Default (1, 0, 0).
-        normal_axis  — body-frame unit vector normal to the chord, in the
-                       foil plane; the +lift side. Default (0, 0, 1).
+        chord_axis   — unit vector along the chord (leading → trailing
+                       edge) in the part's OWN frame. Default (1, 0, 0);
+                       leave it there — see "Orientation" below.
+        normal_axis  — unit vector normal to the chord, in the foil
+                       plane; the +lift side. Default (0, 0, 1); leave
+                       it there.
         alpha_0      — zero-lift angle of attack, rad. 0 for a symmetric
                        foil; negative for positive camber. From the camber
                        line (Re-independent); `naca(...)` fills it.
@@ -129,6 +131,29 @@ class Aerofoil(Part):
                        Scaled by the local Reynolds number.
         induced_k    — induced-drag factor: CD gains induced_k·CL², so
                        induced_k ≈ 1/(π·AR·e) (≈0.05 for an AR-6 wing).
+
+    **Orientation: use `mount_orientation`, not the axis pair.**
+
+    `chord_axis` / `normal_axis` define this foil's CANONICAL frame —
+    chord along +x, lift along +z — and should stay at their defaults.
+    How the surface is INSTALLED is a mount rotation: rigging
+    incidence, dihedral, a vertical stabiliser's 90° roll, an all-moving
+    fin's station around a hull. All of those belong in
+    `Part.mount_orientation`.
+
+    The axis pair predates static mount rotations, and encoding
+    installation angles in it has three costs. One physical rotation
+    gets spread across two hand-derived vectors that must stay mutually
+    perpendicular (the constructor checks, because they can silently
+    stop being so). A left/right mirrored pair becomes a sign buried in
+    a vector component rather than the sign of a roll angle. And only
+    the aerodynamics end up rotated — every other quantity the part
+    sees is still in the unrotated frame, so the part's own idea of
+    "its frame" and the framework's disagree.
+
+    The parameters remain for the models written before mount
+    rotations existed (`examples/vehicles/airplane.py`); new ones
+    should not touch them.
     """
 
     requires_fields = [FluidField]

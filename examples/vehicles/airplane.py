@@ -150,6 +150,19 @@ def build_world():
     a = Craft("plane")
     a.add(Mass("body", mass=MASS, moi=MOI, mount_offset=CG))
 
+    # TODO(mount_orientation): this model predates static mount rotations
+    # and encodes its INSTALLATION geometry — rigging incidence, dihedral,
+    # and the fin's 90° roll — in the chord/normal axis pair. The current
+    # convention is the opposite: leave chord_axis/normal_axis canonical
+    # ((1,0,0) / (0,0,1)) and put installation angles in
+    # `mount_orientation` (see the Aerofoil docstring for why). Converting
+    # this example would replace `wing_chord_axis` and the ∓sd dihedral
+    # component with one roll/pitch quaternion per panel, and make the
+    # left/right mirror a sign on the roll rather than on a vector
+    # component. Left as-is for now because it is live on the site as a
+    # WASM bundle and the change, while behaviour-preserving, is not
+    # risk-free.
+    #
     # Main wing — NACA 2412 (cambered), rigged at +1.5° incidence: tilt the
     # chord/normal pair so level flight already sees α = WING_INC. The wing is
     # unswept and rectangular (chord WING_CHORD, tips at ±WING_SPAN/2), split
