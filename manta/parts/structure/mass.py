@@ -32,7 +32,7 @@ class Mass(Part):
     branches on `ctx.has_field`) — a free-space world is legitimate,
     not a configuration error.
 
-    The part's spatial location is set via its `transform` parameter
+    The part's spatial location is set via its `mount_offset` parameter
     (inherited from Part). Aggregation at the Craft level rolls these
     individual contributions into total mass, COM, and MOI about craft
     origin via parallel-axis lifts.

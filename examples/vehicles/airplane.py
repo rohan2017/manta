@@ -148,7 +148,7 @@ RUD_SIGN  = +1.0
 
 def build_world():
     a = Craft("plane")
-    a.add(Mass("body", mass=MASS, moi=MOI, transform=CG))
+    a.add(Mass("body", mass=MASS, moi=MOI, mount_offset=CG))
 
     # Main wing — NACA 2412 (cambered), rigged at +1.5° incidence: tilt the
     # chord/normal pair so level flight already sees α = WING_INC. The wing is
@@ -175,7 +175,7 @@ def build_world():
         return naca("2412", name, area=(y1 - y0) * WING_CHORD, chord=WING_CHORD,
                     induced_k=wing_ik, chord_axis=wing_chord_axis,
                     normal_axis=(-si, -sy * sd, ci),
-                    transform=(WING_QC_X, sy * 0.5 * (y0 + y1), WING_Z))
+                    mount_offset=(WING_QC_X, sy * 0.5 * (y0 + y1), WING_Z))
 
     wing = None
     for s, sy in (("l", +1.0), ("r", -1.0)):
@@ -193,7 +193,7 @@ def build_world():
                              flap_chord_fraction=AIL_FLAP, **foil,
                              chord_axis=wing_chord_axis,
                              normal_axis=(-si, -sy * sd, ci), **SERVO,
-                             transform=(WING_QC_X, sy * AIL_Y, WING_Z)))
+                             mount_offset=(WING_QC_X, sy * AIL_Y, WING_Z)))
 
     # Horizontal tail = elevator (whole stabiliser), symmetric NACA 0012.
     t = naca("0012", area=1.0, chord=1.0)   # 0012 invariants (CL_max, CD_0)
@@ -201,14 +201,14 @@ def build_world():
                          flap_chord_fraction=ELEV_FLAP,
                          CL_max=t.CL_max, CD_0=t.CD_0, induced_k=0.06,
                          chord_axis=(1.0, 0.0, 0.0), normal_axis=(0.0, 0.0, 1.0),
-                         **SERVO, transform=(HTAIL_QC_X, 0.0, HTAIL_Z)))
+                         **SERVO, mount_offset=(HTAIL_QC_X, 0.0, HTAIL_Z)))
 
     # Vertical fin = rudder (whole fin), stood upright so lift acts along y.
     a.add(ControlSurface("rud", area=VTAIL_AREA, chord=VTAIL_CHORD,
                          flap_chord_fraction=RUD_FLAP,
                          CL_max=t.CL_max, CD_0=t.CD_0, induced_k=0.08,
                          chord_axis=(1.0, 0.0, 0.0), normal_axis=(0.0, 1.0, 0.0),
-                         **SERVO, transform=(VTAIL_QC_X, 0.0, VTAIL_Z)))
+                         **SERVO, mount_offset=(VTAIL_QC_X, 0.0, VTAIL_Z)))
 
     # Fuselage aerodynamics: one anisotropic drag box per FUSELAGE_BOXES
     # prism, mounted at the box centre. Drag along each body axis scales with
@@ -233,19 +233,19 @@ def build_world():
                              FUSELAGE_CD_SIDE * lx * ly])
         a.add(DragSurface(f"fus_{nm}",
                           force_tensors=[np.zeros((3, 3)), A2],
-                          transform=b["center"]))
+                          mount_offset=b["center"]))
 
     # Propeller: thrust along the centreline at the hub, with the engine's
     # reaction roll torque about the thrust axis.
     a.add(Thruster("prop", force=(THRUST, 0.0, 0.0),
                    torque=(PROP_TORQUE, 0.0, 0.0),
-                   transform=(0.0, 0.0, 0.0)))
+                   mount_offset=(0.0, 0.0, 0.0)))
 
     # Tricycle landing gear: frictionless point contacts (free-rolling
     # wheels) on the ground plane.
     for name, pos in GEAR.items():
         a.add(Collider(name, stiffness=1.5e5, damping=8000.0,
-                       friction=GEAR_FRICTION, transform=pos))
+                       friction=GEAR_FRICTION, mount_offset=pos))
 
     w = (World()
          .add_field(GravityField().add_uniform((0.0, 0.0, -9.81)))
@@ -271,7 +271,7 @@ def draw_airframe(viz, craft):
     FIXED, MOVING, METAL = (120, 150, 210), (240, 150, 60), (150, 150, 158)
     hinges = {}
     for p in craft.parts:
-        T = [float(v) for v in p.transform]
+        T = [float(v) for v in p.mount_offset]
         if isinstance(p, (Aerofoil, ControlSurface)):
             c = float(p.chord)
             span = float(p.area) / c

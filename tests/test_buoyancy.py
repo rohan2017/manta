@@ -171,7 +171,7 @@ def test_buoy_offset_produces_righting_torque():
     c = Craft("hull")
     c.add(Mass("body", mass=m, moi=(0.1, 0.1, 0.1)))
     # Buoy mounted 0.5 m above body origin in craft +z.
-    c.add(PointBuoy("top", volume=V, transform=(0.0, 0.0, 0.5)))
+    c.add(PointBuoy("top", volume=V, mount_offset=(0.0, 0.0, 0.5)))
     # Tilt 45° about body y → craft +z points anchor +x somewhat.
     phi = np.pi / 4
     q = (np.cos(phi/2), 0, np.sin(phi/2), 0)

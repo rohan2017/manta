@@ -21,8 +21,8 @@ def test_aggregate_mass_and_com():
     r = 0.5
     m = 1.0
     c = Craft("dumbbell")
-    c.add(Mass("a", mass=m, transform=(+r, 0.0, 0.0)))
-    c.add(Mass("b", mass=m, transform=(-r, 0.0, 0.0)))
+    c.add(Mass("a", mass=m, mount_offset=(+r, 0.0, 0.0)))
+    c.add(Mass("b", mass=m, mount_offset=(-r, 0.0, 0.0)))
 
     inertials = c.aggregate_inertials()
     assert inertials["m_total"] == 2 * m
@@ -42,7 +42,7 @@ def test_aggregate_offset_com():
     r = 1.0
     m = 2.0
     c = Craft("single_offset")
-    c.add(Mass("body", mass=m, transform=(r, 0.0, 0.0)))
+    c.add(Mass("body", mass=m, mount_offset=(r, 0.0, 0.0)))
 
     inertials = c.aggregate_inertials()
     assert np.allclose(inertials["com"], [r, 0.0, 0.0])
@@ -114,8 +114,8 @@ def test_no_position_drift_from_pure_rotation():
     c = Craft("rotating_offset")
     # Two equal masses symmetrically placed → COM at origin → body origin
     # tracks a closed orbit (it's the same as the COM, which is fixed).
-    c.add(Mass("a", mass=1.0, transform=(+r, 0.0, 0.0)))
-    c.add(Mass("b", mass=1.0, transform=(-r, 0.0, 0.0)))
+    c.add(Mass("a", mass=1.0, mount_offset=(+r, 0.0, 0.0)))
+    c.add(Mass("b", mass=1.0, mount_offset=(-r, 0.0, 0.0)))
 
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c, angular_velocity=(0.0, 0.0, 5.0))
@@ -133,8 +133,8 @@ def test_gravity_creates_no_torque_at_balanced_com():
     produces no torque about the origin. Body in pure free-fall: no spin
     induced, no orientation change."""
     c = Craft("balanced")
-    c.add(Mass("a", mass=1.0, transform=(+0.5, 0.0, 0.0)))
-    c.add(Mass("b", mass=1.0, transform=(-0.5, 0.0, 0.0)))
+    c.add(Mass("a", mass=1.0, mount_offset=(+0.5, 0.0, 0.0)))
+    c.add(Mass("b", mass=1.0, mount_offset=(-0.5, 0.0, 0.0)))
     # COM = (0,0,0) by symmetry.
     w = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
     w.add_craft(c)
@@ -168,14 +168,14 @@ def test_quaternion_normalization_holds_over_long_run():
 
 def test_aggregate_composes_nested_offsets():
     """A Mass riding a joint: its craft-frame position is the joint's
-    transform composed with its own — not its bare `transform`."""
+    mount offset composed with its own — not its bare `mount_offset`."""
     from manta.parts import RevoluteJoint
 
     c = Craft("gimballed")
     c.add(Mass("hub", mass=1.0))
     j = c.add(RevoluteJoint("pan", axis=(0.0, 0.0, 1.0),
-                            transform=(1.0, 0.0, 0.0)))
-    j.add(Mass("rotor", mass=1.0, transform=(0.5, 0.0, 0.0)))
+                            mount_offset=(1.0, 0.0, 0.0)))
+    j.add(Mass("rotor", mass=1.0, mount_offset=(0.5, 0.0, 0.0)))
 
     inertials = c.aggregate_inertials()
     assert inertials["m_total"] == 2.0
@@ -195,9 +195,9 @@ def test_aggregate_composes_declared_joint_angle():
     c = Craft("gimballed")
     c.add(Mass("hub", mass=1.0))
     j = c.add(RevoluteJoint("pan", axis=(0.0, 0.0, 1.0),
-                            transform=(1.0, 0.0, 0.0),
+                            mount_offset=(1.0, 0.0, 0.0),
                             angle=math.pi / 2))
-    j.add(Mass("rotor", mass=1.0, transform=(0.5, 0.0, 0.0)))
+    j.add(Mass("rotor", mass=1.0, mount_offset=(0.5, 0.0, 0.0)))
 
     inertials = c.aggregate_inertials()
     # rotor at (1.0, 0.5, 0.0) → COM at the mass-weighted midpoint.

@@ -223,7 +223,8 @@ ukf = TargetNumpy(UKF(w))        # identical predict/update surface
 
 `Fit(world, parameters={...})` fits a model's physical parameters to
 recorded data. Promotable `Parameter`s (those declared with a manifold:
-thruster gains, every part's `transform` mount, `Mass.mass`) are
+thruster gains, every part's `mount_offset`/`mount_orientation`,
+`Mass.mass`) are
 promoted from baked graph constants to a live parameter vector
 (`Sim(world, parameters=[...])` → a `params` port on every kernel), and
 the fit minimizes windowed prediction error against logged controls +

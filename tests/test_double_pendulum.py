@@ -31,11 +31,11 @@ def _double_pendulum(L1, L2, m1, m2):
                    force=(0.0, 0.0, (ANCHOR_M + m1 + m2) * G)))
     h1 = RevoluteJoint("h1", mode="passive", axis=(0.0, 1.0, 0.0))
     h1.add(Mass("bob1", mass=m1, moi=(1e-9, 1e-9, 1e-9),
-                transform=(0.0, 0.0, -L1)))
+                mount_offset=(0.0, 0.0, -L1)))
     h2 = RevoluteJoint("h2", mode="passive", axis=(0.0, 1.0, 0.0),
-                       transform=(0.0, 0.0, -L1))
+                       mount_offset=(0.0, 0.0, -L1))
     h2.add(Mass("bob2", mass=m2, moi=(1e-9, 1e-9, 1e-9),
-                transform=(0.0, 0.0, -L2)))
+                mount_offset=(0.0, 0.0, -L2)))
     h1.add(h2)
     c.add(h1)
     return c

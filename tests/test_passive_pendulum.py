@@ -35,7 +35,7 @@ def _pendulum(L: float, m: float = 1.0, damping: float = 0.0) -> Craft:
     c.add(Mass("anchor", mass=ANCHOR_M, moi=(1.0e6, 1.0e6, 1.0e6)))
     c.add(Thruster("hold", force=(0.0, 0.0, (ANCHOR_M + m) * G)))
     h = RevoluteJoint("hinge", mode="passive", axis=(0.0, 1.0, 0.0), damping=damping)
-    h.add(Mass("bob", mass=m, moi=(1e-9, 1e-9, 1e-9), transform=(0.0, 0.0, -L)))
+    h.add(Mass("bob", mass=m, moi=(1e-9, 1e-9, 1e-9), mount_offset=(0.0, 0.0, -L)))
     c.add(h)
     return c
 

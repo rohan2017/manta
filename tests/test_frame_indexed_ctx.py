@@ -61,7 +61,7 @@ def test_partframe_views_are_zero_and_craft_zero_when_rigid():
     frame and the craft frame, even while the craft spins + translates."""
     c = Craft("rig")
     c.add(Mass("body", mass=1.0, moi=(1.0, 1.0, 1.0)))
-    c.add(_FrameProbe("p", transform=(0.3, 0.0, 0.0)))
+    c.add(_FrameProbe("p", mount_offset=(0.3, 0.0, 0.0)))
     sim = _free(c, velocity=(5.0, 0.0, 0.0), angular_velocity=(0.0, 0.0, 2.0))
     sim.step(dt=1e-4)
     st = sim.outputs()
@@ -87,7 +87,7 @@ def test_world_craft_part_frames_are_distinct_on_a_rotor():
     c.add(Mass("hub", mass=100.0, moi=(10.0, 10.0, 10.0)))
     wheel = RevoluteJoint("wheel", mode="passive", axis=(0.0, 0.0, 1.0))
     wheel.add(Mass("rim", mass=0.01, moi=(1e-4, 1e-4, 1e-4)))
-    wheel.add(_FrameProbe("p", transform=(d, 0.0, 0.0)))
+    wheel.add(_FrameProbe("p", mount_offset=(d, 0.0, 0.0)))
     c.add(wheel)
     sim = _free(c, velocity=(V, 0.0, 0.0), **{"wheel.rate": omega0})
     sim.step(dt=1e-5)
@@ -121,7 +121,7 @@ def test_nested_gimbal_parentframe_isolates_inner_joint():
     pan.add(Mass("pan_rotor", mass=0.01, moi=(1e-4, 1e-4, 1e-4)))
     tilt = RevoluteJoint("tilt", mode="passive", axis=(0.0, 1.0, 0.0))
     tilt.add(Mass("tilt_rotor", mass=0.01, moi=(1e-4, 1e-4, 1e-4)))
-    tilt.add(_FrameProbe("p", transform=(0.2, 0.0, 0.0)))
+    tilt.add(_FrameProbe("p", mount_offset=(0.2, 0.0, 0.0)))
     pan.add(tilt)
     c.add(pan)
 

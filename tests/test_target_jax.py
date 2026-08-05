@@ -155,7 +155,7 @@ def _spinner_world():
     c.add(Mass("body", mass=1.0, moi=(0.01, 0.01, 0.01)))
     j = c.add(RevoluteJoint("wheel", mode="passive"))
     j.add(Mass("rotor", mass=0.1, moi=(0.001, 0.001, 0.01),
-               transform=(0.05, 0.0, 0.0)))
+               mount_offset=(0.05, 0.0, 0.0)))
     w = World().add_field(GravityField(g=(0, 0, -9.81)))
     w.add_craft(c, position=(0, 0, 10), **{"wheel.rate": 3.0})
     return w

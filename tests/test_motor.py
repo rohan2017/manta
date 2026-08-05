@@ -29,7 +29,7 @@ def _motor_world(**motor_overrides):
                     torque_constant=K_T, resistance=RES,
                     **motor_overrides))
     m.add(Mass("rotor", mass=0.1, moi=(0.001, 0.001, J_Z),
-               transform=(0.0, 0.0, 0.05)))
+               mount_offset=(0.0, 0.0, 0.05)))
     w = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
     w.add_craft(c)
     return w
@@ -180,7 +180,7 @@ def test_joint_subclass_extra_state_survives():
     m = c.add(RevCounter("m", axis=(0.0, 0.0, 1.0),
                          torque_constant=K_T, resistance=RES))
     m.add(Mass("rotor", mass=0.1, moi=(0.001, 0.001, J_Z),
-               transform=(0.0, 0.0, 0.05)))
+               mount_offset=(0.0, 0.0, 0.05)))
     w = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
     w.add_craft(c)
 

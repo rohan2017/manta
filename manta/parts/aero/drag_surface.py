@@ -36,7 +36,7 @@ Constructor styles match Thruster's:
 For convenience, `DragSurface.isotropic_quadratic(area, drag_coefficient)`
 returns the classic single-Cd hull form (A_2 = -½·A·Cd·I).
 
-Mount offset (Part.transform) lifts force to body-frame torque via the
+Mount offset (Part.mount_offset) lifts force to body-frame torque via the
 standard force-at-offset path. Off-axis drag surfaces produce body
 torques automatically.
 

@@ -276,7 +276,7 @@ def _bind_part_parameters(craft, prefix, trace, tunable: set,
     """Phase: promote each requested tunable Parameter to a graph input
     named `<craft>.<part>.<param>`, bound on the trace so every read of
     the attribute during this compile — a part's `update()`, the
-    kinematic pass (`transform`), the inertia rollup (`mass`) — sees the
+    kinematic pass (`mount_offset`), the inertia rollup (`mass`) — sees the
     symbol. Non-tunable parameters are untouched (instance reads, baked
     constants). Returns `param_subs` — `(sym_mx, declared_value)` pairs
     for numeric at-rest snapshots (the inertia singularity guard)."""

@@ -14,7 +14,7 @@ X-frame: four identical rotors on equal arms. Those words are
 constraints, and `Free`/`Tied` state them as such —
 
     "arm": Free(...)                                   one number...
-    "fl.transform":  Tied("arm", scale=[[c], [c], [0.0]])   ...four mounts
+    "fl.mount_offset":  Tied("arm", scale=[[c], [c], [0.0]])   ...four mounts
     "fl.force_quad": Tied("kf",  scale=[[0.0], [0.0], [1.0]])
 
 — collapsing 40 decision variables to 7. Every motor is forced to the
@@ -110,9 +110,9 @@ def build(mass, arm, kf, kappa, imu_mount) -> World:
             nm,
             force_quad=(0.0, 0.0, kf),
             torque_quad=(0.0, 0.0, -SPIN[nm] * kappa),
-            transform=(sx * arm * DIAG, sy * arm * DIAG, 0.0),
+            mount_offset=(sx * arm * DIAG, sy * arm * DIAG, 0.0),
             force_noise_sigma=FORCE_SIGMA))
-    quad.add(IMU("imu", transform=imu_mount,
+    quad.add(IMU("imu", mount_offset=imu_mount,
                  gyro_noise_sigma=GYRO_SIGMA, accel_noise_sigma=ACCEL_SIGMA))
     world = World()
     world.add_field(GravityField(g=(0.0, 0.0, -9.81)))
@@ -199,13 +199,13 @@ def fit_structured(model: World, windows: list[Window]):
         "body.mass": Prior(sigma=0.03, log=True),
         # The one thing that is genuinely per-vehicle: where the flight
         # controller ended up on its foam pad. Untied, ±10 cm.
-        "imu.transform": Prior(sigma=0.10),
+        "imu.mount_offset": Prior(sigma=0.10),
     }
     for nm in ROTORS:
         sx, sy = CORNER[nm]
         # One arm length → four mounts. The zero row is a constraint
         # too: the props are in the body's xy plane, not above or below.
-        params[f"{nm}.transform"] = Tied(
+        params[f"{nm}.mount_offset"] = Tied(
             "arm", scale=[[sx * DIAG], [sy * DIAG], [0.0]])
         # One thrust curve → four rotors, thrust along body z.
         params[f"{nm}.force_quad"] = Tied("kf", scale=[[0.0], [0.0], [1.0]])
@@ -221,10 +221,10 @@ def fit_unstructured(model: World, windows: list[Window]):
     knowledge that this is a quadcopter."""
     params = {
         "body.mass": Prior(sigma=0.03, log=True),
-        "imu.transform": Prior(sigma=0.10),
+        "imu.mount_offset": Prior(sigma=0.10),
     }
     for nm in ROTORS:
-        params[f"{nm}.transform"] = Prior(sigma=0.04)
+        params[f"{nm}.mount_offset"] = Prior(sigma=0.04)
         params[f"{nm}.force_quad"] = Prior(sigma=3.0)
         params[f"{nm}.torque_quad"] = Prior(sigma=0.01)
     return Fit(model, parameters=params).solve(windows, weights=WEIGHTS)
@@ -236,7 +236,7 @@ def airframe_report(values: dict) -> dict:
     its thrust gain, and how far its thrust axis leans off body z."""
     radii, gains, tilts, out_of_plane = [], [], [], []
     for nm in ROTORS:
-        mount = np.atleast_1d(values[f"quad.{nm}.transform"])
+        mount = np.atleast_1d(values[f"quad.{nm}.mount_offset"])
         force = np.atleast_1d(values[f"quad.{nm}.force_quad"])
         radii.append(float(np.linalg.norm(mount[:2])))
         out_of_plane.append(abs(float(mount[2])))
@@ -293,7 +293,7 @@ def truth_values() -> dict:
     out = {}
     for nm in ROTORS:
         sx, sy = CORNER[nm]
-        out[f"quad.{nm}.transform"] = (sx * TRUTH["arm"] * DIAG,
+        out[f"quad.{nm}.mount_offset"] = (sx * TRUTH["arm"] * DIAG,
                                        sy * TRUTH["arm"] * DIAG, 0.0)
         out[f"quad.{nm}.force_quad"] = (0.0, 0.0, TRUTH["kf"])
     return out

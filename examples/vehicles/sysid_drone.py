@@ -63,8 +63,8 @@ def build(mass, kf, t1_mount, imu_mount) -> World:
     for nm, mount in mounts.items():
         quad.add(Thruster(nm, force_quad=(0.0, 0.0, kf),
                           torque_quad=(0.0, 0.0, 0.02 * spin[nm]),
-                          transform=mount))
-    quad.add(IMU("imu", transform=imu_mount,
+                          mount_offset=mount))
+    quad.add(IMU("imu", mount_offset=imu_mount,
                  gyro_noise_sigma=GYRO_SIGMA, accel_noise_sigma=ACCEL_SIGMA))
     world = World()
     world.add_field(GravityField(g=(0.0, 0.0, -9.81)))
@@ -120,9 +120,9 @@ def main() -> None:
         "t3.force_quad": Prior(sigma=4.0),
         "t4.force_quad": Prior(sigma=4.0),
         # CAD said 15 cm; trust it to ±5 cm.
-        "t1.transform": Prior(sigma=0.05),
+        "t1.mount_offset": Prior(sigma=0.05),
         # IMU somewhere near the center: ±10 cm.
-        "imu.transform": Prior(sigma=0.10),
+        "imu.mount_offset": Prior(sigma=0.10),
     })
     result = fit.solve(
         windows,
@@ -137,8 +137,8 @@ def main() -> None:
         "quad.body.mass": TRUTH["mass"],
         **{f"quad.t{i}.force_quad": (0.0, 0.0, TRUTH["kf"])
            for i in range(1, 5)},
-        "quad.t1.transform": TRUTH["t1_mount"],
-        "quad.imu.transform": TRUTH["imu_mount"],
+        "quad.t1.mount_offset": TRUTH["t1_mount"],
+        "quad.imu.mount_offset": TRUTH["imu_mount"],
     }
     print(f"{'parameter':24s}  {'started':>22s}  {'fitted':>22s}  "
           f"{'truth':>22s}")
@@ -148,8 +148,8 @@ def main() -> None:
                          "(" + ", ".join(f"{x:.4g}" for x in np.atleast_1d(v))
                          + ")")
         started = {"quad.body.mass": GUESS["mass"],
-                   "quad.t1.transform": GUESS["t1_mount"],
-                   "quad.imu.transform": GUESS["imu_mount"]}.get(
+                   "quad.t1.mount_offset": GUESS["t1_mount"],
+                   "quad.imu.mount_offset": GUESS["imu_mount"]}.get(
             name, (0.0, 0.0, GUESS["kf"]))
         print(f"{name:24s}  {fmt(started):>22s}  {fmt(fv):>22s}  "
               f"{fmt(tv):>22s}")

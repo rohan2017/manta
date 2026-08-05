@@ -101,10 +101,10 @@ def _body(craft, c: "Contrib", name: str, xc: float, length: float,
     i_ax = 0.8 * m * HULL_R ** 2
     i_tr = m * (3.0 * HULL_R ** 2 + length ** 2) / 12.0
     at_m = (xc, 0.0, -COM_DROP)
-    craft.add(Mass(name, mass=m, moi=(i_ax, i_tr, i_tr), transform=at_m))
+    craft.add(Mass(name, mass=m, moi=(i_ax, i_tr, i_tr), mount_offset=at_m))
     c.masses.append((m, at_m))
     vol = m / RHO_WATER * BUOY_RESERVE
-    craft.add(PointBuoy(f"{name}_buoy", volume=vol, transform=(xc, 0.0, 0.0)))
+    craft.add(PointBuoy(f"{name}_buoy", volume=vol, mount_offset=(xc, 0.0, 0.0)))
     c.buoys.append((vol, (xc, 0.0, 0.0)))
 
     # Wetted-surface drag: crossflow from the D·L profile, axial from the
@@ -120,18 +120,18 @@ def _body(craft, c: "Contrib", name: str, xc: float, length: float,
     for tag, off in (("u", (0.0, +rim)), ("d", (0.0, -rim)),
                      ("l", (+rim, 0.0)), ("r", (-rim, 0.0))):
         _drag(craft, c, f"{name}_drag{tag}", kx=k_x / 4, kyz=k_yz / 4,
-              transform=(xc, off[0], off[1]))
+              mount_offset=(xc, off[0], off[1]))
     return m
 
 
 def _drag(craft, c: "Contrib", name: str, *, kx: float, kyz: float,
-          transform) -> None:
+          mount_offset) -> None:
     """Anisotropic quadratic drag + the linear V_LIN floor (see above).
     `k` = ½·area·cd per axis; recorded on `c.drags` for the feedforward."""
     k = np.diag([kx, kyz, kyz])
     craft.add(DragSurface(name, force_tensors=[-k * V_LIN, -k],
-                          transform=transform))
-    c.drags.append({"k": (kx, kyz, kyz), "at": tuple(transform)})
+                          mount_offset=mount_offset))
+    c.drags.append({"k": (kx, kyz, kyz), "at": tuple(mount_offset)})
 
 
 def _thruster(craft, c: "Contrib", part: str, *, axis, at, spin: int,
@@ -142,7 +142,7 @@ def _thruster(craft, c: "Contrib", part: str, *, axis, at, spin: int,
     ax /= np.linalg.norm(ax)
     ct = K_CT * spin
     craft.add(Thruster(part, force=tuple(ax), torque=tuple(ct * ax),
-                       force_noise_sigma=opts["noise"], transform=at))
+                       force_noise_sigma=opts["noise"], mount_offset=at))
     mt = opts["max_thrust"]
     c.thrusters.append({"part": part, "axis": tuple(ax), "at": tuple(at),
                         "ct": ct, "max_thrust": mt})
@@ -177,7 +177,7 @@ GPS_ANT_Z = HULL_R + 0.06
 
 def _gps(craft, part: str, x: float, opts) -> None:
     craft.add(SurfaceGPS(part, position_noise_sigma=opts["gps_noise"],
-                         transform=(x, 0.0, GPS_ANT_Z)))
+                         mount_offset=(x, 0.0, GPS_ANT_Z)))
 
 
 # --- catalog plumbing --------------------------------------------------------
@@ -238,7 +238,7 @@ def _build_nose_dvl(craft, name, xc, opts) -> Contrib:
     _body(craft, c, name, xc, 0.30, 0.85, face_drag=True)
     craft.add(VelocitySensor(f"{name}_dvl",
                              velocity_noise_sigma=opts["dvl_noise"],
-                             transform=(xc + 0.03, 0.0, -0.08)))
+                             mount_offset=(xc + 0.03, 0.0, -0.08)))
     return c
 
 
@@ -256,7 +256,7 @@ def _build_nose_sonar(craft, name, xc, opts) -> Contrib:
     c = Contrib()
     _body(craft, c, name, xc, 0.50, 0.80, face_drag=True)
     _drag(craft, c, f"{name}_xdcr", kx=0.5 * 0.004 * 0.9,
-          kyz=0.5 * 0.006 * 1.1, transform=(xc + 0.15, 0.0, -0.13))
+          kyz=0.5 * 0.006 * 1.1, mount_offset=(xc + 0.15, 0.0, -0.13))
     return c
 
 
@@ -270,7 +270,7 @@ def _build_brain(craft, name, xc, opts) -> Contrib:
     _gps(craft, f"{name}_gps", xc, opts)
     craft.add(Barometer(f"{name}_depth",
                         pressure_noise_sigma=opts["depth_noise"],
-                        transform=(xc, 0.0, 0.0)))
+                        mount_offset=(xc, 0.0, 0.0)))
     return c
 
 
@@ -296,7 +296,7 @@ def _build_ins(craft, name, xc, opts) -> Contrib:
     craft.add(IMU(f"{name}_imu", gyro_noise_sigma=opts["gyro_noise"],
                   accel_noise_sigma=opts["accel_noise"],
                   gyro_bias_sigma=opts["gyro_bias"],
-                  transform=(xc, 0.0, 0.0)))
+                  mount_offset=(xc, 0.0, 0.0)))
     return c
 
 
@@ -362,9 +362,9 @@ def _build_agility(cant_sign: float):
                       opts=opts)
             # the pods' own bluff-body drag, at the pod positions
             _drag(craft, c, f"{name}_podv{tag}", kx=POD_K, kyz=POD_K,
-                  transform=(vert_x, side * 0.165, 0.0))
+                  mount_offset=(vert_x, side * 0.165, 0.0))
             _drag(craft, c, f"{name}_podf{tag}", kx=POD_K, kyz=POD_K,
-                  transform=(canted_x, side * 0.19, 0.0))
+                  mount_offset=(canted_x, side * 0.19, 0.0))
         return c
     return _build
 
@@ -407,7 +407,7 @@ def _build_fin_control(craft, name, xc, opts) -> Contrib:
         craft.add(ControlSurface(part, area=area, chord=math.sqrt(area),
                                  chord_axis=(1.0, 0.0, 0.0),
                                  normal_axis=normal, max_deflection=lim,
-                                 transform=at))
+                                 mount_offset=at))
         c.inputs.append({"name": f"{part}.deflection_cmd",
                          "min": -lim, "max": lim})
         c.fins.append({"input": f"{part}.deflection_cmd",
@@ -424,7 +424,7 @@ def _build_fin_control(craft, name, xc, opts) -> Contrib:
         k_fin = 0.5 * area * 1.2
         _drag(craft, c, f"{part}_pdrag",
               kx=0.5 * area * 0.02,
-              kyz=k_fin, transform=at)
+              kyz=k_fin, mount_offset=at)
     return c
 
 

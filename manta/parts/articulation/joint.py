@@ -70,7 +70,7 @@ _MODES      = (_PASSIVE, _SATURATING)
 
 
 def _offset_from(ancestor, descendant) -> np.ndarray:
-    """Sum the static `transform` of every part on the path from
+    """Sum the static `mount_offset` of every part on the path from
     `ancestor` (exclusive) down to `descendant` (inclusive) — the
     rest-pose offset of a child relative to a joint origin, used for the
     parallel-axis lift in the numeric `I_joint_tensor` snapshot."""
@@ -83,7 +83,7 @@ def _offset_from(ancestor, descendant) -> np.ndarray:
         raise ValueError(
             f"_offset_from: '{descendant.name}' is not a descendant of "
             f"'{ancestor.name}'.")
-    return sum((np.asarray(declared_attr(p, "transform"), dtype=float)
+    return sum((np.asarray(declared_attr(p, "mount_offset"), dtype=float)
                 for p in chain),
                start=np.zeros(3))
 

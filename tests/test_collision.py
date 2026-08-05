@@ -156,7 +156,7 @@ def test_offset_collider_produces_tip_over_torque():
     cr.add(Mass("body", mass=1.0, moi=(0.05, 0.05, 0.05)))
     # Collider mounted at +x = 0.5 m from body origin.
     cr.add(Collider("foot", stiffness=1e4, damping=20.0,
-                    transform=(0.5, 0.0, 0.0)))
+                    mount_offset=(0.5, 0.0, 0.0)))
     # Start just above the ground so the offset foot starts penetrating
     # immediately.
     w.add_craft(cr, position=(0, 0, 0.01))

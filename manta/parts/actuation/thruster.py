@@ -21,7 +21,7 @@ is `2|t|`), so the contact with the linear term is smooth.
     Thruster("blade", force_quad=(0, 0, K_T), torque_quad=(0, 0, K_Q))
     Thruster("prop",  force=(0, 0, 10), torque=(0, 0, 0.5))
 
-The force is applied at the mount offset (Part.transform); the
+The force is applied at the mount offset (Part.mount_offset); the
 framework lifts that to a body-origin wrench, so off-axis thrusters
 produce correct body torques automatically.
 """

@@ -91,7 +91,7 @@ def build_world():
     # Slender-body inertia; the COM sits high so the engine hangs well
     # below it (lever arm ≈ 0.9 m for the thrust-vector torque).
     c.add(Mass("body", mass=M_BODY, moi=(2.8, 2.8, 0.35),
-               transform=(0, 0, 0.3)))
+               mount_offset=(0, 0, 0.3)))
     c.add(DragSurface.isotropic_quadratic("aero", area=0.07,
                                           drag_coefficient=0.8))
 
@@ -100,12 +100,12 @@ def build_world():
     # the thrust direction AND the engine's inertia track the gimbal.
     gx = RevoluteJoint("gimbal_x", axis=(1, 0, 0), mode="saturating",
                        stall_torque=30.0, damping=1.0,
-                       transform=(0, 0, GIM_Z))
+                       mount_offset=(0, 0, GIM_Z))
     gy = RevoluteJoint("gimbal_y", axis=(0, 1, 0), mode="saturating",
                        stall_torque=30.0, damping=1.0)
     gy.add(Mass("engine", mass=M_ENG, moi=(0.02, 0.02, 0.01),
-                transform=(0, 0, ENG_Z)))
-    gy.add(Thruster("main", force=(0, 0, MAXT), transform=(0, 0, ENG_Z)))
+                mount_offset=(0, 0, ENG_Z)))
+    gy.add(Thruster("main", force=(0, 0, MAXT), mount_offset=(0, 0, ENG_Z)))
     gx.add(gy)
     c.add(gx)
 
@@ -114,7 +114,7 @@ def build_world():
     for k, name in enumerate(("leg_a", "leg_b", "leg_c")):
         th = np.pi / 2 + k * 2 * np.pi / 3
         c.add(Collider(name, stiffness=1.5e4, damping=400.0, friction=150.0,
-                       transform=(LEG_R * np.cos(th), LEG_R * np.sin(th),
+                       mount_offset=(LEG_R * np.cos(th), LEG_R * np.sin(th),
                                   LEG_Z)))
 
     cf = CollisionField()

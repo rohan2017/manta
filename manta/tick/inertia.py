@@ -97,9 +97,9 @@ def symbolic_inertia_rollup(root_part, *, param_subs=()) -> dict:
         nonlocal m_total, m_total_decl, com_sum_mx, I_about_origin_mx
 
         # ----- part's own origin in body-frame coords ----------------------
-        # part.transform lives in parent's OUTPUT frame coords. A promoted
+        # part.mount_offset lives in parent's OUTPUT frame coords. A promoted
         # (tunable) transform reads as a bound IR value — keep the symbol.
-        tr_attr = part.transform
+        tr_attr = part.mount_offset
         transform_mx = (tr_attr._mx if is_promoted(tr_attr) else ca.MX(
             np.asarray(tr_attr, dtype=float).reshape(3, 1)))
         r_part_in_craft_mx = (r_parent_in_craft_mx

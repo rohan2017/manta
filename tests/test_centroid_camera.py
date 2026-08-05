@@ -28,7 +28,7 @@ def _world(*, pixel_sigma=1.0, semi=(3.0, 3.0, 3.0), tgt=TGT):
     tracker.add(Mass("base", mass=1.0))
     for nm, (x, y) in zip(CAM_NAMES, CAM_XY):
         tracker.add(CentroidCamera(nm, width=1024, height=1024, hfov_deg=100,
-                                   pixel_sigma=pixel_sigma, transform=(x, y, 0)))
+                                   pixel_sigma=pixel_sigma, mount_offset=(x, y, 0)))
     target = Craft("target")
     target.add(Mass("body", mass=1.0))
     target.add(OpticalSource("hull", semi_axes=semi, label=1))

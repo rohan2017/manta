@@ -45,7 +45,7 @@ def test_position_sensor_with_offset_adds_R_offset():
     craft.position + (0, 1, 0) in world frame."""
     c = Craft("p")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
-    c.add(PositionSensor("gps", transform=(1.0, 0.0, 0.0)))
+    c.add(PositionSensor("gps", mount_offset=(1.0, 0.0, 0.0)))
 
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     # Craft at origin, rotated 90° about world-frame z (so body +x → anchor +y).

@@ -75,7 +75,7 @@ def build_world():
     for name in ROTORS:
         c.add(Thruster(name, force=F,
                        torque=(0, 0, chir[name] * KYAW * MAXT),
-                       transform=ARM[name], force_noise_sigma=SIGMA_FORCE))
+                       mount_offset=ARM[name], force_noise_sigma=SIGMA_FORCE))
     c.add(IMU("imu", gyro_noise_sigma=SIGMA_GYRO, gyro_bias_sigma=2e-4))
     c.add(PositionSensor("gps", position_noise_sigma=SIGMA_GPS))
     w = World().add_field(GravityField(g=(0.0, 0.0, -G)))

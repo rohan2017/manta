@@ -23,7 +23,7 @@ def test_flat_craft_offset_thruster_torque():
     # Thruster mounted at +x offset, firing along +z → torque about −y.
     c = Craft("flat")
     c.add(Mass("body", mass=1.0, moi=(1.0, 1.0, 1.0)))
-    c.add(Thruster("t", force=(0.0, 0.0, 1.0), transform=(0.5, 0.0, 0.0)))
+    c.add(Thruster("t", force=(0.0, 0.0, 1.0), mount_offset=(0.5, 0.0, 0.0)))
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c)
     rt = TargetNumpy(Sim(w))
@@ -48,7 +48,7 @@ def test_no_spurious_wrench_on_deflected_passive_joint():
     c = Craft("pend")
     c.add(Mass("body", mass=10.0, moi=(1.0, 1.0, 1.0)))
     h = RevoluteJoint("hinge", mode="passive", axis=(0.0, 1.0, 0.0))
-    h.add(Mass("bob", mass=1.0, moi=(1e-9, 1e-9, 1e-9), transform=(0.0, 0.0, -L)))
+    h.add(Mass("bob", mass=1.0, moi=(1e-9, 1e-9, 1e-9), mount_offset=(0.0, 0.0, -L)))
     c.add(h)
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))   # NO gravity
     w.add_craft(c)
@@ -75,8 +75,8 @@ def test_free_body_recoils_from_swinging_bob():
     c = Craft("pend")
     c.add(Mass("body", mass=10.0, moi=(1.0, 1.0, 1.0)))
     h = RevoluteJoint("hinge", mode="passive", axis=(0.0, 1.0, 0.0),
-                      transform=(0.3, 0.0, 0.0))
-    h.add(Mass("bob", mass=1.0, moi=(1e-9, 1e-9, 1e-9), transform=(0.0, 0.0, -L)))
+                      mount_offset=(0.3, 0.0, 0.0))
+    h.add(Mass("bob", mass=1.0, moi=(1e-9, 1e-9, 1e-9), mount_offset=(0.0, 0.0, -L)))
     c.add(h)
     w = World().add_field(GravityField().add_uniform((0.0, 0.0, 0.0)))
     w.add_craft(c)
@@ -102,7 +102,7 @@ def test_free_falling_pendulum_does_not_swing():
     c = Craft("pend")
     c.add(Mass("body", mass=10.0, moi=(1.0, 1.0, 1.0)))
     h = RevoluteJoint("hinge", mode="passive", axis=(0.0, 1.0, 0.0))
-    h.add(Mass("bob", mass=1.0, moi=(1e-9, 1e-9, 1e-9), transform=(0.0, 0.0, -L)))
+    h.add(Mass("bob", mass=1.0, moi=(1e-9, 1e-9, 1e-9), mount_offset=(0.0, 0.0, -L)))
     c.add(h)
     w = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
     w.add_craft(c)

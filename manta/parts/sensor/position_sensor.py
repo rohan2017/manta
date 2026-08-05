@@ -7,7 +7,7 @@ for the pattern).
 
 `ctx.position` is already the sensor's own world-frame position — the
 framework's kinematic pass composed it from the body state and the
-chain of `Part.transform` / joint rotations above the sensor. So the
+chain of `Part.mount_offset` / joint rotations above the sensor. So the
 part code is a one-liner.
 """
 

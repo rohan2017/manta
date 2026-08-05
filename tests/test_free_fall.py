@@ -53,8 +53,8 @@ def test_multi_mass_aggregates_correctly():
     regardless of geometry."""
     c = Craft("multi_mass")
     c.add(Mass("heavy", mass=2.0))                                 # at origin
-    c.add(Mass("light", mass=1.0, transform=(0.5, 0.0, 0.0)))      # offset
-    c.add(Mass("third", mass=0.5, transform=(0.0, 0.5, 0.0)))
+    c.add(Mass("light", mass=1.0, mount_offset=(0.5, 0.0, 0.0)))      # offset
+    c.add(Mass("third", mass=0.5, mount_offset=(0.0, 0.5, 0.0)))
     assert c.total_mass == 3.5
 
     w = World().add_field(GravityField(g=(0.0, 0.0, -9.81)))
@@ -118,8 +118,8 @@ def test_zero_mass_craft_raises():
 
 
 def test_parameter_introspection():
-    m = Mass("body", mass=2.5, transform=(0.1, 0.2, 0.3))
+    m = Mass("body", mass=2.5, mount_offset=(0.1, 0.2, 0.3))
     assert m.mass == 2.5
-    assert m.transform == (0.1, 0.2, 0.3)
+    assert m.mount_offset == (0.1, 0.2, 0.3)
     r = repr(m)
     assert "mass=2.5" in r

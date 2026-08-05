@@ -268,7 +268,7 @@ def test_accel_offset_imu_reads_centripetal_under_rotation():
     term — proves the framework does the lift, not the IMU."""
     c = Craft("spinner")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
-    c.add(IMU("imu", transform=(1.0, 0.0, 0.0)))
+    c.add(IMU("imu", mount_offset=(1.0, 0.0, 0.0)))
     omega_z = 2.0   # rad/s about +z
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c, angular_velocity=(0.0, 0.0, omega_z))

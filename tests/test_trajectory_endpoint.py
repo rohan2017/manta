@@ -156,7 +156,7 @@ def test_nested_endpoint_rejected_at_compile():
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     j = c.add(RevoluteJoint("gim", axis=(0.0, 0.0, 1.0)))
     j.add(Mass("rotor", mass=0.1, moi=(0.01, 0.01, 0.01),
-               transform=(0.1, 0.0, 0.0)))
+               mount_offset=(0.1, 0.0, 0.0)))
     j.add(TrajectoryEndpoint("slew", trajectory=hover((0.0, 0.0, 0.0))))
     w = World()
     w.add_craft(c)

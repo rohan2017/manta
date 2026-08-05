@@ -64,7 +64,7 @@ def test_offset_thruster_produces_torque():
     c = Craft("rolling")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     # Thruster mounted at (+1, 0, 0), pointing +z → torque about body y.
-    c.add(Thruster("t", force=(0.0, 0.0, 1.0), transform=(1.0, 0.0, 0.0)))
+    c.add(Thruster("t", force=(0.0, 0.0, 1.0), mount_offset=(1.0, 0.0, 0.0)))
 
     w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
     w.add_craft(c, **{"t.throttle": 1.0})     # 1 N at 1 m → τ = +1 N·m about body y.

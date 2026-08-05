@@ -190,8 +190,8 @@ def test_magnetometer_picks_up_dipole_at_local_position():
 
 def test_magnetometer_samples_at_single_mount_offset():
     """Regression: ctx.position already includes the part transform, so the
-    magnetometer must NOT re-add it. A sensor at transform=(0,0,h) on a craft
-    at z=Z must read the same field as a transform=0 sensor at z=Z+h — in a
+    magnetometer must NOT re-add it. A sensor at mount_offset=(0,0,h) on a craft
+    at z=Z must read the same field as a mount_offset=0 sensor at z=Z+h — in a
     position-varying (dipole) field. The old double-offset bug sampled z=Z+2h."""
     m, Z, h = 1.0e23, 1.0e7, 2.0e6
 
@@ -200,7 +200,7 @@ def test_magnetometer_samples_at_single_mount_offset():
         mf.add(DipoleMag(position=(0, 0, 0), moment=(0.0, 0.0, m), eps=0.0))
         c = Craft("c")
         c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
-        c.add(Magnetometer("mag", transform=(0.0, 0.0, offset)))
+        c.add(Magnetometer("mag", mount_offset=(0.0, 0.0, offset)))
         w = World().add_field(mf)
         w.add_craft(c, position=(0, 0, craft_z))
         sim = TargetNumpy(Sim(w))

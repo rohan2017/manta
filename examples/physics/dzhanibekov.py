@@ -65,7 +65,7 @@ def principal_moments():
 def build_world():
     tee = Craft("tee")
     for name, pos in MASSES.items():
-        tee.add(Mass(name, mass=1.0, moi=(1e-3, 1e-3, 1e-3), transform=pos))
+        tee.add(Mass(name, mass=1.0, moi=(1e-3, 1e-3, 1e-3), mount_offset=pos))
     w = World()                      # no fields: free-floating, torque-free
     # Spin about the stem (body y) + a tiny wobble about the crossbar.
     w.add_craft(tee, position=(0.0, 0.0, 1.2),

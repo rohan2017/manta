@@ -16,11 +16,11 @@ from manta.parts import DragSurface, Mass, RevoluteJoint, Thruster
 
 def _world():
     c = Craft("c")
-    c.add(Mass("body", mass=2.0, moi=(1.0, 1.0, 0.5), transform=(0, 0, 0.2)))
+    c.add(Mass("body", mass=2.0, moi=(1.0, 1.0, 0.5), mount_offset=(0, 0, 0.2)))
     c.add(DragSurface.isotropic_quadratic("aero", area=0.1, drag_coefficient=0.5))
     j = RevoluteJoint("gim", axis=(1, 0, 0), mode="saturating",
-                      stall_torque=20.0, damping=1.0, transform=(0, 0, -0.5))
-    j.add(Thruster("t", force=(0, 0, 60.0), transform=(0, 0, -0.2)))
+                      stall_torque=20.0, damping=1.0, mount_offset=(0, 0, -0.5))
+    j.add(Thruster("t", force=(0, 0, 60.0), mount_offset=(0, 0, -0.2)))
     c.add(j)
     w = (World().add_field(GravityField(g=(0, 0, -9.81)))
                 .add_field(FluidField().add_uniform(density=1.225)))

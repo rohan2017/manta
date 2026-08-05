@@ -8,7 +8,7 @@ the origin, angular velocity/acceleration, the part's body-frame
 position, and the rotations that take its input/output frames into
 body coords — composed through the joint chain. A flat craft (no
 nested joints) reduces to "everything is the body's state offset by
-`part.transform`" with identity rotations; deep nesting (gimbal:
+`part.mount_offset`" with identity rotations; deep nesting (gimbal:
 pan → tilt → camera) composes naturally.
 
 This pass is **frame-blind**: like the EKF/codegen symbolic layer it
@@ -94,7 +94,7 @@ class KinematicState:
         q_world_from_input  — (4,1) world orientation of the input frame.
         q_world_from_output — (4,1) same for the output frame.
         r_in_craft          — (3,1) body-frame position of the part's
-                              origin. Equals `part.transform` for a flat
+                              origin. Equals `part.mount_offset` for a flat
                               craft; depends on joint angles when nested.
         r_out_in_craft / origin_out_world / velocity_out_world /
         velocity_rel_out_body / acceleration_rel_out_body
@@ -254,7 +254,7 @@ def kinematic_pass(root_part,
     for the velocity/position outputs, which don't use it.
 
     The root's state coincides with the body. Each child:
-      * Position composes through `parent.q_world_from_output · transform`.
+      * Position composes through `parent.q_world_from_output · mount_offset`.
       * Velocity composes through standard rigid-body kinematics:
           v_child = v_parent_origin + ω_parent_output × (r_child - r_parent_origin).
       * Angular velocity of the part's input frame equals the parent's
@@ -344,18 +344,18 @@ def _compute_child_state(parent_state: KinematicState, parent_part, child,
                          joint_dof_accels) -> KinematicState:
     from ..parts.articulation.joint import PrismaticJoint, RevoluteDOF
 
-    # Child's `transform` lives in parent's OUTPUT frame coords. A promoted
-    # (tunable) transform reads as a trace-bound IR value — keep the symbol.
-    tr_attr = child.transform
-    transform = (tr_attr._mx if is_promoted(tr_attr)
-                 else ca.MX(list(tr_attr)))
+    # Child's `mount_offset` lives in parent's OUTPUT frame coords. A promoted
+    # (tunable) mount_offset reads as a trace-bound IR value — keep the symbol.
+    tr_attr = child.mount_offset
+    mount_offset = (tr_attr._mx if is_promoted(tr_attr)
+                    else ca.MX(list(tr_attr)))
 
     # ----- body-frame position composition ------------------------------
     # r_child_in_craft = r_parent_out_in_craft
-    #                    + R_craft_from_parent_output · transform.
+    #                    + R_craft_from_parent_output · mount_offset.
     # The parent's OUTPUT origin differs from its own origin only below a
     # PrismaticJoint (slid by `displacement · axis`).
-    offset_in_craft = parent_state.R_craft_from_output @ transform
+    offset_in_craft = parent_state.R_craft_from_output @ mount_offset
     r_in_craft = parent_state.r_out_in_craft + offset_in_craft
 
     # Static mount rotation: the child's INPUT frame is the parent's
@@ -367,7 +367,7 @@ def _compute_child_state(parent_state: KinematicState, parent_part, child,
         R_craft_from_input = parent_state.R_craft_from_output
         q_world_from_input = parent_state.q_world_from_output
     else:
-        q_mount = _attr_quat(child.mount_rotation)
+        q_mount = _attr_quat(child.mount_orientation)
         R_craft_from_input = (parent_state.R_craft_from_output
                               @ quat_to_rotmat(q_mount))
         q_world_from_input = quat_mul(
@@ -375,7 +375,7 @@ def _compute_child_state(parent_state: KinematicState, parent_part, child,
 
     # ----- position + velocity of child's origin, world coords ---------
     offset_world = rotate_vec_by_quat(
-        parent_state.q_world_from_output, transform)
+        parent_state.q_world_from_output, mount_offset)
     origin_world = parent_state.origin_out_world + offset_world
     # v_child = v_parent_out_origin + ω_parent_output (world) × offset_world.
     omega_parent_world = rotate_vec_by_quat(
@@ -511,9 +511,9 @@ def _compute_child_state(parent_state: KinematicState, parent_part, child,
         p_angle = _attr_mx(parent_part.angle)
         p_rate  = _attr_mx(parent_part.rate)
         p_accel = joint_dof_accels.get(parent_part, ca.MX(0.0))
-        # transform is in the parent's OUTPUT coords; express in the
+        # mount_offset is in the parent's OUTPUT coords; express in the
         # parent's INPUT (= ParentFrame) coords via the joint rotation.
-        r_pf = R_from_axis_angle(p_axis, p_angle) @ transform
+        r_pf = R_from_axis_angle(p_axis, p_angle) @ mount_offset
         omega_pf = p_rate * p_axis
         alpha_pf = p_accel * p_axis
         v_pf = ca.cross(omega_pf, r_pf)
@@ -528,12 +528,12 @@ def _compute_child_state(parent_state: KinematicState, parent_part, child,
         p_accel = joint_dof_accels.get(parent_part, ca.MX(0.0))
         # Output coords = input coords (no rotation); the child rode out
         # along the slide, so it translates within the ParentFrame.
-        r_pf = transform + p_disp * p_axis
+        r_pf = mount_offset + p_disp * p_axis
         v_pf = p_rate * p_axis
         a_pf = p_accel * p_axis
         omega_pf, alpha_pf = _ZERO3, _ZERO3
     else:
-        r_pf, v_pf, a_pf = transform, _ZERO3, _ZERO3
+        r_pf, v_pf, a_pf = mount_offset, _ZERO3, _ZERO3
         omega_pf, alpha_pf = _ZERO3, _ZERO3
 
     # ----- absolute α of the part's (INPUT) frame, in craft coords ------

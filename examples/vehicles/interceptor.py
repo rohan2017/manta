@@ -120,7 +120,7 @@ def build_world():
     for nm, (x, y) in zip(CAM_NAMES, CAM_XY):
         tracker.add(CentroidCamera(nm, width=GND_W, height=GND_W,
                                    hfov_deg=GND_HFOV, pixel_sigma=GND_PIX,
-                                   transform=(x, y, CAM_Z)))
+                                   mount_offset=(x, y, CAM_Z)))
 
     target = Craft("target")
     target.add(Mass("body", mass=TGT_MASS, moi=(1, 1, 1)))
@@ -145,20 +145,20 @@ def build_rocket():
     """Gimballed TVC interceptor — passively stable (drag aft of the COM)."""
     rocket = Craft("interceptor")
     rocket.add(Mass("body", mass=M_BODY, moi=(80.0, 80.0, 1.5),
-                    transform=(0, 0, 0.5)))
+                    mount_offset=(0, 0, 0.5)))
     rocket.add(DragSurface.directional_quadratic(
         "aero", areas=(0.6, 0.6, 0.08), drag_coefficient=0.8,
-        transform=(0, 0, -0.6)))
+        mount_offset=(0, 0, -0.6)))
     gx = RevoluteJoint("gimbal_x", axis=(1, 0, 0), mode="saturating",
-                       stall_torque=4000.0, damping=40.0, transform=(0, 0, -1.2))
+                       stall_torque=4000.0, damping=40.0, mount_offset=(0, 0, -1.2))
     gy = RevoluteJoint("gimbal_y", axis=(0, 1, 0), mode="saturating",
                        stall_torque=4000.0, damping=40.0)
-    gy.add(Mass("engine", mass=M_ENG, moi=(0.5, 0.5, 0.2), transform=(0, 0, -0.3)))
-    gy.add(Thruster("main", force=(0, 0, MAXT), transform=(0, 0, -0.3)))
+    gy.add(Mass("engine", mass=M_ENG, moi=(0.5, 0.5, 0.2), mount_offset=(0, 0, -0.3)))
+    gy.add(Thruster("main", force=(0, 0, MAXT), mount_offset=(0, 0, -0.3)))
     gx.add(gy)
     rocket.add(gx)
     rocket.add(Collider("foot", stiffness=4e4, damping=6e3, friction=6e3,
-                        transform=(0, 0, -2.0)))
+                        mount_offset=(0, 0, -2.0)))
     return rocket
 
 

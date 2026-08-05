@@ -23,7 +23,7 @@ def test_offset_drag_uses_mount_velocity_not_double_lever_arm():
          .add_field(FluidField().add_uniform(density=rho)))        # still
     craft = Craft("spinner")
     craft.add(Mass("core", mass=M, moi=(10.0, 10.0, 10.0)))        # COM at origin
-    craft.add(DragSurface("fin", force=(-c, -c, -c), transform=(d, 0.0, 0.0)))
+    craft.add(DragSurface("fin", force=(-c, -c, -c), mount_offset=(d, 0.0, 0.0)))
     w.add_craft(craft, angular_velocity=(0.0, 0.0, omega))
     sim = TargetNumpy(Sim(w))
     sim.step(dt)
@@ -127,7 +127,7 @@ def test_offset_drag_surface_produces_torque():
     c.add(Mass("body", mass=1.0, moi=(0.05, 0.05, 0.05)))
     c.add(DragSurface.isotropic_quadratic("drogue",
                                            area=0.1, drag_coefficient=1.0,
-                                           transform=(0.5, 0.0, 0.0)))   # +x offset
+                                           mount_offset=(0.5, 0.0, 0.0)))   # +x offset
     # Craft moving in +y → drag at +x offset → moment about +z (yaw).
     w.add_craft(c, velocity=(0.0, 1.0, 0.0))
     cw = TargetNumpy(Sim(w))

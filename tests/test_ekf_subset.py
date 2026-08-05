@@ -51,7 +51,7 @@ def test_track_none_keeps_full_spec_with_aux_states():
     c = Craft("drone")
     c.add(Mass("body", mass=1.0))
     wheel = RevoluteJoint("wheel", mode="passive")
-    wheel.add(Mass("rim", mass=0.2, transform=(0.1, 0, 0)))
+    wheel.add(Mass("rim", mass=0.2, mount_offset=(0.1, 0, 0)))
     c.add(wheel)
     c.add(IMU("imu", gyro_noise_sigma=0.01, accel_noise_sigma=0.05, gyro_bias_sigma=1e-4))
     w = World().add_field(GravityField(g=(0, 0, -9.81)))

@@ -37,9 +37,9 @@ def test_fast_rotor_on_precessing_mount_no_energy_pump():
     second here.)"""
     c = Craft("top")
     c.add(Mass("pole", mass=0.02, moi=(2e-4, 2e-4, 1e-5),
-               transform=(0.0, 0.0, 0.15)))
+               mount_offset=(0.0, 0.0, 0.15)))
     rotor = RevoluteJoint("rotor", mode="passive", axis=(0.0, 0.0, 1.0),
-                  transform=(0.0, 0.0, 0.3))
+                  mount_offset=(0.0, 0.0, 0.3))
     rotor.add(Mass("disk", mass=0.4, moi=(0.002, 0.002, 0.004)))
     c.add(rotor)
 

@@ -160,8 +160,8 @@ def test_joint_accepts_mass_child_with_nonzero_transform():
     """Children offset from the joint origin are now lifted symbolically
     by the inertia rollup — no constructor-side restriction."""
     j = RevoluteJoint("axle", mode="passive")
-    j.add(Mass("offset_rotor", mass=0.1, transform=(0.0, 0.0, 0.1)))
-    assert j.children[0].transform == (0.0, 0.0, 0.1)
+    j.add(Mass("offset_rotor", mass=0.1, mount_offset=(0.0, 0.0, 0.1)))
+    assert j.children[0].mount_offset == (0.0, 0.0, 0.1)
 
 
 def test_joint_accepts_any_part_child():
@@ -317,7 +317,7 @@ def test_offset_rotor_at_pi_over_2_shows_com_in_y():
     c.add(Mass("body", mass=10.0, moi=(0.5, 0.5, 0.5)))
     j = RevoluteJoint("arm", mode="passive", axis=(0.0, 0.0, 1.0))
     j.add(Mass("tip", mass=1.0, moi=(0.0, 0.0, 0.0),
-               transform=(1.0, 0.0, 0.0)))
+               mount_offset=(1.0, 0.0, 0.0)))
     c.add(j)
 
     # Set arm.angle = π/2 directly (rate = 0 → angle stays put under no
@@ -344,7 +344,7 @@ def test_offset_rotor_changes_body_com():
     j = RevoluteJoint("arm", mode="passive", axis=(0.0, 0.0, 1.0))
     # Off-axis mass: 1 kg at +x = 1 m from joint origin.
     j.add(Mass("tip", mass=1.0, moi=(0.0, 0.0, 0.0),
-               transform=(1.0, 0.0, 0.0)))
+               mount_offset=(1.0, 0.0, 0.0)))
     c.add(j)
 
     # Smoke: the offset rotor compiles under gravity.

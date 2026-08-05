@@ -188,7 +188,7 @@ def test_offset_mass_under_point_mass_gravity_feels_local_g():
     # Single Mass, mounted at craft-frame offset (+r0, 0, 0). It should
     # feel g sampled at its anchor world position, not at the craft
     # origin.
-    c.add(Mass("probe", mass=1.0, transform=(r0, 0.0, 0.0)))
+    c.add(Mass("probe", mass=1.0, mount_offset=(r0, 0.0, 0.0)))
 
     w = World().add_field(gf)
     # Craft origin at anchor (r0, 0, 0) → "probe" sits at anchor (2·r0, 0, 0).
@@ -222,7 +222,7 @@ def test_uniform_gravity_unchanged_after_offset_fix():
     # Setup B: Mass at non-zero transform on a zero-mass hub.
     cB = Craft("b")
     cB.add(Mass("hub", mass=1e-12))
-    cB.add(Mass("body", mass=1.0, transform=(5.0, -3.0, 2.0)))
+    cB.add(Mass("body", mass=1.0, mount_offset=(5.0, -3.0, 2.0)))
     wB = World().add_field(GravityField().add_uniform(g))
     wB.add_craft(cB, position=(0, 0, 10))
     cwB = TargetNumpy(Sim(wB))

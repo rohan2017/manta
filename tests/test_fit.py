@@ -27,8 +27,8 @@ def _drone(mass=1.2, kf=10.0, arm=0.12):
     for nm, (x, y, s) in {"t1": (arm, arm, 1), "t2": (-arm, arm, -1),
                           "t3": (-arm, -arm, 1), "t4": (arm, -arm, -1)}.items():
         d.add(Thruster(nm, force_quad=(0, 0, kf),
-                       torque_quad=(0, 0, 0.02 * s), transform=(x, y, 0)))
-    d.add(IMU("imu", transform=(0.04, 0.0, 0.0)))
+                       torque_quad=(0, 0, 0.02 * s), mount_offset=(x, y, 0)))
+    d.add(IMU("imu", mount_offset=(0.04, 0.0, 0.0)))
     w = World()
     w.add_field(GravityField(g=(0, 0, -9.81)))
     w.add_craft(d, position=(0, 0, 10))
@@ -50,7 +50,7 @@ def _run(sim, throttles, n):
 def test_promoted_defaults_reproduce_baked_model_exactly():
     base = _run(TargetNumpy(Sim(_drone())), {"t1": 0.6, "t3": 0.4}, 25)
     prom = _run(TargetNumpy(Sim(
-        _drone(), parameters=["t1.force_quad", "body.mass", "t1.transform"])),
+        _drone(), parameters=["t1.force_quad", "body.mass", "t1.mount_offset"])),
         {"t1": 0.6, "t3": 0.4}, 25)
     for slot in ("position", "orientation", "velocity", "angular_velocity"):
         assert np.array_equal(base.state["drone"][slot],
@@ -179,10 +179,10 @@ def test_fit_recovers_thruster_arm_from_gyro():
     windows = _record_windows(_drone(arm=0.12), n_win=3, K=50, seed=2)
     model = _drone()
     t1 = next(p for p in model.crafts[0].parts if p.name == "t1")
-    t1.transform = (0.15, 0.12, 0.0)          # 3 cm wrong in x
-    fit = Fit(model, parameters={"t1.transform": Prior(sigma=0.05)})
+    t1.mount_offset = (0.15, 0.12, 0.0)          # 3 cm wrong in x
+    fit = Fit(model, parameters={"t1.mount_offset": Prior(sigma=0.05)})
     res = fit.solve(windows)
-    assert np.allclose(res.values["drone.t1.transform"],
+    assert np.allclose(res.values["drone.t1.mount_offset"],
                        [0.12, 0.12, 0.0], atol=0.003)
 
 
@@ -306,10 +306,10 @@ def test_log_prior_supports_vector_parameters():
     assert b.log and b.dim == 3
     assert np.allclose(b.init, np.log([0.02, 0.02, 0.04]))
     assert np.allclose(b.theta_of_v(b.init), [0.02, 0.02, 0.04])
-    # t1.transform has a zero z-component — log-reparam is impossible.
+    # t1.mount_offset has a zero z-component — log-reparam is impossible.
     with pytest.raises(ValueError, match="strictly positive"):
         Fit(_drone(),
-            parameters={"t1.transform": Prior(sigma=0.1, log=True)})
+            parameters={"t1.mount_offset": Prior(sigma=0.1, log=True)})
 
 
 def test_tied_parameters_share_one_decision_variable():
@@ -344,17 +344,17 @@ def test_free_arm_length_with_matrix_ties():
     signs = {"t1": (1, 1), "t2": (-1, 1), "t3": (-1, -1), "t4": (1, -1)}
     fit = Fit(model, parameters={
         "arm": Free(0.12, prior=Prior(sigma=0.05, lower=0.0)),
-        **{f"{nm}.transform": Tied("arm", scale=[[sx], [sy], [0.0]])
+        **{f"{nm}.mount_offset": Tied("arm", scale=[[sx], [sy], [0.0]])
            for nm, (sx, sy) in signs.items()},
     })
     res = fit.solve(windows, weights={"imu.gyro": 1e6, "imu.accel": 1e4})
     assert res.converged
     assert abs(res.values["arm"] - 0.15) < 0.002
-    assert np.allclose(res.values["drone.t2.transform"],
+    assert np.allclose(res.values["drone.t2.mount_offset"],
                        [-0.15, 0.15, 0.0], atol=0.002)
     res.apply()
     t4 = next(p for p in model.crafts[0].parts if p.name == "t4")
-    assert np.allclose(t4.transform, (0.15, -0.15, 0.0), atol=0.002)
+    assert np.allclose(t4.mount_offset, (0.15, -0.15, 0.0), atol=0.002)
 
 
 def test_mirror_tie_elementwise_scale():
@@ -364,15 +364,15 @@ def test_mirror_tie_elementwise_scale():
     model = _drone()
     for nm in ("t1", "t2"):
         p = next(q for q in model.crafts[0].parts if q.name == nm)
-        p.transform = (0.15 if nm == "t1" else -0.15, 0.12, 0.0)
+        p.mount_offset = (0.15 if nm == "t1" else -0.15, 0.12, 0.0)
     fit = Fit(model, parameters={
-        "t1.transform": Prior(sigma=0.05),
-        "t2.transform": Tied("t1.transform", scale=(-1, 1, 1)),
+        "t1.mount_offset": Prior(sigma=0.05),
+        "t2.mount_offset": Tied("t1.mount_offset", scale=(-1, 1, 1)),
     })
     res = fit.solve(windows, weights={"imu.gyro": 1e6, "imu.accel": 1e4})
-    assert np.allclose(res.values["drone.t1.transform"],
+    assert np.allclose(res.values["drone.t1.mount_offset"],
                        [0.12, 0.12, 0.0], atol=0.003)
-    assert np.allclose(res.values["drone.t2.transform"],
+    assert np.allclose(res.values["drone.t2.mount_offset"],
                        [-0.12, 0.12, 0.0], atol=0.003)
 
 
@@ -398,11 +398,11 @@ def test_tie_and_bound_validation():
     with pytest.raises(ValueError, match="matrix scale"):
         Fit(_drone(), parameters={
             "arm": Free(0.1),
-            "t1.transform": Tied("arm", scale=[[1.0], [1.0]])})
+            "t1.mount_offset": Tied("arm", scale=[[1.0], [1.0]])})
     with pytest.raises(ValueError, match="dim 1 != target dim 3"):
         Fit(_drone(), parameters={
             "body.mass": Prior(sigma=0.1),
-            "t1.transform": Tied("body.mass")})
+            "t1.mount_offset": Tied("body.mass")})
     with pytest.raises(ValueError, match="itself tied"):
         Fit(_drone(), parameters={
             "t1.force_quad": Prior(sigma=1.0),
@@ -450,7 +450,7 @@ def test_fit_falls_back_when_nlp_cannot_expand():
         c = Craft("rover")
         c.add(Mass("body", mass=4.0, moi=(0.4, 0.5, 0.6)))
         c.add(Thruster("t", force=(0.0, 0.0, force_z),
-                       transform=(0.3, 0.0, 0.0)))
+                       mount_offset=(0.3, 0.0, 0.0)))
         wheel = RevoluteJoint("wheel", mode="passive", axis=(0, 0, 1.0))
         wheel.add(Mass("disk", mass=0.3, moi=(4e-3, 6e-3, 8e-3)))
         c.add(wheel)

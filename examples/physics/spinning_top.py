@@ -52,13 +52,13 @@ def _build_world(spin: float):
     # The pole is nearly massless — all the inertia is the disk on top,
     # which is what makes the standing top an inverted pendulum.
     top.add(Mass("pole", mass=0.02, moi=(2e-4, 2e-4, 1e-5),
-                 transform=(0.0, 0.0, H / 2)))
+                 mount_offset=(0.0, 0.0, H / 2)))
     # A touch of bearing friction on the rotor: it locks the (nearly
     # massless) pole into co-rotation with the disk within ~30 ms — a
     # real toy top is rigid — after which the spin lives in the body
     # and the relative joint rate sits near zero.
     rotor = RevoluteJoint("rotor", mode="passive", axis=(0.0, 0.0, 1.0),
-                  damping=3.0e-4, transform=(0.0, 0.0, H))
+                  damping=3.0e-4, mount_offset=(0.0, 0.0, H))
     rotor.add(Mass("disk", mass=0.4, moi=(0.002, 0.002, 0.004)))
     top.add(rotor)
     # Contact: the tip it stands on (tangential friction grips it
@@ -67,7 +67,7 @@ def _build_world(spin: float):
     # so a toppled top lies down instead of poking through the floor.
     top.add(Collider("tip", stiffness=2000.0, damping=30.0, friction=3.0))
     top.add(Collider("crown", stiffness=2000.0, damping=30.0, friction=3.0,
-                     transform=(0.0, 0.0, H)))
+                     mount_offset=(0.0, 0.0, H)))
 
     w = (World()
          .add_field(GravityField().add_uniform((0.0, 0.0, -G)))

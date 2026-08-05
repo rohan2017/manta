@@ -40,10 +40,10 @@ Usage::
         "t_fl.force_quad": Prior(sigma=3.0, upper=(0, 0, 25.0)),
         "t_fr.force_quad": Tied("t_fl.force_quad"),       # identical
         "arm":             Free(0.12, prior=Prior(sigma=0.02, lower=0.0)),
-        "t_fl.transform":  Tied("arm", scale=[[1], [1], [0]]),
-        "t_fr.transform":  Tied("arm", scale=[[1], [-1], [0]]),
+        "t_fl.mount_offset":  Tied("arm", scale=[[1], [1], [0]]),
+        "t_fr.mount_offset":  Tied("arm", scale=[[1], [-1], [0]]),
         "body.mass":       Prior(sigma=0.05, log=True),   # ±5%
-        "imu.transform":   Prior(sigma=0.02),             # ±2 cm
+        "imu.mount_offset":   Prior(sigma=0.02),             # ±2 cm
     })
     result = fit.solve(windows)
     print(result.summary())

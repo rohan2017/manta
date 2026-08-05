@@ -23,7 +23,7 @@ value or Jacobian. Inside the bands the transition is C¹ (the same
 `smoothstep` the fluid regime layering relies on), keeping EKF/LQR
 Jacobians regular at the taut/slack boundary.
 
-Each endpoint Part on the craft has a `Part.transform` giving the
+Each endpoint Part on the craft has a `Part.mount_offset` giving the
 attachment offset in body frame. The Tether reads both transforms,
 computes the world-frame positions, evaluates the force, and emits a
 pair of wrenches at-the-endpoint-offsets. The compile_world_tick
@@ -102,7 +102,7 @@ class Tether(Coupling):
         from ..parts.attachment.tether_endpoint import TetherEndpoint
         for p in craft.parts:
             if isinstance(p, TetherEndpoint) and p.name == name:
-                # The wrench math below treats `endpoint.transform` as a
+                # The wrench math below treats `endpoint.mount_offset` as a
                 # craft-frame offset — only true for a root-mounted
                 # endpoint. A nested endpoint (under a joint/composite)
                 # would get a silently wrong attachment point.
@@ -132,7 +132,7 @@ class Tether(Coupling):
         # coords, same assumption the constant path makes).
         def _off(ep):
             from ..parts._trace import is_promoted
-            tr = ep.transform
+            tr = ep.mount_offset
             if is_promoted(tr):
                 return Vec3[CraftFrame].from_mx(tr._mx)
             return Vec3[CraftFrame].constant(tuple(tr))

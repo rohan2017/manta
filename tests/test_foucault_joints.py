@@ -33,7 +33,7 @@ def test_gimbal_pendulum_precesses_at_minus_omega():
     j1 = RevoluteJoint("swing_x", mode="passive", axis=(1.0, 0.0, 0.0))
     j2 = RevoluteJoint("swing_y", mode="passive", axis=(0.0, 1.0, 0.0))
     j2.add(Mass("bob", mass=bob_m, moi=(1e-9, 1e-9, 1e-9),
-                transform=(0.0, 0.0, -L)))
+                mount_offset=(0.0, 0.0, -L)))
     j1.add(j2)
     c.add(j1)
 
@@ -97,7 +97,7 @@ def test_no_precession_without_hub_spin():
     j1 = RevoluteJoint("swing_x", mode="passive", axis=(1.0, 0.0, 0.0))
     j2 = RevoluteJoint("swing_y", mode="passive", axis=(0.0, 1.0, 0.0))
     j2.add(Mass("bob", mass=bob_m, moi=(1e-9, 1e-9, 1e-9),
-                transform=(0.0, 0.0, -L)))
+                mount_offset=(0.0, 0.0, -L)))
     j1.add(j2)
     c.add(j1)
     w = World().add_field(GravityField(g=(0.0, 0.0, -G)))

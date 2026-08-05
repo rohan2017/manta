@@ -205,7 +205,7 @@ def build_world(canonical: dict):
         # against the raised seabed plane this is a HULL_R sphere).
         craft.add(Collider(f"{t}{i}_col", stiffness=COL_STIFFNESS,
                            damping=COL_DAMPING, friction=COL_FRICTION,
-                           transform=(xc, 0.0, 0.0)))
+                           mount_offset=(xc, 0.0, 0.0)))
 
     # A real Earth (SPEC "Coordinate/world conventions"): sidereal spin,
     # point-mass gravity, ISA atmosphere over a SeaWaves ocean (hydrostatic

@@ -97,16 +97,16 @@ def _tilt(incidence: float, dihedral: float):
 
 def _hinge(name: str, pos: tuple, axis: tuple) -> RevoluteJoint:
     j = RevoluteJoint(name, mode="saturating", stall_torque=40.0, damping=0.8,
-              axis=axis, transform=pos)
+              axis=axis, mount_offset=pos)
     j.add(Mass(f"{name}_m", mass=0.15, moi=(0.004, 0.004, 0.004),
-               transform=(-0.03, 0.0, 0.0)))
+               mount_offset=(-0.03, 0.0, 0.0)))
     return j
 
 
 def build_world():
     b = Craft("boat")
     b.add(Mass("hull", mass=MASS, moi=(15.0, 40.0, 45.0),
-               transform=(0.0, 0.0, -0.2)))
+               mount_offset=(0.0, 0.0, -0.2)))
 
     # Hull: 9 buoy + 9 drag elements on the triangular-prism edges.
     # Name by station INDEX (part names must be valid identifiers — a
@@ -116,10 +116,10 @@ def build_world():
                             ("pr", (-DECK_Y, DECK_Z)),
                             ("kl", (0.0, KEEL_Z))):
             b.add(PointBuoy(f"b_{tag}{si}", volume=BUOY_V,
-                            transform=(x, y, z)))
+                            mount_offset=(x, y, z)))
             b.add(DragSurface.isotropic_quadratic(
                 f"d_{tag}{si}", area=0.006, drag_coefficient=0.6,
-                transform=(x, y, z)))
+                mount_offset=(x, y, z)))
 
     # Superstructure air drag — the speed-dependent term that gives the
     # foiling regime a thrust/drag equilibrium (a submerged foil's drag
@@ -128,7 +128,7 @@ def build_world():
     # band so it only ever sees air.
     b.add(DragSurface.isotropic_quadratic("air", area=0.8,
                                           drag_coefficient=0.9,
-                                          transform=(0.0, 0.0, 0.5)))
+                                          mount_offset=(0.0, 0.0, 0.5)))
 
     # Front V-foil: two panels with dihedral on a small vertical strut.
     # Each panel's lift leans toward the centreline (a true V): sideslip
@@ -138,13 +138,13 @@ def build_world():
         b.add(Aerofoil(f"foil_{tag}", area=FRONT_AREA, chord=0.12,
                        CL_max=1.1, CD_0=0.01, induced_k=0.04,
                        chord_axis=chord, normal_axis=normal,
-                       transform=(FRONT_X, sy * FOIL_Y, FRONT_Z)))
+                       mount_offset=(FRONT_X, sy * FOIL_Y, FRONT_Z)))
     # Strut sample points sit LOW so they stay wetted at foiling ride
     # height — they are the only yaw stiffness once the hull is dry.
     b.add(Aerofoil("strut_f", area=0.025, chord=0.10,
                    CL_max=1.1, CD_0=0.01, induced_k=0.04,
                    chord_axis=(1, 0, 0), normal_axis=(0, 1, 0),
-                   transform=(FRONT_X, 0.0, -0.55)))
+                   mount_offset=(FRONT_X, 0.0, -0.55)))
 
     # Rear split foil: each half is an elevon on a spanwise hinge.
     chord, normal = _tilt(REAR_INC, 0.0)
@@ -153,13 +153,13 @@ def build_world():
         h.add(Aerofoil(f"elev_{tag}_s", area=0.012, chord=0.06,
                        CL_max=1.1, CD_0=0.01, induced_k=0.04,
                        chord_axis=chord, normal_axis=normal,
-                       transform=(-0.03, 0.0, 0.0)))
+                       mount_offset=(-0.03, 0.0, 0.0)))
         b.add(h)
     # Rear vertical stabilizer: much bigger than the front strut.
     b.add(Aerofoil("strut_r", area=0.08, chord=0.12,
                    CL_max=1.1, CD_0=0.01, induced_k=0.04,
                    chord_axis=(1, 0, 0), normal_axis=(0, 1, 0),
-                   transform=(REAR_X, 0.0, -0.70)))
+                   mount_offset=(REAR_X, 0.0, -0.70)))
 
     # Vectoring thruster: a yaw RevoluteJoint at the stern carries the prop.
     tv = _hinge("tvec", (-1.45, 0.0, -0.5), (0, 0, 1))
@@ -170,10 +170,10 @@ def build_world():
     # tilt RevoluteJoint (pitch); a PID per axis keeps the laser on the buoy no
     # matter what the boat does.
     pan = RevoluteJoint("pan", mode="saturating", stall_torque=8.0, damping=0.3,
-                axis=(0.0, 0.0, 1.0), transform=tuple(GIMBAL))
+                axis=(0.0, 0.0, 1.0), mount_offset=tuple(GIMBAL))
     pan.add(Mass("pan_motor", mass=0.3, moi=(0.002, 0.002, 0.003)))
     tilt = RevoluteJoint("tilt", mode="saturating", stall_torque=6.0, damping=0.3,
-                 axis=(0.0, 1.0, 0.0), transform=(0.0, 0.0, 0.12))
+                 axis=(0.0, 1.0, 0.0), mount_offset=(0.0, 0.0, 0.12))
     tilt.add(Mass("laser", mass=0.2, moi=(0.001, 0.001, 0.001)))
     pan.add(tilt)
     b.add(pan)

@@ -171,7 +171,7 @@ def test_offset_endpoint_produces_torque():
     a = Craft("a")
     a.add(Mass("body", mass=1.0, moi=(0.05, 0.05, 0.05)))
     # Endpoint at +y offset → stretch along +x produces torque about z.
-    a.add(TetherEndpoint("hook", transform=(0.0, 0.5, 0.0)))
+    a.add(TetherEndpoint("hook", mount_offset=(0.0, 0.5, 0.0)))
 
     b = Craft("b")
     b.add(Mass("body", mass=100.0, moi=(1.0, 1.0, 1.0)))   # heavy → stays put

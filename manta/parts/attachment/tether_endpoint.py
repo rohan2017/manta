@@ -2,7 +2,7 @@
 
 A `TetherEndpoint` Part contributes zero wrench during the per-part
 update loop. Its only job is to mark a location on the craft where a
-`Tether` coupling object connects. Part.transform encodes the
+`Tether` coupling object connects. Part.mount_offset encodes the
 attachment point in the craft's body frame.
 
 The Tether coupling reads this part's transform when computing the

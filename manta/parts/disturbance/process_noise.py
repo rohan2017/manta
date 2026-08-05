@@ -27,7 +27,7 @@ inert):
     force_noise  — N
     torque_noise — N·m
 
-Mounted off the craft origin (Part.transform), the force also produces
+Mounted off the craft origin (Part.mount_offset), the force also produces
 the corresponding body torque, as with any part wrench.
 """
 

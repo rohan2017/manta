@@ -158,7 +158,7 @@ class DeclarationHost:
 
     def promotable_parameter_declarations(self) -> dict[str, "Parameter"]:
         """The Parameter entries that declared a manifold — the ones a
-        transform may promote to live graph inputs for system ID."""
+        mount pose may promote to live graph inputs for system ID."""
         return {n: d for n, d in type(self)._declarations().items()
                 if isinstance(d, Parameter) and d.manifold is not None}
 
@@ -177,19 +177,23 @@ class Part(DeclarationHost):
     contribute a `Wrench` per tick.
 
     Every Part has a static mount pose relative to its parent's output
-    frame: `transform`, an (x, y, z) position offset, and
-    `mount_rotation`, a wxyz quaternion rotating the part's OWN axes
-    into the parent's output frame. (The rotation is not called
-    `orientation` because that is the natural name for a part's OUTPUT
-    — an AHRS reports one — and a Parameter of that name on every Part
-    would shadow it.) The framework uses the pose to express the part's
+    frame: `mount_offset`, an (x, y, z) position, and
+    `mount_orientation`, a wxyz quaternion rotating the part's OWN axes
+    into the parent's output frame.
+
+    Both carry the `mount_` prefix deliberately. It separates the
+    STATIC installation from the DYNAMIC kinematics that share the same
+    vocabulary — `ctx.position` and `ctx.orientation` are what the part
+    is doing this tick, `self.mount_offset` and `self.mount_orientation`
+    are where it was bolted — and it leaves `orientation` free for the
+    thing parts actually output (an AHRS reports one). The framework uses the pose to express the part's
     kinematics and to roll its wrench up into the parent's frame
     (force-at-offset → torque contribution at parent origin).
 
     The two compose in the order you would bolt the thing on: the
     offset is measured in the PARENT's frame ("put it here"), then the
     rotation turns the part in place ("pointing that way"). So a
-    thruster canted 30° outboard is one `mount_rotation`, not a hand-
+    thruster canted 30° outboard is one `mount_orientation`, not a hand-
     rotated thrust vector, and a sensor mounted on its side reports in
     a frame that is genuinely rotated rather than one the measurement
     function has to correct after the fact.
@@ -207,7 +211,7 @@ class Part(DeclarationHost):
 
         Mass("body")                            # at origin of parent
         Mass("battery", mass=2.0,
-             transform=(0.0, 0.0, -0.5))        # 0.5 m below parent origin
+             mount_offset=(0.0, 0.0, -0.5))        # 0.5 m below parent origin
     """
 
     # Fields the part requires registered on the World. Verified at
@@ -234,17 +238,17 @@ class Part(DeclarationHost):
     # target (thruster torque arms, sensor lever arms). The bound symbol's
     # coords are the parent's OUTPUT frame, exactly like the constant; the
     # kinematic/inertia passes consume it raw.
-    transform: "tuple[float, float, float]" = Parameter((0.0, 0.0, 0.0),
+    mount_offset: "tuple[float, float, float]" = Parameter((0.0, 0.0, 0.0),
                                                         manifold="R3")
 
     # Static mount rotation, wxyz, part axes → parent output axes.
-    # Named `mount_rotation`, not `orientation`: sensors output the
+    # Named `mount_orientation`, not `orientation`: sensors output the
     # latter, and a base-class Parameter would collide with it.
     # Promotable on SO3: a mount MISALIGNMENT is one of the most
     # valuable things a sysid fit can recover — an IMU a couple of
     # degrees off its nominal frame biases every attitude solution, and
     # is otherwise almost impossible to measure in situ.
-    mount_rotation: "tuple[float, float, float, float]" = Parameter(
+    mount_orientation: "tuple[float, float, float, float]" = Parameter(
         (1.0, 0.0, 0.0, 0.0), manifold="SO3")
 
     def __init__(self, name: str, **overrides: Any) -> None:
@@ -252,28 +256,28 @@ class Part(DeclarationHost):
         self.name = check_name(name, who=type(self).__name__)
         self.parent: "Part | None" = None
         self._apply_declarations(overrides)
-        q = np.asarray(self.declared_value("mount_rotation"), dtype=float)
+        q = np.asarray(self.declared_value("mount_orientation"), dtype=float)
         if q.shape != (4,):
             raise ValueError(
-                f"{type(self).__name__}({name!r}): mount_rotation must be a "
+                f"{type(self).__name__}({name!r}): mount_orientation must be a "
                 f"wxyz quaternion (4 values); got {q.shape}")
         norm = float(np.linalg.norm(q))
         if not np.isfinite(norm) or norm < 1e-12:
             raise ValueError(
-                f"{type(self).__name__}({name!r}): mount_rotation must be a "
+                f"{type(self).__name__}({name!r}): mount_orientation must be a "
                 f"finite non-zero quaternion; got {tuple(q)}")
         if abs(norm - 1.0) > 1e-9:
             # Normalize once here rather than per tick: a rotation that
             # drifts off the unit sphere silently rescales every vector
             # it touches.
-            setattr(self, "mount_rotation",
+            setattr(self, "mount_orientation",
                     tuple(float(v) for v in q / norm))
 
     @property
     def mounted_upright(self) -> bool:
         """True when this part's static mount rotation is identity —
         the common case, and the fast path the kinematic pass takes."""
-        q = np.asarray(self.declared_value("mount_rotation"), dtype=float)
+        q = np.asarray(self.declared_value("mount_orientation"), dtype=float)
         return bool(abs(abs(float(q[0])) - 1.0) < 1e-12)
 
     # --- Declaration resolution: inherited from DeclarationHost ------------
@@ -350,7 +354,7 @@ class CompositePart(Part):
     Children mount on this part's *output frame*. For a non-joint
     CompositePart the output frame is identical to the part's own
     frame — which is its parent's output frame displaced by
-    `transform` and turned by `mount_rotation`. An `ArticulatedJoint`
+    `mount_offset` and turned by `mount_orientation`. An `ArticulatedJoint`
     overrides this — a `RevoluteJoint`'s output frame additionally
     rotates by the joint angle (a `PrismaticJoint`'s translates by its
     displacement).
@@ -359,7 +363,7 @@ class CompositePart(Part):
     returns the child (so chained construction reads naturally):
 
         gimbal = pan.add(RevoluteJoint("tilt", axis=(0, 1, 0)))
-        gimbal.add(Mass("camera", mass=0.05, transform=(0.1, 0, 0)))
+        gimbal.add(Mass("camera", mass=0.05, mount_offset=(0.1, 0, 0)))
     """
 
     def __init__(self, name: str, **overrides: Any) -> None:
@@ -435,8 +439,8 @@ class RootPart(CompositePart):
     # frame. Override the inherited Parameters to lock both halves —
     # a rotated root would silently redefine what "body frame" means
     # for every state, sensor and wrench on the craft.
-    transform: "tuple[float, float, float]" = Parameter((0.0, 0.0, 0.0))
-    mount_rotation: "tuple[float, float, float, float]" = Parameter(
+    mount_offset: "tuple[float, float, float]" = Parameter((0.0, 0.0, 0.0))
+    mount_orientation: "tuple[float, float, float, float]" = Parameter(
         (1.0, 0.0, 0.0, 0.0))
 
     def __init__(self, name: str) -> None:

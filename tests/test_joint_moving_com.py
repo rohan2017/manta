@@ -33,7 +33,7 @@ def test_moving_com_keeps_free_floating_system_com_fixed():
     c.add(Mass("bus", mass=M, moi=(10.0, 10.0, 10.0)))
     wheel = RevoluteJoint("wheel", mode="passive", axis=(0.0, 0.0, 1.0))
     # Rim mass offset d along x → COM swings on a circle as the wheel turns.
-    wheel.add(Mass("rim", mass=m, moi=(0.01, 0.01, 0.01), transform=(d, 0.0, 0.0)))
+    wheel.add(Mass("rim", mass=m, moi=(0.01, 0.01, 0.01), mount_offset=(d, 0.0, 0.0)))
     c.add(wheel)
 
     w = World().add_field(GravityField().add_uniform((0.0, 0.0, 0.0)))  # free

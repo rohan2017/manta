@@ -78,12 +78,12 @@ class Tied:
         "t2.force_quad": Tied("t1.force_quad"),
 
         # mirrored mount across the y-z plane
-        "t2.transform": Tied("t1.transform", scale=(-1, 1, 1)),
+        "t2.mount_offset": Tied("t1.mount_offset", scale=(-1, 1, 1)),
 
         # scalar arm length -> the four X-frame mount positions
         "arm": Free(0.12, prior=Prior(sigma=0.02, lower=0.0)),
-        "t1.transform": Tied("arm", scale=[[1], [1], [0]]),
-        "t2.transform": Tied("arm", scale=[[-1], [1], [0]]),
+        "t1.mount_offset": Tied("arm", scale=[[1], [1], [0]]),
+        "t2.mount_offset": Tied("arm", scale=[[-1], [1], [0]]),
     """
     source: str
     scale: object = None

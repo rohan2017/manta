@@ -79,7 +79,7 @@ class ProjectiveCamera(Part):
     def __init__(self, name: str, *, width: float = 640.0, height: float = 480.0,
                  hfov_deg: float = 70.0, fx=None, fy=None, cx=None, cy=None,
                  rate=None, noise_sigma: float = 0.0,
-                 transform=(0.0, 0.0, 0.0)) -> None:
+                 mount_offset=(0.0, 0.0, 0.0)) -> None:
         import math
         w, h = float(width), float(height)
         f = (w / 2.0) / math.tan(math.radians(hfov_deg) / 2.0)
@@ -89,7 +89,8 @@ class ProjectiveCamera(Part):
             fy=float(fy) if fy is not None else (float(fx) if fx is not None else f),
             cx=float(cx) if cx is not None else w / 2.0,
             cy=float(cy) if cy is not None else h / 2.0,
-            rate=rate, noise_sigma=float(noise_sigma), transform=transform)
+            rate=rate, noise_sigma=float(noise_sigma),
+            mount_offset=mount_offset)
         # Set via set_targets() by World.finalize() (every
         # ellipsoid not on this camera's craft). Drives output/noise
         # declarations and update.

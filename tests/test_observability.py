@@ -24,13 +24,13 @@ def _sub_world():
     above CoM)."""
     s = Craft("sub")
     s.add(Mass("hull", mass=120.0, moi=(3, 12, 12)))
-    s.add(PointBuoy("buoy", volume=120.0 / 1025.0, transform=(0, 0, 0.15)))
+    s.add(PointBuoy("buoy", volume=120.0 / 1025.0, mount_offset=(0, 0, 0.15)))
     s.add(DragSurface.isotropic_quadratic("drag", area=0.09,
                                           drag_coefficient=0.5))
     s.add(DragSurface.isotropic_quadratic("fin", area=0.35,
                                           drag_coefficient=1.1,
-                                          transform=(-1.3, 0, 0)))
-    s.add(Thruster("prop", force=(1, 0, 0), transform=(-1, 0, 0)))
+                                          mount_offset=(-1.3, 0, 0)))
+    s.add(Thruster("prop", force=(1, 0, 0), mount_offset=(-1, 0, 0)))
     s.add(Thruster("yaw", torque=(0, 0, 1)))
     s.add(IMU("imu", gyro_noise_sigma=0.01, accel_noise_sigma=0.05))
     s.add(VelocitySensor("dvl", velocity_noise_sigma=0.01))

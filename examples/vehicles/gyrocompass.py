@@ -70,13 +70,13 @@ def build_world(heading_deg: float):
     # Low CoM under a buoy line → strong pendulum levelling, and heavy
     # top/bottom drag → it settles dead-still fast (a moving accel/gyro would
     # corrupt the gravity + spin references).
-    b.add(Mass("hull", mass=MASS, moi=(8.0, 30.0, 30.0), transform=(0, 0, -0.5)))
+    b.add(Mass("hull", mass=MASS, moi=(8.0, 30.0, 30.0), mount_offset=(0, 0, -0.5)))
     for i, x in enumerate(np.linspace(-1.0, 1.0, 7)):
-        b.add(PointBuoy(f"buoy{i}", volume=MASS / RHO / 7, transform=(float(x), 0, 0)))
+        b.add(PointBuoy(f"buoy{i}", volume=MASS / RHO / 7, mount_offset=(float(x), 0, 0)))
         b.add(DragSurface.isotropic_quadratic(f"du{i}", area=0.6, drag_coefficient=3.0,
-                                              transform=(float(x), 0, 0.3)))
+                                              mount_offset=(float(x), 0, 0.3)))
         b.add(DragSurface.isotropic_quadratic(f"dl{i}", area=0.6, drag_coefficient=3.0,
-                                              transform=(float(x), 0, -0.3)))
+                                              mount_offset=(float(x), 0, -0.3)))
     b.add(IMU("imu", gyro_noise_sigma=GYRO_SIGMA, accel_noise_sigma=1e-3))
     # Unmodeled buffeting: jitters the truth AND auto-builds the EKF's Q
     # (zero Q ⇒ the covariance collapses and the slow Earth-rate channel

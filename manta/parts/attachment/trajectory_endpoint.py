@@ -16,7 +16,7 @@ For *realistic* reference tracking with a craft's real actuators, use the
 LQR machinery against a reference instead.
 
 Control law (world frame), with the part contractually mounted at the
-craft origin (``transform=(0,0,0)``, on the root — so ``PartFrame ≡
+craft origin (``mount_offset=(0,0,0)``, on the root — so ``PartFrame ≡
 CraftFrame``)::
 
     F_world = kp_pos·(p_ref − p) + kd_pos·(v_ref − v)   [+ mass·a_ref − mass·g]

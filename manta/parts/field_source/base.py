@@ -24,13 +24,14 @@ from ..base import Part, RootPart
 
 def cumulative_offset(part) -> np.ndarray:
     """The part's rest-pose position in its craft's body frame: the sum of
-    `transform` along the parent chain up to (excluding) the craft root.
+    `mount_offset` along the parent chain up to (excluding) the craft
+    root.
     Joint angles are ignored — a source rides its mount's REST offset
     (fine for the typical root-mounted source; documented)."""
     off = np.zeros(3)
     cur = part
     while cur is not None and not isinstance(cur, RootPart):
-        off = off + np.asarray(cur.transform, dtype=float)
+        off = off + np.asarray(cur.mount_offset, dtype=float)
         cur = cur.parent
     return off
 

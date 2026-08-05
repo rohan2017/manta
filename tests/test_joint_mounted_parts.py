@@ -91,7 +91,7 @@ def test_rotor_imu_reads_centripetal_and_spin():
     c.add(Mass("hub", mass=1000.0, moi=(50.0, 50.0, 50.0)))
     wheel = RevoluteJoint("wheel", mode="passive", axis=(0.0, 0.0, 1.0))
     wheel.add(Mass("rim", mass=1.0, moi=(0.01, 0.01, 0.01)))  # on-axis inertia
-    wheel.add(IMU("imu", transform=(d, 0.0, 0.0)))            # offset on rim
+    wheel.add(IMU("imu", mount_offset=(d, 0.0, 0.0)))            # offset on rim
     c.add(wheel)
 
     sim = _free_world(c, **{"wheel.rate": omega0})
@@ -115,7 +115,7 @@ def test_rotor_imu_centripetal_scales_with_rate_squared():
         c.add(Mass("hub", mass=1000.0, moi=(50.0, 50.0, 50.0)))
         wheel = RevoluteJoint("wheel", mode="passive", axis=(0.0, 0.0, 1.0))
         wheel.add(Mass("rim", mass=1.0, moi=(0.01, 0.01, 0.01)))
-        wheel.add(IMU("imu", transform=(d, 0.0, 0.0)))
+        wheel.add(IMU("imu", mount_offset=(d, 0.0, 0.0)))
         c.add(wheel)
         sim = _free_world(c, **{"wheel.rate": omega0})
         state = sim.step(dt=1e-4)
@@ -202,7 +202,7 @@ def test_rotated_thruster_pushes_along_its_rotated_axis():
     c = Craft("boat")
     c.add(Mass("body", mass=10.0, moi=(1.0, 1.0, 1.0)))
     c.add(Thruster("t", force=(10.0, 0.0, 0.0),
-                   mount_rotation=(half, 0.0, 0.0, half)))    # +90° yaw
+                   mount_orientation=(half, 0.0, 0.0, half)))    # +90° yaw
     w = World().add_field(GravityField(g=(0, 0, 0)))
     w.add_craft(c, **{"t.throttle": 1.0})
     sim = TargetNumpy(Sim(w))
@@ -233,7 +233,7 @@ def test_rotated_sensor_reads_its_own_frame():
     # Rolled +90° about x, so the sensor's own +y points along the
     # hull's +z — which is the axis the craft is turning about.
     c.add(IMU("rolled", gyro_noise_sigma=0.0,
-              mount_rotation=(half, half, 0.0, 0.0)))
+              mount_orientation=(half, half, 0.0, 0.0)))
     w = World().add_field(GravityField(g=(0, 0, 0)))
     w.add_craft(c, angular_velocity=(0.0, 0.0, 2.0))       # yaw rate
     sim = TargetNumpy(Sim(w))
@@ -246,7 +246,7 @@ def test_rotated_sensor_reads_its_own_frame():
     np.testing.assert_allclose(rolled, [0.0, 2.0, 0.0], atol=1e-6)
 
 
-def test_mount_rotation_composes_through_a_joint():
+def test_mount_orientation_composes_through_a_joint():
     """A rotated part on a rotating joint composes both — the joint
     angle and the static mount, in that order."""
     import numpy as np
@@ -261,7 +261,7 @@ def test_mount_rotation_composes_through_a_joint():
     j = c.add(RevoluteJoint("j", axis=(0.0, 0.0, 1.0), mode="passive"))
     j.add(Mass("rotor", mass=0.5, moi=(0.01, 0.01, 0.02)))
     j.add(IMU("on_rotor", gyro_noise_sigma=0.0,
-              mount_rotation=(half, half, 0.0, 0.0)))          # rolled +90°
+              mount_orientation=(half, half, 0.0, 0.0)))          # rolled +90°
     w = World().add_field(GravityField(g=(0, 0, 0)))
     w.add_craft(c, angular_velocity=(0.0, 0.0, 1.0))
     sim = TargetNumpy(Sim(w))
@@ -282,15 +282,15 @@ def test_root_mount_pose_is_locked_to_identity():
 
     r = RootPart("root")
     assert r.mounted_upright
-    assert r.transform == (0.0, 0.0, 0.0)
+    assert r.mount_offset == (0.0, 0.0, 0.0)
 
 
 def test_orientation_is_validated_and_normalized():
     from manta.parts import Mass
 
-    m = Mass("b", mass=1.0, mount_rotation=(2.0, 0.0, 0.0, 0.0))
-    assert m.mount_rotation == pytest.approx((1.0, 0.0, 0.0, 0.0))
+    m = Mass("b", mass=1.0, mount_orientation=(2.0, 0.0, 0.0, 0.0))
+    assert m.mount_orientation == pytest.approx((1.0, 0.0, 0.0, 0.0))
     with pytest.raises(ValueError, match="non-zero quaternion"):
-        Mass("b", mass=1.0, mount_rotation=(0.0, 0.0, 0.0, 0.0))
+        Mass("b", mass=1.0, mount_orientation=(0.0, 0.0, 0.0, 0.0))
     with pytest.raises(ValueError, match="wxyz quaternion"):
-        Mass("b", mass=1.0, mount_rotation=(1.0, 0.0, 0.0))
+        Mass("b", mass=1.0, mount_orientation=(1.0, 0.0, 0.0))

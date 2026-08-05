@@ -56,8 +56,8 @@ def _build_world():
     base.add(Mass("hub", mass=150.0, moi=(60.0, 60.0, 90.0)))
     for i, (sx, sy) in enumerate([(1, 1), (1, -1), (-1, 1), (-1, -1)]):
         base.add(Collider(f"foot{i}", stiffness=1.0e5, damping=3200.0,
-                          transform=(sx * HALF, sy * HALF, 0.0)))
-    base.add(TetherEndpoint("hook", transform=(0.0, 0.0, APEX)))
+                          mount_offset=(sx * HALF, sy * HALF, 0.0)))
+    base.add(TetherEndpoint("hook", mount_offset=(0.0, 0.0, APEX)))
 
     bob = Craft("bob")
     bob.add(Mass("bob", mass=1.0, moi=(1e-6, 1e-6, 1e-6)))

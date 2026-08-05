@@ -104,42 +104,42 @@ def build_world():
     sub = Craft("sub")
     # Cylinder: long in x. Roll MoI (about x) ≪ pitch/yaw (about y, z); CoM
     # below the buoy line for pendulum stability in roll + pitch.
-    sub.add(Mass("hull", mass=MASS, moi=(5.0, 60.0, 60.0), transform=(0, 0, COM_Z)))
+    sub.add(Mass("hull", mass=MASS, moi=(5.0, 60.0, 60.0), mount_offset=(0, 0, COM_Z)))
 
     # A line of buoys along the hull axis (z = 0): rides the wave profile when
     # surfaced. Co-located axial drag fades with submersion the same way.
     xs = np.linspace(-1.2, 1.2, N_BUOY)
     v_each = BUOY_FAC * MASS / RHO / N_BUOY
     for i, x in enumerate(xs):
-        sub.add(PointBuoy(f"buoy{i}", volume=v_each, transform=(float(x), 0, 0)))
+        sub.add(PointBuoy(f"buoy{i}", volume=v_each, mount_offset=(float(x), 0, 0)))
         sub.add(DragSurface.isotropic_quadratic(f"hd{i}", area=0.05,
                                                 drag_coefficient=0.8,
-                                                transform=(float(x), 0, 0)))
+                                                mount_offset=(float(x), 0, 0)))
     # Top/bottom panels at three stations: these are OFF the roll axis, so
     # they damp roll + pitch rate (the axial line above cannot).
     for j, x in enumerate((1.0, 0.0, -1.0)):
         sub.add(DragSurface.isotropic_quadratic(f"top{j}", area=0.07,
                                                 drag_coefficient=1.0,
-                                                transform=(x, 0, HULL_R)))
+                                                mount_offset=(x, 0, HULL_R)))
         sub.add(DragSurface.isotropic_quadratic(f"bot{j}", area=0.07,
                                                 drag_coefficient=1.0,
-                                                transform=(x, 0, -HULL_R)))
+                                                mount_offset=(x, 0, -HULL_R)))
 
     # 5-thruster vector layout.
-    sub.add(Thruster("surge", force=(1, 0, 0), transform=(-1.2, 0, 0),
+    sub.add(Thruster("surge", force=(1, 0, 0), mount_offset=(-1.2, 0, 0),
                      force_noise_sigma=3.0))
-    sub.add(Thruster("h_fore", force=(0, 1, 0), transform=(1.0, 0, 0)))
-    sub.add(Thruster("h_aft", force=(0, 1, 0), transform=(-1.0, 0, 0)))
-    sub.add(Thruster("v_fore", force=(0, 0, 1), transform=(1.0, 0, 0)))
-    sub.add(Thruster("v_aft", force=(0, 0, 1), transform=(-1.0, 0, 0)))
+    sub.add(Thruster("h_fore", force=(0, 1, 0), mount_offset=(1.0, 0, 0)))
+    sub.add(Thruster("h_aft", force=(0, 1, 0), mount_offset=(-1.0, 0, 0)))
+    sub.add(Thruster("v_fore", force=(0, 0, 1), mount_offset=(1.0, 0, 0)))
+    sub.add(Thruster("v_aft", force=(0, 0, 1), mount_offset=(-1.0, 0, 0)))
 
     # Sensors: IMU (gyro carries the body's inertial rate, so on the spinning
     # Earth it reads Ω) + DVL (dead-reckoning, modeled with the simple
     # VelocitySensor) + two water-gated GPS (fore/aft).
     sub.add(IMU("imu", gyro_noise_sigma=0.01, gyro_bias_sigma=5e-4))
     sub.add(VelocitySensor("dvl", velocity_noise_sigma=0.05))
-    sub.add(SurfaceGPS("gps_fore", position_noise_sigma=0.1, transform=(1.0, 0, DECK_Z)))
-    sub.add(SurfaceGPS("gps_aft", position_noise_sigma=0.1, transform=(-1.0, 0, DECK_Z)))
+    sub.add(SurfaceGPS("gps_fore", position_noise_sigma=0.1, mount_offset=(1.0, 0, DECK_Z)))
+    sub.add(SurfaceGPS("gps_aft", position_noise_sigma=0.1, mount_offset=(-1.0, 0, DECK_Z)))
 
     earth = Earth(waves=WAVES, surface_smoothing=SMOOTH)
     w = World().add_planet(earth)

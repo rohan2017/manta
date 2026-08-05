@@ -12,7 +12,7 @@ implements.
 Scope:
 - 13-DOF rigid-body state: position (3) + orientation quaternion (4) +
   linear velocity (3) + angular velocity (3).
-- Parts have static position offsets (`Part.transform`) in craft frame.
+- Parts have static position offsets (`Part.mount_offset`) in craft frame.
 - Mass parts declare a diagonal MOI tensor about their own origin.
 - Aggregation: total mass, COM in craft frame, MOI about craft origin
   (parallel-axis lifts from each part's position).
@@ -115,7 +115,7 @@ class TickContext:
       orientation          : Quat[WorldFrame, PartFrame] — part attitude.
       position[F]          : Vec3[F] — the part's mount-point position.
                              [WorldFrame] is its world position (already
-                             chain-composed — don't re-add `transform`).
+                             chain-composed — don't re-add `mount_offset`).
       velocity[F]          : Vec3[F] — linear velocity of the mount point.
                              [WorldFrame] includes the body + joint lever
                              arms (don't re-add ω×r).
@@ -258,7 +258,7 @@ def _aggregate_inertials(root_part: Part) -> dict[str, Any]:
     Only parts carrying the `contributes_inertia` trait (`Mass` and
     friends) are counted — a `mass` attribute alone is NOT inertial
     (e.g. `TrajectoryEndpoint.mass` is a feedforward gain). Each
-    counted part's craft-frame position composes its `transform`
+    counted part's craft-frame position composes its `mount_offset`
     through the full parent chain — joints contribute their DECLARED
     rest-pose rotation/slide (`angle` / `displacement` as configured at
     construction) — so a Mass riding a gimbal lands at the right
@@ -274,10 +274,10 @@ def _aggregate_inertials(root_part: Part) -> dict[str, Any]:
 
     def visit(part, r_parent_out: np.ndarray, R_parent_out: np.ndarray):
         nonlocal m_total, com_sum, I_about_origin
-        # `transform` lives in the parent's OUTPUT frame coords; the
+        # `mount_offset` lives in the parent's OUTPUT frame coords; the
         # mount doesn't rotate, so input frame = parent output frame.
         tr = np.asarray(
-            declared_attr(part, "transform", (0.0, 0.0, 0.0)), dtype=float)
+            declared_attr(part, "mount_offset", (0.0, 0.0, 0.0)), dtype=float)
         r = r_parent_out + R_parent_out @ tr
         R_in = R_parent_out
 
