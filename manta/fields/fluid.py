@@ -41,7 +41,7 @@ import casadi as ca
 
 from ..ir.frames import WorldFrame
 from ..ir.types import Vec3
-from ..smoothing import hermite_blend, soft_norm
+from ..smoothing import hermite_blend, smooth_max0, soft_norm
 from .base import Disturbance, SuperposedField
 
 
@@ -193,6 +193,25 @@ class FluidField(SuperposedField):
 
         return base + avg + pert
 
+    def add_flat_ocean(self,
+                       *,
+                       density: float = 1025.0,
+                       surface_z: float = 0.0,
+                       surface_pressure: float = 101325.0,
+                       gravity: float = 9.80665,
+                       temperature: float = 288.15,
+                       viscosity: float = 1.35e-3,
+                       velocity: tuple[float, float, float] = (0.0, 0.0, 0.0),
+                       surface_blend: float = 0.05,
+                       ) -> "FluidField":
+        """Attach a flat hydrostatic ocean below `surface_z`. Returns
+        self. See `FlatOcean` for what it is and is not."""
+        return self.add(FlatOcean(
+            density=density, surface_z=surface_z,
+            surface_pressure=surface_pressure, gravity=gravity,
+            temperature=temperature, viscosity=viscosity,
+            velocity=velocity, surface_blend=surface_blend))
+
     def add_uniform(self,
                     density: float,
                     velocity: tuple[float, float, float] = (0.0, 0.0, 0.0),
@@ -314,6 +333,119 @@ class UniformFluid(Disturbance):
         return (f"<UniformFluid density={self.density} "
                 f"pressure={self.pressure} temperature={self.temperature} "
                 f"viscosity={self.viscosity:.3e} velocity={self.velocity}>")
+
+
+class FlatOcean(Disturbance):
+    """Incompressible water below a horizontal free surface, in the
+    WORLD frame — a local z-up ocean for a world with no planet.
+
+    `Ocean` (in `manta.planets`) is the same physics anchored to a
+    planet's curved surface. This is the flat-earth version, for a
+    local ENU world where the sea surface is the plane `z = surface_z`
+    and gravity is a constant −z. That is the right model whenever the
+    working area is small enough that curvature is irrelevant — which,
+    for a vehicle operating over a few kilometres, it is by a wide
+    margin — and it keeps world coordinates in metres near the origin
+    instead of near the Earth's radius, which matters for anything
+    doing geometry in the world frame (bathymetry, acoustic raycasts,
+    sensor mount arithmetic).
+
+        ρ = density                          (constant)
+        P = surface_pressure + ρ·g·depth     (depth = surface_z − z)
+        T = temperature                      (constant)
+
+    The regime is bounded BELOW the surface by a `below_surface`
+    membership, so it does not simply define fluid everywhere. That is
+    what makes a broaching hull lose buoyancy instead of floating half
+    out of the water with full lift, and it is why `surface_blend`
+    exists: a hard cutoff would put a step in the buoyancy force and
+    every integrator downstream would ring on it.
+
+    Above the surface the field contributes nothing, so a world that
+    wants air as well overlays an `Atmosphere` or a second
+    `UniformFluid` — they layer by membership.
+
+    A flat surface, deliberately: waves belong to the planet path,
+    where the surface height is already a function of position and
+    time. A local world that needs them can supply its own membership
+    and a matching pressure term.
+
+    Args:
+        density          — kg/m³ (1025 seawater, 1000 fresh).
+        surface_z        — world z of the mean free surface.
+        surface_pressure — Pa at the surface. This is the value a depth
+                           sensor is zeroed against, so it belongs to
+                           the world rather than to the sensor.
+        gravity          — magnitude, m/s². Must match the world's
+                           GravityField or buoyancy and pressure will
+                           disagree about how deep things are.
+        surface_blend    — metres over which the regime fades out at the
+                           surface.
+    """
+
+    field_value_shape = FluidState
+    combining = "baseline"
+
+    def __init__(self,
+                 *,
+                 density: float = 1025.0,
+                 surface_z: float = 0.0,
+                 surface_pressure: float = 101325.0,
+                 gravity: float = 9.80665,
+                 temperature: float = 288.15,
+                 viscosity: float = 1.35e-3,
+                 velocity: tuple[float, float, float] = (0.0, 0.0, 0.0),
+                 surface_blend: float = 0.05,
+                 name: str | None = None,
+                 combining: str | None = None) -> None:
+        if density <= 0.0:
+            raise ValueError(
+                f"FlatOcean: density must be > 0, got {density!r}")
+        if gravity < 0.0:
+            raise ValueError(
+                f"FlatOcean: gravity must be >= 0, got {gravity!r}")
+        if surface_blend <= 0.0:
+            raise ValueError(
+                f"FlatOcean: surface_blend must be > 0, got "
+                f"{surface_blend!r} — a hard cutoff steps the buoyancy "
+                f"force and rings every integrator downstream")
+        z0 = float(surface_z)
+        super().__init__(name=name, combining=combining,
+                         membership=below_surface(
+                             lambda point, t: point._mx[2] - z0,
+                             float(surface_blend)))
+        self.density = float(density)
+        self.surface_z = z0
+        self.surface_pressure = float(surface_pressure)
+        self.gravity = float(gravity)
+        self.temperature = float(temperature)
+        self.viscosity = float(viscosity)
+        self.velocity = tuple(float(x) for x in velocity)
+        self.surface_blend = float(surface_blend)
+        if len(self.velocity) != 3:
+            raise ValueError(
+                f"FlatOcean: velocity must be length-3, got {velocity!r}")
+
+    def contribute_at_sym(self, point, t) -> FluidState:
+        # Depth below the surface, floored at zero through the same
+        # smooth max the Heightfield uses — the membership already fades
+        # the regime out above the surface, but the pressure expression
+        # itself must not go negative inside the blend band.
+        depth = smooth_max0(self.surface_z - point._mx[2],
+                            self.surface_blend ** 2)
+        return FluidState(
+            density     = ca.MX(self.density),
+            pressure    = ca.MX(self.surface_pressure)
+                          + self.density * self.gravity * depth,
+            temperature = ca.MX(self.temperature),
+            viscosity   = ca.MX(self.viscosity),
+            velocity    = _VEC3_W.constant(self.velocity),
+        )
+
+    def __repr__(self) -> str:
+        return (f"<FlatOcean density={self.density} "
+                f"surface_z={self.surface_z} "
+                f"P_surface={self.surface_pressure}>")
 
 
 class CurrentFlow(Disturbance):
