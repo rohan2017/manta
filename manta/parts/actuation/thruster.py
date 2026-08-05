@@ -1,12 +1,21 @@
 """Thruster — linear + quadratic in throttle.
 
-    F(t) = force · t + force_quad · t²
-    τ(t) = torque · t + torque_quad · t²
+    F(t) = force · t + force_quad · t·|t|
+    τ(t) = torque · t + torque_quad · t·|t|
 
 `force` and `torque` cover the standard linear case (`F = throttle · v`,
 common for an EDF or scaled-thrust model); `force_quad` and
 `torque_quad` cover the rotor-blade case (`F = K_T · throttle²`, with
 reaction torque `τ = K_Q · throttle²`).
+
+The quadratic term is `t·|t|`, NOT `t²`, so it preserves direction: a
+reversible propeller commanded to full reverse pulls backwards. Plain
+`t²` is positive on both sides of zero, which would make a reversing
+thruster push forward — invisible on a rotor that only spins one way
+(where the two forms are identical for `t ≥ 0`), and badly wrong for
+any marine thruster. Same sign-preserving convention `DragSurface`
+uses for `v·|v|`, and `t·|t|` stays C¹ at the origin (its derivative
+is `2|t|`), so the contact with the linear term is smooth.
 
     Thruster("edf",   force=(0, 0, 10))
     Thruster("blade", force_quad=(0, 0, K_T), torque_quad=(0, 0, K_Q))
@@ -19,9 +28,12 @@ produce correct body torques automatically.
 
 from __future__ import annotations
 
+import casadi as ca
+
 from ...ir.frames import PartFrame
-from ...ir.types import Vec3
+from ...ir.types import Scalar, Vec3
 from .._declarations import Input, Parameter, WhiteNoise
+from .._trace import scalar_mx
 from ..base import Part
 from ...ir.wrench import Wrench
 
@@ -71,8 +83,10 @@ class Thruster(Part):
     torque_noise = WhiteNoise("R3", frame=PartFrame, sigma=0.0)
 
     def update(self, ctx):
-        t  = self.throttle
-        t2 = t * t
+        t = self.throttle
+        # Direction-preserving quadratic: see the module docstring.
+        t_mx = scalar_mx(t)
+        t2 = Scalar(t_mx * ca.fabs(t_mx))
 
         c1F = Vec3[PartFrame].coerce(self.force)
         c2F = Vec3[PartFrame].coerce(self.force_quad)

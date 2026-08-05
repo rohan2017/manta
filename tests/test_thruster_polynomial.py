@@ -1,6 +1,7 @@
 """Thruster tests — linear + quadratic in throttle, plus reaction torque."""
 
 import numpy as np
+import pytest
 
 from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField
@@ -76,3 +77,36 @@ def test_quadratic_reaction_torque():
     sim = TargetNumpy(Sim(w))
     sim.step(0.001)
     assert np.isclose(sim.state["c"]["angular_velocity"][2], 0.001, atol=1e-6)
+
+
+def test_quadratic_term_preserves_direction():
+    """`force_quad` uses `t·|t|`, not `t²`.
+
+    Plain `t²` is positive on both sides of zero, so a reversible
+    thruster commanded to full reverse would PUSH FORWARD. On a rotor
+    that only spins one way the two forms are identical (t >= 0), which
+    is exactly why the bug hid: every quadrotor in the examples is
+    blind to it, and the first marine thruster is not.
+
+    Full reverse must mirror full forward, and half reverse must be a
+    quarter of it — the quadratic shape, with the sign kept.
+    """
+    def accel(throttle: float) -> float:
+        w = World().add_field(GravityField().add_uniform((0.0, 0.0, 0.0)))
+        c = Craft("boat")
+        c.add(Mass("body", mass=10.0, moi=(1.0, 1.0, 1.0)))
+        c.add(Thruster("t", force_quad=(20.0, 0.0, 0.0)))
+        w.add_craft(c)
+        sim = TargetNumpy(Sim(w))
+        sim.state["boat"]["t.throttle"] = throttle
+        sim.step(0.01)
+        return float(sim.state["boat"]["velocity"][0]) / 0.01
+
+    fwd = accel(1.0)
+    rev = accel(-1.0)
+    assert fwd == pytest.approx(20.0 / 10.0, rel=1e-6)
+    assert rev == pytest.approx(-fwd, rel=1e-6), (
+        f"full reverse gave {rev:+.3f} m/s^2 against {fwd:+.3f} forward — "
+        f"a t^2 term pushes the wrong way")
+    # Quadratic, not linear: half command is a quarter of the force.
+    assert accel(-0.5) == pytest.approx(0.25 * rev, rel=1e-6)
