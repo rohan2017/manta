@@ -243,3 +243,72 @@ def _evaluate_at_zero(expr_mx, root_part, param_subs=()) -> np.ndarray:
     # `ca.evalf` folds an MX with no free symbols straight to DM.
     dm = ca.evalf(expr_mx)
     return np.asarray(dm.full()).reshape(expr_mx.shape)
+
+
+def added_mass_rollup(craft, kin_states, param_subs=()) -> dict | None:
+    """Collect the craft's `AddedMass` parts into craft-frame tensors.
+
+    Added mass augments the SOLVES, not the mass rollup: entrained fluid
+    weighs nothing, never shifts the COM, and contributes no gravity —
+    which is why `AddedMass` is not `contributes_inertia` and this walk
+    is separate from `symbolic_inertia_rollup`.
+
+    Returns None when the craft carries no added mass; otherwise:
+        A_lin_mx      : MX (3,3) — added linear inertia, craft frame.
+        B_rot_mx      : MX (3,3) — added rotational inertia, craft frame.
+        B_rot_at_zero : np.ndarray (3,3) — numeric snapshot (promoted
+                        parameters at declared values) for the
+                        degenerate-inertia guards.
+
+    Raises if an `AddedMass` rides an articulated joint: the tensors
+    would become configuration-dependent, and a spinning appendage's
+    added mass is not a modelled effect — mount it rigidly.
+    """
+    from ..parts._trace import is_promoted
+    from ..parts.aero.added_mass import AddedMass
+    from ..parts.articulation.joint import ArticulatedJoint
+    from ..parts.base import CompositePart
+
+    def collect(part, under_joint, out):
+        if isinstance(part, AddedMass) and under_joint:
+            raise ValueError(
+                f"Craft '{craft.name}': AddedMass '{part.name}' is "
+                f"mounted under an articulated joint. Its tensors would "
+                f"become configuration-dependent; added mass models the "
+                f"rigid hull — mount it rigidly.")
+        if isinstance(part, AddedMass):
+            out.append(part)
+        if isinstance(part, CompositePart):
+            for child in part.children:
+                collect(child, under_joint
+                        or isinstance(part, ArticulatedJoint), out)
+
+    parts: list = []
+    collect(craft.root, False, parts)
+    if not parts:
+        return None
+
+    A_mx = ca.MX.zeros(3, 3)
+    B_mx = ca.MX.zeros(3, 3)
+    for part in parts:
+        # Includes the static mount rotation — a diagonal authored in
+        # the part's frame lands in craft axes here.
+        R = kin_states[part].R_craft_from_input
+        for attr, is_linear in ((part.translational, True),
+                                (part.rotational, False)):
+            if is_promoted(attr):
+                diag_mx = ca.diag(attr._mx)
+            else:
+                diag_mx = ca.diag(ca.MX(np.asarray(
+                    [float(attr[0]), float(attr[1]), float(attr[2])])))
+            rotated = ca.mtimes(R, ca.mtimes(diag_mx, R.T))
+            if is_linear:
+                A_mx = A_mx + rotated
+            else:
+                B_mx = B_mx + rotated
+
+    return {
+        "A_lin_mx": A_mx,
+        "B_rot_mx": B_mx,
+        "B_rot_at_zero": _evaluate_at_zero(B_mx, craft.root, param_subs),
+    }

@@ -36,7 +36,7 @@ from ..craft import (
     TickContext, _aggregate_inertials,
     _wrench_rotate_to_craft, _shift_wrench,
 )
-from .inertia import symbolic_inertia_rollup
+from .inertia import added_mass_rollup, symbolic_inertia_rollup
 from .joint_space import DEGENERATE_INERTIA_EPS, build_joint_space
 from .kinematics import kinematic_pass
 from ..ir._linalg import spd_solve
@@ -617,6 +617,20 @@ def _trace_craft_pass1(craft,
         joint_dof_accels=joint_accel_syms)
     inertia = symbolic_inertia_rollup(craft.root, param_subs=param_subs)
 
+    # Added mass: the entrained fluid's inertia. Rotational lands in
+    # I_com so the gyroscopic term and the momentum integrator carry the
+    # fluid's angular momentum; linear is stashed for the (m·I + A)
+    # solve in `_emit_per_craft_dynamics`. Nothing here touches m_total
+    # or the COM — added mass weighs nothing.
+    added = added_mass_rollup(craft, kin_states, param_subs=param_subs)
+    if added is not None:
+        inertia["I_com_in_craft_mx"] = (inertia["I_com_in_craft_mx"]
+                                        + added["B_rot_mx"])
+        inertia["I_com_at_zero"] = (inertia["I_com_at_zero"]
+                                    + added["B_rot_at_zero"])
+    inertia["added_mass_lin_mx"] = (None if added is None
+                                    else added["A_lin_mx"])
+
     # Fields reach every ctx through `world` — nothing is materialized
     # per tick, so `ctx.has_field` / `ctx.field` see exactly the
     # world's registry (user-authored Field subclasses included).
@@ -662,6 +676,7 @@ def _trace_craft_pass1(craft,
         craft,
         kin_states=kin_states,
         inertia=inertia,
+        added_rot_inertia_mx=None if added is None else added["B_rot_mx"],
         state_input_nodes=state_input_nodes,
         own_wrench=own_wrench,
         om_mx=ang_vel._mx,
@@ -877,7 +892,21 @@ def _emit_per_craft_dynamics(g_ctx, craft, pc: CraftTrace, dt) -> None:
     r_com = ir.Vec3[CraftFrame].from_mx(com_mx)
     tau_com = tau_origin - r_com.cross(F_craft)
 
-    a_com_world = orientation.apply(F_craft / m_total)
+    # Linear solve. Without added mass, world-frame Newton for a scalar
+    # mass: a = F/m, the exact decoupling the COM formulation buys.
+    # WITH added mass the effective linear inertia is anisotropic in the
+    # BODY frame — (m·I + A)·Rᵀa_w = F_craft — so solve in craft axes
+    # and rotate out. The velocity-product companions (ω×(Aν) et al.)
+    # arrive through the AddedMass part's wrench, already inside
+    # F_craft; together the two halves are the exact still-water
+    # body-frame EOM.
+    A_lin_mx = inertia.get("added_mass_lin_mx")
+    if A_lin_mx is None:
+        a_com_world = orientation.apply(F_craft / m_total)
+    else:
+        M_lin_mx = m_total * ca.MX.eye(3) + A_lin_mx
+        a_com_world = orientation.apply(ir.Vec3[CraftFrame].from_mx(
+            spd_solve(M_lin_mx, F_craft._mx)))
 
     I_com   = ir.Mat3[CraftFrame, CraftFrame].from_mx(I_com_mx)
     I_omega = I_com @ ang_vel

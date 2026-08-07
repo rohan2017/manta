@@ -84,7 +84,8 @@ def build_joint_space(craft, *,
                       own_wrench: dict,
                       om_mx,
                       v_com_rel_mx,
-                      joint_accel_syms: dict) -> dict | None:
+                      joint_accel_syms: dict,
+                      added_rot_inertia_mx=None) -> dict | None:
     """Assemble the symbolic joint-space blocks for one craft.
 
     Args:
@@ -162,6 +163,14 @@ def build_joint_space(craft, *,
         R = kin.R_craft_from_input
         w_abs = kin.omega_input
         T = T + 0.5 * ca.dot(w_abs, R @ (I_loc @ (R.T @ w_abs)))
+
+    # Added rotational inertia — the entrained fluid's kinetic energy,
+    # ½ωᵀBω about the body axes (see tick/inertia.added_mass_rollup;
+    # rigid-mounted, so B is constant and rides only the ω rows). The
+    # Hessian machinery below then folds it into A's body block and the
+    # momentum/bias terms with no further special-casing.
+    if added_rot_inertia_mx is not None:
+        T = T + 0.5 * ca.dot(om_mx, added_rot_inertia_mx @ om_mx)
 
     # ----- generalized momentum, mass matrix, Hamel bias -----------------
     p = ca.jacobian(T, u).T                      # (3+K,1)
