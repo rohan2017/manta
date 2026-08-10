@@ -8,10 +8,10 @@ direction-preserving quadratic form). B_k are 3×3 tensors, per unit
 fluid density, matching `DragSurface`'s conventions exactly — this IS
 DragSurface's missing rotational twin.
 
-Why a separate part: `DragSurface`'s `torque=` tensors act on the
+Why a separate part: `DragSurface`'s `moment=` tensors act on the
 TRANSLATIONAL relative wind — correct for flow-induced moments (a
 canted vane, Magnus-like couplings), and exactly wrong for spin
-damping: `DragSurface("spin", torque=(-k, 0, 0))` is a roll torque
+damping: a flow-moment tensor abused as spin damping is a roll torque
 proportional to FORWARD SPEED, which silently rolls a cruising hull
 over (measured: a "spin-damped" test hull spun up at 5.7 rad/s² from
 rest under thrust alone, and an optimizer promptly learned to steer

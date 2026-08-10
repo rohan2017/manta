@@ -4,6 +4,17 @@ Surface1..4 tensor form:
     F(v_rel) = ρ · Σ_{k=1..N} A_k · v_rel^(k)        (N ≤ 4)
     τ(v_rel) = ρ · Σ_{k=1..N} B_k · v_rel^(k)
 
+Both polynomials are in the LOCAL FLOW at the mount point — the
+translational relative wind, which includes the ω×r lever-arm
+contribution when the surface is mounted off-centre, and nothing
+rotational when it is not. The `moment=` tensors are therefore
+FLOW-INDUCED moments (a canted vane's rolling moment with forward
+speed, a panel's Cm-like pitching moment) — NOT damping in the body's
+own spin. A centred surface is rotationally blind: a single-point
+sample cannot feel the craft rotating about it. For spin damping use
+`RotationalDrag` (the lumped coefficient), or mount several offset
+DragSurfaces and let the ω×r wind produce it physically.
+
 where v_rel^(k) is the **sign-preserving** element-wise k-th power of
 the relative-wind vector in CraftFrame:
 
@@ -66,7 +77,7 @@ def _as_tensor_polynomial(*,
                           tensors=None,
                           name: str,
                           kind: str) -> tuple:
-    """Resolve a `force`/`force_tensors` (or `torque`/`torque_tensors`)
+    """Resolve a `force`/`force_tensors` (or `moment`/`moment_tensors`)
     input into the canonical form: a tuple of 3×3 numpy arrays giving
     [A_1, A_2, …, A_N]. Note the polynomial starts at k=1 (no F_0 — a
     surface in still fluid produces no spontaneous force).
@@ -114,22 +125,23 @@ class DragSurface(Part):
     Parameters:
         force_tensors   — list of 3×3 matrices [A_1, A_2, …, A_N], CraftFrame.
                           Default is a single zero matrix (no drag).
-        torque_tensors  — same shape, for the surface's contribution to
-                          body torque about the mount point.
+        moment_tensors  — same shape: the surface's FLOW-INDUCED moment
+                          about the mount point (τ = ρ·Σ B_k·v_rel^(k);
+                          not spin damping — see the module docstring).
 
     Convenience args (mutually exclusive with the *_tensors form):
         force=(x,y,z)   — sets A_1 = diag(x, y, z) (per-axis linear drag).
-        torque=(x,y,z)  — sets B_1 = diag(x, y, z) (per-axis linear torque).
+        moment=(x,y,z)  — sets B_1 = diag(x, y, z) (per-axis, linear in flow).
     """
 
-    # `force_tensors` / `torque_tensors` carry a zero-3×3 default so the
+    # `force_tensors` / `moment_tensors` carry a zero-3×3 default so the
     # declaration machinery sees a well-typed slot at class scope; the
     # actual value is always set by __init__ from `force`/`force_tensors`
-    # (resp. torque variants), so this default never reaches update().
+    # (resp. moment variants), so this default never reaches update().
     requires_fields = [FluidField]
 
     force_tensors:  tuple = Parameter((np.zeros((3, 3)),))
-    torque_tensors: tuple = Parameter((np.zeros((3, 3)),))
+    moment_tensors: tuple = Parameter((np.zeros((3, 3)),))
 
     @classmethod
     def isotropic_quadratic(cls,
@@ -169,13 +181,21 @@ class DragSurface(Part):
                  *,
                  force: tuple | None = None,
                  force_tensors: list | tuple | None = None,
-                 torque: tuple | None = None,
-                 torque_tensors: list | tuple | None = None,
+                 moment: tuple | None = None,
+                 moment_tensors: list | tuple | None = None,
                  **overrides) -> None:
         overrides["force_tensors"] = _as_tensor_polynomial(
             force=force, tensors=force_tensors, name=name, kind="force")
-        overrides["torque_tensors"] = _as_tensor_polynomial(
-            force=torque, tensors=torque_tensors, name=name, kind="torque")
+        for legacy in ("torque", "torque_tensors"):
+            if legacy in overrides:
+                raise TypeError(
+                    f"DragSurface {name!r}: `{legacy}=` was renamed "
+                    f"`{legacy.replace('torque', 'moment')}=` — these "
+                    f"tensors are moments induced by the incident FLOW "
+                    f"(τ = ρ·Σ B_k·v_rel^k), NOT damping in the body's "
+                    f"own spin. For spin damping use RotationalDrag.")
+        overrides["moment_tensors"] = _as_tensor_polynomial(
+            force=moment, tensors=moment_tensors, name=name, kind="moment")
         super().__init__(name, **overrides)
 
     def update(self, ctx) -> PartUpdate:
@@ -205,7 +225,7 @@ class DragSurface(Part):
         #   v_powers[0] = v                       (k=1)
         #   v_powers[k] = v · |v|^k              (k+1 in 1-indexed terms)
         # Softened |v| keeps the Jacobian regular at v_i=0.
-        max_order = max(len(self.force_tensors), len(self.torque_tensors))
+        max_order = max(len(self.force_tensors), len(self.moment_tensors))
         abs_v_mx = ca.fabs(v_rel_mx) + 1e-30   # for sign-preservation
         v_powers = [None] * max_order
         if max_order >= 1:
@@ -219,7 +239,7 @@ class DragSurface(Part):
             A_mx = ca.MX(A_k)
             F_mx = F_mx + rho * (A_mx @ v_powers[k])
 
-        for k, B_k in enumerate(self.torque_tensors):
+        for k, B_k in enumerate(self.moment_tensors):
             if np.all(B_k == 0.0):
                 continue
             B_mx = ca.MX(B_k)
