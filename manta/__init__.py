@@ -63,7 +63,7 @@ from .estimation.imu_integrator import IMUIntegrator
 from .estimation.madgwick import Madgwick
 from .estimation.mahony import Mahony
 from .ir.state_spec import ALL, POSE, TWIST, SlotSet
-from .control import LQR, LQRSolution, MPC, PID
+from .control import LQR, LQRSolution, MPC, MpcPlan, PID
 from .recurrence import RecurrenceBlock
 from .codegen import NoiseDriver, TargetCpp, TargetJax, TargetNumpy, TargetWasm
 from .fit import (Fit, FitResult, Free, NoiseFit, NoiseFitResult, Prior,
@@ -74,7 +74,7 @@ __all__ = [
     "__version__",
     "ir", "smoothing", "Craft", "World", "Coupling", "Sim", "Planet",
     "EKF", "UKF",
-    "LQR", "LQRSolution", "MPC", "PID",
+    "LQR", "LQRSolution", "MPC", "MpcPlan", "PID",
     "Madgwick", "Mahony", "IMUIntegrator", "RecurrenceBlock",
     "TargetNumpy", "TargetCpp", "TargetWasm", "TargetJax", "NoiseDriver",
     "Fit", "FitResult", "Free", "NoiseFit", "NoiseFitResult", "Prior",

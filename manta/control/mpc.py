@@ -42,8 +42,11 @@ explicit weights.
 
 Plan birth: the tick bootstraps from the zero plan for hulls that can
 act from rest; for underactuated hulls or basin-sensitive transits,
-seed the HELD plan from an offline solve (`NumpyMpc.reset_plan`) —
-plan birth is a mission-load event, the tick is the flight loop.
+`MPC.plan(x, goal)` runs the OFFLINE solver — adaptive line search,
+μ-scheduled Levenberg regularization, optional multi-start seed sweep
+and full-DDP second-order terms — and its plan seeds the runtime via
+`NumpyMpc.reset_plan`. Plan birth is a mission-load event and stays
+Python; the tick is the flight loop and is the compiled artifact.
 
 Coefficients are BAKED (doctrine 2026-08-09): feedback absorbs small
 model drift (a +10 % module swap flies on the nominal controller);
@@ -51,6 +54,8 @@ changes big enough to matter are a new controller and recompile.
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 import casadi as ca
 import numpy as np
@@ -192,6 +197,16 @@ class MPC:
             sweeps=int(sweeps), alphas=tuple(alphas), mu=float(mu),
             parallel=parallel)
 
+        # kept for the offline plan-birth solver (`plan()`)
+        self._f, self._fj = f, fj
+        self._fj_map = fj.map(self.horizon)
+        self._fh: ca.Function | None = None      # built on first fxx use
+        self._spec = spec
+        self._x_init = x_init
+        self._PT = PT
+        self._po, self._pd, self._vo = po, pd, vo
+        self._w_pos, self._w_u = float(w_pos_running), float(w_u)
+
         self._module = Module(
             name=f"{world.name}_mpc",
             state=StateLayout((StateField(
@@ -218,9 +233,290 @@ class MPC:
         """The typed `Module` IR a backend lowers."""
         return self._module
 
+    # ------------------------------------------------------------------
+    # Plan birth — the offline solver
+    # ------------------------------------------------------------------
+
+    def plan(self, x, goal, *, u_init=None, multi_start: bool = False,
+             second_order: bool = False, max_iter: int = 300,
+             tol: float = 1e-5) -> "MpcPlan":
+        """Solve for a seed plan OFFLINE — mission load, goal change,
+        basin doubt. Same cost, same kernels, same box limits as the
+        tick, but with everything the fixed-work tick gave up:
+        adaptive backtracking line search, μ-scheduled Levenberg
+        regularization, and optionally
+
+        * `multi_start` — one quarter-horizon pulse seed per input
+          channel plus the jittered zero, best kept: the
+          vehicle-agnostic answer to bilinear-payoff saddles that
+          Gauss-Newton cannot see from any single start (a symmetric
+          hull's crab basin — measured in the manta-mpc lab).
+        * `second_order` — full DDP: contract the next Vx against the
+          dynamics' second derivatives in the backward sweep (with
+          state-space regularization and a PD gate on Quu — both
+          load-bearing). Escapes those saddles from a SINGLE start at
+          ~2× per-iteration cost; best used with modest terminal
+          weights ("lqr"), where the value gradients keep the
+          second-order model honest.
+
+        `x` as packed vector or dict; returns an `MpcPlan` whose `.U`
+        (nu × N) feeds `NumpyMpc.reset_plan`. Improvement is monotone
+        from whatever `u_init` is given — hand it a cruise and it can
+        only make the cruise better.
+        """
+        x0 = (np.asarray(x, dtype=float).reshape(-1)
+              if isinstance(x, np.ndarray)
+              else self._spec.pack_any(x, base=self._x_init))
+        goal = np.asarray(goal, dtype=float).reshape(-1)
+        if second_order and self._fh is None:
+            xs = ca.SX.sym("x", self.nx)
+            us = ca.SX.sym("u", self.nu)
+            lam = ca.SX.sym("lam", self.nx)
+            H, _ = ca.hessian(ca.dot(lam, self._f(xs, us)),
+                              ca.vertcat(xs, us))
+            self._fh = ca.Function("fh", [xs, us, lam], [H])
+
+        if not multi_start:
+            return self._solve(x0, goal, u_init, second_order,
+                               max_iter, tol)
+        N, nu = self.horizon, self.nu
+        seeds: list = [None] if u_init is None else [u_init]
+        for ch in range(nu):
+            U = np.zeros((N, nu))
+            U[:N // 4, ch] = self.u_hi[ch]
+            seeds.append(U)
+            if self.u_lo[ch] < 0.0:
+                U = np.zeros((N, nu))
+                U[:N // 4, ch] = self.u_lo[ch]
+                seeds.append(U)
+        best: MpcPlan | None = None
+        for seed in seeds:
+            r = self._solve(x0, goal, seed, second_order, max_iter, tol)
+            if best is None or r.cost < best.cost:
+                best = r
+        assert best is not None
+        return best
+
+    # ---- solver internals (ported from the manta-mpc lab's Ddp) -------
+
+    def _rollout(self, x0, U):
+        X = np.empty((self.horizon + 1, self.nx))
+        X[0] = x0
+        for i in range(self.horizon):
+            X[i + 1] = np.asarray(self._f(X[i], U[i])).ravel()
+        return X
+
+    def _cost(self, X, U, goal):
+        po, pd = self._po, self._pd
+        p_err = X[:-1, po:po + pd] - goal
+        e = X[-1].copy()
+        e[po:po + pd] -= goal
+        return float(self.dt * (self._w_u * np.sum(U * U)
+                                + self._w_pos * np.sum(p_err * p_err))
+                     + e @ self._PT @ e)
+
+    def _solve(self, x0, goal, u_init, second_order, max_iter, tol):
+        N, nu, nx = self.horizon, self.nu, self.nx
+        if u_init is None:
+            # a deterministic whisper of control: exactly symmetric
+            # trajectories sit on the saddles this solver must leave
+            rng = np.random.default_rng(0)
+            span = np.maximum(self.u_hi - self.u_lo, 1e-9)
+            U = 0.01 * span * rng.standard_normal((N, nu))
+        else:
+            u_init = np.asarray(u_init, dtype=float)
+            U = (np.tile(u_init, (N, 1)) if u_init.ndim == 1
+                 else u_init.copy())
+            if U.shape == (nu, N):
+                U = U.T.copy()
+        U = np.clip(U, self.u_lo, self.u_hi)
+
+        X = self._rollout(x0, U)
+        J = self._cost(X, U, goal)
+        trace = [J]
+        mu, mu_min, mu_max = 1e-6, 1e-9, 1e8
+        stall = 0
+        converged = False
+
+        for it in range(max_iter):
+            _, A_flat, B_flat = self._fj_map(X[:N].T, U.T)
+            A_flat, B_flat = np.asarray(A_flat), np.asarray(B_flat)
+            A = np.stack([A_flat[:, i * nx:(i + 1) * nx]
+                          for i in range(N)])
+            B = np.stack([B_flat[:, i * nu:(i + 1) * nu]
+                          for i in range(N)])
+
+            while True:
+                ok, kff, K, dV1, dV2 = self._backward(
+                    A, B, X, U, goal, mu, second_order)
+                if ok:
+                    break
+                mu = mu * 10.0
+                if mu > mu_max:
+                    return MpcPlan(U.T.copy(), J, it, False)
+
+            accepted = False
+            for alpha in ALPHAS:
+                X_new, U_new = self._forward(x0, X, U, kff, K, alpha)
+                J_new = self._cost(X_new, U_new, goal)
+                expected = -(alpha * dV1 + alpha * alpha * dV2)
+                if not np.isfinite(J_new):
+                    continue
+                if J - J_new > max(1e-4 * expected, 0.0):
+                    accepted = True
+                    break
+            if accepted:
+                rel = (J - J_new) / max(abs(J), 1e-12)
+                X, U, J = X_new, U_new, J_new
+                trace.append(J)
+                mu = max(mu / 5.0, mu_min)
+                stall = stall + 1 if rel < tol else 0
+                if stall >= 3:
+                    converged = True
+                    break
+            else:
+                mu = mu * 10.0
+                stall += 1
+                if mu > mu_max or stall >= 8:
+                    converged = trace[-1] < trace[0]
+                    break
+
+        return MpcPlan(U.T.copy(), J, len(trace) - 1, converged)
+
+    def _backward(self, A, B, X, U, goal, mu, second_order):
+        """Control-limited backward pass (Tassa box-QP): honest
+        promised decrease under saturation. With `second_order`, the
+        Vx·fxx contraction plus state-space regularization (μ on Vxx,
+        not Quu) and an explicit PD gate — indefinite curvature routes
+        to μ escalation, never to the line search."""
+        N, nx, nu = self.horizon, self.nx, self.nu
+        po, pd = self._po, self._pd
+        dt = self.dt
+        luu = 2.0 * dt * self._w_u
+
+        e = X[N].copy()
+        e[po:po + pd] -= goal
+        Vx = 2.0 * (self._PT @ e)
+        Vxx = 2.0 * self._PT.copy()
+        kff = np.zeros((N, nu))
+        K = np.zeros((N, nu, nx))
+        dV1 = dV2 = 0.0
+        for i in range(N - 1, -1, -1):
+            Ai, Bi = A[i], B[i]
+            lx = np.zeros(nx)
+            lx[po:po + pd] = 2.0 * dt * self._w_pos * (
+                X[i, po:po + pd] - goal)
+            lu = 2.0 * dt * self._w_u * U[i]
+            Qx = lx + Ai.T @ Vx
+            Qu = lu + Bi.T @ Vx
+            VxxA = Vxx @ Ai
+            Qxx = Ai.T @ VxxA
+            Qxx[po:po + pd, po:po + pd] += np.eye(pd) * (
+                2.0 * dt * self._w_pos)
+            Qux = Bi.T @ VxxA
+            Quu = luu * np.eye(nu) + Bi.T @ Vxx @ Bi
+            if not second_order:
+                Qux_reg = Qux
+                Quu_reg = Quu + mu * np.eye(nu)
+            else:
+                H = np.asarray(self._fh(X[i], U[i], Vx))
+                Hux = H[nx:, :nx]
+                Huu = 0.5 * (H[nx:, nx:] + H[nx:, nx:].T)
+                Qxx = Qxx + H[:nx, :nx]
+                Qux = Qux + Hux
+                Quu = Quu + Huu
+                VxxR = Vxx + mu * np.eye(nx)
+                Qux_reg = Bi.T @ VxxR @ Ai + Hux
+                Quu_reg = luu * np.eye(nu) + Bi.T @ VxxR @ Bi + Huu
+                Quu_reg = 0.5 * (Quu_reg + Quu_reg.T)
+                try:
+                    np.linalg.cholesky(Quu_reg)
+                except np.linalg.LinAlgError:
+                    return False, None, None, 0.0, 0.0
+
+            delta, free = _boxqp(Quu_reg, Qu,
+                                 self.u_lo - U[i], self.u_hi - U[i])
+            if delta is None:
+                return False, None, None, 0.0, 0.0
+            kff[i] = delta
+            K[i] = 0.0
+            if free.any():
+                idx = np.flatnonzero(free)
+                K[i][np.ix_(idx, range(nx))] = -np.linalg.solve(
+                    Quu_reg[np.ix_(idx, idx)], Qux_reg[idx])
+            dV1 += float(Qu @ delta)
+            dV2 += 0.5 * float(delta @ Quu @ delta)
+            Vx = Qx + K[i].T @ (Quu @ kff[i] + Qu) + Qux.T @ kff[i]
+            Vxx = Qxx + K[i].T @ (Quu @ K[i] + Qux) + Qux.T @ K[i]
+            Vxx = 0.5 * (Vxx + Vxx.T)
+        return True, kff, K, dV1, dV2
+
+    def _forward(self, x0, X_bar, U_bar, kff, K, alpha):
+        N = self.horizon
+        X = np.empty_like(X_bar)
+        U = np.empty_like(U_bar)
+        X[0] = x0
+        for i in range(N):
+            u = U_bar[i] + alpha * kff[i] + K[i] @ (X[i] - X_bar[i])
+            U[i] = np.clip(u, self.u_lo, self.u_hi)
+            X[i + 1] = np.asarray(self._f(X[i], U[i])).ravel()
+        return X, U
+
     def __repr__(self) -> str:
         return (f"<MPC N={self.horizon} dt={self.dt} nx={self.nx} "
                 f"nu={self.nu} inputs={list(self.input_names)}>")
+
+
+@dataclass(frozen=True)
+class MpcPlan:
+    """One offline plan-birth solve, as data.
+
+    `U` is (nu × N) — the Module's plan orientation, so it feeds
+    `NumpyMpc.reset_plan(plan.U)` directly; `cost` is the same
+    currency as the runtime's `.J` (compare them to judge how much
+    the tick has polished or lost since birth).
+    """
+    U: np.ndarray
+    cost: float
+    iterations: int
+    converged: bool
+
+
+def _boxqp(H, q, lo, hi, *, tol=1e-8, max_iter=25):
+    """min ½δᵀHδ + qᵀδ over the box [lo, hi] — projected Newton with
+    active-set identification (Tassa's boxQP, compact). Returns
+    (δ, free_mask); (None, None) when the free block loses positive
+    definiteness — the caller's cue to raise μ."""
+    delta = np.clip(np.zeros_like(q), lo, hi)
+    free = np.ones_like(q, dtype=bool)
+    value = lambda d: 0.5 * d @ H @ d + q @ d
+    v = value(delta)
+    for _ in range(max_iter):
+        g = q + H @ delta
+        clamped = (((delta <= lo + 1e-10) & (g > 0.0))
+                   | ((delta >= hi - 1e-10) & (g < 0.0)))
+        free = ~clamped
+        if not free.any():
+            return delta, free
+        idx = np.flatnonzero(free)
+        try:
+            step_f = -np.linalg.solve(H[np.ix_(idx, idx)], g[idx])
+        except np.linalg.LinAlgError:
+            return None, None
+        if np.linalg.norm(g[idx]) < tol:
+            return delta, free
+        improved = False
+        for a in (1.0, 0.5, 0.25, 0.1, 0.03, 0.01):
+            cand = delta.copy()
+            cand[idx] = delta[idx] + a * step_f
+            np.clip(cand, lo, hi, out=cand)
+            cv = value(cand)
+            if cv < v - 1e-12:
+                delta, v, improved = cand, cv, True
+                break
+        if not improved:
+            return delta, free
+    return delta, free
 
 
 def _build_tick(f: ca.Function, fj: ca.Function, *, nx: int, nu: int,

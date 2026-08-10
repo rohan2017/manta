@@ -25,9 +25,11 @@ class NumpyMpc(NumpyRuntime):
 
     Plan birth: the kernel bootstraps from the zero plan on hulls that
     can act from rest; for underactuated hulls or basin-sensitive
-    transits, seed with `reset_plan(U)` from an offline solve at
-    mission load. `reset_plan()` (no argument) re-zeros it — e.g. on a
-    goal change large enough that the old plan is the wrong basin.
+    transits, seed with `reset_plan(mpc.plan(x, goal).U)` — the
+    transform's offline solver (line-searched, multi-start, optional
+    full-DDP) at mission load. `reset_plan()` (no argument) re-zeros
+    it — e.g. on a goal change large enough that the old plan is the
+    wrong basin.
     """
 
     def __init__(self, module) -> None:

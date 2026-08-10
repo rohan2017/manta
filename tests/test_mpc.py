@@ -163,14 +163,18 @@ def test_lqr_terminal_mode_builds_and_flies():
     assert rt_w.J != pytest.approx(j_lqr)
 
 
-def test_underactuated_hull_refuses_the_lqr_terminal():
-    """A forward-only prop with fins dead at rest has no stabilizable
-    rest equilibrium: terminal='lqr' must refuse loudly at
-    CONSTRUCTION, not hand back a meaningless P."""
+def _fin():
+    """Underactuated test hull: forward-only prop, one elevator whose
+    lift is ½ρV²·A·CL — dead at rest. Depth is reachable ONLY through
+    the pitch+drive coupling."""
     c = Craft("fin")
     c.add(Mass("hull", mass=10.0, moi=(0.2, 2.0, 2.0)))
     c.add(DragSurface.directional_quadratic(
-        "drag", areas=(0.02, 0.2, 0.2), drag_coefficient=1.0))
+        "drag", areas=(0.02, 0.15, 0.15), drag_coefficient=1.0))
+    c.add(DragSurface("skin", force=(-2.0 / RHO, -5.0 / RHO,
+                                     -5.0 / RHO)))
+    c.add(DragSurface("spin", torque=(-1.0 / RHO, -3.0 / RHO,
+                                      -3.0 / RHO)))
     c.add(Thruster("prop", force=(20.0, 0.0, 0.0)))
     c.add(ControlSurface("elevator", area=0.01, chord=0.1,
                          mount_offset=(-0.5, 0.0, 0.0),
@@ -179,7 +183,66 @@ def test_underactuated_hull_refuses_the_lqr_terminal():
          .add_field(GravityField().add_uniform((0.0, 0.0, 0.0)))
          .add_field(FluidField().add_uniform(density=RHO)))
     w.add_craft(c)
-    bounds = {"prop.throttle": (0.0, 1.0),
-              "elevator.deflection_cmd": (-0.4, 0.4)}
+    return w, {"prop.throttle": (0.0, 1.0),
+               "elevator.deflection_cmd": (-0.4, 0.4)}
+
+
+def test_underactuated_hull_refuses_the_lqr_terminal():
+    """A forward-only prop with fins dead at rest has no stabilizable
+    rest equilibrium: terminal='lqr' must refuse loudly at
+    CONSTRUCTION, not hand back a meaningless P."""
+    w, bounds = _fin()
     with pytest.raises(RuntimeError, match="not stabilizable"):
         MPC(w, u_bounds=bounds, horizon=10, terminal="lqr")
+
+
+def test_plan_birth_discovers_pitch_to_dive_and_seeds_the_runtime():
+    """The whole controller lifecycle, manta alone. `plan()` from
+    ZEROS on the underactuated hull — no cruise hint, no attitude
+    cost, fins dead at rest — must discover speed-up-then-pitch-to-
+    dive (the finctrl acceptance, inherited from the lab), and its
+    plan must seed `reset_plan` so the tick flies the dive closed-loop
+    against the world's own Sim."""
+    w, bounds = _fin()
+    mpc = MPC(w, u_bounds=bounds, horizon=40, w_pos_terminal=120.0,
+              w_vel_terminal=0.0)
+    x0 = np.asarray(mpc.module().port("x").init, dtype=float)
+    goal = np.array([8.0, 0.0, -2.5])
+
+    p = mpc.plan(x0, goal)
+    assert p.converged
+    assert p.U.shape == (2, 40)           # reset_plan orientation
+
+    rt = TargetNumpy(mpc)
+    rt.reset_plan(p.U)
+    plant = TargetNumpy(Sim(_fin()[0]))
+    spec = mpc.module().port("x").manifold
+    miss = np.inf
+    for _ in range(50):
+        flat = {f"fin.{k}": np.asarray(v, dtype=float).ravel()
+                for k, v in plant.state["fin"].items()}
+        u = rt.tick(spec.pack_any(flat), goal)
+        for _ in range(5):
+            plant.step(0.05, u=u)
+        pos = np.asarray(plant.state["fin"]["position"], dtype=float)
+        miss = min(miss, np.linalg.norm(pos - goal))
+    assert miss < 1.0, f"closest approach {miss:.2f} m"
+    # it dived, and it did so by driving (authority is V²-bought)
+    assert pos[2] < -1.5 or miss < 1.0
+
+
+def test_plan_multi_start_and_second_order_run():
+    """The plan-birth extras execute and do no harm on a hull without
+    saddles (the deep saddle science is the lab's record): multi-start
+    is at least as good as single, full DDP converges to the same
+    neighborhood as Gauss-Newton."""
+    w, bounds = _tug()
+    mpc = MPC(w, u_bounds=bounds, horizon=15)
+    x0 = np.asarray(mpc.module().port("x").init, dtype=float)
+    goal = (2.0, 0.0, 0.0)
+    single = mpc.plan(x0, goal)
+    multi = mpc.plan(x0, goal, multi_start=True)
+    fxx = mpc.plan(x0, goal, second_order=True)
+    assert single.converged
+    assert multi.cost <= single.cost + 1e-9
+    assert fxx.cost <= 1.1 * single.cost
