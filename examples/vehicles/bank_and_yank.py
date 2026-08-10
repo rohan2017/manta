@@ -42,10 +42,13 @@ from __future__ import annotations
 
 import numpy as np
 
+import math
+
 from manta import MPC, Craft, Sim, TargetNumpy, World
 from manta.fields import FluidField, GravityField
 from manta.parts import (
-    AddedMass, ControlSurface, DragSurface, Mass, PointBuoy, Thruster,
+    Aerofoil, AddedMass, ControlSurface, DragSurface, Mass, PointBuoy,
+    Thruster,
 )
 
 from .._control import Pacer, common_args
@@ -72,7 +75,7 @@ def build_world() -> tuple[World, dict[str, tuple[float, float]]]:
         "drag", areas=(0.03, 0.35, 0.35), drag_coefficient=1.0))
     c.add(DragSurface("skin", force=(-4.0 / RHO, -10.0 / RHO,
                                      -10.0 / RHO)))
-    c.add(DragSurface("spin", torque=(-0.8 / RHO, -8.0 / RHO,
+    c.add(DragSurface("spin", torque=(-2.5 / RHO, -8.0 / RHO,
                                       -8.0 / RHO)))
     # Neutrally buoyant, centre of buoyancy ZB above the mass centre:
     # zero net force at every attitude, pure righting torque when
@@ -80,6 +83,20 @@ def build_world() -> tuple[World, dict[str, tuple[float, float]]]:
     c.add(PointBuoy("cb", volume=MASS / RHO,
                     mount_offset=(0.0, 0.0, ZB)))
     c.add(Thruster("prop", force=(50.0, 0.0, 0.0)))
+    # STATIC STABILITY. The transverse added mass above buys the
+    # nose-first preference but also the Munk moment — the classic
+    # destabilizing broach torque on any slender hull (~61 N·m/rad
+    # here at cruise). In the PITCH plane the elevators' fixed area
+    # weathercocks it away (~139 N·m/rad restoring). The YAW plane
+    # has no control surface at all — that is the premise — so it
+    # gets a fixed symmetric tail fin (~116 N·m/rad): the hull is
+    # statically stable in both planes, and the controller shapes the
+    # trajectory instead of fencing with a broach.
+    half = math.pi / 4.0
+    c.add(Aerofoil("vfin", area=0.02, chord=0.1,
+                   mount_offset=(-0.85, 0.0, 0.0),
+                   mount_orientation=(math.cos(half), math.sin(half),
+                                      0.0, 0.0)))
     tail = dict(area=0.012, chord=0.1, servo_gain=4.0,
                 hinge_damping=0.4)
     c.add(ControlSurface("elev_l", mount_offset=(-0.8, 0.3, 0.0), **tail))
@@ -132,6 +149,8 @@ def main() -> None:
     if viz is not None:
         viz.box("world/sub/hull", (1.8, 0.24, 0.24),
                 color=(150, 150, 158))
+        viz.box("world/sub/vfin", (0.10, 0.02, 0.28),
+                center=(-0.85, 0.0, 0.0), color=(120, 120, 130))
         # elevons are POSED children: geometry logged once at each
         # hinge frame's origin, the frame itself re-posed every frame
         # with the servo's actual deflection (rotation about body y)
@@ -157,24 +176,35 @@ def main() -> None:
         flat = {f"sub.{n}": np.asarray(v, dtype=float).ravel()
                 for n, v in st.items()}
         u = rt.tick(spec.pack_any(flat), GOAL)
-        for _ in range(round(DT / PLANT_DT)):
+        # the controller holds u for one period; the PLANT (and the
+        # viewer) run at the fine step — poses log every 50 ms, so the
+        # replay is smooth even though the tick is 4 Hz
+        for j in range(round(DT / PLANT_DT)):
             plant.step(PLANT_DT, u=u)
+            t = k * DT + (j + 1) * PLANT_DT
+            if pacer is not None:
+                pacer.pace(t)
+            if viz is not None and viz.due(t):
+                st = plant.state["sub"]
+                viz.t(t)
+                viz.pose("world/sub",
+                         np.asarray(st["position"], dtype=float).ravel(),
+                         np.asarray(st["orientation"],
+                                    dtype=float).ravel())
+                viz.pose("world/sub/elev_l", (-0.8, 0.30, 0.0),
+                         hinge_quat(st["elev_l.deflection"]))
+                viz.pose("world/sub/elev_r", (-0.8, -0.30, 0.0),
+                         hinge_quat(st["elev_r.deflection"]))
+                viz.trail("world/trail",
+                          np.asarray(st["position"],
+                                     dtype=float).ravel())
 
+        st = plant.state["sub"]
         q = np.asarray(st["orientation"], dtype=float).ravel()
         pos = np.asarray(st["position"], dtype=float).ravel()
         yaw_, pitch, roll = euler_zyx(q)
         max_bank = max(max_bank, abs(roll))
         t = (k + 1) * DT
-        if pacer is not None:
-            pacer.pace(t)
-        if viz is not None and viz.due(t):
-            viz.t(t)
-            viz.pose("world/sub", pos, q)
-            viz.pose("world/sub/elev_l", (-0.8, 0.30, 0.0),
-                     hinge_quat(st["elev_l.deflection"]))
-            viz.pose("world/sub/elev_r", (-0.8, -0.30, 0.0),
-                     hinge_quat(st["elev_r.deflection"]))
-            viz.trail("world/trail", pos)
         dist = np.linalg.norm(pos - GOAL)
         if k % 2 == 1:
             d = np.rad2deg
