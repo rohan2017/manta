@@ -1,0 +1,185 @@
+"""`MPC(world)` — the receding-horizon transform, lowered and flown.
+
+The controller thesis this transform graduates from the manta-mpc lab:
+one MPC, no per-vehicle control code — `MPC(world)` consumes the model
+like `Sim`/`EKF`/`LQR` do, emits a Module whose HELD state is the warm
+plan, and `TargetNumpy` gives back a runtime that IS a receding-horizon
+controller with no controller code of its own. Deeper cross-checks
+(IPOPT oracle, basin behavior, plant mismatch, device benchmarks) live
+in the lab; what belongs HERE is the transform contract: module shape,
+view selection, the α=0 never-worse guarantee, terminal-cost modes,
+and a closed loop against the world's own Sim.
+"""
+
+import numpy as np
+import pytest
+
+from manta import MPC, Craft, Sim, TargetNumpy, World
+from manta.codegen.numpy import NumpyMpc
+from manta.fields import FluidField, GravityField
+from manta.parts import ControlSurface, DragSurface, Mass, Thruster
+
+RHO = 1025.0
+
+
+def _tug():
+    """Fully-actuated test hull: 3 axis thrusters through the COM, no
+    torque authority — attitude stays wherever it started, which is
+    exactly the point-to-point cost family's free-attitude contract."""
+    c = Craft("tug")
+    c.add(Mass("hull", mass=8.0, moi=(0.2, 0.5, 0.5)))
+    c.add(DragSurface.directional_quadratic(
+        "drag", areas=(0.05, 0.12, 0.12), drag_coefficient=1.0))
+    c.add(DragSurface("skin", force=(-3.0 / RHO, -6.0 / RHO,
+                                     -6.0 / RHO)))
+    c.add(DragSurface("spin", torque=(-1.0 / RHO, -2.0 / RHO,
+                                      -2.0 / RHO)))
+    for name, axis in (("fx", (20.0, 0.0, 0.0)), ("fy", (0.0, 15.0, 0.0)),
+                       ("fz", (0.0, 0.0, 15.0))):
+        c.add(Thruster(name, force=axis))
+    w = (World(name="tug_world")
+         .add_field(GravityField().add_uniform((0.0, 0.0, 0.0)))
+         .add_field(FluidField().add_uniform(density=RHO)))
+    w.add_craft(c)
+    bounds = {f"{n}.throttle": (-1.0, 1.0) for n in ("fx", "fy", "fz")}
+    return w, bounds
+
+
+def _pack_plant_state(sim, spec, craft="tug"):
+    flat = {f"{craft}.{k}": np.asarray(v, dtype=float).ravel()
+            for k, v in sim.state[craft].items()}
+    return spec.pack_any(flat)
+
+
+def test_module_shape_selects_the_mpc_view():
+    """The structural contract: HELD + returns CONTROL → NumpyMpc, the
+    plan is a (nu × N) matrix state field, and the tick entry writes it
+    while returning typed u and J."""
+    w, bounds = _tug()
+    mpc = MPC(w, u_bounds=bounds, horizon=15)
+    m = mpc.module()
+    assert m.hosting.value == "held"
+    assert m.state.field("plan").shape == (3, 15)
+    ep = m.entry("tick")
+    assert ep.writes == ("plan",) and ep.returns == ("u", "J")
+
+    rt = TargetNumpy(mpc)
+    assert isinstance(rt, NumpyMpc)
+    # input fields carry the craft-prefixed Part Input names
+    assert [f.name for f in m.port("u").fields] == [
+        "tug.fx.throttle", "tug.fy.throttle", "tug.fz.throttle"]
+
+
+def test_tick_never_degrades_the_held_plan():
+    """The α = 0 guarantee, tested as stated: one tick's J may not
+    exceed the cost of flying the held plan UNCHANGED (α = 0 is always
+    among the scored candidates). Deliberately bad plan — full
+    sideways thrust — so there is real room in both directions."""
+    w, bounds = _tug()
+    N = 15
+    mpc = MPC(w, u_bounds=bounds, horizon=N)   # default weights
+    rt = TargetNumpy(mpc)
+    goal = np.array([2.0, 0.0, 0.0])
+    x0 = np.asarray(mpc.module().port("x").init, dtype=float)
+
+    bad = np.zeros((3, N))
+    bad[1, :] = 1.0
+    rt.reset_plan(bad)
+    rt.tick(x0, goal)
+    j_tick = rt.J
+    assert j_tick is not None
+
+    # the α = 0 candidate's cost, computed independently: roll the bad
+    # plan through the world's own step and price it with the same
+    # default cost family (running pos 0.4 + effort 0.05, terminal
+    # pos 120), substeps matching the transform's default
+    sim_module = Sim(w).module()
+    step = sim_module.functions["step"].expand()
+    spec = sim_module.state.fields[0].manifold
+    po = spec.slot("tug.position").ambient_offset
+    dt, sub = 0.25, 5
+    x, J0 = x0.copy(), 0.0
+    for i in range(N):
+        p_err = x[po:po + 3] - goal
+        J0 += dt * (0.05 * float(bad[:, i] @ bad[:, i])
+                    + 0.4 * float(p_err @ p_err))
+        for j in range(sub):
+            x = np.asarray(step(x, bad[:, i], np.zeros(step.size_in(2)[0]),
+                                dt / sub, j * dt / sub)).ravel()
+    pT = x[po:po + 3] - goal
+    J0 += 120.0 * float(pT @ pT)
+
+    assert j_tick <= J0 + 1e-9, (
+        f"tick returned {j_tick:.2f}, worse than the untouched plan "
+        f"{J0:.2f} — the α=0 guarantee is broken")
+    # and the fixed-work tick is deterministic: same state, same held
+    # plan → the same J to the last bit
+    rt.reset_plan(bad)
+    rt.tick(x0, goal)
+    assert rt.J == j_tick
+
+
+def test_closed_loop_station_keeping_against_the_sim():
+    """The graduation loop: TargetNumpy(MPC(w)) flying
+    TargetNumpy(Sim(w)) — plan born from ZEROS by the tick itself (a
+    fully-actuated hull needs no seed), goal reached and held."""
+    w, bounds = _tug()
+    mpc = MPC(w, u_bounds=bounds, horizon=15,
+              w_pos_terminal=60.0, w_vel_terminal=40.0)
+    rt = TargetNumpy(mpc)
+    plant = TargetNumpy(Sim(_tug()[0]))
+    spec = mpc.module().port("x").manifold
+    goal = np.array([2.0, 0.0, -1.0])
+
+    miss = np.inf
+    for _ in range(40):                    # 10 s at the 0.25 s period
+        x = _pack_plant_state(plant, spec)
+        u = rt.tick(x, goal)
+        for _ in range(5):
+            plant.step(0.05, u=u)
+        p = np.asarray(plant.state["tug"]["position"], dtype=float)
+        miss = min(miss, np.linalg.norm(p - goal))
+    v = np.asarray(plant.state["tug"]["velocity"], dtype=float)
+    assert miss < 0.3, f"closest approach {miss:.2f} m"
+    assert np.linalg.norm(p - goal) < 0.3, "did not HOLD station"
+    assert np.linalg.norm(v) < 0.2, f"still moving {np.linalg.norm(v):.2f}"
+
+
+def test_lqr_terminal_mode_builds_and_flies():
+    """terminal='lqr' — the Riccati tail as terminal cost, solved at
+    construction from the same world. Shorter-horizon planning is its
+    point; here we pin that it builds, flies, and actually differs
+    from the weight terminal."""
+    w, bounds = _tug()
+    mpc = MPC(w, u_bounds=bounds, horizon=10, terminal="lqr")
+    rt = TargetNumpy(mpc)
+    x0 = np.asarray(mpc.module().port("x").init, dtype=float)
+    rt.tick(x0, (1.5, 0.0, 0.0))
+    j_lqr = rt.J
+
+    mpc_w = MPC(w, u_bounds=bounds, horizon=10)
+    rt_w = TargetNumpy(mpc_w)
+    rt_w.tick(x0, (1.5, 0.0, 0.0))
+    assert rt_w.J != pytest.approx(j_lqr)
+
+
+def test_underactuated_hull_refuses_the_lqr_terminal():
+    """A forward-only prop with fins dead at rest has no stabilizable
+    rest equilibrium: terminal='lqr' must refuse loudly at
+    CONSTRUCTION, not hand back a meaningless P."""
+    c = Craft("fin")
+    c.add(Mass("hull", mass=10.0, moi=(0.2, 2.0, 2.0)))
+    c.add(DragSurface.directional_quadratic(
+        "drag", areas=(0.02, 0.2, 0.2), drag_coefficient=1.0))
+    c.add(Thruster("prop", force=(20.0, 0.0, 0.0)))
+    c.add(ControlSurface("elevator", area=0.01, chord=0.1,
+                         mount_offset=(-0.5, 0.0, 0.0),
+                         servo_gain=4.0, hinge_damping=0.4))
+    w = (World(name="fin_world")
+         .add_field(GravityField().add_uniform((0.0, 0.0, 0.0)))
+         .add_field(FluidField().add_uniform(density=RHO)))
+    w.add_craft(c)
+    bounds = {"prop.throttle": (0.0, 1.0),
+              "elevator.deflection_cmd": (-0.4, 0.4)}
+    with pytest.raises(RuntimeError, match="not stabilizable"):
+        MPC(w, u_bounds=bounds, horizon=10, terminal="lqr")

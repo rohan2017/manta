@@ -45,10 +45,18 @@ def _cache_dir() -> str:
     return os.path.join(base, "manta", "compiled")
 
 
-def _compiled_functions(functions: dict[str, Any]) -> dict[str, Any]:
+def _compiled_functions(functions: dict[str, Any], *,
+                        max_instr: int = _MAX_INSTR) -> dict[str, Any]:
     """Return externals keyed the same as `functions`, or `functions`
-    unchanged if it's too big to bother / no C compiler is available."""
-    if sum(f.n_instructions() for f in functions.values()) > _MAX_INSTR:
+    unchanged if it's too big to bother / no C compiler is available.
+
+    `max_instr` is the cost-benefit gate, counted in MX nodes. The
+    default suits the transforms whose big functions are UNROLLED
+    symbolic monsters (an EKF's full-world Jacobian) — codegen there
+    costs more than interpretation ever saves. A view whose kernels
+    are loop-structured (the MPC tick: large node count, compact C,
+    disk-cached, ~12x payoff) overrides it."""
+    if sum(f.n_instructions() for f in functions.values()) > max_instr:
         return functions
     tmp = tempfile.mkdtemp()
     try:
