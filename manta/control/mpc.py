@@ -275,6 +275,23 @@ class MPC:
     # Plan birth — the offline solver
     # ------------------------------------------------------------------
 
+    def terminal(self, *, w_position=0.0, w_velocity=0.0) -> np.ndarray:
+        """A diagonal terminal quadratic PT — the runtime-port shape of
+        the constructor's `terminal="weights"` family, built on demand.
+
+        `w_position` / `w_velocity` are scalars (broadcast) or per-axis
+        (3,) vectors, so a caller whose axis MASKS change at a guidance
+        law switch can keep the terminal cost consistent with the
+        running cost's masks (a masked-out axis with a full-strength
+        terminal pull is an anchor, not a hold). Feed the result to the
+        `PT` port / `set_objective(P=...)`."""
+        d = np.zeros(self.nx)
+        d[self._po:self._po + self._pd] = np.broadcast_to(
+            np.asarray(w_position, dtype=float).ravel(), (self._pd,))
+        d[self._vo:self._vo + 3] = np.broadcast_to(
+            np.asarray(w_velocity, dtype=float).ravel(), (3,))
+        return np.diag(d)
+
     def objective(self, *, goal=None, velocity=None, heading=None,
                   w_position=None, w_velocity=None, w_heading=None,
                   w_effort=None, P=None):
