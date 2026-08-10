@@ -11,13 +11,16 @@ view selection, the α=0 never-worse guarantee, terminal-cost modes,
 and a closed loop against the world's own Sim.
 """
 
+import math
+
 import numpy as np
 import pytest
 
 from manta import MPC, Craft, Sim, TargetNumpy, World
 from manta.codegen.numpy import NumpyMpc
 from manta.fields import FluidField, GravityField
-from manta.parts import ControlSurface, DragSurface, Mass, Thruster
+from manta.parts import (ControlSurface, DragSurface, Mass,
+                         RotationalDrag, Thruster)
 
 RHO = 1025.0
 
@@ -32,8 +35,8 @@ def _tug():
         "drag", areas=(0.05, 0.12, 0.12), drag_coefficient=1.0))
     c.add(DragSurface("skin", force=(-3.0 / RHO, -6.0 / RHO,
                                      -6.0 / RHO)))
-    c.add(DragSurface("spin", torque=(-1.0 / RHO, -2.0 / RHO,
-                                      -2.0 / RHO)))
+    c.add(RotationalDrag("spin", torque=(-1.0 / RHO, -2.0 / RHO,
+                                         -2.0 / RHO)))
     for name, axis in (("fx", (20.0, 0.0, 0.0)), ("fy", (0.0, 15.0, 0.0)),
                        ("fz", (0.0, 0.0, 15.0))):
         c.add(Thruster(name, force=axis))
@@ -173,18 +176,25 @@ def _fin():
         "drag", areas=(0.02, 0.15, 0.15), drag_coefficient=1.0))
     c.add(DragSurface("skin", force=(-2.0 / RHO, -5.0 / RHO,
                                      -5.0 / RHO)))
-    c.add(DragSurface("spin", torque=(-1.0 / RHO, -3.0 / RHO,
-                                      -3.0 / RHO)))
+    c.add(RotationalDrag("spin", torque=(-1.0 / RHO, -3.0 / RHO,
+                                         -3.0 / RHO)))
     c.add(Thruster("prop", force=(20.0, 0.0, 0.0)))
-    c.add(ControlSurface("elevator", area=0.01, chord=0.1,
-                         mount_offset=(-0.5, 0.0, 0.0),
-                         servo_gain=4.0, hinge_damping=0.4))
+    tail = dict(area=0.01, chord=0.1, servo_gain=4.0,
+                hinge_damping=0.4)
+    c.add(ControlSurface("elevator", mount_offset=(-0.5, 0.0, 0.0),
+                         **tail))
+    half = math.pi / 4.0
+    c.add(ControlSurface("rudder", mount_offset=(-0.5, 0.0, 0.0),
+                         mount_orientation=(math.cos(half),
+                                            math.sin(half), 0.0, 0.0),
+                         **tail))
     w = (World(name="fin_world")
          .add_field(GravityField().add_uniform((0.0, 0.0, 0.0)))
          .add_field(FluidField().add_uniform(density=RHO)))
     w.add_craft(c)
     return w, {"prop.throttle": (0.0, 1.0),
-               "elevator.deflection_cmd": (-0.4, 0.4)}
+               "elevator.deflection_cmd": (-0.4, 0.4),
+               "rudder.deflection_cmd": (-0.4, 0.4)}
 
 
 def test_underactuated_hull_refuses_the_lqr_terminal():
@@ -211,7 +221,7 @@ def test_plan_birth_discovers_pitch_to_dive_and_seeds_the_runtime():
 
     p = mpc.plan(x0, goal)
     assert p.converged
-    assert p.U.shape == (2, 40)           # reset_plan orientation
+    assert p.U.shape == (3, 40)           # reset_plan orientation
 
     rt = TargetNumpy(mpc)
     rt.reset_plan(p.U)
@@ -229,6 +239,79 @@ def test_plan_birth_discovers_pitch_to_dive_and_seeds_the_runtime():
     assert miss < 1.0, f"closest approach {miss:.2f} m"
     # it dived, and it did so by driving (authority is V²-bought)
     assert pos[2] < -1.5 or miss < 1.0
+
+
+def test_goal_shorthand_equals_the_explicit_objective():
+    """The legacy surface is the default objective, exactly: a tick
+    driven by the `goal` shorthand must price and solve identically to
+    one driven by `set_objective(position=goal)` — same kernel, same
+    runtime data, bit-equal J."""
+    w, bounds = _tug()
+    mpc = MPC(w, u_bounds=bounds, horizon=15)
+    x0 = np.asarray(mpc.module().port("x").init, dtype=float)
+    goal = (2.0, 0.5, -0.5)
+
+    a = TargetNumpy(mpc)
+    ua = a.tick(x0, goal)
+    b = TargetNumpy(mpc)
+    b.set_objective(position=goal)
+    ub = b.tick(x0)
+    assert a.J == b.J
+    for k in ua:
+        assert ua[k] == ub[k]
+
+
+def test_cruise_transect_heading_speed_depth():
+    """The finctrl mission the stack exists for, with NO position
+    waypoint at all: hold 2 m depth (w_p = (0,0,w) — x/y masked),
+    make 1.1 m/s along a 40° course (velocity target), nose on the
+    course (the heading term, Euler-free). The underactuated hull must
+    discover throttle-for-authority and hold trim — and x/y must
+    remain genuinely free (the vehicle sails away from the origin
+    unpunished)."""
+    w, bounds = _fin()
+    mpc = MPC(w, u_bounds=bounds, horizon=40)
+    d = np.array([np.cos(np.radians(40.0)), np.sin(np.radians(40.0)),
+                  0.0])
+    objective = dict(goal=(0.0, 0.0, -2.0), w_position=(0.0, 0.0, 40.0),
+                     velocity=1.1 * d, w_velocity=(6.0, 6.0, 6.0),
+                     heading=d, w_heading=8.0,
+                     P=np.zeros((mpc.nx, mpc.nx)))
+    x0 = np.asarray(mpc.module().port("x").init, dtype=float)
+    p = mpc.plan(x0, **objective)
+    assert p.converged
+
+    rt = TargetNumpy(mpc)
+    rt.set_objective(position=(0.0, 0.0, -2.0),
+                     w_position=(0.0, 0.0, 40.0),
+                     velocity=1.1 * d, w_velocity=(6.0, 6.0, 6.0),
+                     heading=d, w_heading=8.0,
+                     P=np.zeros((mpc.nx, mpc.nx)))
+    rt.reset_plan(p.U)
+    plant = TargetNumpy(Sim(_fin()[0]))
+    plant.state["fin"]["position"] = np.array([0.0, 0.0, -2.0])
+    spec = mpc.module().port("x").manifold
+    for _ in range(60):
+        st = plant.state["fin"]
+        flat = {f"fin.{n}": np.asarray(v, dtype=float).ravel()
+                for n, v in st.items()}
+        u = rt.tick(spec.pack_any(flat))
+        for _ in range(5):
+            plant.step(0.05, u=u)
+
+    st = plant.state["fin"]
+    pos = np.asarray(st["position"], dtype=float).ravel()
+    v = np.asarray(st["velocity"], dtype=float).ravel()
+    q = np.asarray(st["orientation"], dtype=float).ravel()
+    nose = np.array([1 - 2 * (q[2] ** 2 + q[3] ** 2),
+                     2 * (q[1] * q[2] + q[0] * q[3]),
+                     2 * (q[1] * q[3] - q[0] * q[2])])
+    assert abs(pos[2] + 2.0) < 0.2, f"depth {pos[2]:.2f}"
+    assert nose @ d > 0.95, f"nose off course: {nose @ d:.2f}"
+    assert abs(np.linalg.norm(v) - 1.1) < 0.3, \
+        f"speed {np.linalg.norm(v):.2f}"
+    # x/y really are free: it sailed well away from the origin
+    assert np.linalg.norm(pos[:2]) > 10.0
 
 
 def test_plan_multi_start_and_second_order_run():

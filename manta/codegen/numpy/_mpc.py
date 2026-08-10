@@ -36,6 +36,54 @@ class NumpyMpc(NumpyRuntime):
         super().__init__(module)
         self._plan_field = module.state.field("plan")
         self.J: float | None = None      #: last tick's plan cost
+        # the held objective — targets, weights, terminal quadratic —
+        # seeded from the Module's declared defaults (the transform's
+        # constructor objective) and updated via set_objective()
+        self._target = np.asarray(module.port("target").init,
+                                  dtype=float).reshape(-1).copy()
+        self._weights = np.asarray(module.port("weights").init,
+                                   dtype=float).reshape(-1).copy()
+        self._PT = np.asarray(module.port("PT").init,
+                              dtype=float).copy()
+        self._nu = len(self._u_port.fields)
+
+    # ---- the objective ---------------------------------------------------
+
+    def set_objective(self, *, position=None, velocity=None,
+                      heading=None, w_position=None, w_velocity=None,
+                      w_heading=None, w_effort=None, P=None) -> None:
+        """Update the held objective — the controld surface for a
+        guidance-law switch. Targets: `position`/`velocity` world-frame
+        3-vectors, `heading` a 2- or 3-vector direction (normalized
+        here; commands the NOSE, not the course — hull anisotropy makes
+        them agree in steady flight). Weights: scalars broadcast, or
+        per-axis (3,) / per-channel (nu,) vectors; a mask is a zero.
+        `P` replaces the terminal quadratic (re-solve via
+        `LQR.resolve_at` when running weights change on a
+        station-keeping law). Unnamed pieces keep their current
+        values; whether an unweighted axis is FREE or HOLD-CURRENT is
+        the caller's semantics, applied here by what you pass."""
+        if position is not None:
+            self._target[0:3] = np.asarray(position, dtype=float).ravel()
+        if velocity is not None:
+            self._target[3:6] = np.asarray(velocity, dtype=float).ravel()
+        if heading is not None:
+            d = np.zeros(3)
+            h = np.asarray(heading, dtype=float).ravel()
+            d[:h.size] = h
+            n = np.linalg.norm(d)
+            if n < 1e-9:
+                raise ValueError("set_objective: heading must be a "
+                                 "non-zero direction")
+            self._target[6:9] = d / n
+        for lo, hi, val in ((0, 3, w_position), (3, 6, w_velocity),
+                            (6, 7, w_heading),
+                            (7, 7 + self._nu, w_effort)):
+            if val is not None:
+                self._weights[lo:hi] = np.asarray(val,
+                                                  dtype=float).ravel()
+        if P is not None:
+            self._PT = np.asarray(P, dtype=float).reshape(self._PT.shape)
 
     def _enable_compile(self) -> "NumpyMpc":
         """The tick is loop-structured: large MX node count but compact
@@ -50,21 +98,27 @@ class NumpyMpc(NumpyRuntime):
 
     # ---- the controller surface ----------------------------------------
 
-    def tick(self, x, goal) -> dict[str, Any]:
+    def tick(self, x, goal=None) -> dict[str, Any]:
         """One controller period: solve from the held plan, return the
         first control as `{input name: value}`, hold the shifted rest.
 
         `x` is the current state — packed ambient vector, nested dict
-        (`{craft: {slot: v}}`) or flat dict (`{"craft.slot": v}`);
-        `goal` is the world-frame target position (3-vector).
+        (`{craft: {slot: v}}`) or flat dict (`{"craft.slot": v}`).
+        `goal` is the position-target shorthand (a world 3-vector,
+        persisted into the held objective); the full command family —
+        velocity, heading, per-term weights — is `set_objective`'s.
         """
+        if goal is not None:
+            self._target[0:3] = np.asarray(goal, dtype=float).ravel()
         spec = self._x_port.manifold
         if not isinstance(x, np.ndarray):
             x = spec.pack_any(x, base=np.asarray(self._x_port.init,
                                                  dtype=float))
         out = self.call("tick", values={
             "x": np.asarray(x, dtype=float).reshape(-1),
-            "goal": np.asarray(goal, dtype=float).reshape(-1)})
+            "target": self._target,
+            "weights": self._weights,
+            "PT": self._PT})
         self.J = float(np.asarray(out["J"]).reshape(-1)[0])
         return unpack_fields(self._u_port.fields, out["u"])
 
