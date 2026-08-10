@@ -21,8 +21,9 @@ needs ω — this part reads it.
 The physically-derived alternative remains: offset `DragSurface`
 panels see the ω×r lever-arm wind and damp rotation for real. Use
 panels when the geometry is known; use this part for the lumped
-coefficient a reduced model carries — the rotational rows of the
-Fossen template's 6×6 damping are exactly `RotationalDrag` tensors.
+coefficient a reduced model carries. For the FULL reduced template —
+cross-couplings included (Y_r, N_v) — use `FossenDamping`, whose 6×6
+bottom-right block this part is the special case of.
 """
 
 from __future__ import annotations
