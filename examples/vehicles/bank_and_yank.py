@@ -28,6 +28,14 @@ Run::
 
     .venv/bin/python -m examples.vehicles.bank_and_yank            # rerun viz
     .venv/bin/python -m examples.vehicles.bank_and_yank --no-viz   # headless
+    .venv/bin/python -m examples.vehicles.bank_and_yank --save out.rrd
+    .venv/bin/python -m examples.vehicles.bank_and_yank --viz-addr host:9876
+
+On WSL, ``--save`` (scrub the .rrd in a viewer afterwards) or
+``--viz-addr`` (stream to a Windows-native viewer) beat the WSLg
+window. Live runs are paced to real time; the elevons animate their
+actual servo deflections — watch the split (differential = roll)
+become collective (pitch) as the bank turns into the yank.
 """
 
 from __future__ import annotations
@@ -40,7 +48,7 @@ from manta.parts import (
     AddedMass, ControlSurface, DragSurface, Mass, PointBuoy, Thruster,
 )
 
-from .._control import common_args
+from .._control import Pacer, common_args
 from .._geom import euler_zyx, wrap_pi
 from .._viz import Viz
 
@@ -87,7 +95,11 @@ def build_world() -> tuple[World, dict[str, tuple[float, float]]]:
 
 
 def main() -> None:
-    args = common_args(__doc__).parse_args()
+    p = common_args(__doc__)
+    p.add_argument("--save", metavar="FILE.rrd", default=None,
+                   help="record to a .rrd instead of a live viewer "
+                        "(full speed, scrub afterwards — best on WSL)")
+    args = p.parse_args()
 
     w, bounds = build_world()
     mpc = MPC(w, u_bounds=bounds, horizon=HORIZON, dt=DT,
@@ -114,16 +126,27 @@ def main() -> None:
     plant = TargetNumpy(Sim(build_world()[0]))
     spec = mpc.module().port("x").manifold
 
-    viz = None if args.no_viz else Viz("manta/bank_and_yank")
+    viz = (None if args.no_viz
+           else Viz("manta/bank_and_yank", addr=args.viz_addr,
+                    save=args.save))
     if viz is not None:
         viz.box("world/sub/hull", (1.8, 0.24, 0.24),
                 color=(150, 150, 158))
-        viz.box("world/sub/elev_l", (0.10, 0.28, 0.02),
-                center=(-0.8, 0.30, 0.0), color=(200, 120, 80))
-        viz.box("world/sub/elev_r", (0.10, 0.28, 0.02),
-                center=(-0.8, -0.30, 0.0), color=(80, 140, 220))
+        # elevons are POSED children: geometry logged once at each
+        # hinge frame's origin, the frame itself re-posed every frame
+        # with the servo's actual deflection (rotation about body y)
+        viz.box("world/sub/elev_l/geom", (0.10, 0.28, 0.02),
+                color=(200, 120, 80))
+        viz.box("world/sub/elev_r/geom", (0.10, 0.28, 0.02),
+                color=(80, 140, 220))
         viz.box("world/goal", (0.2, 0.2, 0.2), center=tuple(GOAL),
                 color=(90, 200, 90))
+    # pace live viewing to real time; .rrd recording runs full speed
+    pacer = Pacer() if viz is not None and not args.save else None
+
+    def hinge_quat(deflection) -> tuple:
+        h = 0.5 * float(np.asarray(deflection).ravel()[0])
+        return (np.cos(h), 0.0, np.sin(h), 0.0)
 
     ticks = int((args.duration or 15.0) / DT)
     print(f"{'t':>5} {'roll':>6} {'pitch':>6} {'yaw':>6} "
@@ -142,9 +165,15 @@ def main() -> None:
         yaw_, pitch, roll = euler_zyx(q)
         max_bank = max(max_bank, abs(roll))
         t = (k + 1) * DT
+        if pacer is not None:
+            pacer.pace(t)
         if viz is not None and viz.due(t):
             viz.t(t)
             viz.pose("world/sub", pos, q)
+            viz.pose("world/sub/elev_l", (-0.8, 0.30, 0.0),
+                     hinge_quat(st["elev_l.deflection"]))
+            viz.pose("world/sub/elev_r", (-0.8, -0.30, 0.0),
+                     hinge_quat(st["elev_r.deflection"]))
             viz.trail("world/trail", pos)
         dist = np.linalg.norm(pos - GOAL)
         if k % 2 == 1:
