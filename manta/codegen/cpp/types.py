@@ -67,10 +67,31 @@ _REGISTRY: dict[str, CppType] = {
 }
 
 
+def _vecn_literal(n):
+    def render(value):
+        import numpy as _np
+        vals = ", ".join(f"{float(x)}" for x in
+                         _np.asarray(value, dtype=float).reshape(-1))
+        return (f"(Eigen::Matrix<double, {n}, 1>() << {vals}).finished()")
+    return render
+
+
 def cpp_type_for(manifold: Manifold) -> CppType:
     """Look up the C++ mapping for a Manifold instance, keyed on
     `manifold.kind`. Raises NotImplementedError if the kind is not
-    registered — at which point the fix is to add an entry above."""
+    registered — at which point the fix is to add an entry above.
+
+    The parameterized-dimension kind ("vecn") is CONSTRUCTED here from
+    `storage_shape` rather than enumerated in the registry — one kind,
+    every n (the same dimension-is-data principle as RnManifold
+    itself)."""
+    if manifold.kind == "vecn":
+        n = int(manifold.storage_shape[0])
+        return CppType(
+            decl=f"Eigen::Matrix<double, {n}, 1>",
+            zero=f"Eigen::Matrix<double, {n}, 1>::Zero()",
+            literal=_vecn_literal(n),
+        )
     try:
         return _REGISTRY[manifold.kind]
     except KeyError:

@@ -99,6 +99,41 @@ def test_quadratic_order_follows_the_house_power_convention():
     assert decels[2] == pytest.approx(-decels[0], rel=1e-6)
 
 
+def test_d_tensor_promotes_to_a_live_parameter():
+    """The reducer's whole point, end to end: D1 is a promotable R36
+    Parameter (the generalized manifold grammar), so one compiled
+    graph serves every D — `manta.fit` iterates without recompiling,
+    and a deployed runtime takes a refit D through `set_parameters`.
+
+    Pinned both ways: promoted-at-default integrates bit-for-bit like
+    the baked world, and promoted-then-retargeted integrates bit-for-
+    bit like a world REBUILT with the new tensor."""
+    Da = np.zeros((6, 6))
+    Da[0, 0], Da[1, 1], Da[5, 5] = -2.0 / RHO, -5.0 / RHO, -1.5 / RHO
+    Da[5, 1], Da[1, 5] = -3.0 / RHO, -1.0 / RHO
+    Db = 2.5 * Da
+    v0, w0 = (1.0, -0.6, 0.2), (0.3, -0.2, 0.9)
+
+    def world(D):
+        c = Craft("hull")
+        c.add(Mass("m", mass=12.0, moi=(0.3, 1.5, 1.5)))
+        c.add(FossenDamping("d", tensors=[D]))
+        w = (World()
+             .add_field(GravityField().add_uniform((0.0, 0.0, 0.0)))
+             .add_field(FluidField().add_uniform(density=RHO)))
+        w.add_craft(c, velocity=v0, angular_velocity=w0)
+        return w
+
+    prom = TargetNumpy(Sim(world(Da), parameters=["hull.d.D1"]))
+    for a, b in zip(_run(prom), _run(TargetNumpy(Sim(world(Da))))):
+        np.testing.assert_allclose(a, b, rtol=0, atol=1e-12)
+
+    prom2 = TargetNumpy(Sim(world(Da), parameters=["hull.d.D1"]))
+    prom2.set_parameters({"hull.d.D1": Db.flatten(order="F")})
+    for a, b in zip(_run(prom2), _run(TargetNumpy(Sim(world(Db))))):
+        np.testing.assert_allclose(a, b, rtol=0, atol=1e-12)
+
+
 def test_constructor_contracts():
     with pytest.raises(ValueError, match="exactly one"):
         FossenDamping("d")

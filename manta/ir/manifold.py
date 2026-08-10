@@ -38,6 +38,8 @@ Adding a new manifold kind:
 
 from __future__ import annotations
 
+import re
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, ClassVar
@@ -47,7 +49,7 @@ import numpy as np
 
 from ._rotation import quat_conj, quat_mul, quat_mul_np, so3_exp, so3_exp_np, so3_log
 from .frames import FrameError, _capture_user_source
-from .types import Quat, Scalar, Vec3
+from .types import Quat, Scalar, Vec3, VecN
 
 
 # ---------------------------------------------------------------------------
@@ -250,6 +252,79 @@ class R3Manifold(Manifold):
 
 
 @dataclass(frozen=True)
+class RnManifold(Manifold):
+    """R^n — parameterized-dimension Euclidean. Backend kind: ``"vecn"``.
+
+    ONE class for every n: the dimension is INSTANCE DATA, not a new
+    type — the generalization the R3 docstring promised ("size carried
+    in `storage_shape`, not in the kind string"). Backends size their
+    concrete type from `storage_shape`; the shortcut vocabulary is a
+    grammar (``"R7"``, ``"R36"``, any ``"R<n>"``), not a table.
+
+    Frame-free by design: an R^n quantity is a coefficient block (a
+    fitted 6x6 damping tensor travelling as flat R36), not a spatial
+    vector. Spatial 3-vectors keep `R3Manifold` and its frame
+    checking — which is why n = 1 and n = 3 shortcuts still resolve to
+    the specialized classes."""
+
+    dim: int = 1
+
+    kind: ClassVar[str] = "vecn"
+
+    def __post_init__(self):
+        if int(self.dim) < 1:
+            raise ValueError(f"RnManifold: dim must be >= 1, got "
+                             f"{self.dim}")
+
+    @property
+    def ambient_dim(self) -> int:           # type: ignore[override]
+        return int(self.dim)
+
+    @property
+    def tangent_dim(self) -> int:           # type: ignore[override]
+        return int(self.dim)
+
+    @property
+    def storage_shape(self) -> tuple[int, ...]:  # type: ignore[override]
+        return (int(self.dim),)
+
+    def boxplus(self, x: VecN, delta: VecN) -> VecN:
+        if not isinstance(x, VecN) or not isinstance(delta, VecN):
+            raise TypeError(
+                "RnManifold.boxplus: x and delta must be VecN, got "
+                f"{type(x).__name__} / {type(delta).__name__}")
+        return VecN(x._mx + delta._mx, self.dim)
+
+    def boxminus(self, a: VecN, b: VecN) -> VecN:
+        if not isinstance(a, VecN) or not isinstance(b, VecN):
+            raise TypeError(
+                "RnManifold.boxminus: a and b must be VecN, got "
+                f"{type(a).__name__} / {type(b).__name__}")
+        return VecN(a._mx - b._mx, self.dim)
+
+    def boxplus_sym(self, x_mx, delta_mx):
+        return x_mx + delta_mx
+
+    def boxminus_sym(self, a_mx, b_mx):
+        return a_mx - b_mx
+
+    def boxplus_num(self, x, delta):
+        return np.asarray(x, dtype=float) + np.asarray(delta, dtype=float)
+
+    def default_value(self):
+        return np.zeros(int(self.dim), dtype=float)
+
+    def ir_input(self, name, *, default_frame=None):
+        return VecN.input(name, self.dim)
+
+    def ir_zero(self, *, default_frame=None):
+        return VecN.constant(np.zeros(int(self.dim)), self.dim)
+
+    def ir_add(self, value, delta_mx, *, default_frame=None):
+        return VecN(value._mx + delta_mx, self.dim)
+
+
+@dataclass(frozen=True)
 class SO3Manifold(Manifold):
     """SO(3) — rotations stored as a unit quaternion (w, x, y, z).
 
@@ -354,18 +429,28 @@ def manifold_from_shortcut(shortcut, *, frame=None) -> Manifold:
 
     Accepts:
       * a `Manifold` instance — passed through.
-      * `"R1"` → `ScalarManifold()`.
-      * `"R3"` → `R3Manifold(frame=frame)`.
+      * `"R<n>"` for any n ≥ 1 — the Euclidean grammar. `"R1"` and
+        `"R3"` resolve to their specialized classes (`ScalarManifold`,
+        frame-checked `R3Manifold`); every other n gives the
+        parameterized, frame-free `RnManifold(n)` (`"R36"` = a
+        flattened 6x6 tensor, and so on).
       * `"SO3"` → `SO3Manifold()`.
     """
     if isinstance(shortcut, Manifold):
         return shortcut
-    if shortcut == "R1":
-        return ScalarManifold()
-    if shortcut == "R3":
-        return R3Manifold(frame=frame)
     if shortcut == "SO3":
         return SO3Manifold()
+    m = re.fullmatch(r"R([0-9]+)", shortcut) if isinstance(shortcut, str) \
+        else None
+    if m:
+        n = int(m.group(1))
+        if n == 1:
+            return ScalarManifold()
+        if n == 3:
+            return R3Manifold(frame=frame)
+        if n >= 1:
+            return RnManifold(n)
     raise ValueError(
         f"manifold_from_shortcut: unknown manifold shortcut {shortcut!r}. "
-        f"Pass 'R1', 'R3', 'SO3', or a Manifold instance.")
+        f"Pass 'R<n>' (e.g. 'R1', 'R3', 'R36'), 'SO3', or a Manifold "
+        f"instance.")

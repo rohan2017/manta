@@ -239,6 +239,59 @@ class Scalar(_IRValue):
         return Scalar(self._mx ** float(exponent))
 
 
+class VecN(_IRValue):
+    """A frame-free R^n column — the carrier for parameterized-dimension
+    Euclidean manifolds (`RnManifold`).
+
+    Deliberately minimal: no frame tag and no arithmetic sugar. An R^n
+    quantity is a coefficient block (a fitted 6x6 damping tensor
+    travelling as a flat R36), not a spatial vector — spatial
+    3-vectors keep `Vec3` and its frame checking. Consumers reshape
+    the raw `_mx` themselves."""
+
+    def __init__(self, mx, dim: int):
+        mx = _as_mx(mx)
+        if tuple(mx.shape) != (int(dim), 1):
+            raise ValueError(
+                f"VecN: expected shape ({int(dim)},1), got "
+                f"{tuple(mx.shape)}")
+        self._mx = mx
+        self._dim = int(dim)
+
+    @property
+    def dim(self) -> int:
+        return self._dim
+
+    @classmethod
+    def input(cls, name: str, dim: int) -> "VecN":
+        g = _current_graph()
+        value = cls(ca.MX.sym(name, int(dim), 1), dim)
+        g._register_input(name, value)
+        return value
+
+    @classmethod
+    def constant(cls, value, dim: int | None = None) -> "VecN":
+        arr = np.asarray(value, dtype=float).reshape(-1, 1)
+        if dim is not None and arr.shape[0] != int(dim):
+            raise ValueError(
+                f"VecN.constant: expected {int(dim)} entries, got "
+                f"{arr.shape[0]}")
+        return cls(ca.MX(ca.DM(arr)), arr.shape[0])
+
+    @classmethod
+    def coerce(cls, value, dim: int) -> "VecN":
+        """The promotable-Parameter idiom (see
+        `_ParameterizedConstructor.coerce`): pass a promoted VecN
+        through, build a constant from a plain Python value."""
+        if isinstance(value, VecN):
+            if value.dim != int(dim):
+                raise ValueError(
+                    f"VecN.coerce: expected dim {int(dim)}, got "
+                    f"{value.dim}")
+            return value
+        return cls.constant(value, dim)
+
+
 def _scalar_op(a, b, fn):
     return Scalar(fn(_as_mx(a), _as_mx(b)))
 

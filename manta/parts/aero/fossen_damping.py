@@ -33,10 +33,12 @@ Lumped, craft-level, about the COM: mount it at the COM (the default)
 and give it no offset — like `AddedMass`, its geometry is the craft,
 not a place on the hull.
 
-Promotability: the tensors are plain config Parameters for now — the
-promotable-parameter machinery speaks R1/R3 manifolds today, and the
-R36-per-order extension lands with the reducer, which is the first
-consumer that needs to FIT these numbers rather than write them.
+Promotable: each order's tensor is a Parameter on the R36 manifold
+(column-major flattened 6×6), so `Sim(world,
+parameters=["<craft>.<part>.D1", ...])` promotes it to a live input —
+`manta.fit` fits D without recompiling the graph per iterate, and a
+deployed runtime can be handed a refit D through `set_parameters`.
+This part is why the manifold grammar generalized past R3.
 """
 
 from __future__ import annotations
@@ -46,15 +48,26 @@ import numpy as np
 
 from ...fields import FluidField
 from ...ir.frames import PartFrame, WorldFrame
-from ...ir.types import Vec3
+from ...ir.types import Vec3, _IRValue
 from .._declarations import Parameter, PartUpdate
 from ..base import Part
 from ...ir.wrench import Wrench
 
 _MAX_ORDER = 4
+_ZERO36 = (0.0,) * 36
 
 
-def _as_polynomial(damping, tensors, name):
+def _flat36(T, name, k):
+    T = np.asarray(T, dtype=float)
+    if T.shape != (6, 6):
+        raise ValueError(
+            f"FossenDamping {name!r}: tensors[{k}] must be shape "
+            f"(6, 6), got {T.shape}")
+    # column-major, so ca.reshape(flat, 6, 6) reconstructs it exactly
+    return tuple(T.flatten(order="F"))
+
+
+def _as_orders(damping, tensors, name):
     if (damping is None) == (tensors is None):
         raise ValueError(
             f"FossenDamping {name!r}: give exactly one of damping= "
@@ -66,13 +79,13 @@ def _as_polynomial(damping, tensors, name):
             raise ValueError(
                 f"FossenDamping {name!r}: damping= must be length-6 "
                 f"(vx, vy, vz, wx, wy, wz), got {damping!r}")
-        return [np.diag([float(c) for c in damping])]
-    out = [np.asarray(t, dtype=float).reshape(6, 6) for t in tensors]
-    if not 1 <= len(out) <= _MAX_ORDER:
+        tensors = [np.diag([float(c) for c in damping])]
+    if not 1 <= len(tensors) <= _MAX_ORDER:
         raise ValueError(
             f"FossenDamping {name!r}: 1..{_MAX_ORDER} tensor orders, "
-            f"got {len(out)}.")
-    return out
+            f"got {len(tensors)}.")
+    flats = [_flat36(T, name, k) for k, T in enumerate(tensors)]
+    return flats + [_ZERO36] * (_MAX_ORDER - len(flats))
 
 
 class FossenDamping(Part):
@@ -90,12 +103,19 @@ class FossenDamping(Part):
 
     requires_fields = [FluidField]
 
-    tensors: list = Parameter(None)
+    #: One promotable R36 per polynomial order, column-major flattened.
+    #: Promote with `Sim(world, parameters=["<craft>.<part>.D1"])`.
+    D1: tuple = Parameter(_ZERO36, manifold="R36")
+    D2: tuple = Parameter(_ZERO36, manifold="R36")
+    D3: tuple = Parameter(_ZERO36, manifold="R36")
+    D4: tuple = Parameter(_ZERO36, manifold="R36")
 
     def __init__(self, name: str, *, damping: tuple | None = None,
                  tensors: list | tuple | None = None,
                  **overrides) -> None:
-        overrides["tensors"] = _as_polynomial(damping, tensors, name)
+        flats = _as_orders(damping, tensors, name)
+        for k, flat in enumerate(flats):
+            overrides[f"D{k + 1}"] = flat
         super().__init__(name, **overrides)
 
     def update(self, ctx) -> PartUpdate:
@@ -116,11 +136,20 @@ class FossenDamping(Part):
         abs_nu = ca.fabs(nu) + 1e-30        # sign-preserving powers
         nu_pow = nu
         wrench6 = ca.MX.zeros(6, 1)
-        for k, D_k in enumerate(self.tensors):
+        for k in range(_MAX_ORDER):
             if k > 0:
                 nu_pow = nu_pow * abs_nu
-            if not np.all(D_k == 0.0):
-                wrench6 = wrench6 + rho * (ca.MX(D_k) @ nu_pow)
+            D_k = getattr(self, f"D{k + 1}")
+            if isinstance(D_k, _IRValue):
+                # promoted for system ID: a live flat-R36 input
+                D_mx = ca.reshape(D_k._mx, 6, 6)
+            else:
+                D_np = np.asarray(D_k, dtype=float).reshape(6, 6,
+                                                            order="F")
+                if np.all(D_np == 0.0):
+                    continue
+                D_mx = ca.MX(D_np)
+            wrench6 = wrench6 + rho * (D_mx @ nu_pow)
 
         return PartUpdate(wrench=Wrench(
             force=Vec3[PartFrame].from_mx(wrench6[0:3]),
