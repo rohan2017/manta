@@ -1,4 +1,4 @@
-"""Bank-and-yank — a turn performed by a submarine that CANNOT yaw.
+"""Bank-and-yank — a commanded yaw deviation on a submarine that CANNOT yaw.
 
 The hull: one forward-only prop and two independent elevators on the
 tail, mounted left and right. Collective deflection pitches; a
@@ -6,23 +6,29 @@ differential split rolls. There is no rudder and no thruster off the
 surge axis — the actuator set spans **pitch and roll only**, and fin
 authority is ½ρV²·A·CL: zero at rest, bought with speed.
 
-Command a waypoint 45° off the bow and the controller must change
-heading anyway. The only mechanism physics offers is the aircraft
-turn, and `MPC(world)` discovers it from the model alone — no yaw
-term, no attitude cost, no maneuver script:
+The command is pure guidance-language, through the runtime objective:
+hold this depth, make 1.2 m/s, and put the nose on a course 45° off
+the bow — the heading term (`set_objective(heading=d)`, Euler-free:
+nose·d = qᵀM(d)q). No yaw actuator exists, so the only mechanism
+physics offers is the aircraft turn, and `MPC(world)` discovers it
+from the model alone — no maneuver script:
 
     roll over   — split the elevators, heel the hull toward the turn
     yank        — pull collective; pitch, banked, IS world-frame yaw
-    roll back   — level out and run in; the centre of buoyancy sits
-                  above the mass centre (`PointBuoy` at +z), so the
-                  righting moment makes wings-level the cheap place
-                  to be once the turn is done
+    roll back   — level out and run on course; the centre of buoyancy
+                  sits above the mass centre (`PointBuoy` at +z), so
+                  the righting moment makes wings-level the cheap
+                  place to be once the turn is done
 
-Plan birth uses `plan(multi_start=True)`: the payoff of rolling is
-bilinear (roll × pitch — nothing improves until BOTH move), the exact
-saddle family Gauss-Newton cannot see from a single seed. The flight
-loop is the fixed-work tick from the compiled Module, closed against
-the world's own Sim at a finer step.
+Two solver layers share the work, and the demo shows the seam
+honestly. The fixed-work tick flies the plan — but initiating a bank
+from level flight is a roll×pitch SADDLE (zero first-order yaw
+payoff), invisible to warm Gauss-Newton sweeps, so the closed loop
+alone stalls a few degrees short of the commanded course. The mission
+layer closes it: when the heading residual persists, re-birth the
+plan (`plan(multi_start=True)` from the current state — the same
+replan-on-residual doctrine controld will run). Two replans take the
+nose to 45.0° ± half a degree, wings level.
 
 Run::
 
@@ -48,7 +54,7 @@ from manta import MPC, Craft, Sim, TargetNumpy, World
 from manta.fields import FluidField, GravityField
 from manta.parts import (
     Aerofoil, AddedMass, ControlSurface, DragSurface, Mass, PointBuoy,
-    Thruster,
+    RotationalDrag, Thruster,
 )
 
 from .._control import Pacer, common_args
@@ -58,7 +64,8 @@ from .._viz import Viz
 RHO = 1025.0
 MASS = 30.0
 ZB = 0.02            # CB height above CG (m) — the righting arm
-GOAL = np.array([8.0, 8.0, 0.0])      # 45° off the bow, same depth
+COURSE_DEG = 45.0                     # the commanded yaw deviation
+SPEED = 1.2                           # m/s along the new course
 DT, HORIZON = 0.25, 60
 PLANT_DT = 0.05
 
@@ -75,8 +82,8 @@ def build_world() -> tuple[World, dict[str, tuple[float, float]]]:
         "drag", areas=(0.03, 0.35, 0.35), drag_coefficient=1.0))
     c.add(DragSurface("skin", force=(-4.0 / RHO, -10.0 / RHO,
                                      -10.0 / RHO)))
-    c.add(DragSurface("spin", torque=(-2.5 / RHO, -8.0 / RHO,
-                                      -8.0 / RHO)))
+    c.add(RotationalDrag("spin", torque=(-1.0 / RHO, -8.0 / RHO,
+                                         -8.0 / RHO)))
     # Neutrally buoyant, centre of buoyancy ZB above the mass centre:
     # zero net force at every attitude, pure righting torque when
     # heeled — the physics that closes the maneuver (roll BACK).
@@ -97,10 +104,10 @@ def build_world() -> tuple[World, dict[str, tuple[float, float]]]:
                    mount_offset=(-0.85, 0.0, 0.0),
                    mount_orientation=(math.cos(half), math.sin(half),
                                       0.0, 0.0)))
-    tail = dict(area=0.012, chord=0.1, servo_gain=4.0,
+    tail = dict(area=0.016, chord=0.1, servo_gain=4.0,
                 hinge_damping=0.4)
-    c.add(ControlSurface("elev_l", mount_offset=(-0.8, 0.3, 0.0), **tail))
-    c.add(ControlSurface("elev_r", mount_offset=(-0.8, -0.3, 0.0), **tail))
+    c.add(ControlSurface("elev_l", mount_offset=(-0.8, 0.35, 0.0), **tail))
+    c.add(ControlSurface("elev_r", mount_offset=(-0.8, -0.35, 0.0), **tail))
     w = (World(name="banksub")
          .add_field(GravityField().add_uniform((0.0, 0.0, -9.81)))
          .add_field(FluidField().add_uniform(density=RHO)))
@@ -119,29 +126,32 @@ def main() -> None:
     args = p.parse_args()
 
     w, bounds = build_world()
-    mpc = MPC(w, u_bounds=bounds, horizon=HORIZON, dt=DT,
-              w_pos_terminal=120.0, w_vel_terminal=0.0)
-    x0 = np.asarray(mpc.module().port("x").init, dtype=float)
-    bearing = np.rad2deg(np.arctan2(GOAL[1], GOAL[0]))
-    print(f"goal {GOAL} — a {bearing:.0f}° heading change, "
-          f"with pitch+roll authority only\n")
+    mpc = MPC(w, u_bounds=bounds, horizon=HORIZON, dt=DT)
+    spec = mpc.module().port("x").manifold
+    d_cmd = np.array([np.cos(np.radians(COURSE_DEG)),
+                      np.sin(np.radians(COURSE_DEG)), 0.0])
+    objective = dict(w_position=(0.0, 0.0, 40.0),      # depth-hold only
+                     velocity=SPEED * d_cmd, w_velocity=(15.0,) * 3,
+                     heading=d_cmd, w_heading=30.0,
+                     P=np.zeros((mpc.nx, mpc.nx)))
+    print(f"command: nose to {COURSE_DEG:.0f}°, {SPEED} m/s, hold "
+          f"depth — pitch+roll authority only\n")
 
-    print("plan birth (multi-start — the roll×pitch payoff is a "
+    x0 = np.asarray(mpc.module().port("x").init, dtype=float)
+    print("plan birth (multi-start — initiating a bank is a roll×pitch "
           "saddle single seeds cannot see)...")
-    plan = mpc.plan(x0, GOAL, multi_start=True)
-    X = mpc._rollout(x0, plan.U.T)
-    qs = mpc.module().port("x").manifold.slot("sub.orientation")
-    rolls = np.array([euler_zyx(q)[2] for q in
-                      X[:, qs.ambient_offset:qs.ambient_offset + 4]])
-    d = np.rad2deg
-    print(f"  cost {plan.cost:.1f}, converged={plan.converged}")
-    print(f"  the plan's own arc: roll in to {d(rolls.min()):+.0f}°, "
-          f"yank, roll back out to {d(rolls[-1]):+.0f}° at arrival\n")
+    plan = mpc.plan(x0, goal=(0.0, 0.0, 0.0), multi_start=True,
+                    **objective)
+    print(f"  cost {plan.cost:.1f}, converged={plan.converged}\n")
 
     rt = TargetNumpy(mpc)
+    rt.set_objective(position=(0.0, 0.0, 0.0),
+                     w_position=(0.0, 0.0, 40.0),
+                     velocity=SPEED * d_cmd, w_velocity=(15.0,) * 3,
+                     heading=d_cmd, w_heading=30.0,
+                     P=np.zeros((mpc.nx, mpc.nx)))
     rt.reset_plan(plan.U)
     plant = TargetNumpy(Sim(build_world()[0]))
-    spec = mpc.module().port("x").manifold
 
     viz = (None if args.no_viz
            else Viz("manta/bank_and_yank", addr=args.viz_addr,
@@ -158,8 +168,12 @@ def main() -> None:
                 color=(200, 120, 80))
         viz.box("world/sub/elev_r/geom", (0.10, 0.28, 0.02),
                 color=(80, 140, 220))
-        viz.box("world/goal", (0.2, 0.2, 0.2), center=tuple(GOAL),
-                color=(90, 200, 90))
+        # the commanded course, drawn as a long thin rail
+        half_c = np.radians(COURSE_DEG) / 2.0
+        viz.box("world/course/geom", (40.0, 0.03, 0.03),
+                center=(20.0, 0.0, 0.0), color=(90, 200, 90))
+        viz.pose("world/course", (0.0, 0.0, 0.0),
+                 (np.cos(half_c), 0.0, 0.0, np.sin(half_c)))
     # pace live viewing to real time; .rrd recording runs full speed
     pacer = Pacer() if viz is not None and not args.save else None
 
@@ -167,15 +181,32 @@ def main() -> None:
         h = 0.5 * float(np.asarray(deflection).ravel()[0])
         return (np.cos(h), 0.0, np.sin(h), 0.0)
 
-    ticks = int((args.duration or 15.0) / DT)
+    def nose_err_deg(st) -> float:
+        q = np.asarray(st["orientation"], dtype=float).ravel()
+        n = np.array([1 - 2 * (q[2] ** 2 + q[3] ** 2),
+                      2 * (q[1] * q[2] + q[0] * q[3]),
+                      2 * (q[1] * q[3] - q[0] * q[2])])
+        return float(np.degrees(np.arccos(np.clip(n @ d_cmd, -1, 1))))
+
+    ticks = int((args.duration or 30.0) / DT)
     print(f"{'t':>5} {'roll':>6} {'pitch':>6} {'yaw':>6} "
-          f"{'depth':>7} {'dist':>6}")
-    max_bank = 0.0
+          f"{'speed':>6} {'nose err':>9}")
+    max_bank, replans = 0.0, 0
     for k in range(ticks):
         st = plant.state["sub"]
         flat = {f"sub.{n}": np.asarray(v, dtype=float).ravel()
                 for n, v in st.items()}
-        u = rt.tick(spec.pack_any(flat), GOAL)
+        x = spec.pack_any(flat)
+        # the mission layer: a persistent heading residual means the
+        # tick is stuck at the bank-initiation saddle — re-birth the
+        # plan from the current state (replan-on-residual doctrine)
+        if k > 0 and k % 20 == 0 and nose_err_deg(st) > 3.0:
+            rt.reset_plan(mpc.plan(x, goal=(0.0, 0.0, 0.0),
+                                   multi_start=True, **objective).U)
+            replans += 1
+            print(f"      *** heading residual persists "
+                  f"({nose_err_deg(st):.1f}°) -> replan #{replans} ***")
+        u = rt.tick(x)
         # the controller holds u for one period; the PLANT (and the
         # viewer) run at the fine step — poses log every 50 ms, so the
         # replay is smooth even though the tick is 4 Hz
@@ -191,9 +222,9 @@ def main() -> None:
                          np.asarray(st["position"], dtype=float).ravel(),
                          np.asarray(st["orientation"],
                                     dtype=float).ravel())
-                viz.pose("world/sub/elev_l", (-0.8, 0.30, 0.0),
+                viz.pose("world/sub/elev_l", (-0.8, 0.35, 0.0),
                          hinge_quat(st["elev_l.deflection"]))
-                viz.pose("world/sub/elev_r", (-0.8, -0.30, 0.0),
+                viz.pose("world/sub/elev_r", (-0.8, -0.35, 0.0),
                          hinge_quat(st["elev_r.deflection"]))
                 viz.trail("world/trail",
                           np.asarray(st["position"],
@@ -201,26 +232,24 @@ def main() -> None:
 
         st = plant.state["sub"]
         q = np.asarray(st["orientation"], dtype=float).ravel()
-        pos = np.asarray(st["position"], dtype=float).ravel()
         yaw_, pitch, roll = euler_zyx(q)
+        speed = float(np.linalg.norm(
+            np.asarray(st["velocity"], dtype=float)))
         max_bank = max(max_bank, abs(roll))
         t = (k + 1) * DT
-        dist = np.linalg.norm(pos - GOAL)
-        if k % 2 == 1:
-            d = np.rad2deg
-            print(f"{t:5.1f} {d(roll):+6.0f} {d(pitch):+6.0f} "
-                  f"{d(wrap_pi(yaw_)):+6.0f} {pos[2]:+7.2f} "
-                  f"{dist:6.2f}")
-        if dist < 0.8:
-            # a forward-only prop cannot hover — past the goal the
-            # vehicle would simply orbit it; the demo ends at arrival
-            break
+        if k % 4 == 3:
+            dg = np.rad2deg
+            print(f"{t:5.1f} {dg(roll):+6.0f} {dg(pitch):+6.0f} "
+                  f"{dg(wrap_pi(yaw_)):+6.0f} {speed:6.2f} "
+                  f"{nose_err_deg(st):8.1f}°")
 
+    err = nose_err_deg(plant.state["sub"])
     print(f"\nbank-and-yank: peak bank {np.rad2deg(max_bank):.0f}°, "
-          f"final roll {np.rad2deg(roll):+.0f}° (righted), "
-          f"arrived {dist:.2f} m from the goal at t={t:.1f} s")
+          f"nose {err:.1f}° off the commanded course, final roll "
+          f"{np.rad2deg(roll):+.0f}° (righted), {replans} replan(s)")
     print("no yaw actuator ever existed — the turn is roll × pitch, "
-          "discovered from the model.")
+          "discovered from the model; the last degrees are the "
+          "mission layer's replan closing a saddle the tick cannot.")
 
 
 if __name__ == "__main__":

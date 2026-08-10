@@ -9,7 +9,7 @@ side-by-side lanes:
           seaweed hangs under the tail: more mass, more drag, a
           slight sink, and a speed-dependent trim moment. The stale
           model believes none of it. DEGRADED, NOT DANGEROUS: the
-          vehicle plods along ~1.3 m below its commanded depth,
+          vehicle plods along metres below its commanded depth,
           level and stable — but it cannot close the leg at all
           (unmodeled drag slows it, fin authority is ½ρV²·A·CL, so
           slower means weaker, and the sag settles where the stale
@@ -17,9 +17,9 @@ side-by-side lanes:
           cost J runs far above baseline: the model-health residual
           that triggers the refit on a real vehicle.
   lane 3  fouled vehicle, RECOMPILED controller — the model matches
-          the water again: arrival within a quarter second of the
-          clean baseline, depth held to centimetres. The seaweed is
-          still attached; only the model changed.
+          the water again: arrival within half a second of the clean
+          baseline, depth held to decimetres. The seaweed is still
+          attached; only the model changed.
 
 The refit is stubbed — the rebuild is handed the true fouled world,
 standing in for `manta.fit` run against flight telemetry (the reducer
@@ -46,7 +46,7 @@ from manta import MPC, Craft, Sim, TargetNumpy, World
 from manta.fields import FluidField, GravityField
 from manta.parts import (
     Aerofoil, AddedMass, ControlSurface, DragSurface, Mass, PointBuoy,
-    Thruster,
+    RotationalDrag, Thruster,
 )
 
 from .._control import Pacer, common_args
@@ -79,8 +79,8 @@ def build_world(*, seaweed: bool = False, lane_y: float = 0.0):
         "drag", areas=(0.03, 0.35, 0.35), drag_coefficient=1.0))
     c.add(DragSurface("skin", force=(-4.0 / RHO, -10.0 / RHO,
                                      -10.0 / RHO)))
-    c.add(DragSurface("spin", torque=(-2.5 / RHO, -8.0 / RHO,
-                                      -8.0 / RHO)))
+    c.add(RotationalDrag("spin", torque=(-2.5 / RHO, -8.0 / RHO,
+                                         -8.0 / RHO)))
     c.add(PointBuoy("cb", volume=MASS / RHO,
                     mount_offset=(0.0, 0.0, ZB)))
     c.add(Thruster("prop", force=(50.0, 0.0, 0.0)))

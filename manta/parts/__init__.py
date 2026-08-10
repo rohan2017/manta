@@ -29,6 +29,7 @@ from .sensor.camera import BBoxCamera, CentroidCamera, ProjectiveCamera
 from .actuation.thruster import Thruster
 from .aero.added_mass import AddedMass
 from .aero.drag_surface import DragSurface
+from .aero.rotational_drag import RotationalDrag
 from .disturbance.process_noise import ProcessNoise
 from .aero.aerofoil import Aerofoil, naca
 from .aero.control_surface import ControlSurface
@@ -51,7 +52,7 @@ __all__ = [
     "IMU", "VelocitySensor", "Magnetometer", "PositionSensor", "Barometer",
     "ProjectiveCamera", "BBoxCamera", "CentroidCamera",
     "Thruster",
-    "AddedMass", "DragSurface", "Aerofoil", "naca", "ControlSurface",
+    "AddedMass", "DragSurface", "RotationalDrag", "Aerofoil", "naca", "ControlSurface",
     "ProcessNoise",
     "TetherEndpoint",
     "TrajectoryEndpoint", "TrajectorySample", "LinearTrajectory", "hover",
