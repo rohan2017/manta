@@ -11,7 +11,7 @@ from ._runtime import NumpyRuntime, unpack_fields
 
 class NumpyMpc(NumpyRuntime):
     """A receding-horizon controller: the warm plan is HELD state, one
-    `tick(x, goal)` per controller period.
+    `tick(x, position)` per controller period.
 
     Each tick runs the Module's fixed-work solve from the held plan,
     applies the receding-horizon shift (folded into the kernel), and
@@ -20,15 +20,15 @@ class NumpyMpc(NumpyRuntime):
     view adds no controller logic, only the typed surface:
 
         mpc = TargetNumpy(MPC(world, ...))     # or compile=True
-        u = mpc.tick(x, goal)                  # dict for the actuators
+        u = mpc.tick(x, position)              # dict for the actuators
         mpc.J                                  # last plan cost (QoS)
 
     Plan birth: the kernel bootstraps from the zero plan on hulls that
     can act from rest; for underactuated hulls or basin-sensitive
-    transits, seed with `reset_plan(mpc.plan(x, goal).U)` — the
+    transits, seed with `reset_plan(mpc.plan(x, position).U)` — the
     transform's offline solver (line-searched, multi-start, optional
     full-DDP) at mission load. `reset_plan()` (no argument) re-zeros
-    it — e.g. on a goal change large enough that the old plan is the
+    it — e.g. on a target change large enough that the old plan is the
     wrong basin.
     """
 
@@ -50,9 +50,11 @@ class NumpyMpc(NumpyRuntime):
     # ---- the objective ---------------------------------------------------
 
     def set_objective(self, *, position=None, velocity=None,
-                      heading=None, w_position=None, w_velocity=None,
-                      w_heading=None, w_effort=None, P=None) -> None:
-        """Update the held objective — the controld surface for a
+                      body_velocity=None, heading=None, orientation=None,
+                      rates=None, w_position=None, w_velocity=None,
+                      w_body_velocity=None, w_heading=None,
+                      w_attitude=None, w_rates=None, w_effort=None, P=None) -> None:
+        """Update the held objective — the control surface for a
         guidance-law switch. Targets: `position`/`velocity` world-frame
         3-vectors, `heading` a 2- or 3-vector direction (normalized
         here; commands the NOSE, not the course — hull anisotropy makes
@@ -67,6 +69,8 @@ class NumpyMpc(NumpyRuntime):
             self._target[0:3] = np.asarray(position, dtype=float).ravel()
         if velocity is not None:
             self._target[3:6] = np.asarray(velocity, dtype=float).ravel()
+        if body_velocity is not None:
+            self._target[6:9] = np.asarray(body_velocity, dtype=float).ravel()
         if heading is not None:
             d = np.zeros(3)
             h = np.asarray(heading, dtype=float).ravel()
@@ -75,13 +79,27 @@ class NumpyMpc(NumpyRuntime):
             if n < 1e-9:
                 raise ValueError("set_objective: heading must be a "
                                  "non-zero direction")
-            self._target[6:9] = d / n
-        for lo, hi, val in ((0, 3, w_position), (3, 6, w_velocity),
-                            (6, 7, w_heading),
-                            (7, 7 + self._nu, w_effort)):
+            self._target[9:12] = d / n
+        if orientation is not None:
+            q = np.asarray(orientation, dtype=float).ravel()
+            n = np.linalg.norm(q)
+            if q.size != 4 or n < 1e-9:
+                raise ValueError("set_objective: orientation must be a non-zero wxyz quaternion")
+            self._target[12:16] = q / n
+        if rates is not None:
+            self._target[16:19] = np.asarray(rates, dtype=float).ravel()
+        for lo, hi, val in ((0, 3, w_position), (3, 12, w_velocity),
+                            (12, 21, w_body_velocity), (21, 22, w_heading),
+                            (22, 25, w_attitude), (25, 28, w_rates),
+                            (28, 28 + self._nu, w_effort)):
             if val is not None:
-                self._weights[lo:hi] = np.asarray(val,
-                                                  dtype=float).ravel()
+                a = np.asarray(val, dtype=float)
+                if hi - lo == 9:
+                    a = (np.eye(3) * float(a) if a.ndim == 0 else
+                         np.diag(a.ravel()) if a.size == 3 else a.reshape(3, 3))
+                    if not np.allclose(a, a.T) or np.linalg.eigvalsh(a).min() < -1e-10:
+                        raise ValueError("set_objective: velocity weight must be symmetric positive semidefinite")
+                self._weights[lo:hi] = a.ravel()
         if P is not None:
             self._PT = np.asarray(P, dtype=float).reshape(self._PT.shape)
 
@@ -98,18 +116,19 @@ class NumpyMpc(NumpyRuntime):
 
     # ---- the controller surface ----------------------------------------
 
-    def tick(self, x, goal=None) -> dict[str, Any]:
+    def tick(self, x, position=None) -> dict[str, Any]:
         """One controller period: solve from the held plan, return the
         first control as `{input name: value}`, hold the shifted rest.
 
         `x` is the current state — packed ambient vector, nested dict
         (`{craft: {slot: v}}`) or flat dict (`{"craft.slot": v}`).
-        `goal` is the position-target shorthand (a world 3-vector,
+        `position` is the position-target shorthand (a world 3-vector,
         persisted into the held objective); the full command family —
         velocity, heading, per-term weights — is `set_objective`'s.
         """
-        if goal is not None:
-            self._target[0:3] = np.asarray(goal, dtype=float).ravel()
+        if position is not None:
+            self._target[0:3] = np.asarray(position,
+                                            dtype=float).ravel()
         spec = self._x_port.manifold
         if not isinstance(x, np.ndarray):
             x = spec.pack_any(x, base=np.asarray(self._x_port.init,
@@ -131,7 +150,8 @@ class NumpyMpc(NumpyRuntime):
 
     def reset_plan(self, U=None) -> None:
         """Replace the held plan — `U` as (nu × N) or (N × nu) (an
-        offline `DdpResult.U` transposes in), or None to re-zero."""
+        offline `MPCPlan.U`, which is (N × nu), transposes in), or None
+        to re-zero."""
         shape = self._plan_field.shape
         if U is None:
             self._state["plan"] = np.zeros(shape)

@@ -19,20 +19,24 @@ from ...ir.frames import PartFrame
 from ...ir.types import Vec3
 from ...ir.wrench import Wrench
 from .._declarations import PartUpdate
+from .._mounting import fold_rest_pose
 from ..base import Part, RootPart
 
 
 def cumulative_offset(part) -> np.ndarray:
-    """The part's rest-pose position in its craft's body frame: the sum of
-    `mount_offset` along the parent chain up to (excluding) the craft
-    root.
+    """The part's rest-pose position in its craft's body frame: the
+    static mount poses composed along the parent chain up to (excluding)
+    the craft root — each hop rotates the accumulated offset through the
+    parent's `mount_orientation` (the shared `_mounting` walk, so a
+    source under a rotated bracket lands where the bracket puts it).
     Joint angles are ignored — a source rides its mount's REST offset
     (fine for the typical root-mounted source; documented)."""
-    off = np.zeros(3)
+    chain: list = []
     cur = part
     while cur is not None and not isinstance(cur, RootPart):
-        off = off + np.asarray(cur.mount_offset, dtype=float)
+        chain.append(cur)
         cur = cur.parent
+    off, _R = fold_rest_pose(chain)
     return off
 
 

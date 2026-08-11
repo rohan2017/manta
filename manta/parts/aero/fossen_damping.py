@@ -50,10 +50,11 @@ from ...fields import FluidField
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3, _IRValue
 from .._declarations import Parameter, PartUpdate
+from ._flow import MAX_ORDER, signed_powers
 from ..base import Part
 from ...ir.wrench import Wrench
 
-_MAX_ORDER = 4
+_MAX_ORDER = MAX_ORDER          # shared cap (see `_flow`)
 _ZERO36 = (0.0,) * 36
 
 
@@ -133,12 +134,11 @@ class FossenDamping(Part):
             ctx.angular_velocity[WorldFrame])._mx
         nu = ca.vertcat(v, w)
 
-        abs_nu = ca.fabs(nu) + 1e-30        # sign-preserving powers
-        nu_pow = nu
+        # Same sign-preserving ladder the whole damping family uses.
+        nu_powers = signed_powers(nu, _MAX_ORDER)
         wrench6 = ca.MX.zeros(6, 1)
         for k in range(_MAX_ORDER):
-            if k > 0:
-                nu_pow = nu_pow * abs_nu
+            nu_pow = nu_powers[k]
             D_k = getattr(self, f"D{k + 1}")
             if isinstance(D_k, _IRValue):
                 # promoted for system ID: a live flat-R36 input

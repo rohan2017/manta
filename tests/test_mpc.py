@@ -273,7 +273,7 @@ def test_cruise_transect_heading_speed_depth():
     mpc = MPC(w, u_bounds=bounds, horizon=40)
     d = np.array([np.cos(np.radians(40.0)), np.sin(np.radians(40.0)),
                   0.0])
-    objective = dict(goal=(0.0, 0.0, -2.0), w_position=(0.0, 0.0, 40.0),
+    objective = dict(position=(0.0, 0.0, -2.0), w_position=(0.0, 0.0, 40.0),
                      velocity=1.1 * d, w_velocity=(6.0, 6.0, 6.0),
                      heading=d, w_heading=8.0,
                      P=np.zeros((mpc.nx, mpc.nx)))
@@ -329,3 +329,68 @@ def test_plan_multi_start_and_second_order_run():
     assert single.converged
     assert multi.cost <= single.cost + 1e-9
     assert fxx.cost <= 1.1 * single.cost
+
+
+# ---------------------------------------------------------------------------
+# MPC.terminal() — the on-demand terminal quadratic
+# ---------------------------------------------------------------------------
+
+def test_terminal_places_weights_on_the_position_and_velocity_blocks():
+    """`terminal()` is the runtime-port shape of the constructor's
+    `terminal="weights"` family. It shipped with no caller and no test,
+    so nothing pinned that it lands the weights on the right slices of
+    the (nx × nx) matrix — a silently mis-offset diagonal would just
+    pull on the wrong states."""
+    w, bounds = _tug()
+    mpc = MPC(w, u_bounds=bounds, horizon=5)
+
+    PT = mpc.terminal(w_position=7.0, w_velocity=3.0)
+    assert PT.shape == (mpc.nx, mpc.nx)
+    np.testing.assert_allclose(PT, np.diag(np.diag(PT)))     # diagonal
+    d = np.diag(PT)
+    po, pd, vo = mpc._po, mpc._pd, mpc._vo
+    np.testing.assert_allclose(d[po:po + pd], 7.0)
+    np.testing.assert_allclose(d[vo:vo + 3], 3.0)
+    # Everything else — orientation, rates, any part state — untouched.
+    rest = np.delete(d, list(range(po, po + pd)) + list(range(vo, vo + 3)))
+    np.testing.assert_allclose(rest, 0.0)
+
+
+def test_terminal_defaults_to_no_terminal_cost():
+    w, bounds = _tug()
+    mpc = MPC(w, u_bounds=bounds, horizon=5)
+    np.testing.assert_allclose(mpc.terminal(), np.zeros((mpc.nx, mpc.nx)))
+
+
+def test_terminal_broadcasts_per_axis_masks():
+    """The documented reason it takes vectors: a guidance-law switch that
+    MASKS an axis in the running cost must be able to mask the same axis
+    in the terminal cost, or the masked axis gets an anchor instead of a
+    hold."""
+    w, bounds = _tug()
+    mpc = MPC(w, u_bounds=bounds, horizon=5)
+    PT = mpc.terminal(w_position=(0.0, 0.0, 25.0), w_velocity=(1.0, 2.0, 3.0))
+    d = np.diag(PT)
+    po, vo = mpc._po, mpc._vo
+    np.testing.assert_allclose(d[po:po + 3], (0.0, 0.0, 25.0))
+    np.testing.assert_allclose(d[vo:vo + 3], (1.0, 2.0, 3.0))
+
+
+def test_terminal_feeds_the_PT_port_and_changes_the_cost():
+    """End to end: the matrix it returns is accepted by
+    `set_objective(P=...)` and actually prices the horizon tail."""
+    w, bounds = _tug()
+    mpc = MPC(w, u_bounds=bounds, horizon=10)
+    x0 = np.asarray(mpc.module().port("x").init, dtype=float)
+
+    loose = TargetNumpy(mpc)
+    loose.set_objective(P=mpc.terminal(w_position=0.0, w_velocity=0.0))
+    loose.tick(x0, (1.5, 0.0, 0.0))
+
+    tight = TargetNumpy(mpc)
+    tight.set_objective(P=mpc.terminal(w_position=200.0, w_velocity=50.0))
+    tight.tick(x0, (1.5, 0.0, 0.0))
+
+    # A heavy terminal pull prices the same opening state far higher and
+    # commands a more aggressive first move toward the goal.
+    assert tight.J > loose.J

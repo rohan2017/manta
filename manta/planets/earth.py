@@ -158,6 +158,7 @@ class Earth(Planet):
                  rotation_axis: tuple[float, float, float] = (0.0, 0.0, 1.0),
                  sea_level: float = 0.0,
                  water_density: float = 1025.0,
+                 ocean_current: tuple[float, float, float] = (0.0, 0.0, 0.0),
                  air_density: float = 1.225,
                  sea_level_temperature: float = T0_ISA,
                  lapse_rate: float = LAPSE_ISA,
@@ -180,6 +181,7 @@ class Earth(Planet):
                          omega=omega)
         self.sea_level     = float(sea_level)
         self.water_density = float(water_density)
+        self.ocean_current = tuple(float(v) for v in ocean_current)
         self.air_density   = float(air_density)
         self.sea_level_temperature = float(sea_level_temperature)
         self.lapse_rate    = float(lapse_rate)
@@ -289,8 +291,10 @@ class Earth(Planet):
             R_pw     = ca.transpose(self.R_world_from_planet_sym(t))
             return _signed_altitude(R_pw @ r_world, t)
 
+        current = ca.DM(self.ocean_current).reshape((3, 1))
         if waves is None:
-            ocean_velocity_fn = None
+            def ocean_velocity_fn(p_planet, t):
+                return current
         else:
             def ocean_velocity_fn(p_planet, t):
                 # First-order deep-water orbital velocity: circles of
@@ -303,8 +307,8 @@ class Earth(Planet):
                 phase = k_wave * xi - omega_wave * t
                 decay = ca.exp(k_wave * ca.fmin(alt_mean, 0.0))
                 speed = waves.amplitude * omega_wave * decay
-                return speed * (ca.cos(phase) * dir_dm
-                                + ca.sin(phase) * up)
+                return current + speed * (ca.cos(phase) * dir_dm
+                                          + ca.sin(phase) * up)
 
         # Background air everywhere (added first), ocean carving in below
         # the surface (added second → overrides where its membership is

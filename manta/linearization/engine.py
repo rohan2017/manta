@@ -39,8 +39,10 @@ class SensorModel:
 
     Symbolic expressions are in the system's `(x_sym, u_sym, n_sym, dt_sym,
     t_sym)` symbols; `h_sym` is noise-zeroed, `h_noisy_sym` keeps the noise
-    live (they coincide for a noiseless sensor). `h_fn`/`H_fn` are
-    `(x,u,dt,t)` convenience functions for point evaluation/analysis."""
+    live (they coincide for a noiseless sensor). `H_fn` is a `(x,u,dt,t)`
+    convenience function for point evaluation/analysis; a caller needing a
+    numeric `h` builds its own `ca.Function` from `h_sym` (no consumer
+    warranted baking one per sensor here)."""
     full:          str
     dim:           int
     h_sym:         ca.MX
@@ -48,7 +50,6 @@ class SensorModel:
     H_sym:         ca.MX
     L_h_sym:       ca.MX | None
     observed_cols: np.ndarray
-    h_fn:          ca.Function | None
     H_fn:          ca.Function | None
 
 
@@ -208,15 +209,14 @@ class TickLinearizer:
             h_sym = ca.substitute(h_noisy, n, zero_n)
             L_h_sym = (ca.substitute(ca.jacobian(h_noisy, n), n, zero_n)
                        if self.n_noise > 0 else None)
-            h_fn = H_fn = None
+            H_fn = None
             if build_functions:
-                safe = entry_ident(full)
-                h_fn = ca.Function(f"h_{safe}", args, [h_sym], argn, ["h"])
-                H_fn = ca.Function(f"H_{safe}", args, [H_sym], argn, ["H"])
+                H_fn = ca.Function(f"H_{entry_ident(full)}", args, [H_sym],
+                                   argn, ["H"])
             sensors[full] = SensorModel(
                 full=full, dim=dim,
                 h_sym=h_sym, h_noisy_sym=h_noisy, H_sym=H_sym,
-                L_h_sym=L_h_sym, observed_cols=cols, h_fn=h_fn, H_fn=H_fn)
+                L_h_sym=L_h_sym, observed_cols=cols, H_fn=H_fn)
 
         predict_fn = F_fn = B_fn = L_fn = None
         blocks: list = []

@@ -35,6 +35,7 @@ from ...fields import FluidField
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3
 from .._declarations import Parameter, PartUpdate
+from ._flow import signed_powers
 from ..base import Part
 from ...ir.wrench import Wrench
 
@@ -87,14 +88,12 @@ class RotationalDrag(Part):
             ctx.angular_velocity[WorldFrame])._mx
 
         tensors = self.torque_tensors
-        abs_w = ca.fabs(omega) + 1e-30      # sign-preserving powers
-        w_pow = omega
+        # Same sign-preserving ladder the whole damping family uses.
+        w_powers = signed_powers(omega, len(tensors))
         tau = ca.MX.zeros(3, 1)
         for k, B_k in enumerate(tensors):
-            if k > 0:
-                w_pow = w_pow * abs_w
             if not np.all(B_k == 0.0):
-                tau = tau + rho * (ca.MX(B_k) @ w_pow)
+                tau = tau + rho * (ca.MX(B_k) @ w_powers[k])
 
         return PartUpdate(wrench=Wrench(
             force=Vec3[PartFrame].from_mx(ca.MX.zeros(3, 1)),

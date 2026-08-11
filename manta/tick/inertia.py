@@ -12,18 +12,18 @@ tensor into body-frame coords, then sum:
                            − m_total · (|com|²·I − com·com^T)
 
 All quantities are CasADi MX expressions in the Joint angles of the
-craft. For a flat craft (no joints) the result is symbolically constant
-and matches the legacy numpy `_aggregate_inertials` exactly. For a
-craft with a Joint, the symbolic I_com varies with the joint angle —
-e.g. a long thin rotor swinging out shifts the body's COM and rolls
-its MOI tensor through R · diag · R^T.
+craft. For a flat craft (no joints) the result is symbolically
+constant. For a craft with a Joint, the symbolic I_com varies with the
+joint angle — e.g. a long thin rotor swinging out shifts the body's COM
+and rolls its MOI tensor through R · diag · R^T.
 
-Used at compile time by the world tick (`compile_world_tick`): the symbolic com and I_com
-feed straight into Newton-Euler, with `ca.solve(I_com_mx, τ)` replacing
-the precomputed numpy inverse. The legacy numpy `_aggregate_inertials`
-is kept as a non-symbolic introspection helper (`Craft.aggregate_inertials`)
-and reports the at-rest snapshot — fine for `m_total` queries and for
-sanity-checking degenerate inertia.
+Used at compile time by the world tick (`compile_world_tick`): the
+symbolic com and I_com feed straight into Newton-Euler, with
+`ca.solve(I_com_mx, τ)` replacing a precomputed inverse. This rollup is
+the ONLY inertial tree walk: `Craft.aggregate_inertials` (introspection
+/ tests) evaluates the same expressions outside a trace — where every
+attribute reads as its declared numeric value, so they fold straight to
+constants — rather than maintaining a numpy twin of the geometry.
 
 Frame convention: `r_P_in_craft` is in body (CraftFrame) coords;
 `R_craft_from_P` rotates a vector expressed in the part's input/output
@@ -46,14 +46,57 @@ from __future__ import annotations
 import casadi as ca
 import numpy as np
 
-from ..ir._rotation import R_from_axis_angle
+from ..ir._rotation import R_from_axis_angle, quat_to_rotmat
+
+
+# ---------------------------------------------------------------------------
+# Reading a part's inertials
+# ---------------------------------------------------------------------------
+# Three passes need "what mass/moi does this part contribute, and is it a
+# promoted (tunable) symbol?" — the rollup below, the COM-recoil reduction
+# in `world_tick`, and the kinetic-energy sum in `joint_space`. The rule is
+# subtle enough to be worth having once: a promoted mass contributes even
+# when its DECLARED value is zero (the optimizer may move it), while a
+# fixed zero mass drops out entirely.
+#
+# `is_promoted` is imported lazily, as everywhere in this package: `parts`
+# imports `tick`, so a module-scope import would close the cycle.
+
+def inertial_mass(part):
+    """`(m, m_declared)` for an inertial `part`, or None to skip it.
+
+    `m` is the MX symbol when the mass is promoted and the float
+    otherwise; `m_declared` is always the float, for numeric totals and
+    guards. None means the part contributes no inertia — either it lacks
+    the trait (a bare `mass` attribute is not inertial; TrajectoryEndpoint's
+    is a gain) or its fixed mass is zero.
+    """
+    from ..parts._trace import is_promoted
+    if not part.contributes_inertia:
+        return None
+    attr = part.mass
+    if is_promoted(attr):
+        return attr._mx, float(part.declared_value("mass"))
+    m = float(attr)
+    return None if m <= 0.0 else (m, m)
+
+
+def inertial_moi_diag(part):
+    """`diag(moi)` as a 3×3 MX — the symbol when the moi is promoted,
+    the declared constants otherwise. Parts without a `moi` read zero."""
+    from ..parts._trace import is_promoted
+    attr = getattr(part, "moi", (0.0, 0.0, 0.0))
+    if is_promoted(attr):
+        return ca.diag(attr._mx)
+    return ca.diag(ca.MX(np.asarray([float(attr[0]), float(attr[1]),
+                                     float(attr[2])])))
 
 
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
-def symbolic_inertia_rollup(root_part, *, param_subs=()) -> dict:
+def symbolic_inertia_rollup(root_part, *, param_subs=(), who: str = "") -> dict:
     """Walk `root_part`'s subtree and return symbolic aggregate inertia.
 
     Args:
@@ -61,6 +104,7 @@ def symbolic_inertia_rollup(root_part, *, param_subs=()) -> dict:
                      (tunable) parameters bound on the active trace; the
                      at-rest numeric snapshot substitutes these at their
                      declared values.
+        who        — craft name, to name the offender in the zero-mass error.
 
     Returns a dict with:
         m_total            : float | MX       — total mass. A float unless a
@@ -69,6 +113,9 @@ def symbolic_inertia_rollup(root_part, *, param_subs=()) -> dict:
         com_in_craft_mx    : MX (3,)          — COM in body-frame coords.
         I_com_in_craft_mx  : MX (3,3)         — inertia tensor about COM, in
                                                 body-frame coords.
+        I_origin_in_craft_mx : MX (3,3)       — the same tensor about the
+                                                craft ORIGIN (pre parallel-
+                                                axis reduction).
         I_com_at_zero      : np.ndarray (3,3) — numerical snapshot at all
                                                 joint angles = 0 (and all
                                                 promoted parameters at their
@@ -107,8 +154,16 @@ def symbolic_inertia_rollup(root_part, *, param_subs=()) -> dict:
                                           transform_mx))
 
         # ----- part's input + output frame rotations vs body --------------
-        # The MOUNT doesn't rotate, so input = parent.output.
-        R_craft_from_input_mx = R_craft_from_parent_output_mx
+        # The mount TURNS the part's own axes inside the parent's output
+        # frame (`mount_orientation`, the same static pose the kinematic
+        # pass composes). Skipping it would leave a rotated bracket's
+        # subtree unrotated here while the kinematics places it correctly
+        # — the inertia tensor and the sensor geometry would disagree.
+        q_attr = part.mount_orientation
+        q_mx = (q_attr._mx if is_promoted(q_attr)
+                else ca.MX(np.asarray(q_attr, dtype=float).reshape(4, 1)))
+        R_craft_from_input_mx = ca.mtimes(R_craft_from_parent_output_mx,
+                                          quat_to_rotmat(q_mx))
 
         r_out_in_craft_mx = r_part_in_craft_mx
         if isinstance(part, RevoluteDOF):
@@ -138,43 +193,26 @@ def symbolic_inertia_rollup(root_part, *, param_subs=()) -> dict:
 
         # ----- contribute this part's m, m·r, I_own_in_craft ---------------
         # A Mass is a leaf — its own frame = input frame = parent output.
-        # Only parts with the `contributes_inertia` trait are inertial —
-        # a bare `mass` attribute is not (TrajectoryEndpoint's is a gain).
-        # A promoted (tunable) mass reads as a bound IR Scalar — contribute
-        # it symbolically (regardless of its declared value; the optimizer
-        # may move it), and use the declared value for the numeric totals.
-        if part.contributes_inertia:
-            mass_attr = part.mass
-            symbolic_mass = is_promoted(mass_attr)
-            m_decl = float(part.declared_value("mass") if symbolic_mass
-                           else mass_attr)
-            m = mass_attr._mx if symbolic_mass else m_decl
-            if symbolic_mass or m_decl > 0.0:
-                # A promoted (tunable) moi reads as a bound IR Vec3 —
-                # keep the symbol, same as a promoted mass/transform.
-                moi_attr = getattr(part, "moi", (0.0, 0.0, 0.0))
-                if is_promoted(moi_attr):
-                    I_diag_local_mx = ca.diag(moi_attr._mx)
-                else:
-                    I_diag_local_mx = ca.diag(ca.MX(np.asarray(
-                        [float(moi_attr[0]),
-                         float(moi_attr[1]),
-                         float(moi_attr[2])])))
-                # The Mass rotates with whatever its parent rotor frame is.
-                R_mass_in_craft_mx = R_craft_from_input_mx
-                I_own_in_craft_mx = ca.mtimes(R_mass_in_craft_mx,
-                    ca.mtimes(I_diag_local_mx, R_mass_in_craft_mx.T))
+        # `inertial_mass` owns the trait/promotion/zero-skip rule (above).
+        contribution = inertial_mass(part)
+        if contribution is not None:
+            m, m_decl = contribution
+            I_diag_local_mx = inertial_moi_diag(part)
+            # The Mass rotates with whatever its parent rotor frame is.
+            R_mass_in_craft_mx = R_craft_from_input_mx
+            I_own_in_craft_mx = ca.mtimes(R_mass_in_craft_mx,
+                ca.mtimes(I_diag_local_mx, R_mass_in_craft_mx.T))
 
-                # Parallel-axis lift about craft origin.
-                r = r_part_in_craft_mx                       # 3×1
-                r_dot_r = ca.mtimes(r.T, r)                  # 1×1 MX
-                outer_r = ca.mtimes(r, r.T)                  # 3×3
-                I_about_origin_mx = (I_about_origin_mx
-                                     + I_own_in_craft_mx
-                                     + m * (r_dot_r * eye3 - outer_r))
-                m_total      = m_total + m
-                m_total_decl += m_decl
-                com_sum_mx   = com_sum_mx + m * r
+            # Parallel-axis lift about craft origin.
+            r = r_part_in_craft_mx                       # 3×1
+            r_dot_r = ca.mtimes(r.T, r)                  # 1×1 MX
+            outer_r = ca.mtimes(r, r.T)                  # 3×3
+            I_about_origin_mx = (I_about_origin_mx
+                                 + I_own_in_craft_mx
+                                 + m * (r_dot_r * eye3 - outer_r))
+            m_total      = m_total + m
+            m_total_decl += m_decl
+            com_sum_mx   = com_sum_mx + m * r
 
         # ----- recurse into children ---------------------------------------
         if isinstance(part, CompositePart):
@@ -188,9 +226,10 @@ def symbolic_inertia_rollup(root_part, *, param_subs=()) -> dict:
             visit(child, ca.MX.zeros(3, 1), ca.MX.eye(3))
 
     if m_total_decl <= 0.0:
+        where = f"Craft {who!r}: " if who else ""
         raise ValueError(
-            "symbolic_inertia_rollup: total mass is zero. Add at least one "
-            "Mass part to the craft.")
+            f"{where}total mass is zero. Add at least one Mass part to the "
+            f"craft.")
 
     com_mx     = com_sum_mx / m_total
     com_dot    = ca.mtimes(com_mx.T, com_mx)
@@ -202,10 +241,43 @@ def symbolic_inertia_rollup(root_part, *, param_subs=()) -> dict:
     I_com_at_zero = _evaluate_at_zero(I_com_mx, root_part, param_subs)
 
     return {
-        "m_total":           m_total,
-        "com_in_craft_mx":   com_mx,
-        "I_com_in_craft_mx": I_com_mx,
-        "I_com_at_zero":     I_com_at_zero,
+        "m_total":              m_total,
+        "com_in_craft_mx":      com_mx,
+        "I_com_in_craft_mx":    I_com_mx,
+        "I_origin_in_craft_mx": I_about_origin_mx,
+        "I_com_at_zero":        I_com_at_zero,
+    }
+
+
+def aggregate_inertials_at_rest(root_part) -> dict:
+    """The rollup's numeric snapshot at rest: total mass, COM, and the
+    inertia tensor about both the craft origin and the COM, as
+    plain floats / ndarrays.
+
+    This is `symbolic_inertia_rollup` evaluated rather than a second
+    tree walk. The two used to be hand-written twins under a "must
+    match exactly" comment, and drifted: the numeric one never picked
+    up `mount_orientation`. Deriving it removes the invariant.
+
+    "At rest" is the rollup's own snapshot convention — every joint DOF
+    on the path at zero, every promoted parameter at its declared value.
+    A massless craft returns zeros rather than raising: callers of this
+    are introspection and the compile-time mass guard, both of which
+    want to see the zero, not a traceback.
+    """
+    try:
+        roll = symbolic_inertia_rollup(root_part)
+    except ValueError:
+        return {"m_total": 0.0, "com": np.zeros(3),
+                "I_origin": np.zeros((3, 3)), "I_com": np.zeros((3, 3))}
+    evaluate = lambda e: _evaluate_at_zero(e, root_part)   # noqa: E731
+    m_total = roll["m_total"]
+    return {
+        "m_total":  (float(evaluate(m_total).reshape(-1)[0])
+                     if isinstance(m_total, ca.MX) else float(m_total)),
+        "com":      evaluate(roll["com_in_craft_mx"]).reshape(3),
+        "I_origin": evaluate(roll["I_origin_in_craft_mx"]),
+        "I_com":    evaluate(roll["I_com_in_craft_mx"]),
     }
 
 

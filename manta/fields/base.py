@@ -180,6 +180,14 @@ class Field:
     #: The CasADi-wrapped type the field's value has. Subclasses set this.
     value_shape: type = type(None)
 
+    #: Whether this field's composition rule evaluates
+    #: `Disturbance.membership` at all. Only `FluidField`'s
+    #: baseline/averaged/additive blend does; the plain additive fold
+    #: (gravity, B-field, collision) never calls it, so `add()` refuses
+    #: a disturbance carrying one rather than silently dropping the
+    #: spatial support the user asked for.
+    honors_membership: bool = False
+
     def __init__(self) -> None:
         self._disturbances: list[Disturbance] = []
 
@@ -207,6 +215,27 @@ class Field:
                 f"{type(disturbance).__name__} produces "
                 f"{disturbance.field_value_shape!r}, not "
                 f"{self.value_shape!r}")
+        # A membership on a field whose fold never evaluates it would be
+        # a silent no-op — the disturbance contributes at FULL strength
+        # everywhere while the user believes it is spatially bounded.
+        # That is physics loss, so it fails here at registration, not at
+        # some downstream sample. Both channels count as "non-default":
+        # a `membership=` callable stashed by the constructor and a
+        # subclass overriding the `membership` method.
+        if not self.honors_membership:
+            has_custom_membership = (
+                getattr(disturbance, "_membership", None) is not None
+                or type(disturbance).membership is not Disturbance.membership)
+            if has_custom_membership:
+                raise ValueError(
+                    f"{type(self).__name__}.add: disturbance "
+                    f"{type(disturbance).__name__} carries a non-default "
+                    f"membership, but {type(self).__name__} composes its "
+                    f"disturbances by a plain additive fold and never "
+                    f"evaluates membership — it would be silently ignored. "
+                    f"Membership is only honored by combining-mode fluid "
+                    f"fields (FluidField). Drop the membership, or bake the "
+                    f"spatial support into contribute_at_sym.")
         if disturbance.name is None:
             n = sum(1 for d in self._disturbances
                     if type(d) is type(disturbance))

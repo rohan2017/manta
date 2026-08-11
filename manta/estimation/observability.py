@@ -57,8 +57,11 @@ from typing import Callable
 import numpy as np
 
 from ..ir.module import entry_ident
-from ..ir._names import resolve_suffix
-from ._kalman import joseph_update_np, lin_cov, symmetrize
+from ._assembly import (
+    _controls_at, _resolve_estimator, _resolve_ir, resolve_sensor_set,
+    sensor_R_expr,
+)
+from ._kalman import joseph_update_np, lin_cov, symmetrize, zero_R_message
 
 
 @dataclass
@@ -109,17 +112,11 @@ class ObservabilityReport:
         return self.summary()
 
 
-def _resolve_ir(ekf):
-    """Require a filter transform carrying the IR (`EKF`/`UKF`); the runtime
-    view doesn't carry it. The analysis is the *linearized* observability of
-    the model's sensor set, so it applies to either filter unchanged."""
-    from .ekf import EKF
-    from .ukf import UKF
-    if isinstance(ekf, (EKF, UKF)):
-        return ekf
-    raise TypeError(
-        f"observability: expected the EKF/UKF transform (e.g. "
-        f"EKF(world, ...)), got {type(ekf).__name__}")
+def _empty_report(spec, n: int) -> "ObservabilityReport":
+    """The report for an empty sensor set: nothing is observable, every slot
+    keeps its prior. Built identically by the point and trajectory tests."""
+    return ObservabilityReport(n, 0, [], [(s.name, 1.0) for s in spec.slots],
+                               np.zeros(1), np.zeros((n, 0)))
 
 
 def _operating_point(ekf, state) -> np.ndarray:
@@ -127,19 +124,6 @@ def _operating_point(ekf, state) -> np.ndarray:
     state) into the EKF spec's ambient vector — same convention as
     the runtime's `reset`."""
     return ekf.spec.pack_any(state, base=ekf.world._initial_state_dict())
-
-
-def resolve_sensor_set(ekf, sensors, *, who: str) -> list[str]:
-    """The chosen sensor full-names. `sensors=None` keeps every registered
-    sensor; otherwise each entry resolves like everywhere else (full name or
-    unique `.<suffix>`) — an unknown or ambiguous name raises instead of
-    silently dropping a typo. Shared by observability and `nees`."""
-    fulls = list(ekf.sys.sensors)
-    if sensors is None:
-        return fulls
-    chosen = {resolve_suffix(s, fulls, label="sensor", who=who)
-              for s in sensors}
-    return [f for f in fulls if f in chosen]
 
 
 def _select_sensors(ekf, sensors, *, who: str):
@@ -172,13 +156,12 @@ def observability(ekf, *, state=None, inputs=None, sensors=None,
     spec = ir.spec
     n = spec.tangent_dim
     x = _operating_point(ir, state)
-    u = ir._build_u(inputs)
+    u = ir.sys.resolve_u(inputs, who="observability")
 
     pairs = _select_sensors(ir, sensors, who="observability")
     names = [full for _, full in pairs]
     if not pairs:
-        return ObservabilityReport(n, 0, [], [(s.name, 1.0) for s in spec.slots],
-                                   np.zeros(1), np.zeros((n, 0)))
+        return _empty_report(spec, n)
     return _report_from_O(_local_O(ir, x, u, dt, t, pairs, n), spec, names, rtol)
 
 
@@ -187,7 +170,9 @@ def _local_O(ir, x, u, dt, t, pairs, n) -> np.ndarray:
     H·F^(n-1)]`. `F^p` stays bounded (F ≈ I + A·dt), so this is well
     conditioned — unlike `H·F^k` propagated from a trajectory start."""
     F = np.asarray(ir.sys.F_fn(x, u, dt, t), dtype=float).reshape(n, n)
-    H = np.vstack([np.asarray(h(x, u, dt, t), dtype=float).reshape(-1, n)
+    # H at dt=0: a measurement is dt-independent, the convention the filters
+    # bake in (`prepared_sensors`) and `sigma_horizon` follows.
+    H = np.vstack([np.asarray(h(x, u, 0.0, t), dtype=float).reshape(-1, n)
                    for h, _ in pairs])
     blocks, Fp = [], np.eye(n)
     for _ in range(n):
@@ -248,12 +233,8 @@ def observability_trajectory(world, *, dt: float, steps: int,
     """
     from ..codegen.numpy import TargetNumpy
     from ..sim import Sim
-    from .ekf import EKF
 
-    if estimator is None:
-        estimator = EKF
-    ekf_ir = _resolve_ir(estimator if not callable(estimator)
-                         else estimator(world))
+    ekf_ir = _resolve_estimator(world, estimator)
     sim_ir = Sim(world)
     spec = ekf_ir.spec
     n = spec.tangent_dim
@@ -262,8 +243,7 @@ def observability_trajectory(world, *, dt: float, steps: int,
     pairs = _select_sensors(ekf_ir, sensors, who="observability_trajectory")
     names = [full for _, full in pairs]
     if not pairs:
-        return ObservabilityReport(n, 0, [], [(s.name, 1.0) for s in spec.slots],
-                                   np.zeros(1), np.zeros((n, 0)))
+        return _empty_report(spec, n)
 
     def truth_vec():
         return spec.pack_any(sim.state)
@@ -272,10 +252,13 @@ def observability_trajectory(world, *, dt: float, steps: int,
     blocks = []
     for i in range(steps):
         t = i * dt
-        u_dict = control(t) if callable(control) else (control or {})
+        u_dict = _controls_at(control, t)
         if i % every == 0:
-            blocks.append(_local_O(ekf_ir, truth_vec(),
-                                   ekf_ir._build_u(u_dict or None), dt, t, pairs, n))
+            blocks.append(_local_O(
+                ekf_ir, truth_vec(),
+                ekf_ir.sys.resolve_u(u_dict or None,
+                                     who="observability_trajectory"),
+                dt, t, pairs, n))
         sim.step(dt, u=u_dict)
     return _report_from_O(np.vstack(blocks), spec, names, rtol)
 
@@ -410,14 +393,10 @@ def sigma_horizon(ekf, *, horizon: float, dt: float = 0.02,
 
     # --- per-sensor H/R/rate ---------------------------------------------
     x_s, u_s, dt_s, t_s = sys.x_sym, sys.u_sym, sys.dt_sym, sys.t_sym
-    zero_dt = ca.MX.zeros(1, 1)
     chosen = []                                  # (full, dim, H_fn, R_fn, period)
     for H_fn, full in _select_sensors(ir, sensors, who="sigma_horizon"):
         s = sys.sensors[full]
-        L_h = (ca.substitute(s.L_h_sym, dt_s, zero_dt)
-               if s.L_h_sym is not None and sys.Sigma is not None else None)
-        R_expr = lin_cov(L_h, ca.DM(sys.Sigma) if L_h is not None else None,
-                         s.dim)
+        R_expr = sensor_R_expr(sys, s)
         R_fn = ca.Function(f"R_{entry_ident(full)}",
                            [x_s, u_s, t_s], [R_expr])
         rate = sys.sample_rates.get(full)
@@ -451,15 +430,15 @@ def sigma_horizon(ekf, *, horizon: float, dt: float = 0.02,
         for name, lo, hi in slots:
             block = P[lo:hi, lo:hi]
             sigmas[name].append(float(np.sqrt(max(
-                np.max(np.linalg.eigvalsh(0.5 * (block + block.T))), 0.0))))
+                np.max(np.linalg.eigvalsh(symmetrize(block))), 0.0))))
 
     record_point(t0)
     F = Qk = None
     HRs: list = []
     for i in range(steps):
         t = t0 + i * dt
-        u_dict = control(t) if callable(control) else (control or None)
-        u_vec = ir._build_u(u_dict)
+        u_dict = _controls_at(control, t) or None
+        u_vec = ir.sys.resolve_u(u_dict, who="sigma_horizon")
         if i % refresh == 0:                     # re-linearize along the way
             F = np.asarray(sys.F_fn(x, u_vec, dt, t), float).reshape(n, n)
             Qk = (Q_const if Q_fn is None else
@@ -469,10 +448,10 @@ def sigma_horizon(ekf, *, horizon: float, dt: float = 0.02,
                 H = np.asarray(H_fn(x, u_vec, 0.0, t), float).reshape(dim, n)
                 R = np.asarray(R_fn(x, u_vec, t), float).reshape(dim, dim)
                 if not np.any(np.abs(R) > 0):
-                    raise ValueError(
-                        f"sigma_horizon: sensor {full!r} has zero R — the "
-                        f"update is singular. Declare a noise σ on it or "
-                        f"exclude it via sensors=[...].")
+                    # Same failure `require_active_R` refuses at filter
+                    # construction, reached here when a state-dependent R
+                    # vanishes mid-recursion — so it says the same thing.
+                    raise ValueError(zero_R_message(full, "sigma_horizon"))
                 HRs.append((H, R, period))
         x = np.asarray(sys.predict_fn(x, u_vec, dt, t), float).reshape(-1)
         P = F @ P @ F.T + Qk

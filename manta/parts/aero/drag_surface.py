@@ -65,6 +65,7 @@ from ...fields import FluidField
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3
 from .._declarations import Parameter, PartUpdate
+from ._flow import signed_powers
 from ..base import Part
 from ...ir.wrench import Wrench
 
@@ -221,17 +222,10 @@ class DragSurface(Part):
         F_mx = ca.MX.zeros(3, 1)
         τ_mx = ca.MX.zeros(3, 1)
 
-        # Sign-preserving element-wise powers of v_rel:
-        #   v_powers[0] = v                       (k=1)
-        #   v_powers[k] = v · |v|^k              (k+1 in 1-indexed terms)
-        # Softened |v| keeps the Jacobian regular at v_i=0.
+        # Sign-preserving element-wise powers of v_rel (the shared house
+        # convention — see `_flow.signed_powers`): v_powers[k] = v·|v|^k.
         max_order = max(len(self.force_tensors), len(self.moment_tensors))
-        abs_v_mx = ca.fabs(v_rel_mx) + 1e-30   # for sign-preservation
-        v_powers = [None] * max_order
-        if max_order >= 1:
-            v_powers[0] = v_rel_mx
-        for k in range(1, max_order):
-            v_powers[k] = v_powers[k - 1] * abs_v_mx     # element-wise
+        v_powers = signed_powers(v_rel_mx, max_order)
 
         for k, A_k in enumerate(self.force_tensors):
             if np.all(A_k == 0.0):

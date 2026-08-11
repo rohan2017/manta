@@ -14,7 +14,7 @@ runtime via `Target*`.
 """
 
 from .lqr import LQR, LQRSolution
-from .mpc import MPC, MpcPlan
+from .mpc import MPC, MPCPlan
 from .pid import PID
 
-__all__ = ["LQR", "LQRSolution", "MPC", "MpcPlan", "PID"]
+__all__ = ["LQR", "LQRSolution", "MPC", "MPCPlan", "PID"]

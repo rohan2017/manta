@@ -59,6 +59,8 @@ from __future__ import annotations
 import casadi as ca
 import numpy as np
 
+from .inertia import inertial_mass, inertial_moi_diag
+
 # Below this, an inertia evaluated numerically at the zero pose (a joint's
 # generalized inertia here; det of the 3×3 body inertia in world_tick) is
 # treated as exactly zero — a massless rotor / point-mass craft — and the
@@ -137,29 +139,18 @@ def build_joint_space(craft, *,
     K       = len(joints)
 
     # ----- rotational kinetic energy in COM coordinates -----------------
-    from ..parts._trace import is_promoted
     T = ca.MX(0.0)
     for part in craft.parts:
-        if not part.contributes_inertia:
+        contribution = inertial_mass(part)
+        if contribution is None:
             continue
-        m_attr = part.mass
-        if is_promoted(m_attr):
-            m = m_attr._mx          # promoted (tunable) mass — keep symbolic
-        else:
-            m = float(m_attr)
-            if m <= 0.0:
-                continue
+        m, _ = contribution
         kin = kin_states[part]
         rho = kin.r_in_craft - com_mx
         nu  = kin.velocity_rel_body - v_com_rel_mx
         v   = ca.cross(om_mx, rho) + nu
         T   = T + 0.5 * m * ca.dot(v, v)
-        moi = getattr(part, "moi", (0.0, 0.0, 0.0))
-        if is_promoted(moi):
-            I_loc = ca.diag(moi._mx)    # promoted (tunable) moi — symbolic
-        else:
-            I_loc = ca.DM(np.diag([float(moi[0]), float(moi[1]),
-                                   float(moi[2])]))
+        I_loc = inertial_moi_diag(part)
         R = kin.R_craft_from_input
         w_abs = kin.omega_input
         T = T + 0.5 * ca.dot(w_abs, R @ (I_loc @ (R.T @ w_abs)))

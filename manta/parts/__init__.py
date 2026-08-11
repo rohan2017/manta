@@ -21,6 +21,7 @@ from .articulation.joint import (ArticulatedJoint, PrismaticJoint,
 from .articulation.motor import Motor
 from .thermal.thermal_mass import ThermalMass
 from .sensor.imu import IMU
+from .sensor.antenna import Antenna
 from .sensor.magnetometer import Magnetometer
 from .sensor.position_sensor import PositionSensor
 from .sensor.velocity_sensor import VelocitySensor
@@ -50,7 +51,7 @@ __all__ = [
     "Mass", "PointBuoy", "Collider", "ThermalMass",
     "ArticulatedJoint", "Motor", "PrismaticJoint", "RevoluteDOF",
     "RevoluteJoint",
-    "IMU", "VelocitySensor", "Magnetometer", "PositionSensor", "Barometer",
+    "Antenna", "IMU", "VelocitySensor", "Magnetometer", "PositionSensor", "Barometer",
     "ProjectiveCamera", "BBoxCamera", "CentroidCamera",
     "Thruster",
     "AddedMass", "DragSurface", "FossenDamping", "RotationalDrag", "Aerofoil", "naca", "ControlSurface",

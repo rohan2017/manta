@@ -43,20 +43,24 @@ build inputs are git-ignored (re-emitted); the runtime artifacts are tracked.
 
 ## Build a Mako (`/mako/`)
 
-A drag-and-drop submarine builder: assemble modules (hull sections, thrusters,
-fins, sensors, ballast) in a 2D side-view editor, then **Spawn** — the compile
-server builds the manta `World` from the design, lowers `Sim` + `EKF` + `LQR`
-to WebAssembly with `TargetWasm`, and the browser drives the craft live with
-keyboard setpoints through the baked LQR. The EKF toggle shows a ghost craft
-estimating the state from the design's own sensors (GPS is water-gated, so it
-dead-reckons at depth and re-fixes on surfacing, like
-`examples/vehicles/submarine.py`).
+A drag-and-drop submarine builder: stack spine modules (noses, guidance,
+structure, thruster clusters, finned sterns — one ~20 cm cylinder stack, no
+side mounts) in a 2D side-view editor, then **Spawn** — the compile server
+builds the manta `World` from the design and lowers ONE transform, the `Sim`,
+to WebAssembly with `TargetWasm`. All control runs client-side on the baked
+`meta.mixer` tables: manual keys and quaternion-error orientation/position
+PIDs demand a body wrench, and one matrix-vector product allocates it to
+thrusters (plus speed-scheduled fins). GPS is water-gated like
+`examples/vehicles/submarine.py` — a submerged antenna reports no fix.
 
 - Contract between client and server: `mako/SPEC.md`.
 - Client: `mako/catalog.js` (modules, icons, placement, 3D meshes),
-  `mako/editor.js`, `mako/viewer.js`, `mako/main.js`.
-- Server: `server/mako/` (stdlib-only). Run it for local dev — it serves
-  `web/` **and** the `POST /api/mako/spawn` endpoint:
+  `mako/editor.js`, `mako/viewer.js`, `mako/main.js`,
+  `mako/control.js` (the mixer/PID control laws).
+- Server: `server/mako/` — the HTTP layer (`__main__.py`) is stdlib-only,
+  but the builder it calls needs manta + numpy (and emcc to compile
+  spawns). Run it for local dev — it serves `web/` **and** the
+  `POST /api/mako/spawn` endpoint:
 
 ```sh
 source ~/emsdk/emsdk_env.sh          # emcc, needed to compile spawns

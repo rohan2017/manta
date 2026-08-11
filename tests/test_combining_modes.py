@@ -16,6 +16,7 @@ mode in isolation on a FluidField (the canonical use case).
 
 import casadi as ca
 import numpy as np
+import pytest
 
 from manta.fields import Disturbance, FluidField, FluidState
 from manta.ir.frames import WorldFrame
@@ -141,14 +142,21 @@ def test_averaged_takes_self_mean():
 
 
 def test_averaged_weighted_by_membership():
-    """Memberships weight the mean: 0.75·a + 0.25·b over (0.75+0.25)."""
+    """Memberships weight the mean: 0.75·a + 0.25·b over (0.75+0.25).
+
+    Full coverage (0.75 + 0.25 = 1) is exactly the kink of the saturated
+    denominator `smooth_max0(den − 1) + 1`, where the C^∞ rounding costs
+    0.5·sqrt(_COVERAGE_EPS_SQ) = 5e-7 of denominator — a ~5e-7 relative
+    haircut on the mean. That rounding is the whole point (it is what
+    keeps the fringe Jacobian bounded), so the tolerance admits it.
+    """
     ff = FluidField()
     ff.add(_Const(velocity=(8.0, 0.0, 0.0), combining="averaged",
                   membership=_const_membership(0.75)))
     ff.add(_Const(velocity=(0.0, 8.0, 0.0), combining="averaged",
                   membership=_const_membership(0.25)))
     _, v = _eval(ff)
-    np.testing.assert_allclose(v, (6.0, 2.0, 0.0), atol=1e-6)
+    np.testing.assert_allclose(v, (6.0, 2.0, 0.0), rtol=2e-6, atol=1e-9)
 
 
 def test_averaged_and_additive_compose():
@@ -196,3 +204,63 @@ def test_mutated_combining_raises_at_composition():
     d.combining = "Baseline"
     with pytest.raises(ValueError, match="unknown combining"):
         _eval(ff)
+
+
+# ---------------------------------------------------------------------------
+# the averaged fringe — the smooth boundary the mode used to defeat
+# ---------------------------------------------------------------------------
+
+def _fringe_profile(radius=10.0, width=2.0, speed=8.0, n=801, span=3.0):
+    """Wind speed along +x through a single bounded `averaged` bubble.
+
+    Returns `(xs, speeds)` sampled across the bubble's fringe. One
+    disturbance means the self-mean is `v·w/den`, which is exactly where
+    a naive `den + 1e-9` normalizer cancels the membership out and hands
+    back full-strength wind wherever `w ≳ 1e-6`.
+    """
+    from manta.fields import within_sphere
+
+    ff = FluidField()
+    ff.add(_Const(velocity=(speed, 0.0, 0.0), combining="averaged",
+                  membership=within_sphere((0.0, 0.0, 0.0), radius, width)))
+    xs = np.linspace(radius - span * width, radius + span * width, n)
+    out = []
+    for x in xs:
+        s = ff.value_at_sym(_VEC3.constant((float(x), 0.0, 0.0)), ca.MX(0.0))
+        out.append(np.asarray(ca.evalf(s.velocity._mx)).ravel()[0])
+    return xs, np.asarray(out)
+
+
+def test_averaged_fringe_decays_instead_of_holding_full_strength():
+    """Well outside the bubble the wind is gone, and at the nominal
+    radius it is part-strength — not the full 8 m/s the cancelled
+    membership used to hand back."""
+    radius, width, speed = 10.0, 2.0, 8.0
+    xs, v = _fringe_profile(radius, width, speed)
+    inside = v[np.argmin(np.abs(xs - (radius - 3.0 * width)))]
+    edge = v[np.argmin(np.abs(xs - radius))]
+    outside = v[np.argmin(np.abs(xs - (radius + 3.0 * width)))]
+    assert inside == pytest.approx(speed, rel=1e-5)
+    assert 0.1 * speed < edge < 0.9 * speed
+    assert outside == pytest.approx(0.0, abs=1e-9)
+
+
+def test_averaged_fringe_derivative_is_bounded():
+    """The whole point of `boundary=`: a C¹ ramp. The old `den + 1e-9`
+    normalizer put a `w′/ε` spike here — of order 1e9 — which is a
+    near-discontinuity for every Jacobian downstream (the EKF's F, the
+    LQR's A/B). The saturated denominator caps the slope at the scale
+    the blend width actually implies."""
+    radius, width, speed = 10.0, 2.0, 8.0
+    xs, v = _fringe_profile(radius, width, speed)
+    slope = np.abs(np.diff(v) / np.diff(xs))
+    # A ramp from `speed` to 0 over ~2·width cannot be steeper than a
+    # small multiple of speed/width; the regularizer spike was ~1e9.
+    assert slope.max() < 5.0 * speed / width
+
+
+def test_averaged_fringe_is_monotone_with_no_step():
+    radius, width = 10.0, 2.0
+    _, v = _fringe_profile(radius, width)
+    assert np.all(np.diff(v) <= 1e-9)                  # non-increasing
+    assert np.abs(np.diff(v)).max() < 0.05             # no jump

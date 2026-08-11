@@ -16,7 +16,9 @@ Two frames are "the same" iff they are the same Python class (identity).
 
 from __future__ import annotations
 
+import os
 import traceback
+from pathlib import Path
 
 
 class Frame:
@@ -100,17 +102,35 @@ class FrameError(TypeError):
         self.source = source
 
 
+# Lazily computed root of the installed manta package (with trailing
+# separator, so a sibling like ".../manta_tools/" can't false-match).
+# Lazy because frames.py is imported while `import manta` is still running.
+_MANTA_ROOT: str | None = None
+
+
+def _in_manta_package(filename: str) -> bool:
+    global _MANTA_ROOT
+    if _MANTA_ROOT is None:
+        import manta
+        _MANTA_ROOT = str(Path(manta.__file__).resolve().parent) + os.sep
+    try:
+        return str(Path(filename).resolve()).startswith(_MANTA_ROOT)
+    except OSError:      # unresolvable pseudo-filename ("<string>", …)
+        return False
+
+
 def _capture_user_source() -> str | None:
-    """Walk the stack and return the topmost frame outside of manta.
-    Used to attach a user-code source location to errors raised inside IR
-    ops. Returns `None` if no frame outside manta is found."""
+    """Walk the stack and return the topmost frame outside the manta
+    package. Used to attach a user-code source location to errors raised
+    inside IR ops. Skips *every* manta-internal frame — not just
+    `manta/ir/` — because frame checks also fire from craft.py /
+    world_tick.py etc., and a hint pointing at those internals would
+    mislabel framework code as the "user source". Returns `None` if no
+    frame outside manta is found."""
     stack = traceback.extract_stack()
-    # Walk from the caller end (most recent) inward, skipping any frame
-    # whose file path contains 'manta/ir/'.
+    # Walk from the caller end (most recent) inward.
     for entry in reversed(stack):
-        if "manta/ir/" in entry.filename:
-            continue
-        if "manta\\ir\\" in entry.filename:    # windows
+        if _in_manta_package(entry.filename):
             continue
         return f"{entry.filename}:{entry.lineno}  in {entry.name}"
     return None

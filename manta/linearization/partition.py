@@ -37,9 +37,13 @@ def dependency_closure(F_pattern, sot, seed_slots) -> set[str]:
 
 
 def partition_blocks(n_tangent, F_pattern, L_pattern, h_supports) -> list:
-    """Partition the tangent state into independent subsystems — under it
-    the covariance stays block-diagonal forever, so a predict can
-    propagate each block independently (Σ O(n_b³) instead of O(n³)).
+    """Partition the tangent state into independent subsystems — tangent
+    blocks whose covariance never couples: under this partition a
+    block-diagonal P stays block-diagonal through every predict and
+    update. This is a *structural diagnostic* (surfaced as `EKF.n_blocks`
+    and consumed by the tests as ground truth for cross-block zeros); the
+    filters' kernels are dense — nothing exploits the partition for an
+    O(n_b³) block predict today.
 
     Two tangent indices belong to the same block iff they are connected
     through any of the three coupling channels:

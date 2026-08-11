@@ -22,7 +22,7 @@ exactly the surface its Module shape implies — nothing else:
                         `u(x)`, `control(state_dict)`, `retarget`,
                         `reprogram`, `x_ref`, `gain`, `u_ff`.
   * `NumpyMpc` (`_mpc`)               — HELD + returns CONTROL.
-                        `tick(x, goal)` → typed `u`, warm `plan` held
+                        `tick(x, position)` → typed `u`, warm `plan` held
                         between calls, `reset_plan`, `J`.
 
 `NoiseDriver` (`_noise`) drives the oracle's NOISE port; `_compile`

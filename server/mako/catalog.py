@@ -23,10 +23,13 @@ craft is a stack of ~20 cm-diameter cylinders. Per the document:
 
 Builders share one signature::
 
-    build(craft, name, xc, opts) -> Contrib
+    build(craft, name, xc, opts, spec) -> Contrib
 
-with `name` = `"<type><spineIndex>"`, `xc` the module centre x and `opts`
-the clamped options. The returned `Contrib` records the analytic
+with `name` = `"<type><spineIndex>"`, `xc` the module centre x, `opts`
+the clamped options and `spec` the module's own `ModuleType` entry —
+the builder reads its length/fill from the CATALOG entry rather than
+repeating the numbers, so the registry is the single source of truth
+for the geometry the client mirrors. The returned `Contrib` records the analytic
 bookkeeping (mass, displacement, thruster wrench columns, drag tensors)
 that `builder.py` turns into trim / feedforward / rate scales and
 `meta.json` — nothing is re-derived from the parts.
@@ -222,39 +225,45 @@ class Contrib:
 @dataclass(frozen=True)
 class ModuleType:
     """One catalog entry: where it may sit on the spine, its fixed length,
-    flooded fraction (drives the derived neutral mass) and options."""
+    flooded fraction (drives the derived neutral mass) and options.
+
+    The entry is the single source for length/fill: `build` receives its
+    own entry as `spec` and reads the geometry from it, and
+    `catalog_json()` exports the same numbers for the browser catalog
+    (`web/mako/catalog.gen.json`, checked against `catalog.js` by the
+    smoke test)."""
     kind:    str                      # "nose" | "spine" | "rear"
     length:  float                    # x extent (m), fixed per the document
     fill:    float                    # displaced fraction of fairing volume
     options: dict                     # option name -> Opt
-    build:   object                   # build(craft, name, xc, opts)
+    build:   object                   # build(craft, name, xc, opts, spec)
 
 
 # --- nose modules -------------------------------------------------------------
 
-def _build_nose_dvl(craft, name, xc, opts) -> Contrib:
+def _build_nose_dvl(craft, name, xc, opts, spec) -> Contrib:
     """Nose cone with a downward-pointing DVL embedded in the underside."""
     c = Contrib()
-    _body(craft, c, name, xc, 0.30, 0.85, face_drag=True)
+    _body(craft, c, name, xc, spec.length, spec.fill, face_drag=True)
     craft.add(VelocitySensor(f"{name}_dvl",
                              velocity_noise_sigma=opts["dvl_noise"],
                              mount_offset=(xc + 0.03, 0.0, -0.08)))
     return c
 
 
-def _build_nose_camera(craft, name, xc, opts) -> Contrib:
+def _build_nose_camera(craft, name, xc, opts, spec) -> Contrib:
     """Nose cone with 2 stereo cameras looking forward. Structure-only for
     now — manta cameras need optical targets and the Mako swims alone."""
     c = Contrib()
-    _body(craft, c, name, xc, 0.20, 0.85, face_drag=True)
+    _body(craft, c, name, xc, spec.length, spec.fill, face_drag=True)
     return c
 
 
-def _build_nose_sonar(craft, name, xc, opts) -> Contrib:
+def _build_nose_sonar(craft, name, xc, opts, spec) -> Contrib:
     """Nose cone with a sonar array (sonar not in manta yet) — mass/drag/
     buoyancy only. The hanging transducer adds a little extra crossflow."""
     c = Contrib()
-    _body(craft, c, name, xc, 0.50, 0.80, face_drag=True)
+    _body(craft, c, name, xc, spec.length, spec.fill, face_drag=True)
     _drag(craft, c, f"{name}_xdcr", kx=0.5 * 0.004 * 0.9,
           kyz=0.5 * 0.006 * 1.1, mount_offset=(xc + 0.15, 0.0, -0.13))
     return c
@@ -262,11 +271,11 @@ def _build_nose_sonar(craft, name, xc, opts) -> Contrib:
 
 # --- plain spine modules --------------------------------------------------------
 
-def _build_brain(craft, name, xc, opts) -> Contrib:
+def _build_brain(craft, name, xc, opts, spec) -> Contrib:
     """Spine module with the flight computer: GPS antenna on top + a depth
     (pressure) sensor — the one sensor every real AUV computer carries."""
     c = Contrib()
-    _body(craft, c, name, xc, 0.20, 1.0)
+    _body(craft, c, name, xc, spec.length, spec.fill)
     _gps(craft, f"{name}_gps", xc, opts)
     craft.add(Barometer(f"{name}_depth",
                         pressure_noise_sigma=opts["depth_noise"],
@@ -274,25 +283,25 @@ def _build_brain(craft, name, xc, opts) -> Contrib:
     return c
 
 
-def _build_ui(craft, name, xc, opts) -> Contrib:
+def _build_ui(craft, name, xc, opts, spec) -> Contrib:
     """Spine module with a payload attachment point underneath (payloads
     arrive later) — structure only for now."""
     c = Contrib()
-    _body(craft, c, name, xc, 0.15, 1.0)
+    _body(craft, c, name, xc, spec.length, spec.fill)
     return c
 
 
-def _build_battery(craft, name, xc, opts) -> Contrib:
+def _build_battery(craft, name, xc, opts, spec) -> Contrib:
     """Battery segment — no battery model in manta yet; mass/drag only."""
     c = Contrib()
-    _body(craft, c, name, xc, 0.35, 1.0)
+    _body(craft, c, name, xc, spec.length, spec.fill)
     return c
 
 
-def _build_ins(craft, name, xc, opts) -> Contrib:
+def _build_ins(craft, name, xc, opts, spec) -> Contrib:
     """Spine module with an INS-grade IMU."""
     c = Contrib()
-    _body(craft, c, name, xc, 0.30, 1.0)
+    _body(craft, c, name, xc, spec.length, spec.fill)
     craft.add(IMU(f"{name}_imu", gyro_noise_sigma=opts["gyro_noise"],
                   accel_noise_sigma=opts["accel_noise"],
                   gyro_bias_sigma=opts["gyro_bias"],
@@ -300,30 +309,30 @@ def _build_ins(craft, name, xc, opts) -> Contrib:
     return c
 
 
-def _build_side_scan(craft, name, xc, opts) -> Contrib:
+def _build_side_scan(craft, name, xc, opts, spec) -> Contrib:
     """Long spine module with two side-scan sonars (sonar not in manta yet)
     — mass/drag/buoyancy only."""
     c = Contrib()
-    _body(craft, c, name, xc, 0.55, 1.0)
+    _body(craft, c, name, xc, spec.length, spec.fill)
     return c
 
 
 # --- transverse thruster spine modules -------------------------------------------
 
-def _build_thrust_vert(craft, name, xc, opts) -> Contrib:
+def _build_thrust_vert(craft, name, xc, opts, spec) -> Contrib:
     """Spine module with a vertical through-hull tunnel thruster. The
     tunnel floods → less displacement than the fairing."""
     c = Contrib()
-    _body(craft, c, name, xc, 0.30, 0.70)
+    _body(craft, c, name, xc, spec.length, spec.fill)
     _thruster(craft, c, name + "_prop", axis=(0.0, 0.0, 1.0),
               at=(xc, 0.0, 0.0), spin=+1, opts=opts)
     return c
 
 
-def _build_thrust_horiz(craft, name, xc, opts) -> Contrib:
+def _build_thrust_horiz(craft, name, xc, opts, spec) -> Contrib:
     """Spine module with a horizontal (sway) tunnel thruster."""
     c = Contrib()
-    _body(craft, c, name, xc, 0.30, 0.70)
+    _body(craft, c, name, xc, spec.length, spec.fill)
     _thruster(craft, c, name + "_prop", axis=(0.0, 1.0, 0.0),
               at=(xc, 0.0, 0.0), spin=+1, opts=opts)
     return c
@@ -347,9 +356,9 @@ def _build_agility(cant_sign: float):
     (+1). As in the document, the canted pods sit at the front corners of
     the front module and the rear corners of the rear one (vertical pods
     staggered the other way) — matching web/mako/catalog.js's meshes."""
-    def _build(craft, name, xc, opts) -> Contrib:
+    def _build(craft, name, xc, opts, spec) -> Contrib:
         c = Contrib()
-        _body(craft, c, name, xc, 0.25, 0.80)
+        _body(craft, c, name, xc, spec.length, spec.fill)
         canted_x = xc - cant_sign * 0.05
         vert_x = xc + cant_sign * 0.06
         for tag, side in (("l", +1.0), ("r", -1.0)):
@@ -371,22 +380,22 @@ def _build_agility(cant_sign: float):
 
 # --- rear (stern) modules ----------------------------------------------------------
 
-def _build_rear_thrust(craft, name, xc, opts) -> Contrib:
+def _build_rear_thrust(craft, name, xc, opts, spec) -> Contrib:
     """Stern module: main prop in a duct + the shared GPS antenna."""
     c = Contrib()
-    _body(craft, c, name, xc, 0.40, 0.70, face_drag=True)
+    _body(craft, c, name, xc, spec.length, spec.fill, face_drag=True)
     _thruster(craft, c, name + "_prop", axis=(1.0, 0.0, 0.0),
               at=(xc - 0.20, 0.0, 0.0), spin=+1, opts=opts)
     _gps(craft, f"{name}_gps", xc + 0.14, opts)
     return c
 
 
-def _build_fin_control(craft, name, xc, opts) -> Contrib:
+def _build_fin_control(craft, name, xc, opts, spec) -> Contrib:
     """Stern module: main prop + four identical actuating fins in a +
     configuration (top/bottom rudders, left/right stern planes) + the
     shared GPS antenna."""
     c = Contrib()
-    _body(craft, c, name, xc, 0.40, 0.65, face_drag=True)
+    _body(craft, c, name, xc, spec.length, spec.fill, face_drag=True)
     _thruster(craft, c, name + "_prop", axis=(1.0, 0.0, 0.0),
               at=(xc - 0.20, 0.0, 0.0), spin=+1, opts=opts)
     _gps(craft, f"{name}_gps", xc + 0.12, opts)

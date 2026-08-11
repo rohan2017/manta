@@ -31,9 +31,13 @@ a craft.
 
 ::: manta.parts.Collider
 
+::: manta.parts.ThermalMass
+
 ## Actuation
 
 ::: manta.parts.Thruster
+
+::: manta.parts.Motor
 
 ## Articulation
 
@@ -44,6 +48,12 @@ a craft.
 ## Aerodynamics
 
 ::: manta.parts.DragSurface
+
+::: manta.parts.RotationalDrag
+
+::: manta.parts.AddedMass
+
+::: manta.parts.FossenDamping
 
 ::: manta.parts.Aerofoil
 
@@ -68,6 +78,8 @@ a craft.
 ::: manta.parts.BBoxCamera
 
 ::: manta.parts.CentroidCamera
+
+::: manta.parts.Antenna
 
 ## Attachment and disturbance
 

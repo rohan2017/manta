@@ -203,3 +203,69 @@ def test_aggregate_composes_declared_joint_angle():
     # rotor at (1.0, 0.5, 0.0) → COM at the mass-weighted midpoint.
     np.testing.assert_allclose(inertials["com"], (0.5, 0.25, 0.0),
                                atol=1e-12)
+
+
+def test_aggregate_composes_mount_orientation():
+    """A rotated bracket turns its subtree — offsets AND inertia tensors.
+
+    Both inertia walks used to assume "the mount doesn't rotate", so a
+    part under a 90°-yawed bracket was placed along the bracket's
+    un-rotated axis and had its MOI tensor left in the wrong frame,
+    while the kinematic pass (which does honour `mount_orientation`)
+    placed the same part correctly. The dynamics and the sensor geometry
+    disagreed about where the mass was.
+    """
+    from manta.parts._mounting import rest_pose_from
+    from manta.parts.base import CompositePart
+
+    q_yaw90 = (math.cos(math.pi / 4), 0.0, 0.0, math.sin(math.pi / 4))
+    c = Craft("bracketed")
+    bracket = c.add(CompositePart("bracket", mount_orientation=q_yaw90))
+    mass = bracket.add(Mass("m", mass=2.0, mount_offset=(1.0, 0.0, 0.0),
+                            moi=(0.1, 0.2, 0.3)))
+
+    inertials = c.aggregate_inertials()
+    # The bracket's yaw carries the mass's +x offset onto craft +y —
+    # the same answer the shared rest-pose walk (and the kinematics)
+    # give for that part.
+    expected_r, _ = rest_pose_from(c.root, mass)
+    np.testing.assert_allclose(expected_r, (0.0, 1.0, 0.0), atol=1e-12)
+    np.testing.assert_allclose(inertials["com"], expected_r, atol=1e-12)
+    # R·I·Rᵀ swaps the x/y principal moments; z is on the yaw axis.
+    np.testing.assert_allclose(np.diag(inertials["I_com"]),
+                               (0.2, 0.1, 0.3), atol=1e-12)
+
+
+def test_aggregate_composes_mount_orientation_through_nested_brackets():
+    """Two stacked 45° yaws compose to 90° — the walk multiplies the
+    rotations, it does not just apply the innermost one."""
+    from manta.parts.base import CompositePart
+
+    q_yaw45 = (math.cos(math.pi / 8), 0.0, 0.0, math.sin(math.pi / 8))
+    c = Craft("stacked")
+    outer = c.add(CompositePart("outer", mount_orientation=q_yaw45))
+    inner = outer.add(CompositePart("inner", mount_orientation=q_yaw45))
+    inner.add(Mass("m", mass=1.0, mount_offset=(2.0, 0.0, 0.0)))
+
+    np.testing.assert_allclose(c.aggregate_inertials()["com"],
+                               (0.0, 2.0, 0.0), atol=1e-12)
+
+
+def test_mount_orientation_rotates_a_prismatic_slide():
+    """A prismatic joint slides along its OWN axis: mounted rotated, the
+    slide direction rotates with it."""
+    from manta.parts import PrismaticJoint
+    from manta.parts.base import CompositePart
+
+    q_yaw90 = (math.cos(math.pi / 4), 0.0, 0.0, math.sin(math.pi / 4))
+    c = Craft("slider")
+    c.add(Mass("hub", mass=1.0))
+    bracket = c.add(CompositePart("bracket", mount_orientation=q_yaw90))
+    j = bracket.add(PrismaticJoint("rail", axis=(1.0, 0.0, 0.0),
+                                   displacement=3.0))
+    j.add(Mass("car", mass=1.0))
+
+    # The rail's +x axis is craft +y after the bracket's yaw, so the car
+    # sits at (0, 3, 0) and the two equal masses put the COM halfway.
+    np.testing.assert_allclose(c.aggregate_inertials()["com"],
+                               (0.0, 1.5, 0.0), atol=1e-12)

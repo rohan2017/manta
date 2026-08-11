@@ -65,23 +65,22 @@ import math
 import warnings
 
 import casadi as ca
-import numpy as np
 
-from ..ir.module import Module, entry_ident
-from ..ir.state_spec import StateSpec
+from ..ir.module import entry_ident
 from ..linearization import LinearizedSystem
 from ._assembly import (
-    emit_filter_module, initial_ambient, prepared_sensors, resolve_u,
+    _FilterBase, _q_auto, emit_filter_module, initial_ambient,
+    prepared_sensors,
 )
-from ._kalman import (
-    lin_cov, sigma_deltas, unscented_weights, ut_predict, ut_update,
-)
+from ._kalman import sigma_deltas, unscented_weights, ut_predict, ut_update
 
 
-class UKF:
+class UKF(_FilterBase):
     """Error-state UKF over a `World` — symbolic sigma-point recursion +
     typed Module. Drop-in alternative to `EKF` with the same constructor,
-    runtime surface, and emitted Module shape."""
+    runtime surface, and emitted Module shape. The analysis surface
+    (`module`, `n_blocks`, `observability`, `sigma_horizon`) is the shared
+    `_FilterBase` tail."""
 
     def __init__(self, world, *,
                  track: dict | None = None,
@@ -137,10 +136,7 @@ class UKF:
         """
         sys = LinearizedSystem(world, track=track, sensors=sensors,
                                inputs=inputs, track_mode="closure")
-        self.sys = sys
-        self.world = world
-        self.crafts = sys.crafts
-        self.spec: StateSpec = sys.spec
+        self._bind_system(world, sys)
 
         n_tan = sys.spec.tangent_dim
         explicit_alpha = alpha is not None
@@ -157,7 +153,7 @@ class UKF:
         P = ca.MX.sym("P", n_tan, n_tan)
         Q = ca.MX.sym("Q", n_tan, n_tan)
 
-        _, w_m, w_c, gamma = unscented_weights(n_tan, alpha, beta, kappa)
+        w_m, w_c, gamma = unscented_weights(n_tan, alpha, beta, kappa)
         if explicit_alpha and w_c[0] < 0.0:
             warnings.warn(
                 f"UKF: alpha={alpha}, beta={beta}, kappa={kappa} give a "
@@ -180,13 +176,11 @@ class UKF:
         # `ca.cse` shrinks the graph: the 2n+1 substituted tick copies share
         # nearly all their subexpressions (same reason the linearization
         # engine cse's its inlined H kernels).
-        Q_auto = lin_cov(sys.L_sym,
-                         ca.DM(sys.Sigma) if sys.L_sym is not None else None,
-                         n_tan)
+        Q_auto = _q_auto(sys)
         propagated = [ca.substitute(sys.x_new, x, Xi) for Xi in sigma_pts]
-        x_pred, P_pred = ut_predict(deltas, propagated, Q_auto,
+        x_pred, P_pred = ut_predict(propagated, Q_auto,
                                     w_m, w_c, spec, mean_iters)
-        x_pred_q, P_pred_q = ut_predict(deltas, propagated, Q,
+        x_pred_q, P_pred_q = ut_predict(propagated, Q,
                                         w_m, w_c, spec, mean_iters)
         x_pred, P_pred = ca.cse([x_pred, P_pred])
         x_pred_q, P_pred_q = ca.cse([x_pred_q, P_pred_q])
@@ -217,36 +211,5 @@ class UKF:
             predict_fn=predict_fn, predict_q_fn=predict_q_fn,
             updates=updates)
 
-    def module(self) -> Module:
-        """The typed `Module` IR a backend lowers."""
-        return self._module
-
-    # ------------------------------------------------------------------
-    # Analysis surface
-    # ------------------------------------------------------------------
-
-    @property
-    def n_blocks(self) -> int:
-        """Independent tangent subsystems (structurally decoupled crafts)."""
-        return len(self.sys.blocks)
-
-    def _build_u(self, u: dict[str, float] | None) -> np.ndarray:
-        """Resolve `u` to a flat input vector (full or suffix names)."""
-        return resolve_u(self.sys, u, who="UKF")
-
-    def observability(self, **kwargs):
-        """Local observability of the chosen sensor set at an operating
-        point (the linearized analysis shared with the EKF — see
-        `manta.estimation.observability`)."""
-        from .observability import observability
-        return observability(self, **kwargs)
-
-    def sigma_horizon(self, **kwargs):
-        """Per-slot σ attainable after a horizon — the linearized covariance
-        recursion run open-loop (see `manta.estimation.observability`)."""
-        from .observability import sigma_horizon
-        return sigma_horizon(self, **kwargs)
-
-    def __repr__(self) -> str:
-        return (f"<UKF tangent={self.spec.tangent_dim} "
-                f"sensors={list(self.sys.sensors)} n_blocks={self.n_blocks}>")
+    # module() / n_blocks / observability() / sigma_horizon() / __repr__
+    # are the shared `_FilterBase` analysis tail (estimation/_assembly.py).

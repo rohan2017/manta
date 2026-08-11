@@ -56,36 +56,15 @@ from __future__ import annotations
 import casadi as ca
 import numpy as np
 
-from ...ir.frames import PartFrame
-from ...ir.types import Vec3
 from .._declarations import Input, Parameter, PartUpdate, State, unit_axis
+from .._mounting import rest_pose_from
 from .._trace import declared_attr, scalar_mx
 from ..base import CompositePart
-from ...ir.wrench import Wrench
 
 
 _PASSIVE    = "passive"
 _SATURATING = "saturating"
 _MODES      = (_PASSIVE, _SATURATING)
-
-
-def _offset_from(ancestor, descendant) -> np.ndarray:
-    """Sum the static `mount_offset` of every part on the path from
-    `ancestor` (exclusive) down to `descendant` (inclusive) — the
-    rest-pose offset of a child relative to a joint origin, used for the
-    parallel-axis lift in the numeric `I_joint_tensor` snapshot."""
-    chain: list = []
-    cur = descendant
-    while cur is not None and cur is not ancestor:
-        chain.append(cur)
-        cur = cur.parent
-    if cur is not ancestor:
-        raise ValueError(
-            f"_offset_from: '{descendant.name}' is not a descendant of "
-            f"'{ancestor.name}'.")
-    return sum((np.asarray(declared_attr(p, "mount_offset"), dtype=float)
-                for p in chain),
-               start=np.zeros(3))
 
 
 class ArticulatedJoint(CompositePart):
@@ -111,7 +90,7 @@ class ArticulatedJoint(CompositePart):
         # The kinematic pass and the joint-space rows both assume a unit
         # axis — normalize once here (a zero axis is a config error).
         self.axis = unit_axis(self.axis,
-                              who=f"{type(self).__name__} {name!r}",
+                              who=f"{type(self).__name__}({name!r})",
                               what="axis")
 
     # ----- per-DOF-type hooks ----------------------------------------------
@@ -158,8 +137,15 @@ class ArticulatedJoint(CompositePart):
             I_own = np.diag([float(moi_diag[0]),
                              float(moi_diag[1]),
                              float(moi_diag[2])])
-            r = _offset_from(self, descendant)
-            I_lifted = I_own + m * (float(r @ r) * np.eye(3) - np.outer(r, r))
+            # Rest pose relative to the joint origin, composed through
+            # every intermediate mount_orientation: r for the parallel-
+            # axis lift, R for expressing the descendant's diagonal moi
+            # in the joint's input frame (R·I·Rᵀ). A rotated bracket's
+            # inertia would otherwise land on the wrong axes — and
+            # I_axial gates whether this DOF is live at all.
+            r, R = rest_pose_from(self, descendant)
+            I_lifted = (R @ I_own @ R.T
+                        + m * (float(r @ r) * np.eye(3) - np.outer(r, r)))
             total += I_lifted
         return total
 
@@ -189,13 +175,15 @@ class ArticulatedJoint(CompositePart):
     # ----- update() --------------------------------------------------------
 
     def update(self, ctx) -> PartUpdate:
-        # The joint emits no wrench of its own and does not integrate
-        # here. Its children (Mass, etc.) supply the external wrench; the
-        # world tick's joint-space solve produces q̈ and a central
-        # integrator advances the DOF states.
-        zero = Vec3[PartFrame].constant((0.0, 0.0, 0.0))
-        return PartUpdate(wrench=Wrench(force=zero, torque=zero),
-                          new_state={})
+        # The joint emits no wrench of its own and does not integrate here:
+        # children (Mass, etc.) supply the external wrench, the world tick's
+        # joint-space solve produces q̈, and a central integrator advances
+        # the DOF states. The zero wrench itself comes from CompositePart —
+        # this override exists for the RETURN TYPE. Joints are the parts
+        # users subclass to add state (a rev counter on a Motor, say), and
+        # such a subclass extends `super().update(ctx).new_state`, which a
+        # bare Wrench has no room for.
+        return PartUpdate(wrench=super().update(ctx), new_state={})
 
 
 class CommandedDOF(ArticulatedJoint):
@@ -218,7 +206,7 @@ class CommandedDOF(ArticulatedJoint):
         mode = self.declared_value("mode")
         if mode not in _MODES:
             raise ValueError(
-                f"{type(self).__name__} {name!r}: mode must be one of "
+                f"{type(self).__name__}({name!r}): mode must be one of "
                 f"{_MODES}, got {mode!r}")
 
     def _actuator_cmd(self):

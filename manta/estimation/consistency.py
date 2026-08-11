@@ -40,12 +40,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import sqrt
-from typing import Any, Callable
+from typing import Callable
 
 import numpy as np
 
-# manta imports are deferred into `nees()` to avoid an import cycle
-# (estimation → consistency → codegen.numpy → estimation).
+from ._assembly import _controls_at, _resolve_estimator, resolve_sensor_set
+
+# The heavier manta imports are deferred into `nees()` to avoid an import
+# cycle (estimation → consistency → codegen.numpy → estimation);
+# `_assembly` is a leaf of this package and safe at module scope.
 
 
 # --------------------------------------------------------------------------
@@ -125,12 +128,6 @@ class NEESReport:
         return self.summary()
 
 
-def _controls_at(control, t) -> dict[str, Any]:
-    if control is None:
-        return {}
-    return control(t) if callable(control) else dict(control)
-
-
 def nees(world, *, dt: float, steps: int,
          control: Callable[[float], dict] | dict | None = None,
          sensors: list[str] | None = None,
@@ -176,13 +173,8 @@ def nees(world, *, dt: float, steps: int,
     import casadi as ca
     from ..codegen.numpy import NoiseDriver, TargetNumpy
     from ..sim import Sim
-    from .ekf import EKF
-    from .observability import _resolve_ir, resolve_sensor_set
 
-    if estimator is None:
-        estimator = EKF
-    ekf_ir = _resolve_ir(estimator if not callable(estimator)
-                         else estimator(world))
+    ekf_ir = _resolve_estimator(world, estimator)
     sim_ir = Sim(world)
     spec = ekf_ir.spec
     n = spec.tangent_dim

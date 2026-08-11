@@ -138,6 +138,18 @@ class MPC:
                  parallel: str | None = None) -> None:
         if not world.crafts:
             raise ValueError("MPC: world has no crafts.")
+        if len(world.crafts) > 1:
+            # The objective below is carved from crafts[0]'s slots while
+            # `u` spans EVERY craft's inputs, so a second craft would be
+            # commanded but never priced — silently, and expensively.
+            # Refuse until the objective is genuinely multi-craft.
+            raise ValueError(
+                f"MPC: world has {len(world.crafts)} crafts "
+                f"({', '.join(c.name for c in world.crafts)}); the "
+                f"objective is single-craft (position/velocity/heading "
+                f"of one body) while the control vector spans them all. "
+                f"Build the MPC on a world holding just the craft to "
+                f"control.")
         if terminal not in ("weights", "lqr"):
             raise ValueError(f"MPC: terminal must be 'weights' or "
                              f"'lqr', got {terminal!r}.")
@@ -175,9 +187,11 @@ class MPC:
         pos = spec.slot(f"{craft}.position")
         vel = spec.slot(f"{craft}.velocity")
         quat = spec.slot(f"{craft}.orientation")
+        rates = spec.slot(f"{craft}.angular_velocity")
         po, pd = pos.ambient_offset, pos.ambient_dim
         vo = vel.ambient_offset
         qo = quat.ambient_offset
+        ao = rates.ambient_offset
 
         # ---- terminal quadratic: eᵀ·PT·e, e = x − xref(goal) ----------
         if terminal == "lqr":
@@ -215,31 +229,31 @@ class MPC:
 
         tick = _build_tick(
             f, fj, nx=nx, nu=nu, N=self.horizon, dt=self.dt,
-            po=po, pd=pd, vo=vo, qo=qo, u_lo=u_lo, u_hi=u_hi,
+            po=po, pd=pd, vo=vo, qo=qo, ao=ao, u_lo=u_lo, u_hi=u_hi,
             sweeps=int(sweeps), alphas=tuple(alphas), mu=float(mu),
             parallel=parallel)
 
         # the DEFAULT objective — the legacy point-to-point family:
         # hold the initial position, velocity/heading masked, uniform
-        # effort. target = [p_ref(3), v_ref(3), d_ref(3)]; weights =
-        # [w_p(3), w_v(3), w_h, w_u(nu)].
-        t0 = np.zeros(9)
+        t0 = np.zeros(19)  # p, world-v, body-v, heading, q, body-rates
         t0[0:3] = x_init[po:po + pd]
-        t0[6] = 1.0                              # d_ref: unit +x
-        w0 = np.zeros(7 + nu)
+        t0[9] = 1.0
+        t0[12] = 1.0
+        w0 = np.zeros(28 + nu)  # wp, Wvw, Wvb, wh, wa, wr, wu
         w0[0:3] = float(w_pos_running)
-        w0[7:] = float(w_u)
+        w0[28:] = float(w_u)
         self._t0, self._w0 = t0, w0
 
         # kept for the offline plan-birth solver (`plan()`)
         self._f, self._fj = f, fj
+        self._stage = _stage_function(nx, nu, self.dt, po, pd, vo, qo, ao)
         self._fj_map = fj.map(self.horizon)
         self._fh: ca.Function | None = None      # built on first fxx use
         self._spec = spec
         self._x_init = x_init
         self._PT = PT
         self._po, self._pd = po, pd
-        self._vo, self._qo = vo, qo
+        self._vo, self._qo, self._ao = vo, qo, ao
 
         self._module = Module(
             name=f"{world.name}_mpc",
@@ -249,10 +263,9 @@ class MPC:
             ports=(
                 Port("x", Role.STATE, (spec.ambient_dim,),
                      manifold=spec, init=x_init),
-                Port("target", Role.MATRIX, (9, 1),
-                     init=t0.reshape(9, 1)),
-                Port("weights", Role.MATRIX, (7 + nu, 1),
-                     init=w0.reshape(7 + nu, 1)),
+                Port("target", Role.MATRIX, (19, 1), init=t0.reshape(19, 1)),
+                Port("weights", Role.MATRIX, (28 + nu, 1),
+                     init=w0.reshape(28 + nu, 1)),
                 Port("PT", Role.MATRIX, (nx, nx), init=PT),
                 Port("u", Role.CONTROL, (nu,), fields=tuple(
                     PortField(f.name, 1, float(f.default))
@@ -292,13 +305,15 @@ class MPC:
             np.asarray(w_velocity, dtype=float).ravel(), (3,))
         return np.diag(d)
 
-    def objective(self, *, goal=None, velocity=None, heading=None,
-                  w_position=None, w_velocity=None, w_heading=None,
+    def objective(self, *, position=None, velocity=None, body_velocity=None,
+                  heading=None, orientation=None, rates=None,
+                  w_position=None, w_velocity=None, w_body_velocity=None,
+                  w_heading=None, w_attitude=None, w_rates=None,
                   w_effort=None, P=None):
         """Assemble (target, weights, PT) vectors over the built
         defaults — the same currency the tick's runtime ports carry.
 
-        `goal`/`velocity` are world-frame 3-vectors; `heading` is a
+        `position`/`velocity` are world-frame 3-vectors; `heading` is a
         direction (2- or 3-vector, normalized here); the w_* are
         scalars (broadcast) or per-axis/per-channel vectors; `P` a
         replacement terminal matrix (e.g. `LQR.resolve_at(...).P`
@@ -306,10 +321,12 @@ class MPC:
         t = self._t0.copy()
         w = self._w0.copy()
         PT = self._PT
-        if goal is not None:
-            t[0:3] = np.asarray(goal, dtype=float).ravel()
+        if position is not None:
+            t[0:3] = np.asarray(position, dtype=float).ravel()
         if velocity is not None:
             t[3:6] = np.asarray(velocity, dtype=float).ravel()
+        if body_velocity is not None:
+            t[6:9] = np.asarray(body_velocity, dtype=float).ravel()
         if heading is not None:
             d = np.zeros(3)
             h = np.asarray(heading, dtype=float).ravel()
@@ -318,21 +335,36 @@ class MPC:
             if n < 1e-9:
                 raise ValueError("objective: heading must be a "
                                  "non-zero direction")
-            t[6:9] = d / n
-        for lo, hi, val in ((0, 3, w_position), (3, 6, w_velocity),
-                            (6, 7, w_heading), (7, 7 + self.nu,
-                                                w_effort)):
+            t[9:12] = d / n
+        if orientation is not None:
+            q = np.asarray(orientation, dtype=float).ravel()
+            n = np.linalg.norm(q)
+            if q.size != 4 or n < 1e-9:
+                raise ValueError("objective: orientation must be a non-zero wxyz quaternion")
+            t[12:16] = q / n
+        if rates is not None:
+            t[16:19] = np.asarray(rates, dtype=float).ravel()
+        for lo, hi, val in ((0, 3, w_position), (3, 12, w_velocity),
+                            (12, 21, w_body_velocity), (21, 22, w_heading),
+                            (22, 25, w_attitude), (25, 28, w_rates),
+                            (28, 28 + self.nu, w_effort)):
             if val is not None:
-                w[lo:hi] = np.asarray(val, dtype=float).ravel()
+                a = np.asarray(val, dtype=float)
+                if hi - lo == 9:
+                    a = (np.eye(3) * float(a) if a.ndim == 0 else
+                         np.diag(a.ravel()) if a.size == 3 else a.reshape(3, 3))
+                    if not np.allclose(a, a.T) or np.linalg.eigvalsh(a).min() < -1e-10:
+                        raise ValueError("objective: velocity weight must be symmetric positive semidefinite")
+                w[lo:hi] = a.ravel()
         if P is not None:
             PT = np.asarray(P, dtype=float).reshape(self.nx, self.nx)
         return t, w, PT
 
-    def plan(self, x, goal=None, *, u_init=None,
+    def plan(self, x, position=None, *, u_init=None,
              multi_start: bool = False,
              second_order: bool = False, max_iter: int = 300,
-             tol: float = 1e-5, **objective) -> "MpcPlan":
-        """Solve for a seed plan OFFLINE — mission load, goal change,
+             tol: float = 1e-5, **objective) -> "MPCPlan":
+        """Solve for a seed plan OFFLINE — mission load, target change,
         basin doubt. Same cost, same kernels, same box limits as the
         tick, but with everything the fixed-work tick gave up:
         adaptive backtracking line search, μ-scheduled Levenberg
@@ -351,12 +383,12 @@ class MPC:
           weights ("lqr"), where the value gradients keep the
           second-order model honest.
 
-        `x` as packed vector or dict; returns an `MpcPlan` whose `.U`
+        `x` as packed vector or dict; returns an `MPCPlan` whose `.U`
         (nu × N) feeds `NumpyMpc.reset_plan`. Improvement is monotone
         from whatever `u_init` is given — hand it a cruise and it can
         only make the cruise better.
 
-        The objective: `goal` is the position-target shorthand; the
+        The objective: `position` is the position-target shorthand; the
         full family (velocity, heading, per-term weights, terminal P)
         comes through keyword arguments — see `objective()`. Same
         currency as the tick, so a plan born here is priced exactly
@@ -365,7 +397,7 @@ class MPC:
         x0 = (np.asarray(x, dtype=float).reshape(-1)
               if isinstance(x, np.ndarray)
               else self._spec.pack_any(x, base=self._x_init))
-        tv, wv, PT = self.objective(goal=goal, **objective)
+        tv, wv, PT = self.objective(position=position, **objective)
         if second_order and self._fh is None:
             xs = ca.SX.sym("x", self.nx)
             us = ca.SX.sym("u", self.nu)
@@ -387,7 +419,7 @@ class MPC:
                 U = np.zeros((N, nu))
                 U[:N // 4, ch] = self.u_lo[ch]
                 seeds.append(U)
-        best: MpcPlan | None = None
+        best: MPCPlan | None = None
         for seed in seeds:
             r = self._solve(x0, tv, wv, PT, seed, second_order,
                             max_iter, tol)
@@ -407,22 +439,15 @@ class MPC:
 
     def _cost(self, X, U, tv, wv, PT):
         po, pd = self._po, self._pd
-        vo, qo = self._vo, self._qo
+        vo = self._vo
         p_ref, v_ref = tv[0:3], tv[3:6]
-        wp, wvel, wh = wv[0:3], wv[3:6], wv[6]
-        wu = wv[7:]
-        Mh = np.array(_heading_M(*tv[6:9]))
-        p_err = X[:-1, po:po + pd] - p_ref
-        v_err = X[:-1, vo:vo + 3] - v_ref
-        Q = X[:-1, qo:qo + 4]
-        head = np.einsum("ij,jk,ik->i", Q, Mh, Q)
+        wu = wv[28:]
+        running = sum(float(self._stage(X[i], tv, wv)[0])
+                      for i in range(self.horizon))
         e = X[-1].copy()
         e[po:po + pd] -= p_ref
         e[vo:vo + 3] -= v_ref
-        return float(self.dt * (np.sum((U * U) * wu)
-                                + np.sum((p_err * p_err) * wp)
-                                + np.sum((v_err * v_err) * wvel)
-                                + wh * np.sum(1.0 - head))
+        return float(self.dt * np.sum((U * U) * wu) + running
                      + e @ PT @ e)
 
     def _solve(self, x0, tv, wv, PT, u_init, second_order, max_iter,
@@ -464,7 +489,7 @@ class MPC:
                     break
                 mu = mu * 10.0
                 if mu > mu_max:
-                    return MpcPlan(U.T.copy(), J, it, False)
+                    return MPCPlan(U.T.copy(), J, it, False)
 
             accepted = False
             for alpha in ALPHAS:
@@ -492,7 +517,7 @@ class MPC:
                     converged = trace[-1] < trace[0]
                     break
 
-        return MpcPlan(U.T.copy(), J, len(trace) - 1, converged)
+        return MPCPlan(U.T.copy(), J, len(trace) - 1, converged)
 
     def _backward(self, A, B, X, U, tv, wv, PT, mu, second_order):
         """Control-limited backward pass (Tassa box-QP): honest
@@ -502,17 +527,11 @@ class MPC:
         to μ escalation, never to the line search."""
         N, nx, nu = self.horizon, self.nx, self.nu
         po, pd = self._po, self._pd
-        vo, qo = self._vo, self._qo
+        vo = self._vo
         dt = self.dt
         p_ref, v_ref = tv[0:3], tv[3:6]
-        wp, wvel, wh = wv[0:3], wv[3:6], wv[6]
-        wu = wv[7:]
-        Mh = np.array(_heading_M(*tv[6:9]))
+        wu = wv[28:]
         luu = np.diag(2.0 * dt * wu)
-        lxx_c = np.zeros((nx, nx))
-        lxx_c[po:po + pd, po:po + pd] = np.diag(2.0 * dt * wp)
-        lxx_c[vo:vo + 3, vo:vo + 3] = np.diag(2.0 * dt * wvel)
-        lxx_c[qo:qo + 4, qo:qo + 4] = -2.0 * dt * wh * Mh
 
         e = X[N].copy()
         e[po:po + pd] -= p_ref
@@ -524,10 +543,9 @@ class MPC:
         dV1 = dV2 = 0.0
         for i in range(N - 1, -1, -1):
             Ai, Bi = A[i], B[i]
-            lx = np.zeros(nx)
-            lx[po:po + pd] = 2.0 * dt * wp * (X[i, po:po + pd] - p_ref)
-            lx[vo:vo + 3] = 2.0 * dt * wvel * (X[i, vo:vo + 3] - v_ref)
-            lx[qo:qo + 4] = -2.0 * dt * wh * (Mh @ X[i, qo:qo + 4])
+            _, lx_raw, lxx_raw = self._stage(X[i], tv, wv)
+            lx = np.asarray(lx_raw).reshape(nx)
+            lxx_c = np.asarray(lxx_raw).reshape(nx, nx)
             lu = 2.0 * dt * wu * U[i]
             Qx = lx + Ai.T @ Vx
             Qu = lu + Bi.T @ Vx
@@ -588,7 +606,7 @@ class MPC:
 
 
 @dataclass(frozen=True)
-class MpcPlan:
+class MPCPlan:
     """One offline plan-birth solve, as data.
 
     `U` is (nu × N) — the Module's plan orientation, so it feeds
@@ -650,8 +668,34 @@ def _heading_M(d1, d2, d3):
             [d2,  d3,   z, -d1]]
 
 
+def _stage_function(nx: int, nu: int, dt: float, po: int, pd: int,
+                    vo: int, qo: int, ao: int) -> ca.Function:
+    """Exact running state cost, gradient and Hessian."""
+    sx, st = ca.SX.sym("stage_x", nx), ca.SX.sym("stage_target", 19)
+    sw = ca.SX.sym("stage_weights", 28 + nu)
+    q = sx[qo:qo + 4]
+    qw, qx, qy, qz = q[0], q[1], q[2], q[3]
+    R = ca.vertcat(
+        ca.horzcat(1-2*(qy*qy+qz*qz), 2*(qx*qy-qw*qz), 2*(qx*qz+qw*qy)),
+        ca.horzcat(2*(qx*qy+qw*qz), 1-2*(qx*qx+qz*qz), 2*(qy*qz-qw*qx)),
+        ca.horzcat(2*(qx*qz-qw*qy), 2*(qy*qz+qw*qx), 1-2*(qx*qx+qy*qy)))
+    ep, evw = sx[po:po + pd] - st[0:3], sx[vo:vo + 3] - st[3:6]
+    evb = R.T @ sx[vo:vo + 3] - st[6:9]
+    Wvw, Wvb = ca.reshape(sw[3:12], 3, 3), ca.reshape(sw[12:21], 3, 3)
+    Mh = ca.vertcat(*[ca.horzcat(*row) for row in
+                      _heading_M(st[9], st[10], st[11])])
+    qr = st[12:16]
+    er = qr[0] * q[1:4] - q[0] * qr[1:4] - ca.cross(qr[1:4], q[1:4])
+    ew = sx[ao:ao + 3] - st[16:19]
+    cost = dt * (ca.dot(sw[0:3], ep * ep) + evw.T @ Wvw @ evw
+                 + evb.T @ Wvb @ evb + sw[21] * (1 - q.T @ Mh @ q)
+                 + ca.dot(sw[22:25], er * er) + ca.dot(sw[25:28], ew * ew))
+    return ca.Function("mpc_stage", [sx, st, sw],
+                       [cost, ca.gradient(cost, sx), ca.hessian(cost, sx)[0]])
+
+
 def _build_tick(f: ca.Function, fj: ca.Function, *, nx: int, nu: int,
-                N: int, dt: float, po: int, pd: int, vo: int, qo: int,
+                N: int, dt: float, po: int, pd: int, vo: int, qo: int, ao: int,
                 u_lo: np.ndarray, u_hi: np.ndarray,
                 sweeps: int, alphas: tuple[float, ...],
                 mu: float, parallel: str | None) -> ca.Function:
@@ -742,41 +786,27 @@ def _build_tick(f: ca.Function, fj: ca.Function, *, nx: int, nu: int,
     rev_u = [i * nu + j for i in range(N - 1, -1, -1) for j in range(nu)]
 
     # ---- the tick graph --------------------------------------------------
+    stage = _stage_function(nx, nu, dt, po, pd, vo, qo, ao)
+    stage_map = stage.map(N, parallel) if parallel else stage.map(N)
     x0 = ca.MX.sym("x0", nx)
-    target = ca.MX.sym("target", 9)
-    weights = ca.MX.sym("weights", 7 + nu)
+    target = ca.MX.sym("target", 19)
+    weights = ca.MX.sym("weights", 28 + nu)
     PTm = ca.MX.sym("PT", nx, nx)
     plan = ca.MX.sym("plan", nu, N)
 
     p_ref, v_ref = target[0:3], target[3:6]
-    wp, wv, wh = weights[0:3], weights[3:6], weights[6]
-    wu = weights[7:]
-    Mh = ca.vertcat(*[ca.horzcat(*row) for row in
-                      _heading_M(target[6], target[7], target[8])])
+    wu = weights[28:]
 
     xref = ca.MX.zeros(nx)
     xref[po:po + pd] = p_ref
     xref[vo:vo + 3] = v_ref
-    wpN, wvN = ca.repmat(wp, 1, N), ca.repmat(wv, 1, N)
     wuN = ca.repmat(wu, 1, N)
-    lxx_c = ca.MX.zeros(nx, nx)
-    for j in range(pd):
-        lxx_c[po + j, po + j] = 2.0 * dt * wp[j]
-    for j in range(3):
-        lxx_c[vo + j, vo + j] = 2.0 * dt * wv[j]
-    lxx_c[qo:qo + 4, qo:qo + 4] = -2.0 * dt * wh * Mh
-    lxxN = ca.repmat(lxx_c, 1, N)
+    targetN, weightsN = ca.repmat(target, 1, N), ca.repmat(weights, 1, N)
 
     def cost_of(Xall, U):
-        P = Xall[po:po + pd, :N] - ca.repmat(p_ref, 1, N)
-        V = Xall[vo:vo + 3, :N] - ca.repmat(v_ref, 1, N)
-        Q = Xall[qo:qo + 4, :N]
-        head = ca.sum2(ca.sum1(Q * (Mh @ Q)))       # Σ nose·d over nodes
+        costs, _, _ = stage_map(Xall[:, :N], targetN, weightsN)
         e = Xall[:, N] - xref
-        return (dt * (ca.sum2(ca.sum1((U * U) * wuN))
-                      + ca.sum2(ca.sum1((P * P) * wpN))
-                      + ca.sum2(ca.sum1((V * V) * wvN))
-                      + wh * (N - head))
+        return (dt * ca.sum2(ca.sum1((U * U) * wuN)) + ca.sum2(costs)
                 + e.T @ PTm @ e)
 
     U = plan
@@ -785,18 +815,13 @@ def _build_tick(f: ca.Function, fj: ca.Function, *, nx: int, nu: int,
         Xall = ca.horzcat(x0, roll(x0, U))
         _, Aall, Ball = fj_map(Xall[:, :N], U)
 
-        LX = ca.MX.zeros(nx, N)
-        LX[po:po + pd, :] = 2.0 * dt * wpN * (
-            Xall[po:po + pd, :N] - ca.repmat(p_ref, 1, N))
-        LX[vo:vo + 3, :] = 2.0 * dt * wvN * (
-            Xall[vo:vo + 3, :N] - ca.repmat(v_ref, 1, N))
-        LX[qo:qo + 4, :] = -2.0 * dt * wh * (Mh @ Xall[qo:qo + 4, :N])
+        _, LX, LXX = stage_map(Xall[:, :N], targetN, weightsN)
         e = Xall[:, N] - xref
         _, _, k_rev, K_rev = bsweep(2.0 * (PTm @ e), 2.0 * PTm,
                                     Aall[:, rev_x], Ball[:, rev_u],
                                     LX[:, ::-1],
                                     (2.0 * dt * wuN * U)[:, ::-1],
-                                    lxxN,        # node-constant blocks:
+                                    LXX[:, rev_x],
                                     wuN,         # reversal is a no-op
                                     U[:, ::-1])
         ks = k_rev[:, ::-1]

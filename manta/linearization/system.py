@@ -11,7 +11,10 @@ the pieces live beside it:
 
   * `engine.TickLinearizer` — the differentiation recipe over the tick.
   * `partition`             — dependency closure + independent blocks.
-  * `names`                 — suffix resolution + freeze helpers.
+
+(Suffix name resolution lives in `manta.ir._names.resolve_suffix` — a low
+module that `bus`/`state_spec` and the transforms all reach; the freeze
+helpers live at the bottom of this file, their single consumer.)
 
 What it exposes (everything a transform composes into kernels):
 
@@ -27,7 +30,7 @@ What it exposes (everything a transform composes into kernels):
                `noise_specs`, `sample_rates`
   parameters   `p_sym`, `param_specs`, `n_param` (promoted tunable
                Parameters; empty unless built with `parameters=[...]`)
-  convenience  `predict_fn / F_fn / B_fn` and per-sensor `h_fn / H_fn`
+  convenience  `predict_fn / F_fn / B_fn` and per-sensor `H_fn`
                (`(x,u,dt,t)`-signature `ca.Function`s for point evaluation)
 
 It contains NO filter or controller math — the Kalman recursion lives in
@@ -44,7 +47,6 @@ import numpy as np
 from ..ir._names import resolve_suffix
 from ..ir.state_spec import StateSpec, flatten_nested, resolve_slotset
 from .engine import SensorModel, TickLinearizer
-from .names import freeze_complement, slot_of_tangent_index
 from .partition import dependency_closure
 
 
@@ -303,6 +305,47 @@ class LinearizedSystem:
         """Pack the operating-point reference into `spec`'s ambient layout."""
         return spec.pack_any(self.ref_flat)
 
+    def resolve_u(self, u: dict[str, float] | None, *,
+                  who: str = "LinearizedSystem") -> np.ndarray:
+        """Resolve a `{name: value}` input dict (full or unambiguous suffix
+        names) to this system's flat input vector, defaults elsewhere.
+        `who` labels the errors with the calling tool's name."""
+        names = self.input_names
+        out = self.u_defaults.copy()
+        if u:
+            index = {n: i for i, n in enumerate(names)}
+            for k, v in u.items():
+                full = resolve_suffix(k, names, label="input", who=who)
+                out[index[full]] = float(v)
+        return out
+
     def __repr__(self) -> str:
         return (f"<LinearizedSystem spec(tangent)={self.spec.tangent_dim} "
                 f"inputs={self.input_names} sensors={list(self.sensors)}>")
+
+
+# ---------------------------------------------------------------------------
+# Freeze helpers (single consumer: the construction passes above)
+# ---------------------------------------------------------------------------
+
+def freeze_complement(full_spec, kept, init_flat: dict,
+                      into: dict | None = None) -> dict:
+    """Freeze every full-spec slot NOT in `kept` at its `init_flat` value
+    (zeros if absent), as a flat numpy column."""
+    frozen = into if into is not None else {}
+    for s in full_spec.slots:
+        if s.name not in kept:
+            val = init_flat.get(s.name, np.zeros(s.ambient_dim))
+            frozen[s.name] = np.atleast_1d(
+                np.asarray(val, dtype=float)).reshape(-1)
+    return frozen
+
+
+def slot_of_tangent_index(spec) -> list[str]:
+    """Map each tangent index to its slot name (slot granularity keeps an
+    SO(3) orientation atomic for closure/partitioning)."""
+    m: list[str] = [""] * spec.tangent_dim
+    for s in spec.slots:
+        for i in range(s.tangent_offset, s.tangent_offset + s.tangent_dim):
+            m[i] = s.name
+    return m

@@ -349,15 +349,20 @@ class State(_Declaration):
         if isinstance(manifold, Manifold):
             mfd = manifold
         else:
-            # String shortcut: SO(3) is intentionally not in the shortcut
-            # table because it needs explicit from_frame/to_frame. Pass
-            # `manifold=SO3Manifold(from_frame=..., to_frame=...)` instead.
+            # The shared shortcut grammar (`manifold_from_shortcut`) accepts
+            # any R<n>, but State slots are deliberately restricted to the
+            # manifolds the integrator/EKF/LQR plumbing is exercised on:
+            # R1, R3, and SO(3). SO(3) is excluded from the shortcut form
+            # (not the restriction) because it needs explicit
+            # from_frame/to_frame.
             if manifold not in ("R1", "R3"):
                 raise NotImplementedError(
-                    f"State.manifold={manifold!r}: string shortcuts are "
-                    f"only defined for 'R1' / 'R3'. For SO(3), pass an "
-                    f"explicit SO3Manifold(from_frame=..., to_frame=...) "
-                    f"instance to capture the dual-frame parametrization.")
+                    f"State.manifold={manifold!r}: state manifolds are "
+                    f"deliberately restricted to 'R1' / 'R3' (and SO(3)) "
+                    f"for now, though the shared shortcut grammar is wider. "
+                    f"For SO(3), pass an explicit "
+                    f"SO3Manifold(from_frame=..., to_frame=...) instance "
+                    f"to capture the dual-frame parametrization.")
             mfd = manifold_from_shortcut(manifold, frame=frame)
         if isinstance(mfd, R3Manifold):
             try:

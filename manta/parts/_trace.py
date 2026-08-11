@@ -83,9 +83,13 @@ def declared_attr(owner, name: str, default=None):
     """`getattr(owner, name, default)` that bypasses any active trace
     bindings — always the configured (numeric) instance value. For
     compile-time numeric snapshots that must not pick up a promoted
-    parameter's symbol (rest-pose joint inertia, mass guards)."""
+    parameter's symbol (rest-pose joint inertia, mass guards).
+
+    The defaulting wrapper around `DeclarationHost.declared_value` — the
+    one home of the `object.__getattribute__` trace bypass — so the two
+    read idioms cannot drift apart."""
     try:
-        return object.__getattribute__(owner, name)
+        return owner.declared_value(name)
     except AttributeError:
         return default
 

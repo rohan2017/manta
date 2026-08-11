@@ -12,17 +12,19 @@ A Part is a Python class that:
 Example::
 
     from manta.parts import Part, Parameter, Mass, Wrench
-    from manta.ir.frames import CraftFrame
+    from manta.ir.frames import PartFrame
     from manta.ir.types import Vec3
 
     class ConstantUpwardLift(Part):
-        \"\"\"A toy Part: applies a fixed body-frame +z force.\"\"\"
+        \"\"\"A toy Part: applies a fixed +z force in its own frame.\"\"\"
         magnitude: float = Parameter(1.0)
 
         def update(self, ctx):
-            f = Vec3[CraftFrame].constant((0.0, 0.0, self.magnitude))
+            # Parts emit wrenches in their OWN frame (PartFrame); the
+            # framework rotates them up through the mount pose.
+            f = Vec3[PartFrame].constant((0.0, 0.0, self.magnitude))
             return Wrench(force=f,
-                          torque=Vec3[CraftFrame].constant((0, 0, 0)))
+                          torque=Vec3[PartFrame].constant((0, 0, 0)))
 
 Inside `update`, declared State / Input attributes read the *current*
 tick's symbolic node — the compiler binds them in a thread-local
@@ -165,7 +167,9 @@ class DeclarationHost:
     def declared_value(self, name: str):
         """The instance's configured (numeric) value for `name`, bypassing
         any active trace bindings — compile-time framework code uses this
-        for numeric guards/snapshots while `name` is bound to a symbol."""
+        for numeric guards/snapshots while `name` is bound to a symbol.
+        The single home of the `object.__getattribute__` bypass;
+        `_trace.declared_attr` is the defaulting wrapper around it."""
         return object.__getattribute__(self, name)
 
 
@@ -222,6 +226,8 @@ class Part(DeclarationHost):
 
     # Planet subclass the part requires. None ⇒ no planet required.
     # Verified at `Sim(world)` (`LinearizedSystem._validate_model`).
+    # Forward provision: no stock part sets it yet — the validation hook
+    # exists so a planet-coupled part can declare its need declaratively.
     requires_planet: ClassVar[type | None] = None
 
     # Does this part contribute inertial mass to the craft's rigid-body
@@ -291,15 +297,15 @@ class Part(DeclarationHost):
             * `σ²·I_d` (np.ndarray, d×d) for d-vector noise (sized
               off `signal_manifold.ambient_dim`).
 
-        Used by the EKF to size measurement updates without the user
-        having to specify R separately:
+        User-facing convenience: the framework's own EKF wiring reads
+        `<name>_sigma` directly, but hand-driven filter code can size a
+        measurement update without restating σ²:
             `ekf.update(h, z, R=imu.noise_R("gyro_noise"))`.
         """
-        import numpy as np
         decls = self.noise_declarations()
         if name not in decls:
             raise KeyError(
-                f"{type(self).__name__}('{self.name}'): no Noise slot "
+                f"{type(self).__name__}({self.name!r}): no Noise slot "
                 f"named {name!r}. Declared: {sorted(decls)}")
         decl = decls[name]
         sigma = float(getattr(self, f"{name}_sigma"))
@@ -418,10 +424,13 @@ class CompositePart(Part):
 
     def update(self, ctx):
         """CompositePart has no intrinsic wrench contribution by default —
-        subclasses (RootPart, joints, etc.) override if they need to."""
+        subclasses (RootPart, joints, etc.) override if they need to.
+        PartFrame, like every part's update: the tick rolls each wrench
+        up from the part's own frame, so a CraftFrame zero here would
+        FrameError the compile for any non-root composite."""
         from ..ir.wrench import Wrench
-        from ..ir.frames import CraftFrame
-        return Wrench.zero(CraftFrame)
+        from ..ir.frames import PartFrame
+        return Wrench.zero(PartFrame)
 
 
 # ---------------------------------------------------------------------------

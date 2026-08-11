@@ -20,6 +20,7 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from manta import Craft, NoiseDriver, Sim, TargetNumpy, World
 from manta.parts import Mass, PositionSensor
@@ -27,6 +28,13 @@ from manta.parts import Mass, PositionSensor
 from .builder import analyze, build_bundle, build_world, design_hash, \
     validate_design
 from .catalog import BUOY_RESERVE, CRAFT
+
+# Everything in this module is toolchain-or-build shaped (WASM emission,
+# emcc when present, full bundle builds), so the whole module carries both
+# markers. Module-level pytestmark — NOT a conftest hook: a conftest's
+# pytest_collection_modifyitems receives the ENTIRE session's items, and a
+# previous version of this marking silently stamped all 749 repo tests.
+pytestmark = [pytest.mark.cpp, pytest.mark.slow]
 
 
 # --- the representative design ----------------------------------------------
@@ -162,7 +170,6 @@ def test_seabed_colliders_catch_a_sinking_hull():
     canonical, errors = validate_design(d)
     assert not errors
     world, craft, contrib, scene = build_world(canonical)
-    from .catalog import HULL_R
     sim = TargetNumpy(Sim(world))
     # drive all four vertical agility pods DOWN hard
     u = {f"{CRAFT}.{t['part']}.throttle": -220.0

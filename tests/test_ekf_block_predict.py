@@ -101,7 +101,7 @@ def test_block_predict_matches_dense():
         rt.predict(dt=dt, t=t)
 
         # Dense reference from the same pre-step state.
-        u_vec = ir._build_u(None)
+        u_vec = ir.sys.resolve_u(None, who="test")
         F = np.asarray(ir.sys.F_fn(x_before, u_vec, dt, t))
         L = np.asarray(ir.sys.L_fn(x_before, u_vec, dt, t))
         Q = L @ ir.sys.Sigma @ L.T

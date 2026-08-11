@@ -100,6 +100,18 @@ def joseph_update_np(P: np.ndarray, H: np.ndarray, R: np.ndarray, *,
     return x_new, P_new, nu, S
 
 
+def zero_R_message(full: str, who: str) -> str:
+    """The one shared zero-R refusal text — `require_active_R` raises it at
+    filter construction, `sigma_horizon` raises it when a state-dependent R
+    vanishes mid-recursion. One string so the two refusals can never say
+    different things about the same failure."""
+    return (
+        f"{who}: sensor {full!r} has no active noise channel — its baked "
+        f"R is zero and the first update is singular (the next fold "
+        f"NaNs). Declare a nonzero noise σ on the sensor, or exclude it "
+        f"via sensors=[...].")
+
+
 def require_active_R(R: ca.MX, R_fn: ca.Function, syms: ca.MX, *,
                      x0: np.ndarray, u_defaults: np.ndarray, spec: StateSpec,
                      full: str, who: str, extra: tuple = (),
@@ -128,11 +140,7 @@ def require_active_R(R: ca.MX, R_fn: ca.Function, syms: ca.MX, *,
         return not np.any(np.abs(vals) > 0.0)
 
     if all(zero_at(p) for p in probes):
-        raise ValueError(
-            f"{who}: sensor {full!r} has no active noise channel — its baked "
-            f"R is zero and the first update is singular (the next fold "
-            f"NaNs). Declare a nonzero noise σ on the sensor, or exclude it "
-            f"via sensors=[...].")
+        raise ValueError(zero_R_message(full, who))
 
 
 # ---------------------------------------------------------------------------
@@ -149,9 +157,9 @@ def require_active_R(R: ca.MX, R_fn: ca.Function, syms: ca.MX, *,
 
 def unscented_weights(n: int, alpha: float, beta: float, kappa: float):
     """Scaled unscented weights for an `n`-dim tangent state (Wan & Van der
-    Merwe). Returns `(lam, w_m, w_c, gamma)`:
+    Merwe). With `lam = α²(n+κ) − n` (the scaling parameter, internal),
+    returns `(w_m, w_c, gamma)`:
 
-      * `lam = α²(n+κ) − n`                 — the scaling parameter,
       * `w_m`  (2n+1 means)                 — `w_m[0] = lam/(n+lam)`, the
         rest `1/(2(n+lam))`,
       * `w_c`  (2n+1 covariances)           — `w_c[0]` adds `1−α²+β`,
@@ -178,7 +186,7 @@ def unscented_weights(n: int, alpha: float, beta: float, kappa: float):
     w0 = 1.0 / (2.0 * c)
     w_m = [lam / c] + [w0] * (2 * n)
     w_c = [lam / c + (1.0 - alpha ** 2 + beta)] + [w0] * (2 * n)
-    return lam, w_m, w_c, math.sqrt(c)
+    return w_m, w_c, math.sqrt(c)
 
 
 def sigma_deltas(P: ca.MX, gamma: float, n: int, *,
@@ -223,7 +231,7 @@ def manifold_mean(points: list[ca.MX], w_m: list[float], spec: StateSpec,
     return mu
 
 
-def ut_predict(deltas: list[ca.MX], propagated: list[ca.MX], Q: ca.MX,
+def ut_predict(propagated: list[ca.MX], Q: ca.MX,
                w_m: list[float], w_c: list[float], spec: StateSpec,
                mean_iters: int) -> tuple[ca.MX, ca.MX]:
     """Unscented predict from already-propagated sigma points:
@@ -231,9 +239,9 @@ def ut_predict(deltas: list[ca.MX], propagated: list[ca.MX], Q: ca.MX,
         x⁺ = mean({f(x ⊞ δᵢ)})                 (manifold mean)
         P⁺ = Σ w_cᵢ (yᵢ ⊟ x⁺)(yᵢ ⊟ x⁺)ᵀ + Q   (re-symmetrized)
 
-    `deltas` are the prior tangent offsets (unused here but kept for a
-    symmetric signature with `ut_update`); `propagated[i] = f(x ⊞ δᵢ)` are
-    the ambient next-state sigma points."""
+    `propagated[i] = f(x ⊞ δᵢ)` are the ambient next-state sigma points —
+    unlike `ut_update`, the prior tangent offsets are not needed (the
+    predicted covariance is re-summarized around the manifold mean)."""
     x_pred = manifold_mean(propagated, w_m, spec, mean_iters)
     d = [spec.boxminus_sym(y, x_pred) for y in propagated]
     P_pred = w_c[0] * (d[0] @ d[0].T)

@@ -12,7 +12,8 @@ implements.
 Scope:
 - 13-DOF rigid-body state: position (3) + orientation quaternion (4) +
   linear velocity (3) + angular velocity (3).
-- Parts have static position offsets (`Part.mount_offset`) in craft frame.
+- Parts have a static pose (`Part.mount_offset` + `mount_orientation`)
+  relative to their parent.
 - Mass parts declare a diagonal MOI tensor about their own origin.
 - Aggregation: total mass, COM in craft frame, MOI about craft origin
   (parallel-axis lifts from each part's position).
@@ -24,7 +25,11 @@ Scope:
       a_origin = a_com + R · [α × r_OC + ω × (ω × r_OC)]
   where r_OC = -r_com (origin minus COM in craft frame).
 - Integration: position via symplectic-flavored Euler; orientation via
-  SO3 boxplus on ω·dt; velocities via Euler.
+  SO3 boxplus on ω·dt; linear velocity via Euler. Angular velocity is
+  NOT an Euler step on α — it advances the body-frame generalized
+  momentum `p = A·[ω; q̇]` and re-solves for ω (and the joint rates
+  with it), so a stacked chain conserves axial momentum exactly; see
+  `tick/world_tick._integrate_angular_momentum`.
 - Single-phase parts: each Part implements exactly one `update(ctx)`
   function. `ctx.acceleration[Frame]` / `ctx.angular_acceleration[Frame]`
   reflect **current-tick** dynamics — the
@@ -42,9 +47,8 @@ dynamically exact — a 2-axis gimbal is two stacked `RevoluteJoint`s,
 full coupling included. Native multi-DOF joint PARTS (ball, universal)
 are just ergonomics on top of that, still future work.
 
-Known omissions: non-identity static orientation between part and craft
-frames; field disturbances tied to per-craft motion (only queried, not
-contributed-to by parts).
+Known omissions: field disturbances tied to per-craft motion (only
+queried, not contributed-to by parts).
 """
 
 from __future__ import annotations
@@ -238,96 +242,21 @@ class TickContext:
 # Inertial aggregation (pure Python, runs at compile time)
 # ---------------------------------------------------------------------------
 
-def _np_axis_angle_rotation(axis, angle: float) -> np.ndarray:
-    """Numeric Rodrigues rotation about a unit `axis` by `angle` (rad) —
-    the numpy twin of `ir._rotation.R_from_axis_angle` for the at-rest
-    inertia snapshot. Joints normalize `axis` at construction."""
-    a = np.asarray(axis, dtype=float)
-    K = np.array([[0.0, -a[2], a[1]],
-                  [a[2], 0.0, -a[0]],
-                  [-a[1], a[0], 0.0]])
-    return np.eye(3) + np.sin(angle) * K + (1.0 - np.cos(angle)) * (K @ K)
-
-
 def _aggregate_inertials(root_part: Part) -> dict[str, Any]:
-    """Compute total mass, COM offset, and MOI-about-craft-origin for
-    the part tree rooted at `root_part`. Returns concrete Python/numpy
-    values — these are constants in the traced graph, not symbolic
-    nodes; the dynamics use the symbolic `symbolic_inertia_rollup`.
+    """Total mass, COM offset, and MOI about craft origin and COM for
+    the part tree rooted at `root_part`, as concrete Python/numpy
+    values — constants in the traced graph, not symbolic nodes.
 
-    Only parts carrying the `contributes_inertia` trait (`Mass` and
-    friends) are counted — a `mass` attribute alone is NOT inertial
-    (e.g. `TrajectoryEndpoint.mass` is a feedforward gain). Each
-    counted part's craft-frame position composes its `mount_offset`
-    through the full parent chain — joints contribute their DECLARED
-    rest-pose rotation/slide (`angle` / `displacement` as configured at
-    construction) — so a Mass riding a gimbal lands at the right
-    craft-frame position, mirroring the symbolic rollup's geometry.
+    This is the SAME walk the dynamics use, evaluated at rest
+    (`tick.inertia.aggregate_inertials_at_rest`): only parts carrying
+    the `contributes_inertia` trait are counted (a `mass` attribute
+    alone is not inertial — `TrajectoryEndpoint.mass` is a feedforward
+    gain), each part's craft-frame pose composes `mount_offset` and
+    `mount_orientation` through the parent chain, and joints contribute
+    their declared rest-pose rotation/slide.
     """
-    from .parts.articulation.joint import PrismaticJoint, RevoluteDOF
-    from .parts._trace import declared_attr
-    from .parts.base import CompositePart
-
-    m_total = 0.0
-    com_sum = np.zeros(3)        # m_i · r_i, then divide
-    I_about_origin = np.zeros((3, 3))
-
-    def visit(part, r_parent_out: np.ndarray, R_parent_out: np.ndarray):
-        nonlocal m_total, com_sum, I_about_origin
-        # `mount_offset` lives in the parent's OUTPUT frame coords; the
-        # mount doesn't rotate, so input frame = parent output frame.
-        tr = np.asarray(
-            declared_attr(part, "mount_offset", (0.0, 0.0, 0.0)), dtype=float)
-        r = r_parent_out + R_parent_out @ tr
-        R_in = R_parent_out
-
-        r_out, R_out = r, R_in
-        if isinstance(part, RevoluteDOF):
-            angle = float(declared_attr(part, "angle", 0.0))
-            R_out = R_in @ _np_axis_angle_rotation(part.axis, angle)
-        elif isinstance(part, PrismaticJoint):
-            disp = float(declared_attr(part, "displacement", 0.0))
-            r_out = r + R_in @ (disp * np.asarray(part.axis, dtype=float))
-
-        if part.contributes_inertia:
-            m = float(declared_attr(part, "mass", 0.0))
-            if m > 0.0:
-                moi_diag = declared_attr(part, "moi", (0.0, 0.0, 0.0))
-                I_own_local = np.diag([float(moi_diag[0]),
-                                       float(moi_diag[1]),
-                                       float(moi_diag[2])])
-                # The part's own (diagonal) MOI lives in its input frame.
-                I_own = R_in @ I_own_local @ R_in.T
-                m_total += m
-                com_sum += m * r
-                # Parallel-axis lift:
-                # I_about_origin += I_own + m·(|r|²·I − r·r^T).
-                I_about_origin += I_own + m * (
-                    float(r @ r) * np.eye(3) - np.outer(r, r))
-
-        if isinstance(part, CompositePart):
-            for child in part.children:
-                visit(child, r_out, R_out)
-
-    if isinstance(root_part, CompositePart):
-        for child in root_part.children:
-            visit(child, np.zeros(3), np.eye(3))
-
-    if m_total <= 0.0:
-        return {"m_total": 0.0, "com": np.zeros(3),
-                "I_origin": np.zeros((3, 3)), "I_com": np.zeros((3, 3))}
-
-    com = com_sum / m_total
-    # I_com = I_origin − m_total · (|com|² · I − com·com^T)
-    I_com = I_about_origin - m_total * (
-        float(com @ com) * np.eye(3) - np.outer(com, com))
-
-    return {
-        "m_total":  m_total,
-        "com":      com,            # in CraftFrame
-        "I_origin": I_about_origin,
-        "I_com":    I_com,
-    }
+    from .tick.inertia import aggregate_inertials_at_rest
+    return aggregate_inertials_at_rest(root_part)
 
 
 # ---------------------------------------------------------------------------
@@ -435,6 +364,12 @@ class Craft:
         `"<part>.<noise>" → np.ndarray` ready to merge into the state
         dict before calling the compiled tick.
 
+        This is the *model-side* draw, keyed by full state name. The
+        running sim does not call it — `NumpySim` drives noise through
+        the Module's NOISE port with a `NoiseDriver`. Keep it for
+        hand-driven ticks and for tests that want the per-channel
+        sigmas without a backend.
+
         Slots whose sigma is 0 return zero vectors without consuming
         RNG state (so a deterministic-seed sim stays reproducible
         regardless of which noise channels are active).
@@ -490,8 +425,8 @@ class Craft:
                 state[f"{part.name}.{iname}"] = float(getattr(part, iname))
             # Noise / RW-bias slots. Seed everything at zero.
             #   * White: one slot `<part>.<nname>` (the per-tick driver).
-            #     EKF leaves it at zero; sim overwrites via
-            #     `craft.sample_noise(rng)`.
+            #     EKF leaves it at zero; `NumpySim` overwrites it from an
+            #     attached `NoiseDriver` (see `codegen/numpy/_noise.py`).
             #   * RW (sigma > 0): two slots — `<part>.<nname>` is the
             #     bias state, `<part>.<nname>_driver` is the per-tick
             #     driver. RW channels with sigma == 0 are inert.

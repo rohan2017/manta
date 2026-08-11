@@ -27,8 +27,8 @@ payoff), invisible to warm Gauss-Newton sweeps, so the closed loop
 alone stalls a few degrees short of the commanded course. The mission
 layer closes it: when the heading residual persists, re-birth the
 plan (`plan(multi_start=True)` from the current state — the same
-replan-on-residual doctrine controld will run). Two replans take the
-nose to 45.0° ± half a degree, wings level.
+replan-on-residual doctrine a flight controller will run). Two
+replans take the nose to 45.0° ± half a degree, wings level.
 
 Run::
 
@@ -140,7 +140,7 @@ def main() -> None:
     x0 = np.asarray(mpc.module().port("x").init, dtype=float)
     print("plan birth (multi-start — initiating a bank is a roll×pitch "
           "saddle single seeds cannot see)...")
-    plan = mpc.plan(x0, goal=(0.0, 0.0, 0.0), multi_start=True,
+    plan = mpc.plan(x0, position=(0.0, 0.0, 0.0), multi_start=True,
                     **objective)
     print(f"  cost {plan.cost:.1f}, converged={plan.converged}\n")
 
@@ -201,7 +201,7 @@ def main() -> None:
         # tick is stuck at the bank-initiation saddle — re-birth the
         # plan from the current state (replan-on-residual doctrine)
         if k > 0 and k % 20 == 0 and nose_err_deg(st) > 3.0:
-            rt.reset_plan(mpc.plan(x, goal=(0.0, 0.0, 0.0),
+            rt.reset_plan(mpc.plan(x, position=(0.0, 0.0, 0.0),
                                    multi_start=True, **objective).U)
             replans += 1
             print(f"      *** heading residual persists "

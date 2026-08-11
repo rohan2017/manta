@@ -119,15 +119,33 @@ class TrajectoryEndpoint(Part):
 
     def on_world_finalize(self, world, craft) -> None:
         # The control law treats PartFrame ≡ CraftFrame (the reference
-        # quaternion is reinterpreted into PartFrame in update()). A
-        # nested endpoint (under a joint/composite) silently breaks that
-        # — reject it at finalize, before any tracing.
+        # quaternion is reinterpreted into PartFrame in update()). Any of
+        # a nested endpoint, a nonzero mount_offset, or a mount rotation
+        # silently breaks that identification — the offset injects a
+        # force×lever-arm torque into the attitude channel (exactly what
+        # the class docstring warns about), a rotation skews the whole
+        # wrench. Reject all three at finalize, before any tracing.
         if not isinstance(self.parent, RootPart):
             raise ValueError(
                 f"{type(self).__name__}({self.name!r}): must be mounted "
                 f"directly on the craft root (got parent "
                 f"'{self.parent.name if self.parent else None}'). The "
                 f"SE(3) spring law assumes PartFrame ≡ CraftFrame.")
+        import numpy as np
+        off = np.asarray(self.declared_value("mount_offset"), dtype=float)
+        if np.any(off != 0.0):
+            raise ValueError(
+                f"{type(self).__name__}({self.name!r}): must be mounted "
+                f"at the craft origin, got mount_offset={tuple(off)}. An "
+                f"off-origin mount injects a force×lever-arm torque that "
+                f"corrupts the attitude channel.")
+        if not self.mounted_upright:
+            raise ValueError(
+                f"{type(self).__name__}({self.name!r}): must be mounted "
+                f"upright, got mount_orientation="
+                f"{tuple(self.declared_value('mount_orientation'))}. A "
+                f"rotated mount skews the SE(3) spring wrench — the law "
+                f"assumes PartFrame ≡ CraftFrame.")
 
     def update(self, ctx) -> PartUpdate:
         sample = self.trajectory(ctx.t)

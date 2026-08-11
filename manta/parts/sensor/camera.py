@@ -67,6 +67,11 @@ class ProjectiveCamera(Part):
     #: Per-target scalar measurement names (excludes the ``vis`` flag).
     _COMPONENTS: ClassVar[tuple[str, ...]] = ()
 
+    # The Parameter defaults are THE defaults — __init__'s keyword
+    # sentinels are all None and resolve here, so image size lives in
+    # exactly one place. fx/fy/cx/cy default to 0.0 as "derive me":
+    # their real defaults are functions of width/height/hfov and are
+    # computed at construction, never read back from these declarations.
     width:  float = Parameter(640.0)
     height: float = Parameter(480.0)
     fx:     float = Parameter(0.0)
@@ -76,12 +81,15 @@ class ProjectiveCamera(Part):
     rate:   float = Parameter(None)
     noise_sigma: float = Parameter(0.0)
 
-    def __init__(self, name: str, *, width: float = 640.0, height: float = 480.0,
+    def __init__(self, name: str, *, width=None, height=None,
                  hfov_deg: float = 70.0, fx=None, fy=None, cx=None, cy=None,
                  rate=None, noise_sigma: float = 0.0,
-                 mount_offset=(0.0, 0.0, 0.0)) -> None:
+                 mount_offset=(0.0, 0.0, 0.0),
+                 mount_orientation=(1.0, 0.0, 0.0, 0.0)) -> None:
         import math
-        w, h = float(width), float(height)
+        decls = self._declarations()
+        w = float(width if width is not None else decls["width"].default)
+        h = float(height if height is not None else decls["height"].default)
         f = (w / 2.0) / math.tan(math.radians(hfov_deg) / 2.0)
         super().__init__(
             name, width=w, height=h,
@@ -90,7 +98,11 @@ class ProjectiveCamera(Part):
             cx=float(cx) if cx is not None else w / 2.0,
             cy=float(cy) if cy is not None else h / 2.0,
             rate=rate, noise_sigma=float(noise_sigma),
-            mount_offset=mount_offset)
+            mount_offset=mount_offset,
+            # Forwarded like mount_offset: the kinematic pass honors a
+            # rotated camera (it looks down its own +z), so dropping this
+            # kwarg would make rotated cameras unconstructable.
+            mount_orientation=mount_orientation)
         # Set via set_targets() by World.finalize() (every
         # ellipsoid not on this camera's craft). Drives output/noise
         # declarations and update.

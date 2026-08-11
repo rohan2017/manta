@@ -55,7 +55,10 @@ def check_name(name: str, *, who: str) -> str:
 # State
 # ---------------------------------------------------------------------------
 
-@dataclass(frozen=True)
+# eq=False: `init` is an ndarray, so a generated __eq__ raises ValueError
+# (ambiguous truth) and frozen-dataclass __hash__ raises TypeError — identity
+# semantics are what every consumer actually uses.
+@dataclass(frozen=True, eq=False)
 class StateField:
     """One field of a Module's persistent State.
 
@@ -66,12 +69,21 @@ class StateField:
 
     `init` is the field's default value (a packed ndarray), used to allocate
     fresh State and to render typed-struct defaults.
+
+    NOTE: despite its name, `manifold` holds a `StateSpec` (the flat-layout
+    descriptor over per-slot Manifolds), not a single `Manifold`. The name
+    is kept for call-site stability; `spec` is the honest alias.
     """
     name: str
     kind: str                  # "manifold" | "matrix"
     shape: tuple[int, ...]
     init: Any = None
     manifold: Any = None       # StateSpec for kind == "manifold"
+
+    @property
+    def spec(self):
+        """Honest alias for `manifold` (which holds a StateSpec)."""
+        return self.manifold
 
 
 @dataclass(frozen=True)
@@ -162,7 +174,12 @@ ARG_ROLES = frozenset(Role) - {Role.OUTPUT}
 class PortField:
     """One named sub-component of a structured Port — a Part Input inside
     `u`, a noise channel inside `noise`, a readout inside `y`. `default`
-    seeds typed-struct members; `sigma` is the channel's σ for NOISE."""
+    seeds typed-struct members; `sigma` is the channel's σ for NOISE.
+
+    Naming note: `dim` is this sub-component's width *inside* the port;
+    the whole port's flattened width is `Port.size` (the product of
+    `Port.shape`). They are deliberately different names because they
+    measure different things."""
     name: str
     dim: int
     default: Any = 0.0
@@ -170,10 +187,15 @@ class PortField:
     rate: float | None = None      # CONTROL inputs: declared intake rate (Hz)
 
 
-@dataclass(frozen=True)
+# eq=False: `init`/`manifold` can hold ndarrays — see StateField.
+@dataclass(frozen=True, eq=False)
 class Port:
     """A typed value channel of a Module — a runtime input to a method, a
-    returned value, or both (a Sim reading that a filter later consumes)."""
+    returned value, or both (a Sim reading that a filter later consumes).
+
+    NOTE: like `StateField.manifold`, the `manifold` attribute holds a
+    `StateSpec` (for role == STATE), not a single `Manifold`; `spec` is
+    the honest alias."""
     name: str
     role: Role
     shape: tuple[int, ...] = ()
@@ -183,6 +205,11 @@ class Port:
                                # vector (STATE) or a coefficient an
                                # unsupplied argument falls back to (MATRIX)
     rate: float | None = None  # MEASUREMENT: declared sample rate (Hz)
+
+    @property
+    def spec(self):
+        """Honest alias for `manifold` (which holds a StateSpec)."""
+        return self.manifold
 
     @property
     def size(self) -> int:
@@ -225,7 +252,9 @@ class EntryPoint:
 # Module
 # ---------------------------------------------------------------------------
 
-@dataclass(frozen=True)
+# eq=False: contains Ports/StateFields with ndarray payloads — see
+# StateField. Modules compare and hash by identity.
+@dataclass(frozen=True, eq=False)
 class Module:
     """A stateful unit = State + named Functions + typed methods.
 

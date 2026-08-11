@@ -200,7 +200,11 @@ def build_world(canonical: dict):
         xc = cursor - length / 2.0
         cursor -= length
         t = el["type"]
-        contrib.merge(CATALOG[t].build(craft, f"{t}{i}", xc, el["options"]))
+        # The entry goes in as `spec`: the builder reads its length/fill
+        # from the CATALOG rather than repeating the numbers, so placement
+        # (above) and physics (inside) can never disagree.
+        spec = CATALOG[t]
+        contrib.merge(spec.build(craft, f"{t}{i}", xc, el["options"], spec))
         # One point contact per module on the hull axis (see COL_* above:
         # against the raised seabed plane this is a HULL_R sphere).
         craft.add(Collider(f"{t}{i}_col", stiffness=COL_STIFFNESS,

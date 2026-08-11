@@ -1,6 +1,8 @@
-"""IR value types — Scalar, Vec3[F], Mat3[A,B], Quat[A,B].
+"""IR value types — Scalar, VecN[n], Vec3[F], Mat3[A,B], Quat[A,B].
 
-Each type wraps a `casadi.MX` node and carries one or two frame tags. The
+Each type wraps a `casadi.MX` node and carries one or two frame tags —
+except `VecN`, the deliberately frame-free R^n carrier for
+parameterized-dimension Euclidean state (see its docstring). The
 operators dispatch to CasADi while preserving and checking frame tags.
 
 Type parameterization uses `__class_getitem__` so the syntax reads cleanly:
@@ -8,6 +10,7 @@ Type parameterization uses `__class_getitem__` so the syntax reads cleanly:
     Vec3[WorldFrame]
     Mat3[CraftFrame, PartFrame]
     Quat[WorldFrame, CraftFrame]
+    VecN[36]
 
 `Cls[args]` returns a small typed-constructor object (not the bare class).
 Its `.input(name)` and `.constant(value)` factories produce instances of the
@@ -22,6 +25,7 @@ from __future__ import annotations
 from typing import Any, ClassVar
 
 import casadi as ca
+import numpy as np
 
 from ._rotation import quat_conj, quat_mul, quat_to_rotmat
 from .frames import (
@@ -77,6 +81,14 @@ class _IRValue:
     MX in `_mx` plus frame metadata."""
 
     _mx: ca.MX
+
+    @property
+    def mx(self) -> ca.MX:
+        """The wrapped CasADi MX node — the public, read-only spelling of
+        `._mx` for external code (backends, notebooks, tests) that needs
+        to drop below the typed layer. The underscore attribute remains
+        for the existing internal accesses."""
+        return self._mx
 
     @property
     def shape(self) -> tuple[int, int]:
@@ -150,6 +162,40 @@ class _ParameterizedConstructor:
             f"{k}={_format_frame(v) if _is_frame(v) else v!r}"
             for k, v in self._kwargs.items())
         return f"{self._cls.__name__}[{params}]"
+
+
+class _VecNConstructor(_ParameterizedConstructor):
+    """`VecN[n]` — the type parameter is a DIMENSION (an int), not a frame.
+
+    Two of the generic `_ParameterizedConstructor` paths assume a
+    class-fixed `_mx_shape` and frame-identity kwargs; both are
+    dimension-driven here, so they are overridden. `constant` /
+    `from_mx` reuse the generic path (they route through
+    `_make_constant` / `_from_mx`, which take `dim=`)."""
+
+    def input(self, name: str) -> "VecN":
+        g = _current_graph()
+        dim = int(self._kwargs["dim"])
+        value = self._cls(ca.MX.sym(name, dim, 1), dim)
+        g._register_input(name, value)
+        return value
+
+    def coerce(self, value) -> "VecN":
+        """The promotable-Parameter idiom (see the base class): pass a
+        promoted VecN through (dim-checked), build a constant from a
+        plain Python value."""
+        dim = int(self._kwargs["dim"])
+        if isinstance(value, self._cls):
+            if value.dim != dim:
+                raise ValueError(
+                    f"VecN[{dim}].coerce: expected dim {dim}, got "
+                    f"{value.dim}")
+            return value
+        if isinstance(value, _IRValue):
+            raise TypeError(
+                f"VecN[{dim}].coerce: expected VecN or a plain Python "
+                f"value, got {type(value).__name__}")
+        return self._cls._make_constant(value, dim=dim)
 
 
 # ---------------------------------------------------------------------------
@@ -262,15 +308,22 @@ class VecN(_IRValue):
     def dim(self) -> int:
         return self._dim
 
-    @classmethod
-    def input(cls, name: str, dim: int) -> "VecN":
-        g = _current_graph()
-        value = cls(ca.MX.sym(name, int(dim), 1), dim)
-        g._register_input(name, value)
-        return value
+    # ---- Constructors via __class_getitem__ -----------------------------
+    # `VecN[36].input("D1")` — the same `Cls[param].input(name)` grammar
+    # every other IR type uses; the parameter is a dimension, not a frame.
+
+    def __class_getitem__(cls, dim):
+        if isinstance(dim, bool) or not isinstance(dim, int) or dim < 1:
+            raise TypeError(
+                f"VecN[...]: dim must be an int >= 1, got {dim!r}")
+        return _VecNConstructor(cls, dim=dim)
 
     @classmethod
-    def constant(cls, value, dim: int | None = None) -> "VecN":
+    def _from_mx(cls, mx, *, dim):
+        return cls(mx, dim)
+
+    @classmethod
+    def _make_constant(cls, value, *, dim=None):
         arr = np.asarray(value, dtype=float).reshape(-1, 1)
         if dim is not None and arr.shape[0] != int(dim):
             raise ValueError(
@@ -278,18 +331,26 @@ class VecN(_IRValue):
                 f"{arr.shape[0]}")
         return cls(ca.MX(ca.DM(arr)), arr.shape[0])
 
+    # ---- dim-argument classmethods --------------------------------------
+    # Predate the `VecN[n]` grammar; kept (delegating) because external
+    # call sites use them — `RnManifold.ir_input` and friends.
+
+    @classmethod
+    def input(cls, name: str, dim: int) -> "VecN":
+        return cls[int(dim)].input(name)
+
+    @classmethod
+    def constant(cls, value, dim: int | None = None) -> "VecN":
+        """`dim=None` infers the dimension from `value`; a given `dim`
+        is enforced."""
+        return cls._make_constant(value, dim=dim)
+
     @classmethod
     def coerce(cls, value, dim: int) -> "VecN":
         """The promotable-Parameter idiom (see
         `_ParameterizedConstructor.coerce`): pass a promoted VecN
         through, build a constant from a plain Python value."""
-        if isinstance(value, VecN):
-            if value.dim != int(dim):
-                raise ValueError(
-                    f"VecN.coerce: expected dim {int(dim)}, got "
-                    f"{value.dim}")
-            return value
-        return cls.constant(value, dim)
+        return cls[int(dim)].coerce(value)
 
 
 def _scalar_op(a, b, fn):
@@ -448,7 +509,6 @@ class Mat3(_IRValue):
 
     @classmethod
     def _make_constant(cls, value, *, from_frame, to_frame):
-        import numpy as np
         arr = np.asarray(value, dtype=float)
         if arr.shape != (3, 3):
             raise ValueError(

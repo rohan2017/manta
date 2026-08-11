@@ -41,19 +41,21 @@ operating point.
 from __future__ import annotations
 
 import casadi as ca
-import numpy as np
 
-from ..ir.module import Module, entry_ident
+from ..ir.module import entry_ident
 from ..ir.state_spec import StateSpec
 from ..linearization import LinearizedSystem
 from ._assembly import (
-    emit_filter_module, initial_ambient, prepared_sensors, resolve_u,
+    _FilterBase, _q_auto, emit_filter_module, initial_ambient,
+    prepared_sensors,
 )
-from ._kalman import joseph_update, lin_cov, symmetrize
+from ._kalman import joseph_update, symmetrize
 
 
-class EKF:
-    """Error-state EKF over a `World` — symbolic recursion + typed Module."""
+class EKF(_FilterBase):
+    """Error-state EKF over a `World` — symbolic recursion + typed Module.
+    The analysis surface (`module`, `n_blocks`, `observability`,
+    `sigma_horizon`) is the shared `_FilterBase` tail."""
 
     def __init__(self, world, *,
                  track: dict | None = None,
@@ -76,10 +78,7 @@ class EKF:
         sys = LinearizedSystem(world, track=track, sensors=sensors,
                                inputs=inputs, track_mode="closure",
                                discretization=discretization)
-        self.sys = sys
-        self.world = world
-        self.crafts = sys.crafts
-        self.spec: StateSpec = sys.spec
+        self._bind_system(world, sys)
 
         # ---- the Kalman recursion, symbolically, once -------------------
         spec, n_tan = sys.spec, sys.spec.tangent_dim
@@ -91,9 +90,7 @@ class EKF:
 
         # predict: auto process noise Q = L Σ Lᵀ baked into the kernel
         # (zero when the model declares none) + an explicit-Q override.
-        Q_auto = lin_cov(sys.L_sym,
-                         ca.DM(sys.Sigma) if sys.L_sym is not None else None,
-                         n_tan)
+        Q_auto = _q_auto(sys)
         predict_fn = ca.Function(
             "ekf_predict", [x, P, u, dt, t],
             [sys.x_new, symmetrize(F @ P @ F.T + Q_auto)],
@@ -124,39 +121,8 @@ class EKF:
             predict_fn=predict_fn, predict_q_fn=predict_q_fn,
             updates=updates)
 
-    def module(self) -> Module:
-        """The typed `Module` IR a backend lowers."""
-        return self._module
-
-    # ------------------------------------------------------------------
-    # Analysis surface
-    # ------------------------------------------------------------------
-
-    @property
-    def n_blocks(self) -> int:
-        """Independent tangent subsystems (block-diagonal predict)."""
-        return len(self.sys.blocks)
-
-    def _build_u(self, u: dict[str, float] | None) -> np.ndarray:
-        """Resolve `u` to a flat input vector (full or suffix names)."""
-        return resolve_u(self.sys, u, who="EKF")
-
-    def observability(self, **kwargs):
-        """Local observability of the chosen sensor set at an operating
-        point (see `manta.estimation.observability`)."""
-        from .observability import observability
-        return observability(self, **kwargs)
-
-    def sigma_horizon(self, **kwargs):
-        """Per-slot σ attainable after a horizon — the covariance
-        recursion run open-loop, resolving the weak/slow observability the
-        rank test can't (see `manta.estimation.observability`)."""
-        from .observability import sigma_horizon
-        return sigma_horizon(self, **kwargs)
-
-    def __repr__(self) -> str:
-        return (f"<EKF tangent={self.spec.tangent_dim} "
-                f"sensors={list(self.sys.sensors)} n_blocks={self.n_blocks}>")
+    # module() / n_blocks / observability() / sigma_horizon() / __repr__
+    # are the shared `_FilterBase` analysis tail (estimation/_assembly.py).
 
 
 # ---------------------------------------------------------------------------

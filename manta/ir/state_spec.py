@@ -149,6 +149,10 @@ class StateSpec:
 
     # ----- Construction --------------------------------------------------
 
+    # `from_layout` is the ONE place offsets densify; every other
+    # constructor collects (name, manifold) pairs and delegates, so the
+    # ambient/tangent bookkeeping cannot drift between entry points.
+
     @classmethod
     def from_craft(cls, craft) -> "StateSpec":
         """Build the canonical state spec for a single-craft world.
@@ -162,21 +166,10 @@ class StateSpec:
 
         Future: multi-craft worlds will concatenate per-craft layouts here.
         """
-        slots: list[StateSlot] = []
-        offset = 0
-        tan_offset = 0
-
-        def add(name: str, manifold: Manifold):
-            nonlocal offset, tan_offset
-            slots.append(StateSlot(name=name,
-                                   ambient_offset=offset,
-                                   manifold=manifold,
-                                   tangent_offset=tan_offset))
-            offset += manifold.ambient_dim
-            tan_offset += manifold.tangent_dim
-
-        cls._add_craft_slots(craft, "", add)
-        return cls(slots)
+        layout: list[tuple[str, Manifold]] = []
+        cls._add_craft_slots(craft, "",
+                             lambda name, mfd: layout.append((name, mfd)))
+        return cls.from_layout(layout)
 
     @classmethod
     def from_world(cls, world) -> "StateSpec":
@@ -186,24 +179,16 @@ class StateSpec:
         Slot ordering: per-craft in world.crafts order; within each
         craft, the same per-craft layout as `from_craft`.
         """
-        slots: list[StateSlot] = []
-        offset = 0
-        tan_offset = 0
+        layout: list[tuple[str, Manifold]] = []
 
-        def add(name: str, manifold: Manifold):
-            nonlocal offset, tan_offset
-            slots.append(StateSlot(name=name,
-                                   ambient_offset=offset,
-                                   manifold=manifold,
-                                   tangent_offset=tan_offset))
-            offset += manifold.ambient_dim
-            tan_offset += manifold.tangent_dim
+        def add(name: str, mfd: Manifold) -> None:
+            layout.append((name, mfd))
 
         for craft in world.crafts:
             cls._add_craft_slots(craft, f"{craft.name}.", add)
         for field in world.fields:
             cls._add_field_disturbance_slots(field, add)
-        return cls(slots)
+        return cls.from_layout(layout)
 
     @classmethod
     def from_layout(cls, layout) -> "StateSpec":
@@ -235,19 +220,9 @@ class StateSpec:
         (pack/unpack/boxplus/boxminus) works on the result unchanged.
         """
         kept = set(kept_names)
-        slots: list[StateSlot] = []
-        offset = 0
-        tan_offset = 0
-        for s in full_spec.slots:
-            if s.name not in kept:
-                continue
-            slots.append(StateSlot(name=s.name,
-                                   ambient_offset=offset,
-                                   manifold=s.manifold,
-                                   tangent_offset=tan_offset))
-            offset += s.ambient_dim
-            tan_offset += s.tangent_dim
-        return cls(slots)
+        return cls.from_layout([(s.name, s.manifold)
+                                for s in full_spec.slots
+                                if s.name in kept])
 
     @staticmethod
     def _add_field_disturbance_slots(field, add) -> None:

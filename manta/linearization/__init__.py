@@ -1,21 +1,15 @@
 """Linearization — the shared plumbing every transform reads.
 
 `LinearizedSystem` (in `system`) orchestrates; `TickLinearizer` (in
-`engine`) differentiates; `partition` analyzes structure; `names` holds
-the name-resolution helpers used across the runtimes.
+`engine`) differentiates; `partition` analyzes structure. Only the two
+names a transform actually consumes are exported — everything else is
+internal to this package.
 """
 
-from .engine import SensorModel, TickLinearizer
-from .names import freeze_complement, slot_of_tangent_index
-from .partition import dependency_closure, partition_blocks
+from .engine import SensorModel
 from .system import LinearizedSystem
 
 __all__ = [
     "LinearizedSystem",
     "SensorModel",
-    "TickLinearizer",
-    "dependency_closure",
-    "freeze_complement",
-    "partition_blocks",
-    "slot_of_tangent_index",
 ]

@@ -32,14 +32,14 @@ import casadi as ca
 import numpy as np
 
 from .. import ir
-from ..craft import (
-    TickContext, _aggregate_inertials,
-    _wrench_rotate_to_craft, _shift_wrench,
+from ..craft import TickContext, _wrench_rotate_to_craft, _shift_wrench
+from .inertia import (
+    added_mass_rollup, inertial_mass, symbolic_inertia_rollup,
 )
-from .inertia import added_mass_rollup, symbolic_inertia_rollup
 from .joint_space import DEGENERATE_INERTIA_EPS, build_joint_space
 from .kinematics import kinematic_pass
 from ..ir._linalg import spd_solve
+from ..ir._rotation import quat_to_rotmat, so3_exp
 from ..ir.frames import WorldFrame, CraftFrame, PartFrame
 from ..ir.manifold import SO3Manifold
 from ..parts._declarations import PartUpdate
@@ -47,7 +47,6 @@ from ..parts._trace import TraceBindings
 from ..parts.base import CompositePart, Part
 from ..ir.types import _IRValue
 from ..ir.wrench import Wrench
-from ..smoothing import NORM_EPS_SQ
 
 
 def compile_world_tick(world,
@@ -97,16 +96,10 @@ def compile_world_tick(world,
                 "compile_world_tick: coupling references a craft not in "
                 "the given crafts list.")
 
-    # Quick numpy snapshot per craft (mass-positivity guard only). The
-    # actual COM / I_com used in Newton-Euler are symbolic and built
-    # inside the ir.Graph block below — they pick up joint-angle
-    # dependence when a joint reorients a rotor.
-    for craft in crafts:
-        ai = _aggregate_inertials(craft.root)
-        if ai["m_total"] <= 0.0:
-            raise ValueError(
-                f"Craft '{craft.name}': total mass is "
-                f"{ai['m_total']}; need m > 0.")
+    # No mass-positivity pre-check here: `symbolic_inertia_rollup` (called
+    # per craft inside the graph block below, with `who=craft.name`) is
+    # the one place that owns it. A second numeric snapshot up here was
+    # the same validation written twice.
 
     name = "_".join(c.name for c in crafts) + "_world_tick"
     # All State/Input/Noise attribute reads (and the per-craft rigid-body
@@ -504,22 +497,13 @@ def _com_relative_motion(craft, kin_states, m_total):
     (same quantities a rotor-mounted sensor reads). Zero when no joint
     shifts the COM. Carries the θ̈/d̈ placeholders via a_rel; resolved in
     `_emit_per_craft_dynamics`. Returns `(v_com_rel_mx, a_com_rel_mx)`."""
-    from ..parts._trace import is_promoted
     v_com_rel_mx = ca.MX.zeros(3, 1)
     a_com_rel_mx = ca.MX.zeros(3, 1)
     for part in craft.parts:
-        if not part.contributes_inertia:
+        contribution = inertial_mass(part)
+        if contribution is None:
             continue
-        m_attr = part.mass
-        if is_promoted(m_attr):
-            # mass promoted to a tunable graph input — keep it symbolic
-            # (a part whose DECLARED mass is zero still contributes; the
-            # optimizer may move it).
-            m = m_attr._mx
-        else:
-            m = float(m_attr)
-            if m <= 0.0:
-                continue
+        m, _ = contribution
         kin = kin_states[part]
         v_com_rel_mx = v_com_rel_mx + m * kin.velocity_rel_body
         a_com_rel_mx = a_com_rel_mx + m * kin.acceleration_rel_body
@@ -615,7 +599,8 @@ def _trace_craft_pass1(craft,
         body_acceleration_world=a_world_sym,
         body_angular_acceleration=alpha_sym,
         joint_dof_accels=joint_accel_syms)
-    inertia = symbolic_inertia_rollup(craft.root, param_subs=param_subs)
+    inertia = symbolic_inertia_rollup(craft.root, param_subs=param_subs,
+                                      who=craft.name)
 
     # Added mass: the entrained fluid's inertia. Rotational lands in
     # I_com so the gyroscopic term and the momentum integrator carry the
@@ -807,17 +792,15 @@ def _integrate_angular_momentum(prefix, js, inertia, ang_vel, alpha,
     I_com_mx         = inertia["I_com_in_craft_mx"]
     I_com_at_zero_np = inertia["I_com_at_zero"]
     om_mx = ang_vel._mx
-    # Counter-rotation Exp(−ω·dt) via Rodrigues (branch-free at ω→0).
+    # Counter-rotation Exp(−ω·dt), through `ir._rotation` — the single
+    # home for SO(3) math — rather than a fourth hand-rolled Rodrigues.
+    # Both primitives are branch-free at ω→0.
     # The MIDPOINT rate (ω + ½α·dt) sets the rotation: a first-order
     # (old-ω) rotation leaves an O(dt) phase error that pumps kinetic
     # energy into nutation at λ ≈ Ω²·dt/2; the midpoint drops the pump
     # to O(dt²) — negligible at any practical rate.
     rv = -(om_mx + 0.5 * alpha._mx * dt_mx) * dt_mx
-    th2 = ca.dot(rv, rv)
-    th = ca.sqrt(th2 + NORM_EPS_SQ)
-    K = ca.skew(rv)
-    R_neg = (ca.MX.eye(3) + (ca.sin(th) / th) * K
-             + ((1.0 - ca.cos(th)) / (th2 + NORM_EPS_SQ)) * (K @ K))
+    R_neg = quat_to_rotmat(so3_exp(rv))
     rate_overrides: dict[str, Any] = {}
     if js is None:
         H_mx = I_com_mx @ om_mx

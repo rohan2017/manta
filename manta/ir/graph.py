@@ -18,9 +18,7 @@ import threading
 from typing import Any
 
 import casadi as ca
-
-# Forward refs to avoid circular imports — types.py imports from graph.py.
-# (Resolved at runtime.)
+import numpy as np
 
 
 _local = threading.local()
@@ -256,7 +254,6 @@ def _to_numpy(val):
       (n, 1)  → 1-D ndarray of length n (column vector)
       other   → 2-D ndarray             (matrices etc.)
     """
-    import numpy as np
     arr = np.array(val)
     if arr.shape == (1, 1):
         return float(arr[0, 0])

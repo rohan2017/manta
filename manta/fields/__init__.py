@@ -15,10 +15,10 @@ architecture is locked per the Field redesign:
     body-pulls) are different Disturbance subclasses added to the
     same Field instance.
   * `field.add(Disturbance)` — append a contribution.
-  * `field.value_at_sym(point)` — return the symbolic MX value of the
-    field at `point` (Vec3[WorldFrame]), every registered disturbance
-    combined (a plain sum, or `FluidField`'s baseline/averaged/additive
-    blend).
+  * `field.value_at_sym(point, t)` — return the symbolic MX value of
+    the field at `point` (Vec3[WorldFrame]) at time `t`, every
+    registered disturbance combined (a plain sum, or `FluidField`'s
+    baseline/averaged/additive blend).
 
 User-facing surface::
 

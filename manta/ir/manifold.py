@@ -1,4 +1,4 @@
-"""Manifold metadata + operations — Scalar, R3, SO(3).
+"""Manifold metadata + operations — Scalar (R^1), R^3, R^n, SO(3).
 
 A `Manifold` instance is the single source of truth for one state-vector
 component: its structural metadata (`kind`, dims, `storage_shape`) AND the
@@ -60,15 +60,31 @@ from .types import Quat, Scalar, Vec3, VecN
 class Manifold(ABC):
     """Structural descriptor + operations for a state-vector component.
 
-    Subclasses set `kind` (the backend-registry key) and the dims as
-    class-level constants. Instance attributes carry per-occurrence
-    context (e.g. a frame tag).
+    Subclasses set `kind` (the backend-registry key) as a class-level
+    constant. The three dims are *instance-level* abstract properties:
+    fixed-dimension manifolds (Scalar/R3/SO3) satisfy them with plain
+    class attributes, while `RnManifold` derives them from its `dim`
+    instance field — no `ClassVar`-vs-property override friction.
+    Instance attributes carry per-occurrence context (e.g. a frame tag).
     """
 
-    kind:          ClassVar[str]
-    ambient_dim:   ClassVar[int]
-    tangent_dim:   ClassVar[int]
-    storage_shape: ClassVar[tuple[int, ...]]
+    kind: ClassVar[str]
+
+    @property
+    @abstractmethod
+    def ambient_dim(self) -> int:
+        """Length of this component's packed ambient block."""
+
+    @property
+    @abstractmethod
+    def tangent_dim(self) -> int:
+        """Length of this component's tangent (error/perturbation) block."""
+
+    @property
+    @abstractmethod
+    def storage_shape(self) -> tuple[int, ...]:
+        """Shape of the stored ambient value (backends size their concrete
+        types from this, not from `kind`)."""
 
     # ---- Value-typed (frame-checked, for IR construction) ------------
 
@@ -130,31 +146,24 @@ class Manifold(ABC):
 
 
 # ---------------------------------------------------------------------------
-# Concrete manifolds
+# Shared guards / Euclidean base
 # ---------------------------------------------------------------------------
 
+def _require(x, T, who: str) -> None:
+    """Loud isinstance guard shared by the value-typed manifold ops — one
+    error shape instead of a hand-rolled copy per manifold per op."""
+    if not isinstance(x, T):
+        raise TypeError(
+            f"{who}: must be {T.__name__}, got {type(x).__name__}")
+
+
 @dataclass(frozen=True)
-class ScalarManifold(Manifold):
-    """R^1 — scalar real. Backend kind: ``"scalar"``."""
-
-    kind:          ClassVar[str]               = "scalar"
-    ambient_dim:   ClassVar[int]               = 1
-    tangent_dim:   ClassVar[int]               = 1
-    storage_shape: ClassVar[tuple[int, ...]]   = (1,)
-
-    def boxplus(self, x: Scalar, delta: Scalar) -> Scalar:
-        if not isinstance(x, Scalar) or not isinstance(delta, Scalar):
-            raise TypeError(
-                "ScalarManifold.boxplus: x and delta must be Scalar, got "
-                f"{type(x).__name__} / {type(delta).__name__}")
-        return x + delta
-
-    def boxminus(self, a: Scalar, b: Scalar) -> Scalar:
-        if not isinstance(a, Scalar) or not isinstance(b, Scalar):
-            raise TypeError(
-                "ScalarManifold.boxminus: a and b must be Scalar, got "
-                f"{type(a).__name__} / {type(b).__name__}")
-        return a - b
+class _EuclideanManifold(Manifold):
+    """Base for the flat (R^1 / R^3 / R^n) manifolds: ⊞ is `+` and ⊟ is
+    `−` in every flavor, so the symbolic and numeric ops — which were
+    byte-identical across the three subclasses — live here exactly once.
+    Subclasses keep only the value-typed (type/frame-checked) pair, the
+    dims, and the IR constructors."""
 
     def boxplus_sym(self, x_mx, delta_mx):
         return x_mx + delta_mx
@@ -164,6 +173,30 @@ class ScalarManifold(Manifold):
 
     def boxplus_num(self, x, delta):
         return np.asarray(x, dtype=float) + np.asarray(delta, dtype=float)
+
+
+# ---------------------------------------------------------------------------
+# Concrete manifolds
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class ScalarManifold(_EuclideanManifold):
+    """R^1 — scalar real. Backend kind: ``"scalar"``."""
+
+    kind:          ClassVar[str]               = "scalar"
+    ambient_dim:   ClassVar[int]               = 1
+    tangent_dim:   ClassVar[int]               = 1
+    storage_shape: ClassVar[tuple[int, ...]]   = (1,)
+
+    def boxplus(self, x: Scalar, delta: Scalar) -> Scalar:
+        _require(x,     Scalar, "ScalarManifold.boxplus: x")
+        _require(delta, Scalar, "ScalarManifold.boxplus: delta")
+        return x + delta
+
+    def boxminus(self, a: Scalar, b: Scalar) -> Scalar:
+        _require(a, Scalar, "ScalarManifold.boxminus: a")
+        _require(b, Scalar, "ScalarManifold.boxminus: b")
+        return a - b
 
     def default_value(self):
         return 0.0
@@ -179,10 +212,11 @@ class ScalarManifold(Manifold):
 
 
 @dataclass(frozen=True)
-class R3Manifold(Manifold):
-    """R^3 — 3-vector. Backend kind: ``"vec"`` (size carried in
-    `storage_shape`, not in the kind string, so a future R6 reuses
-    the same backend dispatch)."""
+class R3Manifold(_EuclideanManifold):
+    """R^3 — spatial 3-vector, frame-checked. Backend kind: ``"vec"``
+    (fixed size 3, carried in `storage_shape`). Other Euclidean sizes
+    do NOT reuse this kind: they are `RnManifold` (kind ``"vecn"``,
+    frame-free), which backends dispatch separately."""
 
     kind:          ClassVar[str]               = "vec"
     ambient_dim:   ClassVar[int]               = 3
@@ -191,42 +225,27 @@ class R3Manifold(Manifold):
 
     frame: Any = None   # Frame class; codegen does not consume this.
 
+    # The frame checks live on Vec3's own operators — delegating keeps ONE
+    # definition of "same frame" while the re-raise keeps the error's op
+    # label pointing at the manifold call the user actually made.
+
     def boxplus(self, x: Vec3, delta: Vec3) -> Vec3:
-        if not isinstance(x, Vec3) or not isinstance(delta, Vec3):
-            raise TypeError(
-                "R3Manifold.boxplus: x and delta must be Vec3, got "
-                f"{type(x).__name__} / {type(delta).__name__}")
-        if delta._frame is not x._frame:
-            raise FrameError(
-                "R3Manifold.boxplus",
-                expected=f"delta frame matches x.frame ({x._frame.__name__})",
-                got=f"delta_frame={delta._frame.__name__}",
-                source=_capture_user_source(),
-            )
-        return x + delta
+        _require(x,     Vec3, "R3Manifold.boxplus: x")
+        _require(delta, Vec3, "R3Manifold.boxplus: delta")
+        try:
+            return x + delta
+        except FrameError as e:
+            raise FrameError("R3Manifold.boxplus", expected=e.expected,
+                             got=e.got, source=e.source) from None
 
     def boxminus(self, a: Vec3, b: Vec3) -> Vec3:
-        if not isinstance(a, Vec3) or not isinstance(b, Vec3):
-            raise TypeError(
-                "R3Manifold.boxminus: a and b must be Vec3, got "
-                f"{type(a).__name__} / {type(b).__name__}")
-        if a._frame is not b._frame:
-            raise FrameError(
-                "R3Manifold.boxminus",
-                expected=f"matching frames ({a._frame.__name__})",
-                got=f"b_frame={b._frame.__name__}",
-                source=_capture_user_source(),
-            )
-        return a - b
-
-    def boxplus_sym(self, x_mx, delta_mx):
-        return x_mx + delta_mx
-
-    def boxminus_sym(self, a_mx, b_mx):
-        return a_mx - b_mx
-
-    def boxplus_num(self, x, delta):
-        return np.asarray(x, dtype=float) + np.asarray(delta, dtype=float)
+        _require(a, Vec3, "R3Manifold.boxminus: a")
+        _require(b, Vec3, "R3Manifold.boxminus: b")
+        try:
+            return a - b
+        except FrameError as e:
+            raise FrameError("R3Manifold.boxminus", expected=e.expected,
+                             got=e.got, source=e.source) from None
 
     def default_value(self):
         return np.zeros(3, dtype=float)
@@ -252,14 +271,15 @@ class R3Manifold(Manifold):
 
 
 @dataclass(frozen=True)
-class RnManifold(Manifold):
+class RnManifold(_EuclideanManifold):
     """R^n — parameterized-dimension Euclidean. Backend kind: ``"vecn"``.
 
     ONE class for every n: the dimension is INSTANCE DATA, not a new
-    type — the generalization the R3 docstring promised ("size carried
-    in `storage_shape`, not in the kind string"). Backends size their
-    concrete type from `storage_shape`; the shortcut vocabulary is a
-    grammar (``"R7"``, ``"R36"``, any ``"R<n>"``), not a table.
+    type. `dim` is required — n = 1 and n = 3 have specialized classes
+    (`ScalarManifold`, `R3Manifold`), so there is no honest default and
+    a silent `dim=1` would just shadow ScalarManifold. Backends size
+    their concrete type from `storage_shape`; the shortcut vocabulary is
+    a grammar (``"R7"``, ``"R36"``, any ``"R<n>"``), not a table.
 
     Frame-free by design: an R^n quantity is a coefficient block (a
     fitted 6x6 damping tensor travelling as flat R36), not a spatial
@@ -267,7 +287,7 @@ class RnManifold(Manifold):
     checking — which is why n = 1 and n = 3 shortcuts still resolve to
     the specialized classes."""
 
-    dim: int = 1
+    dim: int
 
     kind: ClassVar[str] = "vecn"
 
@@ -277,39 +297,26 @@ class RnManifold(Manifold):
                              f"{self.dim}")
 
     @property
-    def ambient_dim(self) -> int:           # type: ignore[override]
+    def ambient_dim(self) -> int:
         return int(self.dim)
 
     @property
-    def tangent_dim(self) -> int:           # type: ignore[override]
+    def tangent_dim(self) -> int:
         return int(self.dim)
 
     @property
-    def storage_shape(self) -> tuple[int, ...]:  # type: ignore[override]
+    def storage_shape(self) -> tuple[int, ...]:
         return (int(self.dim),)
 
     def boxplus(self, x: VecN, delta: VecN) -> VecN:
-        if not isinstance(x, VecN) or not isinstance(delta, VecN):
-            raise TypeError(
-                "RnManifold.boxplus: x and delta must be VecN, got "
-                f"{type(x).__name__} / {type(delta).__name__}")
+        _require(x,     VecN, "RnManifold.boxplus: x")
+        _require(delta, VecN, "RnManifold.boxplus: delta")
         return VecN(x._mx + delta._mx, self.dim)
 
     def boxminus(self, a: VecN, b: VecN) -> VecN:
-        if not isinstance(a, VecN) or not isinstance(b, VecN):
-            raise TypeError(
-                "RnManifold.boxminus: a and b must be VecN, got "
-                f"{type(a).__name__} / {type(b).__name__}")
+        _require(a, VecN, "RnManifold.boxminus: a")
+        _require(b, VecN, "RnManifold.boxminus: b")
         return VecN(a._mx - b._mx, self.dim)
-
-    def boxplus_sym(self, x_mx, delta_mx):
-        return x_mx + delta_mx
-
-    def boxminus_sym(self, a_mx, b_mx):
-        return a_mx - b_mx
-
-    def boxplus_num(self, x, delta):
-        return np.asarray(x, dtype=float) + np.asarray(delta, dtype=float)
 
     def default_value(self):
         return np.zeros(int(self.dim), dtype=float)
@@ -356,13 +363,8 @@ class SO3Manifold(Manifold):
     def boxplus(self, q: Quat, delta: Vec3) -> Quat:
         """q ⊞ δ with δ in q's from_frame (left trivialization). Returns
         a Quat carrying q's frames."""
-        if not isinstance(q, Quat):
-            raise TypeError(
-                f"SO3Manifold.boxplus: q must be a Quat, got {type(q).__name__}")
-        if not isinstance(delta, Vec3):
-            raise TypeError(
-                "SO3Manifold.boxplus: delta must be a Vec3, got "
-                f"{type(delta).__name__}")
+        _require(q,     Quat, "SO3Manifold.boxplus: q")
+        _require(delta, Vec3, "SO3Manifold.boxplus: delta")
         if delta._frame is not q._from_frame:
             raise FrameError(
                 "SO3Manifold.boxplus",
@@ -376,10 +378,8 @@ class SO3Manifold(Manifold):
 
     def boxminus(self, a: Quat, b: Quat) -> Vec3:
         """δ = log(a ⊗ b⁻¹), returned in a's from_frame tangent space."""
-        if not isinstance(a, Quat) or not isinstance(b, Quat):
-            raise TypeError(
-                "SO3Manifold.boxminus: a and b must be Quat, got "
-                f"{type(a).__name__} / {type(b).__name__}")
+        _require(a, Quat, "SO3Manifold.boxminus: a")
+        _require(b, Quat, "SO3Manifold.boxminus: b")
         if (a._from_frame is not b._from_frame
                 or a._to_frame is not b._to_frame):
             raise FrameError(
@@ -410,8 +410,10 @@ class SO3Manifold(Manifold):
         return Quat[self.from_frame, self.to_frame].input(name)
 
     def ir_zero(self, *, default_frame=None):
-        return Quat[self.from_frame, self.to_frame].from_mx(
-            ca.MX([1.0, 0.0, 0.0, 0.0]))
+        # `Quat.identity` is the single spelling of the identity rotation —
+        # no restated (1, 0, 0, 0) literal to drift.
+        return Quat.identity(from_frame=self.from_frame,
+                             to_frame=self.to_frame)
 
     def ir_add(self, value, delta_mx, *, default_frame=None):
         raise NotImplementedError(
@@ -429,27 +431,43 @@ def manifold_from_shortcut(shortcut, *, frame=None) -> Manifold:
 
     Accepts:
       * a `Manifold` instance — passed through.
-      * `"R<n>"` for any n ≥ 1 — the Euclidean grammar. `"R1"` and
-        `"R3"` resolve to their specialized classes (`ScalarManifold`,
-        frame-checked `R3Manifold`); every other n gives the
-        parameterized, frame-free `RnManifold(n)` (`"R36"` = a
-        flattened 6x6 tensor, and so on).
+      * `"R<n>"` for any n ≥ 1 (no leading zeros) — the Euclidean
+        grammar. `"R1"` and `"R3"` resolve to their specialized classes
+        (`ScalarManifold`, frame-checked `R3Manifold`); every other n
+        gives the parameterized, frame-free `RnManifold(n)` (`"R36"` =
+        a flattened 6x6 tensor, and so on).
       * `"SO3"` → `SO3Manifold()`.
-    """
+
+    `frame=` is consumed only by `"R3"` (the one frame-tagged shortcut).
+    Passing it with `"SO3"` (whose frames are the dual from/to pair on
+    `SO3Manifold`) or a frame-free `"R<n>"` raises instead of silently
+    dropping it — a dropped frame would resurface later as an unchecked
+    frame bug, far from the declaration."""
     if isinstance(shortcut, Manifold):
         return shortcut
+
+    def _reject_frame(why: str) -> None:
+        if frame is not None:
+            raise ValueError(
+                f"manifold_from_shortcut: frame= is not consumed by "
+                f"{shortcut!r} — {why}")
+
     if shortcut == "SO3":
+        _reject_frame("SO(3) frames are the from/to pair on "
+                      "SO3Manifold(from_frame=..., to_frame=...).")
         return SO3Manifold()
-    m = re.fullmatch(r"R([0-9]+)", shortcut) if isinstance(shortcut, str) \
-        else None
+    # No leading zeros: "R03" would silently alias "R3" via int().
+    m = re.fullmatch(r"R([1-9][0-9]*)", shortcut) \
+        if isinstance(shortcut, str) else None
     if m:
         n = int(m.group(1))
         if n == 1:
             return ScalarManifold()
         if n == 3:
             return R3Manifold(frame=frame)
-        if n >= 1:
-            return RnManifold(n)
+        _reject_frame(f"R{n} is frame-free by design (RnManifold); only "
+                      f"'R3' carries a frame tag.")
+        return RnManifold(n)
     raise ValueError(
         f"manifold_from_shortcut: unknown manifold shortcut {shortcut!r}. "
         f"Pass 'R<n>' (e.g. 'R1', 'R3', 'R36'), 'SO3', or a Manifold "

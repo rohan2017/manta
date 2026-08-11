@@ -69,6 +69,15 @@ def _xu(sys):
     return x, u
 
 
+def _h_fn(sys, full):
+    """Evaluate a sensor's measurement expression. `SensorModel` carries the
+    symbolic `h_sym` (the production consumers use `H_fn`); this test is the
+    only caller that wants h itself, so it builds the Function here."""
+    import casadi as ca
+    return ca.Function("h", [sys.x_sym, sys.u_sym, sys.dt_sym, sys.t_sym],
+                       [sys.sensors[full].h_sym])
+
+
 def test_euler_f_converges_quadratically_to_exact():
     sx = LinearizedSystem(_rover())
     se = LinearizedSystem(_rover(), discretization="euler")
@@ -100,9 +109,11 @@ def test_euler_mode_h_and_predict_unchanged():
         np.asarray(sx.predict_fn(x, u, dt, 0.0)), atol=1e-14)
     assert set(se.sensors) == set(sx.sensors)
     for full in sx.sensors:
+        # `SensorModel` carries only the symbolic h (the Function was a
+        # test-only convenience); build it here from the system's syms.
         np.testing.assert_allclose(
-            np.asarray(se.sensors[full].h_fn(x, u, dt, 0.0)),
-            np.asarray(sx.sensors[full].h_fn(x, u, dt, 0.0)),
+            np.asarray(_h_fn(se, full)(x, u, dt, 0.0)),
+            np.asarray(_h_fn(sx, full)(x, u, dt, 0.0)),
             atol=1e-12, err_msg=full)
         np.testing.assert_allclose(
             np.asarray(se.sensors[full].H_fn(x, u, dt, 0.0)),

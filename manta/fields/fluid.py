@@ -43,9 +43,19 @@ from ..ir.frames import WorldFrame
 from ..ir.types import Vec3
 from ..smoothing import hermite_blend, smooth_max0, soft_norm
 from .base import Disturbance, SuperposedField
+from .fluid_props import T0_ISA, hydrostatic_pressure, sutherland_viscosity
 
 
 _VEC3_W = Vec3[WorldFrame]
+
+# Rounding half-width² for the averaged-pool coverage saturation at
+# den = 1 (coverage is dimensionless, so this is (1e-6)² in coverage
+# units). Small on purpose: the derivative bound does NOT depend on it
+# (smooth_max0's slope is ≤ 1 for any eps), it only sets the value error
+# where bubbles exactly tile coverage 1 — √eps/2 = 5e-7, far below any
+# wind-estimate resolution — and keeps the ≥-1 branch's mean exact to
+# eps/4 = 2.5e-13.
+_COVERAGE_EPS_SQ: float = 1e-12
 
 
 @dataclass(frozen=True)
@@ -118,6 +128,11 @@ class FluidField(SuperposedField):
     # `field_value_shape` is FluidState may be added.
     value_shape = FluidState
 
+    # The layered blend below evaluates `Disturbance.membership` on every
+    # role, so `Field.add` accepts a bounded disturbance here (it refuses
+    # one on the plain additive fields, where it would be dropped).
+    honors_membership = True
+
     def __init__(self,
                  density: float | None = None,
                  velocity: tuple[float, float, float] = (0.0, 0.0, 0.0),
@@ -174,7 +189,22 @@ class FluidField(SuperposedField):
             c = d.contribute_at_sym(point, t)
             base = base.scaled(1.0 - w) + c.scaled(w)
 
-        # Averaged overlays: membership-weighted self-mean.
+        # Averaged overlays: membership-weighted self-mean with a
+        # smoothly SATURATED denominator. The naive `num / (den + ε)`
+        # defeats the membership ramp: for a single bubble the weight
+        # cancels out of its own mean (w·v / (w + ε) ≈ v anywhere
+        # w ≳ ε — full-strength wind right up to the fringe), and the
+        # derivative of w/(w+ε) at w → 0 is w′/ε — the C¹ boundary a
+        # CraftWindBubble promises turns into a ~1/ε-amplified
+        # near-step in every Jacobian the EKF/LQR consumes. Instead,
+        # divide by `smooth_max0(den − 1) + 1`: at coverage den ≥ 1 the
+        # denominator is den (exact overlap mean — two full bubbles
+        # agree on their average), while at den < 1 it saturates at 1,
+        # so the value decays as Σ wᵢ·vᵢ (≈ v·w at a lone fringe — the
+        # true C¹ ramp) and the derivative stays bounded by the
+        # membership ramp's own slope w′, ε-free. The transition is C^∞
+        # (see `smooth_max0`); _COVERAGE_EPS_SQ only rounds the kink at
+        # den = 1.
         avg = self._zero_value()
         if averaged:
             num = self._zero_value()
@@ -183,7 +213,8 @@ class FluidField(SuperposedField):
                 w = d.membership(point, t)
                 num = num + d.contribute_at_sym(point, t).scaled(w)
                 den = den + w
-            avg = num.scaled(1.0 / (den + 1e-9))
+            den_sat = smooth_max0(den - 1.0, _COVERAGE_EPS_SQ) + 1.0
+            avg = num.scaled(1.0 / den_sat)
 
         # Additive perturbations: membership-weighted sum on top.
         pert = self._zero_value()
@@ -309,10 +340,9 @@ class UniformFluid(Disturbance):
         if len(self.velocity) != 3:
             raise ValueError(
                 f"UniformFluid: velocity must be length-3, got {velocity!r}")
-        # Default-fill viscosity from Sutherland(T) for air — a lazy import
-        # keeps the fields↔planets dependency one-directional at load time.
+        # Default-fill viscosity from Sutherland(T) for air (the fluid-
+        # column physics lives beside us in `fluid_props`).
         if viscosity is None:
-            from ..planets.atmosphere import T0_ISA, sutherland_viscosity
             T = self.temperature if self.temperature > 0.0 else T0_ISA
             viscosity = float(sutherland_viscosity(T))
         self.viscosity = float(viscosity)
@@ -435,8 +465,11 @@ class FlatOcean(Disturbance):
                             self.surface_blend ** 2)
         return FluidState(
             density     = ca.MX(self.density),
-            pressure    = ca.MX(self.surface_pressure)
-                          + self.density * self.gravity * depth,
+            # Same incompressible column `Ocean` uses (one law, one
+            # helper): P = P_surface + ρ·g·depth.
+            pressure    = hydrostatic_pressure(
+                              ca.MX(self.surface_pressure),
+                              self.density, self.gravity, depth),
             temperature = ca.MX(self.temperature),
             viscosity   = ca.MX(self.viscosity),
             velocity    = _VEC3_W.constant(self.velocity),
