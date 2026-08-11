@@ -82,7 +82,7 @@ class Motor(RevoluteDOF):
 
     torque_constant: float = Parameter(0.05, manifold="R1")
     resistance:      float = Parameter(1.0, manifold="R1")
-    current_limit:   float = Parameter(math.inf)
+    current_limit:   float = Parameter(math.inf, allow_infinite=True)
     gear_ratio:      float = Parameter(1.0)
     voltage:         float = Input(default=0.0)
 

@@ -391,6 +391,7 @@ class Fit:
 
         self.world = world
         self.sim = Sim(world, parameters=promoted_keys)
+        self.model_world = self.sim.world
         self.module = self.sim.module()
         self._spec = self.module.spec
         port = self.module.port("params")
@@ -553,7 +554,7 @@ class Fit:
         z_resolved, K = resolve_traces(w.z, meas_names, dims, who="Fit")
 
         # Initial state: window slots over the world's initial state.
-        x0 = pack_x0(self.world, self._spec, w)
+        x0 = pack_x0(self.model_world, self._spec, w)
 
         # Control trace (n_u, K): recorded columns, defaults elsewhere.
         U = pack_u_trace(

@@ -58,10 +58,12 @@ class Parameter(_Declaration):
                    frame; must match what `update()` composes it with.
     """
 
-    __slots__ = ("manifold",)
+    __slots__ = ("manifold", "allow_infinite")
 
-    def __init__(self, default: Any, *, manifold=None, frame=None) -> None:
+    def __init__(self, default: Any, *, manifold=None, frame=None,
+                 allow_infinite: bool = False) -> None:
         super().__init__(default)
+        self.allow_infinite = allow_infinite
         if manifold is None:
             self.manifold = None
         else:

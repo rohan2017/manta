@@ -14,7 +14,7 @@ import casadi as ca
 def emit_kernel_call(fn: str, args: list[str],
                      results: list[tuple[int, str]]) -> list[str]:
     """Emit a CasADi flat-C kernel call (arg/res/iw/w boilerplate)."""
-    out = [f"    {{",
+    out = ["    {",
            f"        const double* arg[{fn}_SZ_ARG] = {{0}};"]
     out += [f"        arg[{i}] = {a};" for i, a in enumerate(args)]
     out.append(f"        double* res[{fn}_SZ_RES] = {{0}};")

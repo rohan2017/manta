@@ -121,7 +121,7 @@ def _as_tensor_polynomial(*,
 
 
 class DragSurface(Part):
-    """Polynomial drag/lift surface (legacy Surface1..4).
+    """Polynomial drag/lift surface.
 
     Parameters:
         force_tensors   — list of 3×3 matrices [A_1, A_2, …, A_N], CraftFrame.

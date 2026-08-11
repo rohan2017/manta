@@ -32,6 +32,7 @@ import numpy as np
 
 if TYPE_CHECKING:
     from ..world import World
+    from .scene import Scene
     from .state import PlanetState
 
 

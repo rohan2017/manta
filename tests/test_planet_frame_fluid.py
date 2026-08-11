@@ -59,7 +59,7 @@ def test_ocean_full_density_at_any_depth():
     w.add_planet(earth)
     c = Craft("probe"); c.add(Mass("body", mass=1.0))
     w.add_craft(c, position=(earth.R_EQ, 0, 0))
-    Sim(w)
+    w = Sim(w).world
 
     for depth in (0.1, 1.0, 5.0, 50.0, 500.0):
         rho = _sample_density(w, (earth.R_EQ - depth, 0, 0))
@@ -74,7 +74,7 @@ def test_atmosphere_isa_lapse_profile():
     w = World(); w.add_planet(earth)
     c = Craft("probe"); c.add(Mass("body", mass=1.0))
     w.add_craft(c, position=(earth.R_EQ + 1.0, 0, 0))
-    Sim(w)
+    w = Sim(w).world
 
     P0, T0, L, g0, R = _earth_isa_constants(earth)
     for alt in (100.0, 1000.0, 10000.0):
@@ -97,7 +97,7 @@ def test_ocean_hydrostatic_pressure():
     w = World(); w.add_planet(earth)
     c = Craft("probe"); c.add(Mass("body", mass=1.0))
     w.add_craft(c, position=(earth.R_EQ, 0, 0))
-    Sim(w)
+    w = Sim(w).world
 
     P0, T0, _, g0, _ = _earth_isa_constants(earth)
     for depth in (1.0, 10.0, 100.0, 1000.0):
@@ -116,7 +116,7 @@ def test_atmosphere_vanishes_at_lunar_distance():
     w = World(); w.add_planet(earth)
     c = Craft("probe"); c.add(Mass("body", mass=1.0))
     w.add_craft(c, position=(earth.R_EQ + 1.0, 0, 0))
-    Sim(w)
+    w = Sim(w).world
     rho = _sample_density(w, (3.84e8, 0, 0))
     assert rho < 1e-15, f"atmosphere should be negligible, got {rho}"
 
@@ -155,7 +155,7 @@ def test_custom_planet_frame_fluid_lambda():
     w.add_field(ff)
     c = Craft("probe"); c.add(Mass("body", mass=1.0))
     w.add_craft(c)
-    Sim(w)
+    w = Sim(w).world
     # Sample at r=3 (inside hole), r=7 (donut), r=12 (outside).
     np.testing.assert_allclose(_sample_density(w, (3, 0, 0)),    0.0)
     np.testing.assert_allclose(_sample_density(w, (7, 0, 0)), 1000.0)
@@ -171,7 +171,7 @@ def _wave_world(**earth_kw):
     w = World(); w.add_planet(earth)
     c = Craft("probe"); c.add(Mass("body", mass=1.0))
     w.add_craft(c, position=(0, 0, 1.0))
-    Sim(w)
+    w = Sim(w).world
     return earth, w
 
 
@@ -255,7 +255,7 @@ def _patch_world(*patches):
     ff = w.get_or_create_field(FluidField)
     for p in patches:
         ff.add(p)
-    Sim(w)
+    w = Sim(w).world
     return earth, w
 
 

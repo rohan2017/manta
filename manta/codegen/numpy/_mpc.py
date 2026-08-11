@@ -129,7 +129,7 @@ class NumpyMpc(NumpyRuntime):
         if position is not None:
             self._target[0:3] = np.asarray(position,
                                             dtype=float).ravel()
-        spec = self._x_port.manifold
+        spec = self._x_port.spec
         if not isinstance(x, np.ndarray):
             x = spec.pack_any(x, base=np.asarray(self._x_port.init,
                                                  dtype=float))

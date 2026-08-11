@@ -157,7 +157,7 @@ class MPC:
         from ..sim import Sim
         sim_module = Sim(world).module()
         step = sim_module.functions["step"].expand()
-        spec = sim_module.state.fields[0].manifold
+        spec = sim_module.state.fields[0].spec
         x_init = np.asarray(sim_module.state.fields[0].init,
                             dtype=float).reshape(-1)
 
@@ -262,7 +262,7 @@ class MPC:
                 init=np.zeros((nu, self.horizon))),)),
             ports=(
                 Port("x", Role.STATE, (spec.ambient_dim,),
-                     manifold=spec, init=x_init),
+                     spec=spec, init=x_init),
                 Port("target", Role.MATRIX, (19, 1), init=t0.reshape(19, 1)),
                 Port("weights", Role.MATRIX, (28 + nu, 1),
                      init=w0.reshape(28 + nu, 1)),
@@ -425,7 +425,8 @@ class MPC:
                             max_iter, tol)
             if best is None or r.cost < best.cost:
                 best = r
-        assert best is not None
+        if best is None:  # defensive: `seeds` is constructed non-empty above
+            raise RuntimeError("MPC.solve: multi-start produced no candidate")
         return best
 
     # ---- solver internals (ported from the manta-mpc lab's Ddp) -------

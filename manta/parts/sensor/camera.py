@@ -19,7 +19,7 @@ and emit per-target image measurements. They differ only in WHAT they report:
 Both project with the dual-quadric / point projection through
 ``P = K·[R_cw | −R_cw·C]`` (looks down its own +z; image +x right, +y down;
 intrinsics from a horizontal FOV with a centred principal point). The output
-set is fixed at compile time: `World.finalize()` fills
+set is fixed at compile time: World snapshot resolution fills
 `self._targets` with every ellipsoid not on the camera's own craft before the
 tick is traced, and both `output_declarations` and `update` iterate it.
 
@@ -103,12 +103,12 @@ class ProjectiveCamera(Part):
             # rotated camera (it looks down its own +z), so dropping this
             # kwarg would make rotated cameras unconstructable.
             mount_orientation=mount_orientation)
-        # Set via set_targets() by World.finalize() (every
+        # Set via set_targets() during World snapshot resolution (every
         # ellipsoid not on this camera's craft). Drives output/noise
         # declarations and update.
         self._targets: tuple = ()
 
-    def on_world_finalize(self, world, craft) -> None:
+    def on_world_resolve(self, world, craft) -> None:
         """Point the camera at every optical ellipsoid it can see — all
         but its own craft's. A camera with no OpticalField registered
         fails the `requires_fields` check at transform build; here we
@@ -121,7 +121,7 @@ class ProjectiveCamera(Part):
 
     def set_targets(self, targets) -> None:
         """Point the camera: fix the compile-time set of ellipsoids it
-        measures. Called once by `World.finalize()` before
+        measures. Called once during snapshot resolution before
         the tick is traced; the output/noise declarations follow it.
 
         Also materializes the per-channel `<name>_sigma` attributes the

@@ -107,7 +107,7 @@ def test_earth_atmosphere_viscosity_drops_with_altitude():
     earth = Earth(rotation_rate=0.0)
     w = World(); w.add_planet(earth)
     c = Craft("probe"); c.add(Mass("body", mass=1.0))
-    w.add_craft(c, position=(earth.R_EQ, 0, 0)); Sim(w)
+    w.add_craft(c, position=(earth.R_EQ, 0, 0)); w = Sim(w).world
 
     mu_sea = _visc(w, (earth.R_EQ + 0.0, 0, 0))
     mu_high = _visc(w, (earth.R_EQ + 8000.0, 0, 0))
@@ -126,7 +126,7 @@ def test_earth_ocean_viscosity_is_seawater():
     earth = Earth(rotation_rate=0.0)
     w = World(); w.add_planet(earth)
     c = Craft("probe"); c.add(Mass("body", mass=1.0))
-    w.add_craft(c, position=(earth.R_EQ, 0, 0)); Sim(w)
+    w.add_craft(c, position=(earth.R_EQ, 0, 0)); w = Sim(w).world
 
     mu_wet = _visc(w, (earth.R_EQ - 50.0, 0, 0))
     mu_air = _visc(w, (earth.R_EQ + 50.0, 0, 0))

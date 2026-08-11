@@ -101,8 +101,8 @@ def _converge(ekf, bear, names_per_round, *, rounds=20):
 
 def test_centroid_declares_uv_noise_channels():
     w = _world(pixel_sigma=1.5)
-    w.finalize()
-    cam = next(p for c in w.crafts if c.name == "tracker"
+    snapshot = w.snapshot()
+    cam = next(p for c in snapshot.crafts if c.name == "tracker"
                for p in c.parts if p.name == "c0")
     assert set(cam.noise_declarations()) == {"target_hull_u_noise",
                                              "target_hull_v_noise"}

@@ -7,6 +7,7 @@ from typing import Any
 import casadi as ca
 import numpy as np
 
+from ..._validation import require_finite, require_positive
 from ...ir.module import Role, StateRef
 from ...ir.state_spec import flatten_nested
 from ...ir._names import resolve_suffix
@@ -129,9 +130,10 @@ class NumpySim(NumpyRuntime):
             raise TypeError(
                 "NumpySim.step: the functional step(state, dt) form was "
                 "removed — pass commands as step(dt, u={...}).")
-        t0 = self._t if t is None else t
-        self._sim_state = self._advance(self.state, float(dt), t0, u)
-        self._t = t0 + float(dt)
+        dt = require_positive(dt, name="NumpySim.step dt")
+        t0 = self._t if t is None else float(require_finite(t, name="NumpySim.step t"))
+        self._sim_state = self._advance(self.state, dt, t0, u)
+        self._t = t0 + dt
         return self._sim_state
 
     def _pack_u(self, flat: dict, u: dict[str, Any] | None) -> np.ndarray:
@@ -185,13 +187,19 @@ class NumpySim(NumpyRuntime):
 
         Falls back to sequential stepping when a `NoiseDriver` is attached (a
         fresh stochastic draw per substep cannot be folded)."""
+        dt = require_positive(dt, name="NumpySim.step_n dt")
+        if isinstance(n, bool) or int(n) != n or n < 0:
+            raise ValueError(f"NumpySim.step_n n must be a non-negative integer, got {n!r}")
+        n = int(n)
+        if t is not None:
+            t = float(require_finite(t, name="NumpySim.step_n t"))
         if n <= 1 or self._driver is not None:
-            for k in range(int(n)):
+            for k in range(n):
                 self.step(dt, t=None if t is None else t + k * dt, u=u)
             return self.state          # property: seeds when n == 0
         t0 = self._t if t is None else t
-        self._sim_state = self._advance_n(self.state, float(dt), int(n), t0, u)
-        self._t = t0 + n * float(dt)
+        self._sim_state = self._advance_n(self.state, dt, n, t0, u)
+        self._t = t0 + n * dt
         return self._sim_state
 
     def _step_n_fn(self, n: int):

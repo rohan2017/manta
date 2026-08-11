@@ -29,19 +29,15 @@ plus one top-level key per state-bearing disturbance (e.g. a
 CraftWindBubble's estimated wind appears at
 `sim.state["drone_wind"]["wind"]`).
 
-Lifecycle: the first transform built over the world (`Sim`, `EKF`,
-`LQR`, …) calls `world.finalize()`, which resolves the compile-time
-registrations (planets contribute their standing disturbances, field-
-source parts emit onto the shared fields, cameras get pointed at their
-targets) and LOCKS the model — `add_craft` / `add_field` / `add_planet`
-/ `add_coupling` raise afterwards. This is what makes several transforms
-over one world consistent: they all see the same finalized model, and
-nothing can be added that an already-built transform would silently
-miss.
+Each transform resolves a private snapshot of the authoring World. Planet
+disturbances, field sources, camera targets, and planet-frame initial state
+are resolved on that copy. The authoring objects remain editable for later
+transforms, while existing transforms retain the revision they captured.
 """
 
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 import numpy as np
@@ -73,37 +69,26 @@ class World:
         # FluidField, …). Concrete subclasses query by class.
         self._fields: dict[type, Field] = {}
         # Planets registered with this world. Each one contributes its
-        # standing field disturbances at finalize() time via
+        # standing field disturbances at snapshot-resolution time via
         # `planet.register_disturbances(world)`. Multi-planet supported;
         # disturbances superpose into the shared field instances.
         self._planets: list = []
-        # Set by finalize(): compile-time registrations have run and the
-        # model is locked (the add_* mutators raise).
-        self._finalized = False
 
-    # ---- Finalization -----------------------------------------------------
+    # ---- Snapshot resolution ---------------------------------------------
 
-    @property
-    def finalized(self) -> bool:
-        """True once `finalize()` has locked the model."""
-        return self._finalized
+    def snapshot(self) -> "World":
+        """Return an independently resolved snapshot of this authoring model.
 
-    def finalize(self) -> "World":
-        """Resolve the compile-time registrations and lock the model.
-
-        Runs once (idempotent): planets contribute their standing
-        disturbances to the shared fields, field-source parts emit their
-        craft-anchored disturbances, cameras are pointed at the optical
-        ellipsoids they can see, and `PlanetState` initial-state wrappers
-        resolve to WorldFrame. Afterwards `add_craft` / `add_field` /
-        `add_planet` / `add_coupling` raise — every transform built over
-        this world sees the same finalized model.
-
-        Called automatically by the first transform (`Sim`, `EKF`,
-        `LQR`, …); call it directly only to lock a world early.
+        Deferred registrations and hooks run on a deep copy. If resolution
+        fails, the authoring World remains untouched. Transforms call this
+        automatically and retain the resulting fixed model revision.
         """
-        if self._finalized:
-            return self
+        snapshot = copy.deepcopy(self)
+        snapshot._resolve()
+        return snapshot
+
+    def _resolve(self) -> None:
+        """Resolve deferred compile-time behavior on a private snapshot."""
         for p in self._planets:
             p.register_disturbances(self)
         self._register_field_sources()
@@ -113,19 +98,8 @@ class World:
         for entry in self._crafts:
             craft = entry["craft"]
             for part in craft.parts:
-                part.on_world_finalize(self, craft)
+                part.on_world_resolve(self, craft)
         self._resolve_planet_state_overrides()
-        self._finalized = True
-        return self
-
-    def _require_mutable(self, what: str) -> None:
-        if self._finalized:
-            raise RuntimeError(
-                f"World '{self.name}': cannot {what} — the world was "
-                f"finalized when its first transform (Sim/EKF/LQR) was "
-                f"built, and a transform built later would not see the "
-                f"addition. Build the full model first, then the "
-                f"transforms.")
 
     # ---- Fields ----------------------------------------------------------
 
@@ -136,7 +110,6 @@ class World:
 
         Returns self for chaining.
         """
-        self._require_mutable("add a field")
         if not isinstance(field, Field):
             raise TypeError(
                 f"World.add_field: expected a Field, got "
@@ -181,7 +154,6 @@ class World:
         shared fields. Multi-planet worlds superpose contributions
         from every registered planet.
         """
-        self._require_mutable("add a planet")
         from .planets.base import Planet
         if not isinstance(planet, Planet):
             raise TypeError(
@@ -232,7 +204,6 @@ class World:
             **extra_state    — per-part state overrides
                                (e.g., `**{"wheel.angle": 0.5}`).
         """
-        self._require_mutable("add a craft")
         # Validate uniqueness.
         for entry in self._crafts:
             if entry["craft"] is craft:
@@ -261,7 +232,6 @@ class World:
         be registered via `add_craft`. The coupling forces them into the
         same connected component at compile time → one shared compiled
         tick over both."""
-        self._require_mutable("add a coupling")
         if not isinstance(coupling, Coupling):
             raise TypeError(
                 f"World.add_coupling: expected Coupling, got "
@@ -316,7 +286,7 @@ class World:
         already be registered — a source CONTRIBUTES to a field, it does
         not provide one; using a `GravitySource` with no `GravityField`
         registered is a configuration error. Runs once, from
-        `finalize()` (before the per-part `on_world_finalize` hooks, so
+        snapshot resolution (before the per-part `on_world_resolve` hooks, so
         a hook sees the fully-assembled fields)."""
         from .parts.field_source.base import FieldSource, cumulative_offset
 

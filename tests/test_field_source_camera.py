@@ -179,11 +179,13 @@ def test_source_registration_idempotent():
     tgt.add(OpticalSource("hull", semi_axes=(1, 1, 1)))
     tgt.add(PositionSensor("gps", position_noise_sigma=0.1))
     w.add_craft(tgt, position=(0, 0, 10))
-    Sim(w)
+    first = Sim(w)
     # Camera boxes are noiseless → not EKF sensors; track the gps only.
     EKF(w, sensors=["t.gps.position"])
-    Sim(w)
-    assert len(w.get_field(OpticalField).ellipsoids) == 1
+    third = Sim(w)
+    assert len(first.world.get_field(OpticalField).ellipsoids) == 1
+    assert len(third.world.get_field(OpticalField).ellipsoids) == 1
+    assert len(w.get_field(OpticalField).ellipsoids) == 0
 
 
 def test_field_source_adds_no_wrench():

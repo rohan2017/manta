@@ -73,7 +73,7 @@ class Sim:
         # bit-for-bit.
         self._sys = LinearizedSystem(           # full state, all sensors
             world, discretization=discretization, parameters=parameters)
-        self.world = world
+        self.world = self._sys.world
         self.crafts = self._sys.crafts
 
     # ------------------------------------------------------------------
@@ -94,7 +94,7 @@ class Sim:
         init_flat = flatten_nested(self.world._initial_state_dict())
         x0 = spec.pack_any(init_flat)
         x_field = StateField("x", "manifold", (spec.ambient_dim,),
-                             init=x0, manifold=spec)
+                             init=x0, spec=spec)
         # A command's declared default is the MODEL's initial value: an
         # `add_craft(..., **{"t.throttle": x0})` override wins over the
         # Part-declared default.

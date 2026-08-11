@@ -98,7 +98,7 @@ def test_tick_never_degrades_the_held_plan():
     # pos 120), substeps matching the transform's default
     sim_module = Sim(w).module()
     step = sim_module.functions["step"].expand()
-    spec = sim_module.state.fields[0].manifold
+    spec = sim_module.state.fields[0].spec
     po = spec.slot("tug.position").ambient_offset
     dt, sub = 0.25, 5
     x, J0 = x0.copy(), 0.0
@@ -131,7 +131,7 @@ def test_closed_loop_station_keeping_against_the_sim():
               w_pos_terminal=60.0, w_vel_terminal=40.0)
     rt = TargetNumpy(mpc)
     plant = TargetNumpy(Sim(_tug()[0]))
-    spec = mpc.module().port("x").manifold
+    spec = mpc.module().port("x").spec
     goal = np.array([2.0, 0.0, -1.0])
 
     miss = np.inf
@@ -226,7 +226,7 @@ def test_plan_birth_discovers_pitch_to_dive_and_seeds_the_runtime():
     rt = TargetNumpy(mpc)
     rt.reset_plan(p.U)
     plant = TargetNumpy(Sim(_fin()[0]))
-    spec = mpc.module().port("x").manifold
+    spec = mpc.module().port("x").spec
     miss = np.inf
     for _ in range(50):
         flat = {f"fin.{k}": np.asarray(v, dtype=float).ravel()
@@ -290,7 +290,7 @@ def test_cruise_transect_heading_speed_depth():
     rt.reset_plan(p.U)
     plant = TargetNumpy(Sim(_fin()[0]))
     plant.state["fin"]["position"] = np.array([0.0, 0.0, -2.0])
-    spec = mpc.module().port("x").manifold
+    spec = mpc.module().port("x").spec
     for _ in range(60):
         st = plant.state["fin"]
         flat = {f"fin.{n}": np.asarray(v, dtype=float).ravel()

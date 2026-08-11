@@ -80,6 +80,28 @@ def test_filter_clock_advances_like_sim():
     assert f._t == 0.0
 
 
+@pytest.mark.parametrize("dt", [0.0, -0.1, float("nan"), float("inf")])
+def test_runtimes_reject_invalid_timestep(dt):
+    sim = TargetNumpy(Sim(_world()))
+    filt = TargetNumpy(EKF(_world()))
+    with pytest.raises(ValueError):
+        sim.step(dt)
+    with pytest.raises(ValueError):
+        filt.predict(dt)
+
+
+def test_reset_resets_covariance_and_explicit_state_move_preserves_it():
+    filt = TargetNumpy(EKF(_world()))
+    default = filt.P.copy()
+    filt._state["P"] = np.eye(filt.spec.tangent_dim) * 7.0
+    filt.reset(state={"d": {"position": [1.0, 2.0, 3.0]}})
+    assert np.array_equal(filt.P, default)
+    kept = np.eye(filt.spec.tangent_dim) * 5.0
+    filt._state["P"] = kept.copy()
+    filt.set_state_keep_covariance({"d": {"position": [4.0, 5.0, 6.0]}})
+    assert np.array_equal(filt.P, kept)
+
+
 def test_step_n_zero_returns_state():
     """`step_n(dt, 0)` is a no-op that still returns the state dict (it
     used to return None because the loop never seeded the lazy state)."""

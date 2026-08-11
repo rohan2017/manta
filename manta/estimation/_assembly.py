@@ -93,7 +93,7 @@ def emit_filter_module(sys, spec: StateSpec, *, name: str, x0: np.ndarray,
     n_tan = spec.tangent_dim
     fields = (
         StateField("x", "manifold", (spec.ambient_dim,),
-                   init=x0, manifold=spec),
+                   init=x0, spec=spec),
         StateField("P", "matrix", (n_tan, n_tan),
                    init=np.eye(n_tan) * 1e-2),
     )

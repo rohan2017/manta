@@ -11,6 +11,7 @@ the gate.
 """
 
 import numpy as np
+import pytest
 
 from manta import (
     Craft, EKF, Sim, TargetNumpy, World,
@@ -87,6 +88,20 @@ def test_rate_gate_due_per_window():
         sim.step(0.02)
         due.append(gate.due(i * 0.02))
     assert due == [True, False, False, False, False] * 3
+
+
+@pytest.mark.parametrize("rate", [0.0, -1.0, float("nan"), float("inf")])
+def test_rate_gate_rejects_invalid_rate(rate):
+    from manta import RateGate
+    with pytest.raises(ValueError):
+        RateGate(rate)
+
+
+@pytest.mark.parametrize("t", [float("nan"), float("inf")])
+def test_rate_gate_rejects_non_finite_time(t):
+    from manta import RateGate
+    with pytest.raises(ValueError, match="must be finite"):
+        RateGate(1.0).due(t)
 
 
 def test_reading_is_live_not_held():

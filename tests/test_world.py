@@ -32,7 +32,7 @@ def test_duplicate_part_name_raises():
 
 def test_field_source_without_emits_field_raises():
     """A FieldSource subclass that forgets `emits_field` gets a named
-    error at finalize — not an AttributeError from inside the error
+    error during snapshot resolution — not an AttributeError from inside the error
     message that was trying to report it."""
     from manta.parts.field_source.base import FieldSource
 
@@ -46,7 +46,7 @@ def test_field_source_without_emits_field_raises():
     w = World().add_field(GravityField().add_uniform((0.0, 0.0, -9.81)))
     w.add_craft(c)
     with pytest.raises(TypeError, match="emits_field"):
-        w.finalize()
+        w.snapshot()
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +82,24 @@ def test_two_crafts_fall_independently():
     # Alice's x stays at 0; Bob's at 10.
     assert np.allclose(cw.state["alice"]["position"][:2], [0.0, 0.0])
     assert np.allclose(cw.state["bob"]["position"][:2],   [10.0, 0.0])
+
+
+def test_transform_resolves_private_snapshot_and_authoring_world_stays_editable():
+    c = Craft("c")
+    c.add(Mass("body", mass=1.0))
+    w = World()
+    w.add_craft(c)
+    first = Sim(w)
+
+    from manta.parts import Thruster
+    c.add(Thruster("late", force=(1.0, 0.0, 0.0)))
+    second = Sim(w)
+
+    assert first.world is not w and second.world is not w
+    assert first.world is not second.world
+    assert not first.module().port("u").fields
+    assert [f.name for f in second.module().port("u").fields] == [
+        "c.late.throttle"]
 
 
 # ---------------------------------------------------------------------------

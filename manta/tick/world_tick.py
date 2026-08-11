@@ -31,6 +31,8 @@ from typing import Any
 import casadi as ca
 import numpy as np
 
+from .._validation import require_positive
+
 from .. import ir
 from ..craft import TickContext, _wrench_rotate_to_craft, _shift_wrench
 from .inertia import (
@@ -458,7 +460,9 @@ def _run_part_updates(craft, prefix, kin_states, fields_tuple, dt, t,
             sensor_outputs.append((prefix + f"{part.name}.{oname}", oval))
         for rname, r in rates.items():
             if r is not None:
-                sample_rates[prefix + f"{part.name}.{rname}"] = float(r)
+                full = prefix + f"{part.name}.{rname}"
+                sample_rates[full] = require_positive(
+                    r, name=f"sample rate {full!r}")
 
         ctx_R = ir.Mat3[CraftFrame, PartFrame].from_mx(
             kin.R_craft_from_input)

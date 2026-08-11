@@ -7,6 +7,7 @@ from typing import Any, Callable
 import casadi as ca
 import numpy as np
 
+from ..._validation import require_finite, require_positive
 from ...estimation._kalman import joseph_update_np
 from ...ir.module import entry_ident
 from ...ir._names import resolve_suffix
@@ -60,21 +61,21 @@ class NumpyFilter(NumpyRuntime):
 
     def reset(self, state: dict | None = None, *,
               P: np.ndarray | None = None) -> None:
-        """Reset held state. `state` is a nested/flat dict merged over
-        the Module's declared initial values, or a flat ambient vector
-        taken verbatim; `P` resets the covariance. The runtime clock
-        rewinds to 0 (pass explicit `t=` to predict/update to resync
-        against a different timebase)."""
+        """Reset state, covariance, and clock from the Module defaults.
+
+        ``state`` is merged over the declared initial state and ``P`` may
+        replace the declared initial covariance. To move only the nominal
+        state while deliberately preserving covariance, use
+        :meth:`set_state_keep_covariance`.
+        """
         self._t = 0.0
         x_field = self.module.state.field("x")
-        if state is not None:
-            self._state["x"] = self._spec.pack_any(state, base=x_field.init)
-        elif P is None:
-            self._state["x"] = np.asarray(
+        self._state["x"] = self._spec.pack_any(
+            state, base=x_field.init) if state is not None else np.asarray(
                 x_field.init, dtype=float).reshape(-1).copy()
-            pf = self.module.state.field("P")
-            self._state["P"] = np.asarray(
-                pf.init, dtype=float).reshape(pf.shape).copy()
+        pf = self.module.state.field("P")
+        self._state["P"] = np.asarray(
+            pf.init, dtype=float).reshape(pf.shape).copy()
         if P is not None:
             P = np.asarray(P, dtype=float)
             expected = (self._spec.tangent_dim, self._spec.tangent_dim)
@@ -83,6 +84,16 @@ class NumpyFilter(NumpyRuntime):
                     f"reset: P shape {P.shape} doesn't match tangent dim "
                     f"{expected}")
             self._state["P"] = P.copy()
+
+    def set_state_keep_covariance(self, state: dict) -> None:
+        """Replace the nominal state while preserving covariance and clock.
+
+        This is intentionally separate from :meth:`reset`: retaining a
+        covariance after moving its linearization point is an advanced,
+        explicit operation.
+        """
+        self._state["x"] = self._spec.pack_any(
+            state, base=self.module.state.field("x").init)
 
     @property
     def Q(self):
@@ -105,10 +116,12 @@ class NumpyFilter(NumpyRuntime):
         held `u` truth ran on. `t=None` uses (and advances) the runtime's
         clock, matching `NumpySim.step`; an explicit `t` overrides and
         resynchronizes it."""
-        t0 = self._t if t is None else float(t)
+        dt = require_positive(dt, name=f"{type(self).__name__}.predict dt")
+        t0 = self._t if t is None else float(require_finite(
+            t, name=f"{type(self).__name__}.predict t"))
         self._predict_kernel(dt, t0, self.build_u(u),
                              Q if Q is not None else self._Q)
-        self._t = t0 + float(dt)
+        self._t = t0 + dt
 
     def update(self, target, z=None, R=None, *, t: float | None = None,
                u: dict[str, Any] | None = None) -> None:
@@ -128,7 +141,8 @@ class NumpyFilter(NumpyRuntime):
             return self._update_custom(target, z, R)
         self._fold_sensor(self._resolve_sensor(target), z,
                           self.build_u(u),
-                          t=self._t if t is None else float(t))
+                          t=self._t if t is None else float(require_finite(
+                              t, name=f"{type(self).__name__}.update t")))
 
     # ---- kernels ---------------------------------------------------------
 

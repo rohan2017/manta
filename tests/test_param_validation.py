@@ -62,6 +62,17 @@ def test_mass_rejects_negative():
     Mass("m", mass=0.0)               # zero allowed; craft-level guard
 
 
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), -float("inf")])
+def test_declarations_reject_non_finite_numbers(bad):
+    with pytest.raises(ValueError, match="must be finite"):
+        Mass("m", mass=bad)
+    with pytest.raises(ValueError, match="must be finite"):
+        Mass("m", moi=(1.0, bad, 1.0))
+    from manta.parts import IMU
+    with pytest.raises(ValueError, match="must be finite"):
+        IMU("imu", gyro_noise_sigma=bad)
+
+
 def test_point_buoy_rejects_negative_volume():
     with pytest.raises(ValueError, match="volume must be >= 0"):
         PointBuoy("b", volume=-1e-3)

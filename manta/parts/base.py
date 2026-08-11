@@ -49,6 +49,8 @@ from typing import Any, ClassVar
 
 import numpy as np
 
+from .._validation import require_finite, require_positive
+
 from ._declarations import (
     Input, Noise, Output, Parameter, State, _Declaration,
 )
@@ -114,6 +116,15 @@ class DeclarationHost:
                 f"{sorted(set(decls) | noise_sigma_keys)}")
         for attr_name, decl in decls.items():
             value = overrides.get(attr_name, decl.default)
+            if not (isinstance(decl, Parameter) and decl.allow_infinite):
+                require_finite(
+                    value,
+                    name=f"{type(self).__name__}({self.name!r}).{attr_name}",
+                )
+            elif np.any(np.isnan(np.asarray(value, dtype=float))):
+                raise ValueError(
+                    f"{type(self).__name__}({self.name!r}).{attr_name} "
+                    f"must not be NaN, got {value!r}")
             # Plain attribute. For State, this is the init value used both
             # as the seed in initial_state() and as the value the attribute
             # holds OUTSIDE of a trace. Inside a trace, the framework
@@ -121,15 +132,12 @@ class DeclarationHost:
             setattr(self, attr_name, value)
             if isinstance(decl, Noise):
                 sigma_key = f"{attr_name}_sigma"
-                sigma = float(overrides.get(sigma_key, decl.sigma))
-                if sigma < 0.0:
-                    # A typo'd minus sign would otherwise split the
-                    # filter from the truth silently: `is_active` gates
-                    # on σ > 0 (no noise injected) while `noise_R`
-                    # squares it into a nonzero R.
-                    raise ValueError(
-                        f"{type(self).__name__}({self.name!r}): "
-                        f"{sigma_key} must be >= 0, got {sigma!r}")
+                sigma = require_positive(
+                    overrides.get(sigma_key, decl.sigma),
+                    name=(f"{type(self).__name__}({self.name!r})."
+                          f"{sigma_key}"),
+                    allow_zero=True,
+                )
                 setattr(self, sigma_key, sigma)
 
     # The declaration accessors are INSTANCE methods: the default set is
@@ -324,9 +332,9 @@ class Part(DeclarationHost):
         raise NotImplementedError(
             f"{type(self).__name__}: must override update(self, ctx)")
 
-    def on_world_finalize(self, world, craft) -> None:
+    def on_world_resolve(self, world, craft) -> None:
         """Compile-time resolution hook — called once per part by
-        `World.finalize()`, after planets and field sources have
+        snapshot resolution, after planets and field sources have
         registered their disturbances, with the world and this part's
         craft. The generic slot for anything a part can only do against
         the *finished* model:
@@ -338,9 +346,9 @@ class Part(DeclarationHost):
             requirement)
 
         so a user-authored part gets the same compile-time treatment as
-        the stock ones — no `isinstance` ladder in `World.finalize`.
+        the stock ones — no `isinstance` ladder in World resolution.
         Default: no-op. Raise to reject a bad configuration at
-        finalize time (before any tracing) rather than mid-trace."""
+        resolution time (before any tracing) rather than mid-trace."""
 
     # --- Introspection ----------------------------------------------------
 

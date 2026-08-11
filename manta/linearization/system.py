@@ -113,10 +113,9 @@ class LinearizedSystem:
                 f"LinearizedSystem: discretization must be 'exact' or "
                 f"'euler', got {discretization!r}")
 
-        # The first transform finalizes the world: compile-time
-        # registrations run once and the model locks (post-compile
-        # additions raise instead of being silently invisible).
-        world.finalize()
+        # Resolve a private snapshot. Authoring objects remain editable;
+        # this system and all artifacts derived from it retain this revision.
+        world = world.snapshot()
 
         self.world = world
         self.crafts = tuple(world.crafts)

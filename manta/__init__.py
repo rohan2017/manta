@@ -15,7 +15,8 @@ Three layers:
 
   3. **Target** — lower a Module to a backend. `TargetNumpy(x)` returns
      the matching native-Python view over the one kernel engine (sim
-     `.step(dt, u=…)`/`.reading()`, filter `.update()`/`.predict()`, …);
+     `.step(dt, u=…)`/`.outputs()` for all readings or `.reading(name)` for
+     one sensor, filter `.update()`/`.predict()`, …);
      `TargetCpp(x, …)` emits a typed C++ library for embedded use. You own
      the driving loop — the same shape in every backend.
 
@@ -49,7 +50,9 @@ The low-level IR (`manta.ir`) is still exported for advanced use
 through the World/Target API above.
 """
 
-__version__ = "0.1.0"   # keep in lockstep with pyproject.toml
+from importlib.metadata import version as _distribution_version
+
+__version__ = _distribution_version("mantapilot")
 
 from . import ir, smoothing
 from .craft import Craft

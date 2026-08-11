@@ -149,8 +149,24 @@ class NoiseFitResult:
                 "writing the failed solve's final iterate onto the parts.",
                 RuntimeWarning, stacklevel=2)
         for c in self._channels:
-            setattr(c.spec.owner, f"{c.decl_name}_sigma",
-                    self.values[c.alias])
+            pieces = c.alias.split(".")
+            owner = None
+            if len(pieces) >= 3:
+                craft = next((x for x in self._world.crafts
+                              if x.name == pieces[0]), None)
+                owner = (None if craft is None else
+                         next((p for p in craft.parts
+                               if p.name == pieces[1]), None))
+            elif len(pieces) == 2:
+                owner = next(
+                    (d for field in self._world.fields
+                     for d in field.disturbances if d.name == pieces[0]),
+                    None)
+            if owner is None:
+                raise KeyError(
+                    f"NoiseFitResult.apply: no owner for channel {c.alias!r} "
+                    f"in the authoring world — was it rebuilt since the fit?")
+            setattr(owner, f"{c.decl_name}_sigma", self.values[c.alias])
 
     def summary(self) -> str:
         rows = [("channel", "fitted σ", "prior σ(rel)", "post σ(rel)",
@@ -188,8 +204,9 @@ class NoiseFit:
 
     def __init__(self, world, noise: dict, *,
                  sensors: list[str] | None = None) -> None:
-        self.world = world
         self.sys = LinearizedSystem(world, sensors=sensors)
+        self.world = world
+        self.model_world = self.sys.world
         sys = self.sys
 
         # Resolve requested channels against the tick's noise vector.
@@ -300,7 +317,7 @@ class NoiseFit:
         R is diagonal in σ)."""
         s0 = np.concatenate([c.init for c in self.channels]).reshape(-1, 1)
         sys = self.sys
-        flat = flatten_nested(self.world._initial_state_dict())
+        flat = flatten_nested(self.model_world._initial_state_dict())
         x0 = np.asarray(sys.spec.pack_any(flat), dtype=float)
         s_sym = ca.MX.sym("s", self.n_s, 1)
         zero_dt = ca.MX.zeros(1, 1)
@@ -390,7 +407,7 @@ class NoiseFit:
                 f"{sorted(missing)} — every chosen sensor needs a trace "
                 f"(restrict with sensors=[...]).")
         Z = np.vstack([traces[f].T for f in sensor_fulls])
-        x0 = pack_x0(self.world, sys.spec, w)
+        x0 = pack_x0(self.model_world, sys.spec, w)
         U = pack_u_trace(w.u, sys.input_names, sys.u_defaults, K,
                          who="NoiseFit")
         return x0, U, Z, K

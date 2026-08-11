@@ -135,7 +135,7 @@ class RecurrenceBlock:
             name=self.name,
             state=StateLayout((StateField(
                 "x", "manifold", (spec.ambient_dim,),
-                init=self.x0.copy(), manifold=spec),)),
+                init=self.x0.copy(), spec=spec),)),
             ports=(
                 Port("u", Role.CONTROL, (self.input_dim,), fields=tuple(
                     PortField(p.name, p.dim, 0.0) for p in self.inputs)),

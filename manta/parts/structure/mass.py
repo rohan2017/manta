@@ -5,7 +5,7 @@ inertia aggregation via parallel-axis lifts at world-compile time.
 
 from __future__ import annotations
 
-from ...fields import GravityField, gravity_at
+from ...fields import gravity_at
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Scalar, Vec3
 from .._declarations import Parameter

@@ -197,7 +197,7 @@ class LQR:
                                track_mode="verbatim", control=True,
                                ref=x_ref)
         self.sys     = sys
-        self.world   = world
+        self.world   = sys.world
         self.spec    = sys.full_spec      # full layout (the law gathers from it)
         self._spec   = sys.spec           # tracked subspec
         self.regulated = sys.tracked
@@ -261,9 +261,9 @@ class LQR:
             name=f"{world.name}_lqr", state=StateLayout(()),
             ports=(
                 Port("x", Role.STATE, (full_spec.ambient_dim,),
-                     manifold=full_spec, init=self.x_ref),
+                     spec=full_spec, init=self.x_ref),
                 Port("x_ref", Role.STATE, (full_spec.ambient_dim,),
-                     manifold=full_spec, init=self.x_ref),
+                     spec=full_spec, init=self.x_ref),
                 Port("K", Role.MATRIX, (n_u, n_x), init=self.K),
                 Port("u_ff", Role.MATRIX, (n_u, 1),
                      init=u_ref_vec.reshape(-1, 1)),

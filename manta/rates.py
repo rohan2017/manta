@@ -23,6 +23,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from ._validation import require_finite, require_positive
+
 
 class RateGate:
     """Window gate: `due(t)` fires once per `1/rate` window (and records
@@ -32,10 +34,12 @@ class RateGate:
     __slots__ = ("rate", "_last")
 
     def __init__(self, rate: float | None) -> None:
-        self.rate = rate
+        self.rate = (None if rate is None else
+                     require_positive(rate, name="RateGate.rate"))
         self._last: float | None = None
 
     def due(self, t: float) -> bool:
+        t = float(require_finite(float(t), name="RateGate time"))
         if self.rate is None:
             return True
         if self._last is None or t - self._last >= 1.0 / self.rate - 1e-9:

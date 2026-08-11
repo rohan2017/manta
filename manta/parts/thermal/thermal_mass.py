@@ -23,7 +23,7 @@ call wires both directions; parallel heat paths between the same pair
 are extra `connect` calls *from the same endpoint* (a reciprocal
 `b.connect(a, …)` raises — it would silently double the conductance).
 Links join nodes on the *same craft* (thermal structure is craft
-structure; validated at `World.finalize()`).
+structure; validated while resolving a transform snapshot).
 
 **Ambient exchange** — with `ambient_conductance > 0` the node leaks to
 a boundary temperature chosen by `ambient=`:
@@ -67,8 +67,6 @@ channel. Observing them needs a sensor part with a temperature Output
 from __future__ import annotations
 
 from typing import Any
-
-import casadi as ca
 
 from ...ir.frames import PartFrame
 from ...ir.types import Scalar, Vec3
@@ -229,8 +227,8 @@ class ThermalMass(Part):
                 f"tree. Thermal links and heat sources must live on the "
                 f"same craft — cross-craft heat exchange isn't modeled.")
 
-    def on_world_finalize(self, world, craft) -> None:
-        """Validate the thermal network's structure once, at finalize —
+    def on_world_resolve(self, world, craft) -> None:
+        """Validate the thermal network on the resolved snapshot —
         before any tracing — instead of erroring mid-trace: every linked
         node and the heat source must ride this node's craft."""
         for other, _, _ in self._links:
@@ -247,7 +245,7 @@ class ThermalMass(Part):
         q_dot = _mx(self.heat_input) + _mx(self.heat_noise)
 
         # Structure (same-craft links/source) was validated by
-        # `on_world_finalize` — the trace only builds the balance.
+        # `on_world_resolve` — the trace only builds the balance.
         for other, k, _ in self._links:
             q_dot = q_dot + k * (_mx(other.temperature) - T)
 

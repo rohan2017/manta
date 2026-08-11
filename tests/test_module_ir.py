@@ -92,7 +92,7 @@ def test_lqr_module_is_typed():
               Q=np.eye(6), R=np.eye(3) * 0.1, dt=0.02)
     m = lqr.module()
     assert m.state.fields == ()                  # stateless
-    assert m.port("x").role is Role.STATE and m.port("x").manifold is not None
+    assert m.port("x").role is Role.STATE and m.port("x").spec is not None
     assert m.entry("control").returns == ("u",)
 
 
@@ -242,8 +242,8 @@ def test_initial_x_and_spec_fall_back_past_none_manifold_field():
     STATE-port fallback (and the same for `spec`)."""
     from manta.ir.module import Port, StateField, StateLayout
     init = np.arange(4.0)
-    f = StateField("x", "manifold", (4,), init=None, manifold=None)
-    p = Port("x", Role.STATE, shape=(4,), manifold="the-spec", init=init)
+    f = StateField("x", "manifold", (4,), init=None, spec=None)
+    p = Port("x", Role.STATE, shape=(4,), spec="the-spec", init=init)
     m = Module(name="m", state=StateLayout((f,)), ports=(p,),
                functions={}, entry_points=())
     assert m.initial_x is init

@@ -41,7 +41,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from ...fields import GravityField, gravity_at
+from ...fields import gravity_at
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.manifold import SO3Manifold
 from ...ir.types import Quat, Vec3
@@ -117,14 +117,14 @@ class TrajectoryEndpoint(Part):
             raise ValueError(
                 f"{type(self).__name__}({name!r}): mass must be >= 0.")
 
-    def on_world_finalize(self, world, craft) -> None:
+    def on_world_resolve(self, world, craft) -> None:
         # The control law treats PartFrame ≡ CraftFrame (the reference
         # quaternion is reinterpreted into PartFrame in update()). Any of
         # a nested endpoint, a nonzero mount_offset, or a mount rotation
         # silently breaks that identification — the offset injects a
         # force×lever-arm torque into the attitude channel (exactly what
         # the class docstring warns about), a rotation skews the whole
-        # wrench. Reject all three at finalize, before any tracing.
+        # wrench. Reject all three during resolution, before any tracing.
         if not isinstance(self.parent, RootPart):
             raise ValueError(
                 f"{type(self).__name__}({self.name!r}): must be mounted "

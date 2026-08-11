@@ -41,6 +41,12 @@ This emits the C ABI + kernels + JS runtime + descriptor for each vehicle, then
 compiles each to `<name>.mjs` + `<name>.wasm`. The `*_kernels.c` / `*_abi.c`
 build inputs are git-ignored (re-emitted); the runtime artifacts are tracked.
 
+The tracked `.js`, `.mjs`, `.wasm`, and `.descriptor.json` files under
+`quad/` and `airplane/` are website release assets, not library source or
+local build debris. They are committed because the static production site
+serves them directly. Any change to a demo model or the WASM emitter must run
+`web/build_demos.py` and commit the regenerated assets together.
+
 ## Build a Mako (`/mako/`)
 
 A drag-and-drop submarine builder: stack spine modules (noses, guidance,

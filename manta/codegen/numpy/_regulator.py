@@ -45,7 +45,7 @@ class NumpyRegulator(NumpyRuntime):
             raise AttributeError(
                 f"{type(self).__name__}: module {self.module.name!r} has "
                 "no reference port — its control law is not retargetable.")
-        self._x_ref = self._ref_port.manifold.pack_any(state,
+        self._x_ref = self._ref_port.spec.pack_any(state,
                                                        base=self._x_ref)
 
     def reprogram(self, solution) -> None:
@@ -103,5 +103,5 @@ class NumpyRegulator(NumpyRuntime):
         """Map a state estimate (nested or flat dict) → `{input: value}`,
         merged over the live reference point (unsupplied slots sit at
         the reference, i.e. zero error)."""
-        x = self._x_port.manifold.pack_any(state, base=self._x_ref)
+        x = self._x_port.spec.pack_any(state, base=self._x_ref)
         return unpack_fields(self._u_fields(), self.u(x))

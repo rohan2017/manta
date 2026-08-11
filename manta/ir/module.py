@@ -62,7 +62,7 @@ def check_name(name: str, *, who: str) -> str:
 class StateField:
     """One field of a Module's persistent State.
 
-    * ``kind="manifold"`` — a packed ambient state vector; `manifold` carries
+    * ``kind="manifold"`` — a packed ambient state vector; `spec` carries
       the descriptor (a `StateSpec`: slot names, ambient/tangent layout,
       boxplus). `shape == (ambient_dim,)`.
     * ``kind="matrix"`` — a plain Euclidean tensor (the EKF covariance).
@@ -70,20 +70,13 @@ class StateField:
     `init` is the field's default value (a packed ndarray), used to allocate
     fresh State and to render typed-struct defaults.
 
-    NOTE: despite its name, `manifold` holds a `StateSpec` (the flat-layout
-    descriptor over per-slot Manifolds), not a single `Manifold`. The name
-    is kept for call-site stability; `spec` is the honest alias.
+    `spec` is the flat-layout `StateSpec` descriptor over per-slot manifolds.
     """
     name: str
     kind: str                  # "manifold" | "matrix"
     shape: tuple[int, ...]
     init: Any = None
-    manifold: Any = None       # StateSpec for kind == "manifold"
-
-    @property
-    def spec(self):
-        """Honest alias for `manifold` (which holds a StateSpec)."""
-        return self.manifold
+    spec: Any = None           # StateSpec for kind == "manifold"
 
 
 @dataclass(frozen=True)
@@ -135,7 +128,7 @@ class Role(Enum):
     * ``TIME``        — world-clock time `t` (defaults to 0 at call sites).
     * ``TIMESTEP``    — the integration step `dt` (always required).
     * ``STATE``       — a full ambient manifold state passed as data (the
-                        LQR's input); `manifold` carries the StateSpec and
+                        LQR's input); `spec` carries the StateSpec and
                         `init` the reference/operating point. May repeat:
                         the primary state is declared first, a reference
                         point after it (an LQR's `x`, `x_ref`).
@@ -193,23 +186,16 @@ class Port:
     """A typed value channel of a Module — a runtime input to a method, a
     returned value, or both (a Sim reading that a filter later consumes).
 
-    NOTE: like `StateField.manifold`, the `manifold` attribute holds a
-    `StateSpec` (for role == STATE), not a single `Manifold`; `spec` is
-    the honest alias."""
+    For role ``STATE``, `spec` holds the value's `StateSpec`."""
     name: str
     role: Role
     shape: tuple[int, ...] = ()
     fields: tuple[PortField, ...] = ()
-    manifold: Any = None       # StateSpec, for role == STATE
+    spec: Any = None           # StateSpec, for role == STATE
     init: Any = None           # the port's default value: a reference
                                # vector (STATE) or a coefficient an
                                # unsupplied argument falls back to (MATRIX)
     rate: float | None = None  # MEASUREMENT: declared sample rate (Hz)
-
-    @property
-    def spec(self):
-        """Honest alias for `manifold` (which holds a StateSpec)."""
-        return self.manifold
 
     @property
     def size(self) -> int:
@@ -342,7 +328,7 @@ class Module:
         """The Euclidean matrix State fields (an EKF's held covariance `P`)."""
         return tuple(f for f in self.state.fields if f.kind == "matrix")
 
-    def _manifold_source(self, attr: str):
+    def _state_source(self, attr: str):
         """First non-None `attr` off a manifold State field, else off a
         STATE-role port — the shared scan behind `initial_x` and `spec`."""
         for f in self.state.fields:
@@ -358,13 +344,13 @@ class Module:
         """The manifold state's packed init vector — a manifold State field's
         `init`, else a STATE-role port's `init`, else None. The reference
         point `spec` is built around; backends seed struct defaults from it."""
-        return self._manifold_source("init")
+        return self._state_source("init")
 
     @property
     def spec(self):
         """The manifold StateSpec this Module's state/struct is built from —
         a manifold State field's, else a STATE-role port's, else None."""
-        return self._manifold_source("manifold")
+        return self._state_source("spec")
 
     def __repr__(self) -> str:
         return (f"<Module {self.name!r} state={list(self.state.names)} "

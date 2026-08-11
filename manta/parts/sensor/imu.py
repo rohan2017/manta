@@ -27,7 +27,7 @@ no lag.
 
 from __future__ import annotations
 
-from ...fields import GravityField, gravity_at
+from ...fields import gravity_at
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3
 from .._declarations import (

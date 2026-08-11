@@ -37,6 +37,19 @@ declaring its channels at class scope:
 
 The model is pure description: nothing executes at this layer.
 
+### Authoring models and transform snapshots
+
+`World`, `Craft`, fields, and parts are editable authoring objects. Constructing
+a transform takes a private snapshot and resolves deferred model behavior on
+that copy: planets register their disturbances, field-source parts emit their
+sources, camera targets are discovered, and planet-frame initial state is
+lowered to the world frame. A failed resolution discards the private copy and
+does not partially mutate the authoring model.
+
+Existing transforms never change when the authoring model is edited. A later
+`Sim(world)` or `EKF(world)` captures the later revision, which makes iterative
+model comparison possible without a lock/finalize lifecycle.
+
 ## Layer 2 — Transform
 
 `Sim(world)`, `EKF(world)`, and `LQR(world, …)` are **pure compile-time**.
