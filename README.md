@@ -177,7 +177,7 @@ estimable through the EKF.
   (Earth: point-mass + optional J2 gravity, ocean + ISA atmosphere
   via `PlanetFrameFluid`, dipole magnetic field).
 - Provides initial-state factories — `earth.position(x, y, z)`,
-  `earth.velocity(vx, vy, vz)`, `earth.at_rest()` — that resolve to
+  `earth.velocity(vx, vy, vz)` — that resolve to
   WorldFrame seeds at compile time via the planet's transform.
 
 Multiple planets in one world are supported. Each planet's
@@ -315,12 +315,8 @@ steady-state solve performs no per-stage heap allocation.
 Fixed sparse scatters and actuator slew/bound blocks are vectorized NumPy. The
 ordinary structure omits scheduled SO(3) constraint rows; Manta switches to a
 constrained structure only when a reference supplies that envelope.
-`MPCResult` exposes the nominal
-state/control plan, constraint metrics, solver status, and split timings for
-benchmarking. With `synthesize_feedback=True`, Manta also publishes a bounded,
-time-varying physical-actuator policy derived from that RTI quadratic. It is an
-optional ancillary policy around the accepted plan, not a vehicle-specific
-attitude controller or replacement planner.
+`MPCResult` exposes the nominal state/control plan, constraint metrics, solver
+status, and split timings for benchmarking.
 
 Further performance experiments and their behavioral gates are recorded in
 the [RTI MPC optimization roadmap](docs/explanation/mpc-optimization.md).

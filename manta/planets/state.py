@@ -11,7 +11,6 @@ The user constructs these via factory methods on the planet:
 
     earth.position(0, 0, 100)     # PlanetFrame position 100m above origin
     earth.velocity(0, 0, 0)        # PlanetFrame velocity (at rest on earth)
-    earth.at_rest()                # alias for velocity(0,0,0)
 
 For symmetry with the other Frame-tagged IR types, `PlanetState`
 carries (a) the owning `Planet`, (b) the kind ('position' or

@@ -126,42 +126,6 @@ def test_one_rti_tick_obeys_bounds_and_shifts_a_finite_plan():
     np.testing.assert_array_equal(mpc._qp_lam_a, 0.0)
 
 
-def test_optional_feedback_policy_tracks_plan_in_physical_actuator_space():
-    world, bounds = _world()
-    mpc = MPC(
-        world, u_bounds=bounds, horizon=8, dt=.1,
-        synthesize_feedback=True)
-    result = mpc.tick(None, _reference(8))
-    policy = mpc.feedback_policy
-    assert result.feedback_available
-    assert policy is not None
-    assert policy.nominal_states.shape == (9, mpc.nx)
-    assert policy.nominal_controls.shape == (8, 1)
-    assert policy.gains.shape == (8, 1, mpc.ndx)
-    assert policy.previous_correction_gains.shape == (8, 1, 1)
-    assert np.all(np.isfinite(policy.gains))
-
-    nominal = mpc.feedback(None, 0.0)
-    np.testing.assert_allclose(
-        nominal.control_vector, result.nominal_controls[0], atol=1e-9)
-    np.testing.assert_allclose(nominal.correction, 0.0, atol=1e-9)
-    assert nominal.policy_revision == policy.revision
-
-    displaced = mpc.feedback(
-        {"tug": {"position": np.array([0.5, 0.0, 0.0])}}, .025,
-        previous_correction=np.array([.01]))
-    assert displaced.stage == 0
-    assert displaced.fraction == pytest.approx(.25)
-    assert -1.0 <= displaced.control_vector[0] <= 1.0
-    assert np.linalg.norm(displaced.tangent_error) > 0.0
-    with pytest.raises(ValueError, match="inside the policy horizon"):
-        mpc.feedback(None, policy.horizon_s)
-    mpc.reset()
-    assert mpc.feedback_policy is None
-    with pytest.raises(RuntimeError, match="no synthesized"):
-        mpc.feedback(None, 0.0)
-
-
 def test_warm_start_advances_by_controller_time_not_a_whole_node():
     world, bounds = _world()
     mpc = MPC(world, u_bounds=bounds, horizon=8, dt=.1)

@@ -65,8 +65,6 @@ EKF-innovation-likelihood fitter — after applying this fit's result.
 
 from __future__ import annotations
 
-import warnings
-
 import casadi as ca
 import numpy as np
 
@@ -310,10 +308,8 @@ class FitResult:
         transform built afterwards (`Sim(world)`, `EKF(world)`, a C++
         deploy) bakes them in as constants."""
         if not self.converged:
-            warnings.warn(
-                "FitResult.apply: the solve did NOT converge — writing the "
-                "failed solve's final iterate onto the parts.",
-                RuntimeWarning, stacklevel=2)
+            raise RuntimeError(
+                "FitResult.apply refuses to write an unconverged solve")
         for full, dim in self._fields:
             try:
                 craft_name, part_name, pname = full.split(".", 2)

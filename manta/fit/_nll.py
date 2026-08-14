@@ -39,8 +39,6 @@ meaningful once the mean model is right.
 
 from __future__ import annotations
 
-import warnings
-
 import casadi as ca
 import numpy as np
 
@@ -144,10 +142,8 @@ class NoiseFitResult:
         (an `EKF(world)`'s auto-Q/R, a `NoiseDriver`d truth sim) use
         them."""
         if not self.converged:
-            warnings.warn(
-                "NoiseFitResult.apply: the solve did NOT converge — "
-                "writing the failed solve's final iterate onto the parts.",
-                RuntimeWarning, stacklevel=2)
+            raise RuntimeError(
+                "NoiseFitResult.apply refuses to write an unconverged solve")
         for c in self._channels:
             pieces = c.alias.split(".")
             owner = None

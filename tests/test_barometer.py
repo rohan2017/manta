@@ -5,9 +5,9 @@ import numpy as np
 import pytest
 
 from manta import Craft, EKF, Sim, TargetNumpy, World
+from manta.fields.fluid_props import R_AIR, isa_pressure
 from manta.parts import Barometer, Mass
 from manta.planets import Earth
-from manta.planets.atmosphere import R_AIR, isa_pressure
 
 
 def _earth_isa(earth):

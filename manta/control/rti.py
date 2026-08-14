@@ -191,86 +191,6 @@ class MPCTimings:
 
 
 @dataclass(frozen=True)
-class MPCFeedbackPolicy:
-    """Time-varying local feedback attached to one accepted RTI plan.
-
-    ``gains[k]`` maps a tangent-state error at stage ``k`` to a physical
-    actuator correction, while ``previous_correction_gains[k]`` preserves
-    the MPC slew cost.  The corresponding law is ``u = u_nominal - Kx*error
-    - Ku*previous_correction``.  It is an ancillary
-    policy, not a replacement planner: it has exactly the MPC's physical
-    inputs and hard bounds and is valid only around this nominal trajectory.
-    """
-
-    revision: int
-    dt: float
-    input_names: tuple[str, ...]
-    nominal_states: FloatArray
-    nominal_controls: FloatArray
-    gains: FloatArray
-    previous_correction_gains: FloatArray
-    lower_bounds: FloatArray
-    upper_bounds: FloatArray
-
-    def __post_init__(self) -> None:
-        states = np.asarray(self.nominal_states, dtype=np.float64)
-        controls = np.asarray(self.nominal_controls, dtype=np.float64)
-        gains = np.asarray(self.gains, dtype=np.float64)
-        if states.ndim != 2 or controls.ndim != 2 or gains.ndim != 3:
-            raise ValueError("invalid MPC feedback policy array rank")
-        horizon, nu = controls.shape
-        if states.shape[0] != horizon + 1:
-            raise ValueError("feedback policy needs one more state than control")
-        if gains.shape[:2] != (horizon, nu):
-            raise ValueError("feedback gains do not match the nominal controls")
-        if len(self.input_names) != nu:
-            raise ValueError("feedback input names do not match the controls")
-        for name, value, shape in (
-            ("nominal_states", states, states.shape),
-            ("nominal_controls", controls, controls.shape),
-            ("gains", gains, gains.shape),
-            ("previous_correction_gains", self.previous_correction_gains,
-             (horizon, nu, nu)),
-            ("lower_bounds", self.lower_bounds, (nu,)),
-            ("upper_bounds", self.upper_bounds, (nu,)),
-        ):
-            object.__setattr__(self, name, _owned(value, shape, name))
-        if not math.isfinite(self.dt) or self.dt <= 0.0:
-            raise ValueError("feedback policy dt must be finite and positive")
-
-    @property
-    def horizon_s(self) -> float:
-        return self.dt * self.nominal_controls.shape[0]
-
-
-@dataclass(frozen=True)
-class MPCFeedbackCommand:
-    """One bounded evaluation of an :class:`MPCFeedbackPolicy`."""
-
-    controls: Mapping[str, float]
-    control_vector: FloatArray
-    nominal_control: FloatArray
-    correction: FloatArray
-    tangent_error: FloatArray
-    policy_revision: int
-    stage: int
-    fraction: float
-    saturated: tuple[str, ...]
-    correction_limited: bool
-    active_set_changed: bool
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "controls", MappingProxyType(dict(self.controls)))
-        for name in (
-            "control_vector", "nominal_control", "correction",
-            "tangent_error",
-        ):
-            value = np.asarray(getattr(self, name), dtype=np.float64).copy()
-            value.setflags(write=False)
-            object.__setattr__(self, name, value)
-
-
-@dataclass(frozen=True)
 class MPCResult:
     """One RTI update and its inspectable warm trajectory."""
 
@@ -287,7 +207,6 @@ class MPCResult:
     bank_slack: float
     saturated: tuple[str, ...]
     timings: MPCTimings
-    feedback_available: bool = False
     qp_primal_residual: float = math.nan
     qp_dual_residual: float = math.nan
     qp_rho_updates: int = 0
@@ -327,7 +246,6 @@ class MPC:
         terminal_multiplier: float = 4.0,
         bank_slack_weight: float = 1e4,
         trust_region: float = 0.5,
-        synthesize_feedback: bool = False,
         compile: bool = False,
         qp_backend: str = "osqp",
         qp_options: Mapping[str, Any] | None = None,
@@ -416,7 +334,6 @@ class MPC:
         self.terminal_multiplier = float(terminal_multiplier)
         self.bank_slack_weight = float(bank_slack_weight)
         self.trust_region = float(trust_region)
-        self.synthesize_feedback = bool(synthesize_feedback)
         self.compiled = bool(compile)
         self.qp_backend = str(qp_backend).lower()
         if self.qp_backend not in ("osqp", "hpipm"):
@@ -437,14 +354,11 @@ class MPC:
         self._attitude_map = self._attitude.map(self.horizon)
         self._objective_map = self._objective.map(self.horizon)
         self._accepted_rollout_kernel = self._build_accepted_rollout_function()
-        self._boxminus, self._interpolate = self._build_manifold_functions()
         if compile:
             from ..codegen.numpy import compile_functions
             compiled = compile_functions(
                 {"attitude_horizon": self._attitude_map,
                  "objective_horizon": self._objective_map,
-                 "boxminus": self._boxminus,
-                 "interpolate": self._interpolate,
                  "rollout": self._rollout_kernel,
                  "rollout_linearize": self._rollout_linearize_kernel,
                  "accepted_rollout": self._accepted_rollout_kernel},
@@ -453,8 +367,6 @@ class MPC:
             )
             self._attitude_map = compiled["attitude_horizon"]
             self._objective_map = compiled["objective_horizon"]
-            self._boxminus = compiled["boxminus"]
-            self._interpolate = compiled["interpolate"]
             self._rollout_kernel = compiled["rollout"]
             self._rollout_linearize_kernel = compiled[
                 "rollout_linearize"]
@@ -486,8 +398,6 @@ class MPC:
         self._last_u = np.zeros(self.nu)
         self._prepare_structure(include_attitude_constraints=False)
         self.last_result: MPCResult | None = None
-        self._feedback_policy: MPCFeedbackPolicy | None = None
-        self._feedback_revision = 0
 
     @staticmethod
     def _resolve_bound(
@@ -630,20 +540,6 @@ class MPC:
         return ca.Function(
             "mpc_accepted_rollout", [x, controls],
             [raw_states, body_left])
-
-    def _build_manifold_functions(self) -> tuple[ca.Function, ca.Function]:
-        actual = ca.MX.sym("mpc_actual", self.nx)
-        nominal = ca.MX.sym("mpc_nominal", self.nx)
-        error = self.spec.boxminus_sym(actual, nominal)
-        boxminus = ca.Function("mpc_boxminus", [actual, nominal], [error])
-        start = ca.MX.sym("mpc_interpolate_start", self.nx)
-        finish = ca.MX.sym("mpc_interpolate_finish", self.nx)
-        fraction = ca.MX.sym("mpc_interpolate_fraction")
-        delta = self.spec.boxminus_sym(finish, start)
-        interpolated = self.spec.boxplus_sym(start, fraction * delta)
-        interpolate = ca.Function(
-            "mpc_interpolate", [start, finish, fraction], [interpolated])
-        return boxminus, interpolate
 
     def _build_objective_function(self) -> ca.Function:
         """One stage's state cost and bank linearization as a native kernel."""
@@ -1050,11 +946,6 @@ class MPC:
     def qp_nonzeros(self) -> tuple[int, int]:
         return self._h_sparsity.nnz(), self._a_sparsity.nnz()
 
-    @property
-    def feedback_policy(self) -> MPCFeedbackPolicy | None:
-        """The ancillary policy for the latest accepted plan, if requested."""
-        return self._feedback_policy
-
     def reset(self, controls: Any | None = None) -> None:
         if controls is None:
             self._U.fill(0.0)
@@ -1069,163 +960,6 @@ class MPC:
         self._qp_lam_x.fill(0.0)
         self._qp_lam_a.fill(0.0)
         self.last_result = None
-        self._feedback_policy = None
-
-    def _synthesize_feedback(
-        self,
-        states: FloatArray,
-        controls: FloatArray,
-        dynamics_A: FloatArray,
-        dynamics_B: FloatArray,
-        hessian_values: FloatArray,
-    ) -> MPCFeedbackPolicy:
-        """Solve the finite-horizon Riccati recursion for this RTI model.
-
-        RTI's actuator decision is normalized by physical authority.  The
-        recursion is therefore solved in that same coordinate and converted
-        back to physical actuator gains at the policy boundary.  Previous
-        actuator correction is included as an augmented state, preserving the
-        MPC's exact effort/slew quadratic rather than inventing a memoryless
-        approximation.
-        """
-        state_costs = np.stack([
-            hessian_values[index] for index in self._h_state_blocks
-        ])
-        gains = np.empty((self.horizon, self.nu, self.ndx))
-        previous_gains = np.empty((self.horizon, self.nu, self.nu))
-        augmented_dim = self.ndx + self.nu
-        value = np.zeros((augmented_dim, augmented_dim))
-        value[:self.ndx, :self.ndx] = 0.5 * (
-            state_costs[-1] + state_costs[-1].T)
-        effort = 2.0 * self.effort_weight * np.eye(self.nu)
-        slew = 2.0 * self.control_rate_weight * np.eye(self.nu)
-        for stage in range(self.horizon - 1, -1, -1):
-            A = dynamics_A[stage]
-            B = dynamics_B[stage] * self._authority[None, :]
-            augmented_A = np.zeros((augmented_dim, augmented_dim))
-            augmented_A[:self.ndx, :self.ndx] = A
-            augmented_B = np.zeros((augmented_dim, self.nu))
-            augmented_B[:self.ndx] = B
-            augmented_B[self.ndx:] = np.eye(self.nu)
-            stage_cost = np.zeros((augmented_dim, augmented_dim))
-            if stage > 0:
-                stage_cost[:self.ndx, :self.ndx] = state_costs[stage-1]
-            stage_cost[self.ndx:, self.ndx:] = slew
-            cross = np.zeros((augmented_dim, self.nu))
-            cross[self.ndx:] = -slew
-            system = effort + slew + augmented_B.T @ value @ augmented_B
-            scale = max(1.0, float(np.max(np.abs(np.diag(system)))))
-            system = system + 1e-10 * scale * np.eye(self.nu)
-            normalized_gain = np.linalg.solve(
-                system,
-                augmented_B.T @ value @ augmented_A + cross.T)
-            gains[stage] = (
-                self._authority[:, None]
-                * normalized_gain[:, :self.ndx])
-            previous_gains[stage] = (
-                self._authority[:, None]
-                * normalized_gain[:, self.ndx:]
-                / self._authority[None, :])
-            left = augmented_A.T @ value @ augmented_B + cross
-            value = (stage_cost + augmented_A.T @ value @ augmented_A
-                     - left @ normalized_gain)
-            value = 0.5 * (value + value.T)
-        if (not np.all(np.isfinite(gains))
-                or not np.all(np.isfinite(previous_gains))):
-            raise np.linalg.LinAlgError(
-                "MPC ancillary feedback synthesis produced nonfinite gains")
-        self._feedback_revision += 1
-        return MPCFeedbackPolicy(
-            revision=self._feedback_revision,
-            dt=self.dt,
-            input_names=self.input_names,
-            nominal_states=states,
-            nominal_controls=controls,
-            gains=gains,
-            previous_correction_gains=previous_gains,
-            lower_bounds=self.u_lo,
-            upper_bounds=self.u_hi,
-        )
-
-    def feedback(
-        self, state: Any, elapsed_s: float, *,
-        previous_correction: Any | None = None,
-    ) -> MPCFeedbackCommand:
-        """Evaluate the latest ancillary policy at ``state``.
-
-        ``elapsed_s`` is time since the RTI plan was accepted.  Evaluation
-        outside that plan's horizon is rejected instead of silently applying
-        a stale terminal gain.  Returned actuator commands always obey the
-        same hard bounds as MPC.
-        """
-        policy = self._feedback_policy
-        if policy is None:
-            raise RuntimeError("MPC has no synthesized feedback policy")
-        elapsed = float(elapsed_s)
-        if (not math.isfinite(elapsed) or elapsed < 0.0
-                or elapsed >= policy.horizon_s):
-            raise ValueError(
-                "feedback elapsed_s must be finite and inside the policy horizon")
-        position = elapsed / policy.dt
-        stage = min(int(math.floor(position)), self.horizon - 1)
-        fraction = position - stage
-        next_stage = min(stage + 1, self.horizon - 1)
-        nominal_state = np.asarray(self._interpolate(
-            policy.nominal_states[stage],
-            policy.nominal_states[stage + 1], fraction), dtype=float).reshape(-1)
-        actual_state = self.spec.pack_any(state, base=self._x_init)
-        if not np.all(np.isfinite(actual_state)):
-            raise ValueError("MPC feedback state must contain only finite values")
-        tangent_error = np.asarray(
-            self._boxminus(actual_state, nominal_state),
-            dtype=float).reshape(-1)
-        nominal_control = (
-            (1.0 - fraction) * policy.nominal_controls[stage]
-            + fraction * policy.nominal_controls[next_stage])
-        gain = ((1.0 - fraction) * policy.gains[stage]
-                + fraction * policy.gains[next_stage])
-        previous_gain = (
-            (1.0 - fraction) * policy.previous_correction_gains[stage]
-            + fraction * policy.previous_correction_gains[next_stage])
-        previous = np.zeros(self.nu) if previous_correction is None else np.asarray(
-            previous_correction, dtype=float)
-        if previous.shape != (self.nu,) or not np.all(np.isfinite(previous)):
-            raise ValueError(
-                f"previous_correction must be finite with shape ({self.nu},)")
-        requested = (nominal_control - gain @ tangent_error
-                     - previous_gain @ previous)
-        command = np.clip(requested, policy.lower_bounds, policy.upper_bounds)
-        correction_limited = not np.allclose(
-            command, requested, rtol=0.0, atol=1e-10)
-        at_nominal_lower = np.isclose(
-            nominal_control, policy.lower_bounds, rtol=0.0, atol=1e-6)
-        at_nominal_upper = np.isclose(
-            nominal_control, policy.upper_bounds, rtol=0.0, atol=1e-6)
-        clipped_lower = requested < policy.lower_bounds-1e-10
-        clipped_upper = requested > policy.upper_bounds+1e-10
-        active_set_changed = bool(np.any(
-            (clipped_lower & ~at_nominal_lower)
-            | (clipped_upper & ~at_nominal_upper)))
-        correction = command - nominal_control
-        controls = {name: float(command[index])
-                    for index, name in enumerate(policy.input_names)}
-        saturated = tuple(sorted(
-            name for index, name in enumerate(policy.input_names)
-            if math.isclose(command[index], policy.lower_bounds[index], abs_tol=1e-6)
-            or math.isclose(command[index], policy.upper_bounds[index], abs_tol=1e-6)))
-        return MPCFeedbackCommand(
-            controls=controls,
-            control_vector=command,
-            nominal_control=nominal_control,
-            correction=correction,
-            tangent_error=tangent_error,
-            policy_revision=policy.revision,
-            stage=stage,
-            fraction=fraction,
-            saturated=saturated,
-            correction_limited=correction_limited,
-            active_set_changed=active_set_changed,
-        )
 
     def _reference(self, reference: Any) -> MPCReference:
         if isinstance(reference, CraftHorizonReference):
@@ -1588,7 +1322,6 @@ class MPC:
     ) -> Any:
         """Translate the sparse RTI QP into HPIPM's stage representation."""
         attitude_rows = 3*self.nc if self._with_attitude_constraints else 0
-        general_count = 2*self.nc + attitude_rows
         general_jacobians = self._hp_general_jacobians
         general_jacobians.fill(0.0)
         bank_jacobians = A_values[self._a_bank_state_array[True]]
@@ -1781,18 +1514,6 @@ class MPC:
             out=accepted_controls)
         accepted_states, accepted_body_left = self._rollout_accepted(
             x0, accepted_controls)
-        if self.synthesize_feedback:
-            # RTI deliberately executes the feedback implied by the one QP
-            # it just solved. Re-linearizing after the accepted step would
-            # construct a different, unevaluated SQP subproblem, double the
-            # preparation cost, and break that correspondence. The trust
-            # region bounds the distance between this quadratic model and the
-            # rolled-out accepted nominal trajectory.
-            self._feedback_policy = self._synthesize_feedback(
-                accepted_states, accepted_controls,
-                dynamics_A, dynamics_B, H)
-        else:
-            self._feedback_policy = None
         peak_bank, bank_violation = self._bank_metrics(accepted_body_left)
         attitude_constraint_violation = (
             self._attitude_constraint_violation(accepted_states, ref))
@@ -1831,7 +1552,6 @@ class MPC:
                 attitude_constraint_violation),
             bank_slack=float(np.max(slack * slack_scales)),
             saturated=saturated, timings=timings,
-            feedback_available=self._feedback_policy is not None,
             qp_primal_residual=qp_primal_residual,
             qp_dual_residual=qp_dual_residual,
             qp_rho_updates=qp_rho_updates,
@@ -1841,6 +1561,5 @@ class MPC:
 
 
 __all__ = [
-    "CraftHorizonReference", "MPC", "MPCFeedbackCommand",
-    "MPCFeedbackPolicy", "MPCReference", "MPCResult", "MPCTimings",
+    "CraftHorizonReference", "MPC", "MPCReference", "MPCResult", "MPCTimings",
 ]

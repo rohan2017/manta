@@ -12,13 +12,13 @@ import numpy as np
 
 from manta import Craft, Sim, World
 from manta.fields import FluidField
+from manta.fields.fluid_props import (
+    MU_REF_AIR, T0_ISA, isa_temperature, sutherland_viscosity,
+)
 from manta.ir.frames import WorldFrame
 from manta.ir.types import Vec3
 from manta.parts import Mass
 from manta.planets import Earth
-from manta.planets.atmosphere import (
-    MU_REF_AIR, T0_ISA, isa_temperature, sutherland_viscosity,
-)
 
 
 def _sample(world, point, t=0.0):

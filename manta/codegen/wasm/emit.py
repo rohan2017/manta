@@ -50,8 +50,7 @@ class WasmEmitResult:
 
 
 def emit_module_wasm(x, out_dir, *, class_name: str,
-                     basename: str | None = None,
-                     namespace: str = "manta_gen") -> WasmEmitResult:
+                     basename: str | None = None) -> WasmEmitResult:
     out_dir = Path(out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     base = basename or class_name.lower()

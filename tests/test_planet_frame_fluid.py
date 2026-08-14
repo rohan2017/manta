@@ -15,13 +15,13 @@ import numpy as np
 
 from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import FluidField, FluidState
+from manta.fields.fluid_props import (
+    R_AIR, ideal_gas_density, isa_pressure, isa_temperature,
+)
 from manta.ir.frames import WorldFrame
 from manta.ir.types import Vec3
 from manta.parts import Mass
 from manta.planets import Earth, SeaWaves
-from manta.planets.atmosphere import (
-    R_AIR, ideal_gas_density, isa_pressure, isa_temperature,
-)
 from manta.planets.disturbances import PlanetFrameFluid
 
 
@@ -123,13 +123,12 @@ def test_atmosphere_vanishes_at_lunar_distance():
 
 def test_co_rotating_at_rest_in_planet_frame():
     """A craft seeded at PlanetFrame rest should pick up the
-    `ω × r_world` WorldFrame velocity. `Planet.at_rest()` returns
-    the corresponding PlanetState wrapper."""
+    `ω × r_world` WorldFrame velocity."""
     earth = Earth(rotation_rate=Earth.SIDEREAL)
     w = World(); w.add_planet(earth)
     c = Craft("buoy"); c.add(Mass("body", mass=1.0))
     w.add_craft(c, position=earth.position(earth.R_EQ, 0, 0),
-                   velocity=earth.at_rest())
+                   velocity=earth.velocity(0.0, 0.0, 0.0))
     cw = TargetNumpy(Sim(w))
     state = cw.initial_state()
     expected_v_y = Earth.SIDEREAL * earth.R_EQ

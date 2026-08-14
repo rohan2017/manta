@@ -18,8 +18,6 @@ from .pid import PID
 from .rti import (
     CraftHorizonReference,
     MPC,
-    MPCFeedbackCommand,
-    MPCFeedbackPolicy,
     MPCReference,
     MPCResult,
     MPCTimings,
@@ -30,8 +28,6 @@ __all__ = [
     "LQR",
     "LQRSolution",
     "MPC",
-    "MPCFeedbackCommand",
-    "MPCFeedbackPolicy",
     "MPCReference",
     "MPCResult",
     "MPCTimings",

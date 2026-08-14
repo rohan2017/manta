@@ -10,7 +10,7 @@ CasADi callables — use `ca.if_else`, `ca.fmax`, exponentials, anything
 in the symbolic graph.
 
 `Ocean` and `Atmosphere` are thin baseline regimes built on top: they
-wire the **planet-independent** equations in `manta.planets.atmosphere`
+wire the **planet-independent** equations in `manta.fields.fluid_props`
 (ISA lapse + ideal gas for air; incompressible hydrostatic for water)
 into `PlanetFrameFluid`, parameterised by an `altitude_fn` / `depth_fn`
 the planet supplies (its sea-surface geometry, possibly waving) plus its
@@ -27,7 +27,7 @@ import casadi as ca
 from ..fields import Disturbance, FluidState
 from ..ir.frames import WorldFrame
 from ..ir.types import Vec3
-from .atmosphere import (
+from ..fields.fluid_props import (
     LAPSE_ISA, P0_ISA, R_AIR, T0_ISA,
     hydrostatic_pressure, ideal_gas_density, isa_pressure, isa_temperature,
     sutherland_viscosity,

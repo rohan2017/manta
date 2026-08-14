@@ -169,12 +169,6 @@ class Planet:
         return PlanetState(self, "velocity",
                            (float(vx), float(vy), float(vz)))
 
-    def at_rest(self) -> "PlanetState":
-        """Shorthand for `planet.velocity(0, 0, 0)` — sets the WorldFrame
-        velocity such that the craft sits at rest in PlanetFrame
-        (i.e., co-rotates with the planet)."""
-        return self.velocity(0.0, 0.0, 0.0)
-
     # ------------------------------------------------------------------
     # Rigid-attachment kinematics — full WorldFrame initial state for a
     # craft fixed to (co-rotating with) the planet. Cartesian throughout;

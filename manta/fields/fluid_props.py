@@ -7,7 +7,6 @@ a Mars or Titan model supplies its own T0 / P0 / lapse / gas constant).
 They live in `manta.fields` (not `manta.planets`) because planet-free
 fluid disturbances (`UniformFluid`, `FlatOcean`) consume them too — the
 fields↔planets dependency stays one-directional at import time.
-(Formerly `manta.planets.atmosphere`, which remains as a re-export shim.)
 
 The atmosphere model is the standard ISA troposphere: a linear
 temperature lapse with altitude, hydrostatic balance, and the ideal-gas

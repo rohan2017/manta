@@ -35,8 +35,7 @@ def TargetWasm(x,
                out_dir: str | Path,
                *,
                class_name: str,
-               basename: str | None = None,
-               namespace: str = "manta_gen") -> WasmEmitResult:
+               basename: str | None = None) -> WasmEmitResult:
     """WASM codegen target.
 
     Args:
@@ -44,13 +43,12 @@ def TargetWasm(x,
         out_dir     — destination directory (created if missing).
         class_name  — public name for the bundle. Conventionally PascalCase.
         basename    — filename stem; defaults to `class_name.lower()`.
-        namespace   — reserved for parity with `TargetCpp` (unused in C ABI).
 
     Returns:
         `WasmEmitResult` with paths to every emitted file plus the descriptor.
     """
     return emit_module_wasm(x, out_dir, class_name=class_name,
-                            basename=basename, namespace=namespace)
+                            basename=basename)
 
 
 __all__ = ["TargetWasm", "WasmEmitResult"]

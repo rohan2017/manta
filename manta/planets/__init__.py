@@ -7,7 +7,7 @@ to the world's shared fields and provides:
   * Numpy + symbolic transforms between PlanetFrame and WorldFrame
     (so co-rotating disturbances can compute `ω × r` symbolically).
   * Factory methods for initial-state values expressed in PlanetFrame
-    (`earth.position(x,y,z)`, `earth.at_rest()`), resolved at
+    (`earth.position(x,y,z)`, `earth.velocity(vx,vy,vz)`), resolved at
     `Sim(world)` time to the WorldFrame seed the integrator
     actually uses.
 

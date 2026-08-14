@@ -399,7 +399,7 @@ def test_fit_validates_window_traces():
 
 def test_fit_unconverged_sets_flag_and_warns():
     """A solve cut off by the iteration cap must say so: converged=False,
-    a RuntimeWarning at solve and at apply, and a loud summary header."""
+    a RuntimeWarning at solve, a loud summary, and apply must refuse it."""
     windows = _record_windows(_drone(kf=11.0), n_win=1, K=10, seed=7)
     fit = Fit(_drone(kf=9.0),
               parameters={"t1.force_quad": Prior(sigma=4.0)})
@@ -407,7 +407,7 @@ def test_fit_unconverged_sets_flag_and_warns():
         res = fit.solve(windows, ipopt_options={"ipopt.max_iter": 1})
     assert res.converged is False
     assert "NOT CONVERGED" in res.summary()
-    with pytest.warns(RuntimeWarning, match="did NOT converge"):
+    with pytest.raises(RuntimeError, match="refuses"):
         res.apply()
 
 

@@ -148,7 +148,7 @@ def test_noise_fit_validates_window_traces():
 
 def test_noise_fit_unconverged_sets_flag_and_warns():
     """A solve cut off by the iteration cap must say so: converged=False,
-    a RuntimeWarning at solve and at apply, and a loud summary header."""
+    a RuntimeWarning at solve, a loud summary, and apply must refuse it."""
     windows = _record(_noisy_drone(), n_win=1, K=25, seed=9)
     nf = NoiseFit(_noisy_drone(gyro=0.02, accel=0.01), noise={
         "imu.gyro_noise": Prior(sigma=2.0),
@@ -158,7 +158,7 @@ def test_noise_fit_unconverged_sets_flag_and_warns():
         res = nf.solve(windows, ipopt_options={"ipopt.max_iter": 1})
     assert res.converged is False
     assert "NOT CONVERGED" in res.summary()
-    with pytest.warns(RuntimeWarning, match="did NOT converge"):
+    with pytest.raises(RuntimeError, match="refuses"):
         res.apply()
 
 

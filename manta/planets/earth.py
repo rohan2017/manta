@@ -35,7 +35,7 @@ from ..fields import (
     MagField, PointMassGravity, below_surface,
 )
 from ..smoothing import soft_norm
-from .atmosphere import LAPSE_ISA, R_AIR, T0_ISA
+from ..fields.fluid_props import LAPSE_ISA, R_AIR, T0_ISA
 from .base import Planet
 from .disturbances import Atmosphere, Ocean
 
@@ -222,7 +222,7 @@ class Earth(Planet):
         # (membership below the — possibly waving — sea surface, blended
         # over `surface_smoothing` metres). The FluidField layers them by
         # membership: `(1−wet)·air + wet·ocean`. The (ρ,P,T) physics live
-        # in `manta.planets.atmosphere`, so other planets reuse this.
+        # in `manta.fields.fluid_props`, so other planets reuse this.
         ff = world.get_or_create_field(FluidField)
         R_planet = self.planet_radius
         rho_w    = self.water_density

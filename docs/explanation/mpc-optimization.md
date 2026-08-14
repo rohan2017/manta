@@ -288,19 +288,6 @@ Revisit only if a validity metric can predict safe reuse cheaply and broad
 trajectory tests show a clear advantage. Avoid adding several thresholds that
 make the controller harder to diagnose.
 
-### High-rate ancillary controller
-
-The model-derived ancillary feedback experiment remains opt-in and has not
-consistently beaten direct 20 Hz RTI. Do not introduce a conventional
-vehicle-specific PID cascade merely to reduce MPC load: planning against one
-plant and regulating another would weaken model-aware trajectory planning.
-
-A future high-rate roll or disturbance controller remains architecturally
-possible. Either derive it from the accepted MPC quadratic with explicit
-validity bounds, or include its closed-loop behavior in the MPC prediction
-model. It must preserve actuator-failure semantics and must not reinterpret a
-path tangent as an orientation command.
-
 ### Learned replacement controller or learned plant
 
 A network that directly commands actuators without the optimizer's constraint
@@ -314,10 +301,9 @@ constraints, replayability, and the one-controller/every-vehicle goal.
 2. Profile and, if justified, finish the native HPIPM numeric update path.
 3. Sweep HPIPM condensing and solver settings on each hardware class.
 4. Implement and validate one or two fixed nonuniform prediction grids.
-5. Prototype preparation/feedback pipelining with explicit revision checks.
-6. Improve deterministic warm starts and failure transitions.
-7. Try an advisory learned warm start only if iteration tails still dominate.
-8. Evaluate mixed precision after numerical scaling tests exist.
+5. Improve deterministic warm starts and failure transitions.
+6. Try an advisory learned warm start only if iteration tails still dominate.
+7. Evaluate mixed precision after numerical scaling tests exist.
 
 Each step should land independently with a reproducible benchmark report and
 an easy fallback to the previous controller. Benchmark artifacts belong with
