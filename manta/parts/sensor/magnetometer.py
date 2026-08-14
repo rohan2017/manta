@@ -21,7 +21,7 @@ from ...fields import MagField
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3
 from .._declarations import Output, Parameter, PartUpdate, WhiteNoise
-from ..base import Part
+from ..base import Part, PartRole
 from ...ir.wrench import Wrench
 
 
@@ -42,6 +42,8 @@ class Magnetometer(Part):
                   PositionSensor's `position_noise` does. Defaults to 0
                   (a clean reading).
     """
+
+    role = PartRole.SENSOR
 
     requires_fields = [MagField]
 

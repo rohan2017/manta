@@ -55,33 +55,86 @@ from importlib.metadata import version as _distribution_version
 __version__ = _distribution_version("mantapilot")
 
 from . import ir, smoothing
-from .craft import Craft
-from .world import World
-from .sim import Sim
-from .planets import Planet
+from .codegen import (
+    CompilationError,
+    NoiseDriver,
+    TargetCpp,
+    TargetJax,
+    TargetNumpy,
+    TargetWasm,
+    compile_functions,
+)
+from .control import (
+    CraftHorizonReference,
+    LQR,
+    LQRSolution,
+    MPC,
+    MPCFeedbackCommand,
+    MPCFeedbackPolicy,
+    MPCReference,
+    MPCResult,
+    MPCTimings,
+    PID,
+)
 from .couplings import Coupling
+from .craft import Craft
 from .estimation.ekf import EKF
-from .estimation.ukf import UKF
 from .estimation.imu_integrator import IMUIntegrator
 from .estimation.madgwick import Madgwick
 from .estimation.mahony import Mahony
+from .estimation.ukf import UKF
+from .fit import Fit, FitResult, Free, NoiseFit, NoiseFitResult, Prior, Tied, Window
 from .ir.state_spec import ALL, POSE, TWIST, SlotSet
-from .control import LQR, LQRSolution, MPC, MPCPlan, PID
-from .recurrence import RecurrenceBlock
-from .codegen import NoiseDriver, TargetCpp, TargetJax, TargetNumpy, TargetWasm
-from .fit import (Fit, FitResult, Free, NoiseFit, NoiseFitResult, Prior,
-                  Tied, Window)
+from .planets import Planet
 from .rates import CommandLatch, RateGate
+from .recurrence import RecurrenceBlock
+from .sim import Sim
+from .world import World
 
 __all__ = [
+    "ALL",
+    "EKF",
+    "LQR",
+    "MPC",
+    "MPCFeedbackCommand",
+    "MPCFeedbackPolicy",
+    "PID",
+    "POSE",
+    "TWIST",
+    "UKF",
+    "CommandLatch",
+    "CompilationError",
+    "Coupling",
+    "Craft",
+    "Fit",
+    "FitResult",
+    "Free",
+    "IMUIntegrator",
+    "LQRSolution",
+    "MPCReference",
+    "MPCResult",
+    "MPCTimings",
+    "CraftHorizonReference",
+    "Madgwick",
+    "Mahony",
+    "NoiseDriver",
+    "NoiseFit",
+    "NoiseFitResult",
+    "Planet",
+    "Prior",
+    "RateGate",
+    "RecurrenceBlock",
+    "Sim",
+    "SlotSet",
+    "TargetCpp",
+    "TargetJax",
+    "TargetNumpy",
+    "TargetWasm",
+    "Tied",
+    "Window",
+    "World",
     "__version__",
-    "ir", "smoothing", "Craft", "World", "Coupling", "Sim", "Planet",
-    "EKF", "UKF",
-    "LQR", "LQRSolution", "MPC", "MPCPlan", "PID",
-    "Madgwick", "Mahony", "IMUIntegrator", "RecurrenceBlock",
-    "TargetNumpy", "TargetCpp", "TargetWasm", "TargetJax", "NoiseDriver",
-    "Fit", "FitResult", "Free", "NoiseFit", "NoiseFitResult", "Prior",
-    "Tied", "Window",
-    "RateGate", "CommandLatch",
-    "SlotSet", "POSE", "TWIST", "ALL",
+    "compile_functions",
+    "ir",
+    "smoothing",
 ]

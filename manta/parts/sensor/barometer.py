@@ -24,7 +24,7 @@ from ...fields import FluidField
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Scalar, Vec3
 from .._declarations import Output, Parameter, PartUpdate, WhiteNoise
-from ..base import Part
+from ..base import Part, PartRole
 from ...ir.wrench import Wrench
 
 
@@ -49,6 +49,8 @@ class Barometer(Part):
                each in exactly once. Pure metadata — the tick stays a
                smooth function.
     """
+
+    role = PartRole.SENSOR
 
     requires_fields = [FluidField]
 

@@ -34,7 +34,7 @@ from ...ir.frames import PartFrame
 from ...ir.types import Scalar, Vec3
 from .._declarations import Input, Parameter, WhiteNoise
 from .._trace import scalar_mx
-from ..base import Part
+from ..base import Part, PartRole
 from ...ir.wrench import Wrench
 
 
@@ -65,6 +65,8 @@ class Thruster(Part):
         torque_noise : per-tick white torque (N·m) added to the reaction
                        torque, same frame and same role for attitude.
     """
+
+    role = PartRole.ACTUATOR
 
     # All four coefficients are promotable (system-ID targets): a tunable
     # transform constructed with `parameters=[...]` promotes them to live

@@ -45,6 +45,7 @@ Input/Output entries from their parents. Construction-time overrides
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any, ClassVar
 
 import numpy as np
@@ -60,6 +61,22 @@ from ._trace import _trace_local
 # ---------------------------------------------------------------------------
 # DeclarationHost — class-scope declaration resolution
 # ---------------------------------------------------------------------------
+
+
+class PartRole(str, Enum):
+    """Semantic role used when deriving purpose-specific model profiles.
+
+    This describes why a part must remain in a compiled model, independently
+    of the declarations it happens to expose.  In particular, an ``Output``
+    does not make a part a sensor and an ``Input`` does not necessarily make
+    it a vehicle actuator.  Reducers can therefore select parts explicitly
+    without guessing from implementation details.
+    """
+
+    DYNAMICS = "dynamics"
+    ACTUATOR = "actuator"
+    SENSOR = "sensor"
+
 
 class DeclarationHost:
     """Mixin: class-scope `_Declaration` resolution.
@@ -237,6 +254,12 @@ class Part(DeclarationHost):
     # Forward provision: no stock part sets it yet — the validation hook
     # exists so a planet-coupled part can declare its need declaratively.
     requires_planet: ClassVar[type | None] = None
+
+    # Purpose-specific transforms (control, estimation, simulation) select
+    # retained device parts from this explicit role.  Ordinary structural and
+    # hydrodynamic parts are dynamics by default; physical I/O parts override
+    # it at their defining class so subclasses inherit the correct meaning.
+    role: ClassVar[PartRole] = PartRole.DYNAMICS
 
     # Does this part contribute inertial mass to the craft's rigid-body
     # dynamics? The inertia walks (numpy aggregation, symbolic rollup,

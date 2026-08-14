@@ -21,7 +21,7 @@ from __future__ import annotations
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3
 from .._declarations import Output, Parameter, PartUpdate, WhiteNoise
-from ..base import Part
+from ..base import Part, PartRole
 from ...ir.wrench import Wrench
 
 
@@ -41,6 +41,8 @@ class VelocitySensor(Part):
                          measurement R, exactly as PositionSensor's
                          `position_noise`. Defaults to 0 (an ideal read).
     """
+
+    role = PartRole.SENSOR
 
     #: Measurement rate, Hz. `None` ⇒ every tick (family-uniform knob).
     rate: float = Parameter(None)

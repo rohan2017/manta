@@ -42,6 +42,7 @@ from ...ir.wrench import Wrench
 from .._declarations import Input, Parameter, PartUpdate, State
 from .._trace import scalar_mx as _as_mx
 from .aerofoil import Aerofoil
+from ..base import PartRole
 
 
 def _flap_effectiveness(E: float) -> tuple[float, float]:
@@ -88,6 +89,8 @@ class ControlSurface(Aerofoil):
     State:
         deflection     — actual deflection δ, rad.
     """
+
+    role = PartRole.ACTUATOR
 
     flap_chord_fraction: float = Parameter(0.25)
     servo_gain:          float = Parameter(20.0)

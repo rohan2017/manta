@@ -263,8 +263,121 @@ def test_fit_validates_windows():
     with pytest.raises(ValueError, match="at least one Window"):
         fit.solve([])
     truth = TargetNumpy(Sim(_drone()))
-    with pytest.raises(ValueError, match="at least one sensor"):
+    with pytest.raises(ValueError, match="at least one state or sensor"):
         fit.solve([Window(x0=truth.state, z={}, dt=DT)])
+
+
+def test_fit_accepts_ground_truth_state_trajectories_without_sensors():
+    """System identification must not require an IMU-shaped proxy when a
+    simulator or motion-capture system provides the state trajectory."""
+    truth = TargetNumpy(Sim(_drone(mass=1.32, kf=11.0)))
+    x0 = copy.deepcopy(truth.state)
+    K = 35
+    traces = {name: [] for name in
+              ("position", "orientation", "velocity", "angular_velocity")}
+    throttle = np.linspace(0.2, 0.8, K)
+    for value in throttle:
+        truth.step(DT, u={f"t{i}.throttle": float(value)
+                          for i in range(1, 5)})
+        for name in traces:
+            traces[name].append(copy.deepcopy(truth.state["drone"][name]))
+    window = Window(
+        x0=x0,
+        u={f"t{i}.throttle": throttle for i in range(1, 5)},
+        x={"drone": {name: np.asarray(values)
+                     for name, values in traces.items()}},
+        dt=DT)
+    result = Fit(_drone(mass=1.5, kf=11.0), parameters={
+        "body.mass": Prior(sigma=0.5, log=True),
+    }).solve([window], state_weights={
+        "position": 1e5, "velocity": 1e5,
+        "orientation": 1e4, "angular_velocity": 1e4,
+    })
+    assert result.values["drone.body.mass"] == pytest.approx(1.32, abs=0.02)
+
+
+def test_state_scales_make_loss_a_normalized_trajectory_mean():
+    """A scaled state slot contributes RMS², independent of trace length."""
+    world = _drone(mass=1.5, kf=11.0)
+    sim = TargetNumpy(Sim(world))
+    x0 = copy.deepcopy(sim.state)
+    K = 12
+    truth = np.tile(np.asarray(x0["drone"]["position"])
+                    + np.array([2.0, 0.0, 0.0]), (K, 1))
+    window = Window(
+        x0=x0, x={"drone": {"position": truth}},
+        x_scale={"position": 2.0}, dt=0.0)
+    # The model predicts zero position: ||error|| / scale = 1 at every
+    # sample, hence the normalized trajectory objective is exactly one.
+    result = Fit(world, parameters={
+        "body.mass": Prior(sigma=0.5),
+    }).solve([window], compute_posterior=False,
+             ipopt_options={"ipopt.max_iter": 0})
+    assert result.initial_objective == pytest.approx(1.0)
+
+
+def test_state_robust_loss_bounds_a_bad_trajectory_influence():
+    world = _drone(mass=1.5, kf=11.0)
+    sim = TargetNumpy(Sim(world))
+    x0 = copy.deepcopy(sim.state)
+    K = 8
+    window = Window(
+        x0=x0,
+        x={"drone": {"position": np.tile(
+            np.asarray(x0["drone"]["position"])
+            + np.array([20.0, 0.0, 0.0]), (K, 1))}},
+        x_scale={"position": 2.0}, dt=0.0)
+    result = Fit(world, parameters={
+        "body.mass": Prior(sigma=0.5),
+    }).solve([window], state_robust_delta=0.2,
+             compute_posterior=False,
+             ipopt_options={"ipopt.max_iter": 0})
+    # Plain normalized MSE is 100. Pseudo-Huber at delta=.2 is ~3.92.
+    assert result.initial_objective == pytest.approx(
+        2 * 0.2**2 * (np.sqrt(1 + 100 / 0.2**2) - 1))
+
+
+def test_state_scale_and_robust_delta_validation():
+    world = _drone()
+    x0 = TargetNumpy(Sim(world)).state
+    window = Window(
+        x0=x0, x={"drone": {"position": np.zeros((2, 3))}},
+        x_scale={"position": 0.0}, dt=DT)
+    fit = Fit(world, parameters={"body.mass": Prior(sigma=0.1)})
+    with pytest.raises(ValueError, match="state scale"):
+        fit.solve([window])
+    with pytest.raises(ValueError, match="state_robust_delta"):
+        fit.solve([Window(x0=x0, x={"drone": {
+            "position": np.zeros((2, 3))}}, dt=DT)],
+                  state_robust_delta=0.0)
+
+
+def test_fit_accepts_an_ambient_parameter_warm_start():
+    windows = _record_windows(_drone(mass=1.32), n_win=1, K=10)
+    fit = Fit(_drone(mass=1.5), parameters={
+        "body.mass": Prior(sigma=0.5, lower=1.0, upper=2.0),
+    })
+    with pytest.warns(RuntimeWarning, match="did NOT converge"):
+        result = fit.solve(
+            windows, initial_values={"body.mass": 1.32},
+            compute_posterior=False, ipopt_options={"ipopt.max_iter": 0})
+    assert result.initial_objective < 1.0
+    with pytest.raises(ValueError, match="violates its bounds"):
+        fit.solve(windows, initial_values={"body.mass": 3.0})
+
+
+def test_limited_fit_returns_the_best_accepted_iterate():
+    """An iteration cap must never return a worse model than its input."""
+    windows = _record_windows(_drone(mass=1.32), n_win=1, K=15)
+    fit = Fit(_drone(mass=1.5), parameters={
+        "body.mass": Prior(sigma=0.5),
+    })
+    with pytest.warns(RuntimeWarning, match="did NOT converge"):
+        result = fit.solve(
+            windows, compute_posterior=False,
+            ipopt_options={"ipopt.max_iter": 1})
+    assert result.objective <= result.initial_objective
+    assert result.objective_history[-1] == pytest.approx(result.objective)
 
 
 def test_fit_validates_window_traces():
@@ -485,6 +598,21 @@ def test_fit_records_expanded_flag():
         **{f"t{i}.force_quad": Prior(sigma=4.0) for i in range(1, 5)},
     }).solve(windows, weights={"imu.gyro": 1e6, "imu.accel": 1e4})
     assert res.expanded is True
+
+
+def test_fit_exposes_loss_history_and_can_skip_posterior_diagnostics():
+    windows = _record_windows(_drone(mass=1.32), n_win=1, K=20)
+    res = Fit(_drone(mass=1.5), parameters={
+        "body.mass": Prior(sigma=0.5),
+    }).solve(windows, compute_posterior=False,
+             ipopt_options={"expand": False,
+                            "ipopt.hessian_approximation": "limited-memory"})
+    assert len(res.objective_history) >= 2
+    assert res.objective_history[0] == pytest.approx(res.initial_objective)
+    assert res.objective_history[-1] == pytest.approx(res.objective)
+    assert res.objective_history[-1] < res.objective_history[0]
+    assert not res.posterior_computed
+    assert np.isnan(res.posterior_sigma).all()
 
 
 def test_log_prior_with_bounds():

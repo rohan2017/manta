@@ -1,6 +1,6 @@
 """TargetNumpy — the native-Python backend.
 
-ONE kernel engine + five thin typed views. `NumpyRuntime` (`_runtime`)
+ONE kernel engine + four thin typed views. `NumpyRuntime` (`_runtime`)
 is the engine: the generic typed-arg gather → `ca.Function` call →
 scatter over a Module's entry points (`call(method, values)`), plus the
 shared port metadata helpers. Each view subclasses it and exposes
@@ -21,9 +21,6 @@ exactly the surface its Module shape implies — nothing else:
   * `NumpyRegulator` (`_regulator`)   — THREADED + a ``control`` entry.
                         `u(x)`, `control(state_dict)`, `retarget`,
                         `reprogram`, `x_ref`, `gain`, `u_ff`.
-  * `NumpyMpc` (`_mpc`)               — HELD + returns CONTROL.
-                        `tick(x, position)` → typed `u`, warm `plan` held
-                        between calls, `reset_plan`, `J`.
 
 `NoiseDriver` (`_noise`) drives the oracle's NOISE port; `_compile`
 holds the optional cc-compiled-kernel path.
@@ -40,8 +37,8 @@ backend never mentions a transform.
 from __future__ import annotations
 
 from ...ir.module import Hosting, Role
+from ._compile import CompilationError, compile_functions
 from ._filter import NumpyFilter
-from ._mpc import NumpyMpc
 from ._noise import NoiseDriver
 from ._recurrence import NumpyRecurrence
 from ._regulator import NumpyRegulator
@@ -49,8 +46,15 @@ from ._runtime import NumpyRuntime
 from ._sim import NumpySim
 
 __all__ = [
-    "NoiseDriver", "NumpyFilter", "NumpyMpc", "NumpyRecurrence",
-    "NumpyRegulator", "NumpyRuntime", "NumpySim", "TargetNumpy",
+    "CompilationError",
+    "NoiseDriver",
+    "NumpyFilter",
+    "NumpyRecurrence",
+    "NumpyRegulator",
+    "NumpyRuntime",
+    "NumpySim",
+    "TargetNumpy",
+    "compile_functions",
 ]
 
 
@@ -62,7 +66,9 @@ def TargetNumpy(x, *, compile: bool = False) -> NumpyRuntime:
 
     `compile=True` builds the kernel's CasADi functions with `cc` and
     calls them as externals instead of interpreting the MX graph
-    (bit-identical, ~8x per call; cached on disk). Pair with `NumpySim`'s
+    (bit-identical, ~8x per call; cached on disk). It raises
+    `CompilationError` if an external cannot be produced; explicit native
+    execution never silently becomes interpretation. Pair with `NumpySim`'s
     `step_n` to fold substeps for a further amortization."""
     from ..target import as_module
     m = as_module(x, "TargetNumpy")
@@ -75,7 +81,6 @@ def _select_view(m):
     Role/field signature, never an entry-point name (the C++ emitter's
     no-name-matching discipline, applied to view selection):
 
-      * HELD + returns a CONTROL port (an MPC's warm plan + `u`) → NumpyMpc
       * HELD + a matrix State field (the EKF covariance `P`)  → NumpyFilter
       * HELD + an OUTPUT port (a recurrence's readouts)       → NumpyRecurrence
       * a NOISE port (the simulation oracle's live draw)      → NumpySim
@@ -83,8 +88,6 @@ def _select_view(m):
       * anything else (e.g. the Sim's noiseless deploy bundle) → the engine
     """
     if m.hosting is Hosting.HELD:
-        if m.returns_role(Role.CONTROL):
-            return NumpyMpc
         if m.matrix_fields:
             return NumpyFilter
         if m.sole_port(Role.OUTPUT) is not None:

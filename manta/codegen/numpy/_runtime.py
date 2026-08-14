@@ -90,8 +90,7 @@ class NumpyRuntime:
         self._t = 0.0
 
     def _enable_compile(self) -> "NumpyRuntime":
-        """Replace the interpreted CasADi functions with `cc`-compiled
-        externals (bit-identical, ~8x per call). Idempotent."""
+        """Require `cc`-compiled externals (bit-identical, ~8x per call)."""
         self._functions = _compiled_functions(dict(self.module.functions))
         return self
 

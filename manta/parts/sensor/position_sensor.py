@@ -16,7 +16,7 @@ from __future__ import annotations
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3
 from .._declarations import Output, Parameter, PartUpdate, WhiteNoise
-from ..base import Part
+from ..base import Part, PartRole
 from ...ir.wrench import Wrench
 
 
@@ -42,6 +42,8 @@ class PositionSensor(Part):
                each fix in exactly once. Pure metadata — the tick stays a
                smooth function (the estimator sees the continuous model).
     """
+
+    role = PartRole.SENSOR
 
     rate: float = Parameter(None)
 

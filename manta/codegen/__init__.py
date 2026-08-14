@@ -8,7 +8,7 @@ The pipeline:
      (`manta.ir.module`) via `.module()`.
   3. **Target**: lowers a Module to a backend. `TargetNumpy(x)` → the
      native-Python view matching the Module's shape (one kernel engine,
-     thin views for sim / filter / recurrence / regulator / mpc);
+     thin views for sim / filter / recurrence / regulator);
      `TargetCpp(x, …)` → a buildable C++ library via the one generic
      emitter.
 
@@ -27,11 +27,18 @@ Adding a backend = translate a `ca.Function` + one generic lowering of a
 """
 
 from .cpp import TargetCpp
-from .wasm import TargetWasm
 from .numpy import (
-    NoiseDriver, NumpyFilter, NumpyMpc, NumpyRecurrence, NumpyRegulator,
-    NumpyRuntime, NumpySim, TargetNumpy,
+    CompilationError,
+    NoiseDriver,
+    NumpyFilter,
+    NumpyRecurrence,
+    NumpyRegulator,
+    NumpyRuntime,
+    NumpySim,
+    TargetNumpy,
+    compile_functions,
 )
+from .wasm import TargetWasm
 
 
 def TargetJax(x):
@@ -44,7 +51,16 @@ def TargetJax(x):
     return _TargetJax(x)
 
 __all__ = [
-    "TargetNumpy", "TargetCpp", "TargetWasm", "TargetJax", "NoiseDriver",
-    "NumpyRuntime", "NumpySim", "NumpyFilter", "NumpyRecurrence",
-    "NumpyRegulator", "NumpyMpc",
+    "CompilationError",
+    "NoiseDriver",
+    "NumpyFilter",
+    "NumpyRecurrence",
+    "NumpyRegulator",
+    "NumpyRuntime",
+    "NumpySim",
+    "TargetCpp",
+    "TargetJax",
+    "TargetNumpy",
+    "TargetWasm",
+    "compile_functions",
 ]

@@ -6,12 +6,10 @@ differential split rolls. There is no rudder and no thruster off the
 surge axis — the actuator set spans **pitch and roll only**, and fin
 authority is ½ρV²·A·CL: zero at rest, bought with speed.
 
-The command is pure guidance-language, through the runtime objective:
-hold this depth, make 1.2 m/s, and put the nose on a course 45° off
-the bow — the heading term (`set_objective(heading=d)`, Euler-free:
-nose·d = qᵀM(d)q). No yaw actuator exists, so the only mechanism
-physics offers is the aircraft turn, and `MPC(world)` discovers it
-from the model alone — no maneuver script:
+The command is a sampled path reference: hold this depth, make 1.2 m/s,
+and put the nose on a course 45° off the bow. No yaw actuator exists, so
+the only mechanism physics offers is the aircraft turn, and sparse RTI
+discovers it from the model alone — no maneuver script:
 
     roll over   — split the elevators, heel the hull toward the turn
     yank        — pull collective; pitch, banked, IS world-frame yaw
@@ -20,15 +18,8 @@ from the model alone — no maneuver script:
                   the righting moment makes wings-level the cheap
                   place to be once the turn is done
 
-Two solver layers share the work, and the demo shows the seam
-honestly. The fixed-work tick flies the plan — but initiating a bank
-from level flight is a roll×pitch SADDLE (zero first-order yaw
-payoff), invisible to warm Gauss-Newton sweeps, so the closed loop
-alone stalls a few degrees short of the commanded course. The mission
-layer closes it: when the heading residual persists, re-birth the
-plan (`plan(multi_start=True)` from the current state — the same
-replan-on-residual doctrine a flight controller will run). Two
-replans take the nose to 45.0° ± half a degree, wings level.
+The controller advances one sparse direct-multiple-shooting RTI update per
+tick and keeps its shifted nonlinear plan warm between ticks.
 
 Run::
 
@@ -50,7 +41,7 @@ import numpy as np
 
 import math
 
-from manta import MPC, Craft, Sim, TargetNumpy, World
+from manta import CraftHorizonReference, MPC, Craft, Sim, TargetNumpy, World
 from manta.fields import FluidField, GravityField
 from manta.parts import (
     Aerofoil, AddedMass, ControlSurface, DragSurface, Mass, PointBuoy,
@@ -127,30 +118,10 @@ def main() -> None:
 
     w, bounds = build_world()
     mpc = MPC(w, u_bounds=bounds, horizon=HORIZON, dt=DT)
-    spec = mpc.module().port("x").manifold
     d_cmd = np.array([np.cos(np.radians(COURSE_DEG)),
                       np.sin(np.radians(COURSE_DEG)), 0.0])
-    objective = dict(w_position=(0.0, 0.0, 40.0),      # depth-hold only
-                     velocity=SPEED * d_cmd, w_velocity=(15.0,) * 3,
-                     heading=d_cmd, w_heading=30.0,
-                     P=np.zeros((mpc.nx, mpc.nx)))
     print(f"command: nose to {COURSE_DEG:.0f}°, {SPEED} m/s, hold "
           f"depth — pitch+roll authority only\n")
-
-    x0 = np.asarray(mpc.module().port("x").init, dtype=float)
-    print("plan birth (multi-start — initiating a bank is a roll×pitch "
-          "saddle single seeds cannot see)...")
-    plan = mpc.plan(x0, position=(0.0, 0.0, 0.0), multi_start=True,
-                    **objective)
-    print(f"  cost {plan.cost:.1f}, converged={plan.converged}\n")
-
-    rt = TargetNumpy(mpc)
-    rt.set_objective(position=(0.0, 0.0, 0.0),
-                     w_position=(0.0, 0.0, 40.0),
-                     velocity=SPEED * d_cmd, w_velocity=(15.0,) * 3,
-                     heading=d_cmd, w_heading=30.0,
-                     P=np.zeros((mpc.nx, mpc.nx)))
-    rt.reset_plan(plan.U)
     plant = TargetNumpy(Sim(build_world()[0]))
 
     viz = (None if args.no_viz
@@ -191,22 +162,20 @@ def main() -> None:
     ticks = int((args.duration or 30.0) / DT)
     print(f"{'t':>5} {'roll':>6} {'pitch':>6} {'yaw':>6} "
           f"{'speed':>6} {'nose err':>9}")
-    max_bank, replans = 0.0, 0
+    max_bank = 0.0
     for k in range(ticks):
         st = plant.state["sub"]
-        flat = {f"sub.{n}": np.asarray(v, dtype=float).ravel()
-                for n, v in st.items()}
-        x = spec.pack_any(flat)
-        # the mission layer: a persistent heading residual means the
-        # tick is stuck at the bank-initiation saddle — re-birth the
-        # plan from the current state (replan-on-residual doctrine)
-        if k > 0 and k % 20 == 0 and nose_err_deg(st) > 3.0:
-            rt.reset_plan(mpc.plan(x, position=(0.0, 0.0, 0.0),
-                                   multi_start=True, **objective).U)
-            replans += 1
-            print(f"      *** heading residual persists "
-                  f"({nose_err_deg(st):.1f}°) -> replan #{replans} ***")
-        u = rt.tick(x)
+        progress = max(0.0, float(np.asarray(st["position"]) @ d_cmd))
+        distances = progress + SPEED*DT*np.arange(1, HORIZON+1)
+        reference = CraftHorizonReference(
+            positions=distances[:, None]*d_cmd,
+            tangents=np.tile(d_cmd, (HORIZON, 1)),
+            forward_speeds=np.full(HORIZON, SPEED),
+            up=np.tile([0.0, 0.0, 1.0], (HORIZON, 1)),
+            bank_limits=np.full(HORIZON, math.radians(35.0)))
+        result = mpc.tick(plant.state, reference)
+        u = {name.split(".", 1)[1]: value
+             for name, value in result.controls.items()}
         # the controller holds u for one period; the PLANT (and the
         # viewer) run at the fine step — poses log every 50 ms, so the
         # replay is smooth even though the tick is 4 Hz
@@ -246,10 +215,9 @@ def main() -> None:
     err = nose_err_deg(plant.state["sub"])
     print(f"\nbank-and-yank: peak bank {np.rad2deg(max_bank):.0f}°, "
           f"nose {err:.1f}° off the commanded course, final roll "
-          f"{np.rad2deg(roll):+.0f}° (righted), {replans} replan(s)")
+          f"{np.rad2deg(roll):+.0f}° (righted)")
     print("no yaw actuator ever existed — the turn is roll × pitch, "
-          "discovered from the model; the last degrees are the "
-          "mission layer's replan closing a saddle the tick cannot.")
+          "discovered from the model.")
 
 
 if __name__ == "__main__":

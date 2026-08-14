@@ -75,6 +75,7 @@ nav:
       - Planets: explanation/planets.md
       - State estimation (error-state EKF): explanation/estimation.md
       - Control synthesis (LQR): explanation/control.md
+      - RTI MPC optimization roadmap: explanation/mpc-optimization.md
       - Codegen and backends: explanation/codegen.md
   - Tutorials:
       - Overview: tutorials/index.md

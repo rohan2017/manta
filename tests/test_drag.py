@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from manta import Craft, Sim, TargetNumpy, World
+from manta import Craft, NoiseDriver, Sim, TargetNumpy, World
 from manta.fields import FluidField, GravityField
 from manta.parts import DragSurface, Mass, Thruster
 
@@ -151,6 +151,35 @@ def test_drag_surface_requires_fluid_field():
     w.add_craft(c, velocity=(1.0, 0.0, 0.0))
     with pytest.raises(ValueError, match="FluidField"):
         Sim(w)
+
+
+def test_drag_surface_white_flow_noise_buffets_at_its_force_point():
+    """Surface turbulence is incident-flow noise, not an arbitrary body
+    wrench. A deterministic local +x water fluctuation therefore enters the
+    same drag law as a +x current and accelerates this stationary craft +x.
+    The NoiseDriver path is independently checked by the seeded replay."""
+    w = (World()
+         .add_field(GravityField().add_uniform((0, 0, 0)))
+         .add_field(FluidField().add_uniform(density=1000.0)))
+    c = Craft("buffeted")
+    c.add(Mass("body", mass=2.0, moi=(0.1, 0.1, 0.1)))
+    c.add(DragSurface("panel", force=(-0.1, -0.1, -0.1),
+                      flow_noise_sigma=0.2))
+    w.add_craft(c)
+
+    deterministic = TargetNumpy(Sim(w))
+    deterministic.state["buffeted"]["panel.flow_noise"] = (0.2, 0.0, 0.0)
+    deterministic.step(0.01)
+    assert deterministic.state["buffeted"]["velocity"][0] > 0.0
+
+    def seeded_end(seed):
+        sim = TargetNumpy(Sim(w))
+        sim.attach_driver(NoiseDriver(seed=seed))
+        sim.step(0.01)
+        return np.asarray(sim.state["buffeted"]["velocity"])
+
+    np.testing.assert_array_equal(seeded_end(7), seeded_end(7))
+    assert not np.array_equal(seeded_end(7), seeded_end(8))
 
 
 # ---------------------------------------------------------------------------

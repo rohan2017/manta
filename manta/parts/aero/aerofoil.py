@@ -48,7 +48,7 @@ from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3
 from ...ir.wrench import Wrench
 from ...smoothing import NORM_EPS_SQ, smoothstep
-from .._declarations import Parameter, PartUpdate, unit_axis
+from .._declarations import Parameter, PartUpdate, WhiteNoise, unit_axis
 from ..base import Part
 
 # Reynolds-scaling reference points (engineering fits, not high-fidelity
@@ -169,6 +169,11 @@ class Aerofoil(Part):
     CD_0:        float = Parameter(0.01)
     induced_k:   float = Parameter(0.05)
 
+    # Per-tick surface-local fluid-velocity perturbation (m/s). Keeping the
+    # stochastic input upstream of AoA and dynamic pressure makes a fin react
+    # through the same lift, drag, stall, and hinge physics as any other flow.
+    flow_noise = WhiteNoise("R3", frame=PartFrame, sigma=0.0)
+
     def __init__(self, name: str, **overrides) -> None:
         super().__init__(name, **overrides)
         who = f"{type(self).__name__} {name!r}"
@@ -209,7 +214,8 @@ class Aerofoil(Part):
         mu    = fluid.viscosity
         v_rel = v_surface_anchor - fluid.velocity
 
-        v_rel_craft = ctx.orientation.conjugate().apply(v_rel)
+        v_rel_craft = (ctx.orientation.conjugate().apply(v_rel)
+                       - self.flow_noise)
         chord_b  = Vec3[PartFrame].constant(tuple(self.chord_axis))
         normal_b = Vec3[PartFrame].constant(tuple(self.normal_axis))
         v_rel_mx = v_rel_craft._mx

@@ -11,7 +11,7 @@ from ._declarations import (
     Input, Noise, Output, Parameter, PartUpdate, RandomWalkNoise, State,
     WhiteNoise, unit_axis,
 )
-from .base import CompositePart, Part, RootPart
+from .base import CompositePart, Part, PartRole, RootPart
 from ..ir.wrench import Wrench
 from .structure.mass import Mass
 from .structure.point_buoy import PointBuoy
@@ -28,6 +28,7 @@ from .sensor.velocity_sensor import VelocitySensor
 from .sensor.barometer import Barometer
 from .sensor.camera import BBoxCamera, CentroidCamera, ProjectiveCamera
 from .actuation.thruster import Thruster
+from .actuation.ducted_propeller import DuctedPropeller
 from .aero.added_mass import AddedMass
 from .aero.drag_surface import DragSurface
 from .aero.fossen_damping import FossenDamping
@@ -44,7 +45,7 @@ from .field_source import (
 )
 
 __all__ = [
-    "Part", "CompositePart", "RootPart",
+    "Part", "PartRole", "CompositePart", "RootPart",
     "Parameter", "Input", "Output", "State", "PartUpdate",
     "Noise", "WhiteNoise", "RandomWalkNoise", "unit_axis",
     "Wrench",
@@ -53,7 +54,7 @@ __all__ = [
     "RevoluteJoint",
     "Antenna", "IMU", "VelocitySensor", "Magnetometer", "PositionSensor", "Barometer",
     "ProjectiveCamera", "BBoxCamera", "CentroidCamera",
-    "Thruster",
+    "DuctedPropeller", "Thruster",
     "AddedMass", "DragSurface", "FossenDamping", "RotationalDrag", "Aerofoil", "naca", "ControlSurface",
     "ProcessNoise",
     "TetherEndpoint",

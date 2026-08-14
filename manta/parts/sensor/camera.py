@@ -42,7 +42,7 @@ from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Scalar, Vec3
 from ...ir.wrench import Wrench
 from .._declarations import Output, Parameter, PartUpdate, WhiteNoise
-from ..base import Part
+from ..base import Part, PartRole
 
 
 class ProjectiveCamera(Part):
@@ -61,6 +61,8 @@ class ProjectiveCamera(Part):
             under a friendlier name). 0 ⇒ noiseless oracle, no noise channels
             (byte-identical to a camera with none), and not EKF-usable.
     """
+
+    role = PartRole.SENSOR
 
     requires_fields = [OpticalField]
 

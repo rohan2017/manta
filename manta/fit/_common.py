@@ -6,12 +6,56 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass, field
+from itertools import count
 
 import casadi as ca
 import numpy as np
 
 from ..ir.state_spec import flatten_nested
 from ..ir._names import resolve_suffix
+
+
+_CALLBACK_IDS = count()
+
+
+class _BestIterate(ca.Callback):
+    """Retain the lowest finite objective IPOPT has actually accepted."""
+
+    def __init__(self, nx: int, initial_x: np.ndarray,
+                 initial_objective: float) -> None:
+        ca.Callback.__init__(self)
+        self.nx = int(nx)
+        self.best_x = np.asarray(initial_x, dtype=float).ravel().copy()
+        self.best_objective = float(initial_objective)
+        self.construct(f"best_iterate_{next(_CALLBACK_IDS)}")
+
+    def get_n_in(self):
+        return ca.nlpsol_n_out()
+
+    def get_n_out(self):
+        return 1
+
+    def get_name_in(self, index):
+        return ca.nlpsol_out(index)
+
+    def get_name_out(self, index):
+        return "ret"
+
+    def get_sparsity_in(self, index):
+        name = ca.nlpsol_out(index)
+        if name == "f":
+            return ca.Sparsity.scalar()
+        if name in ("x", "lam_x"):
+            return ca.Sparsity.dense(self.nx)
+        return ca.Sparsity(0, 0)
+
+    def eval(self, args):
+        values = {ca.nlpsol_out(i): args[i] for i in range(len(args))}
+        objective = float(values["f"])
+        if np.isfinite(objective) and objective < self.best_objective:
+            self.best_objective = objective
+            self.best_x = np.asarray(values["x"], dtype=float).ravel().copy()
+        return [0]
 
 
 @dataclass(frozen=True)
@@ -118,6 +162,15 @@ class Window:
         u  — recorded controls: `{input name/suffix: scalar | (K,)}`.
              A scalar is held for the whole window; inputs omitted hold
              their model default.
+        x  — recorded state trajectories: nested or flat mapping from state
+             slot name to `(K, ambient_dim)` values. Row k is the state after
+             step k. Only named slots enter `Fit`; quaternion slots are
+             compared on their SO(3) tangent manifold, not componentwise.
+        x_scale — optional positive physical scale per recorded state slot.
+             When present, Fit scores that slot as a trajectory mean-square
+             ``sum(error²) / (K · scale²)`` instead of a raw sample sum.
+             This is the explicit mixed-unit normalization boundary: callers
+             choose meaningful floors/tolerances in each slot's native units.
         z  — recorded sensor readings: `{sensor name/suffix:
              (K, dim) | (K,)}`. Row k is the reading produced by step k
              (the step taken FROM state k). For `Fit`, only sensors
@@ -128,6 +181,8 @@ class Window:
     """
     x0: dict
     u: dict = field(default_factory=dict)
+    x: dict = field(default_factory=dict)
+    x_scale: dict = field(default_factory=dict)
     z: dict = field(default_factory=dict)
     dt: float = 0.01
     t0: float = 0.0
@@ -217,7 +272,9 @@ def expand_or_none(fn: ca.Function):
 
 
 def solve_blocks_nlp(name: str, x: ca.MX, loss: ca.MX, blocks: list, *,
-                     verbose: bool, ipopt_options: dict | None):
+                     verbose: bool, ipopt_options: dict | None,
+                     initial: np.ndarray | None = None,
+                     retain_best: bool = False):
     """Build the fitters' shared IPOPT solver, seed it from the blocks'
     `init`, apply their box bounds, and solve. Returns
     `(x_opt, objective, stats, expanded)`.
@@ -252,12 +309,28 @@ def solve_blocks_nlp(name: str, x: ca.MX, loss: ca.MX, blocks: list, *,
             v = ca.SX.sym("v", x.numel())
             nlp = {"x": v, "f": f_sx(v)}
             expanded = True
+    x0 = (np.concatenate([b.init for b in blocks]) if initial is None
+          else np.asarray(initial, dtype=float).ravel())
+    callback = None
+    if retain_best:
+        if "iteration_callback" in opts:
+            raise ValueError(
+                "retain_best cannot be combined with iteration_callback")
+        initial_fn = ca.Function(
+            f"{name}_initial_objective", [nlp["x"]], [nlp["f"]])
+        initial_objective = float(ca.DM(initial_fn(x0)))
+        callback = _BestIterate(x0.size, x0, initial_objective)
+        opts["iteration_callback"] = callback
     solver = ca.nlpsol(name, "ipopt", nlp, opts)
-    sol = solver(x0=np.concatenate([b.init for b in blocks]),
+    sol = solver(x0=x0,
                  lbx=np.concatenate([b.lower for b in blocks]),
                  ubx=np.concatenate([b.upper for b in blocks]))
-    return (np.asarray(sol["x"]).ravel(), sol["f"], solver.stats(),
-            expanded)
+    solution_x = np.asarray(sol["x"]).ravel()
+    solution_f = float(sol["f"])
+    if callback is not None and callback.best_objective < solution_f:
+        solution_x = callback.best_x
+        solution_f = callback.best_objective
+    return solution_x, solution_f, solver.stats(), expanded
 
 
 def solver_converged(stats: dict, *, who: str) -> bool:
@@ -357,6 +430,37 @@ def resolve_traces(z: dict, sensor_fulls: list[str], dims: dict, *,
         traces[full] = a
     if K is None:
         raise ValueError(f"{who}: window needs at least one sensor trace.")
+    return traces, K
+
+
+def resolve_state_traces(x: dict, spec, *, who: str):
+    """Resolve selected state trajectories against a world's `StateSpec`.
+
+    The returned arrays remain in each slot's ambient representation; the
+    fitter applies that slot's manifold `boxminus` when constructing the
+    residual, so SO(3) contributes a three-component rotation error rather
+    than a sign-ambiguous four-component quaternion subtraction.
+    """
+    flat = flatten_nested(x)
+    names = [slot.name for slot in spec.slots]
+    traces: dict[str, np.ndarray] = {}
+    K = None
+    for key, arr in flat.items():
+        full = resolve_suffix(key, names, label="state slot", who=who)
+        slot = spec.slot(full)
+        a = np.asarray(arr, dtype=float)
+        if a.ndim == 1:
+            a = a.reshape(-1, 1)
+        if a.ndim != 2 or a.shape[1] != slot.ambient_dim:
+            raise ValueError(
+                f"{who}: x[{key!r}] expected (K, {slot.ambient_dim}), "
+                f"got {a.shape}.")
+        if K is None:
+            K = a.shape[0]
+        elif a.shape[0] != K:
+            raise ValueError(
+                f"{who}: x[{key!r}] trace length {a.shape[0]} != {K}.")
+        traces[full] = a
     return traces, K
 
 

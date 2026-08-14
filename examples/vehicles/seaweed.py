@@ -22,12 +22,10 @@ side-by-side lanes:
           attached; only the model changed.
 
 The refit is stubbed — the rebuild is handed the true fouled world,
-standing in for `manta.fit` run against flight telemetry (the reducer
-arrives with the shiver integration; this demo measures what the
-recompile buys once it exists). The rebuild itself is the real
-on-board sequence: fresh `MPC(world)` + plan birth; generate + `cc
--O0` is ~a minute on a Pi-class board, and the stale controller —
-lane 2, degraded but stable — is exactly what flies while it runs.
+standing in for the offline Shiver reducer run against flight telemetry.
+The rebuild itself is the real on-board sequence: construct a fresh sparse
+RTI controller and compile its dynamics/linearization kernels. The stale
+controller — lane 2, degraded but stable — is what flies while that runs.
 
 Run::
 
@@ -42,7 +40,7 @@ import math
 
 import numpy as np
 
-from manta import MPC, Craft, Sim, TargetNumpy, World
+from manta import CraftHorizonReference, MPC, Craft, Sim, TargetNumpy, World
 from manta.fields import FluidField, GravityField
 from manta.parts import (
     Aerofoil, AddedMass, ControlSurface, DragSurface, Mass, PointBuoy,
@@ -123,21 +121,28 @@ def fly_trial(mpc, plant, goal, *, viz=None, pacer=None, t0=0.0,
               sub_path="world/sub0", trail="world/trail0",
               color=(80, 160, 255)):
     """One from-rest trial to arrival (or the cap): metrics + J trace."""
-    spec = mpc.module().port("x").manifold
-    rt = TargetNumpy(mpc)
-    st = plant.state["sub"]
-    x0 = spec.pack_any({f"sub.{n}": np.asarray(v, dtype=float).ravel()
-                        for n, v in st.items()})
-    rt.reset_plan(mpc.plan(x0, goal).U)
-
     zs, Js = [], []
     t = t0
     for k in range(LEG_CAP):
         st = plant.state["sub"]
-        flat = {f"sub.{n}": np.asarray(v, dtype=float).ravel()
-                for n, v in st.items()}
-        u = rt.tick(spec.pack_any(flat), goal)
-        Js.append(rt.J)
+        position = np.asarray(st["position"], dtype=float).reshape(3)
+        direction = np.asarray(goal, dtype=float)-position
+        distance = float(np.linalg.norm(direction))
+        tangent = (direction/distance if distance > 1e-9
+                   else np.array([1.0, 0.0, 0.0]))
+        speed = min(1.2, distance/3.0)
+        travel = np.minimum(
+            distance, speed*DT*np.arange(1, mpc.horizon+1))
+        reference = CraftHorizonReference(
+            positions=position+travel[:, None]*tangent,
+            tangents=np.tile(tangent, (mpc.horizon, 1)),
+            forward_speeds=np.full(mpc.horizon, speed),
+            up=np.tile([0.0, 0.0, 1.0], (mpc.horizon, 1)),
+            bank_limits=np.full(mpc.horizon, math.radians(30.0)))
+        result = mpc.tick(plant.state, reference)
+        u = {name.split(".", 1)[1]: value
+             for name, value in result.controls.items()}
+        Js.append(distance)
         for j in range(round(DT / PLANT_DT)):
             plant.step(PLANT_DT, u=u)
             t = t0 + k * DT + (j + 1) * PLANT_DT
@@ -176,8 +181,7 @@ def main() -> None:
     args = p.parse_args()
 
     clean_w, bounds = build_world()
-    mpc_nom = MPC(clean_w, u_bounds=bounds, horizon=HORIZON, dt=DT,
-                  w_pos_terminal=120.0, w_vel_terminal=0.0)
+    mpc_nom = MPC(clean_w, u_bounds=bounds, horizon=HORIZON, dt=DT)
 
     viz = (None if args.no_viz
            else Viz("manta/seaweed", addr=args.viz_addr, save=args.save))
@@ -212,8 +216,7 @@ def main() -> None:
                   "with lane 2's degraded-but-stable flight covering "
                   "the wait) ***\n")
             ctrl = MPC(build_world(seaweed=True)[0], u_bounds=bounds,
-                       horizon=HORIZON, dt=DT,
-                       w_pos_terminal=120.0, w_vel_terminal=0.0)
+                       horizon=HORIZON, dt=DT)
         else:
             ctrl = mpc_nom
         plant = TargetNumpy(Sim(
@@ -226,7 +229,7 @@ def main() -> None:
         results.append((label, r))
         t0 = r["t_end"] + 1.0
         if i == 1:
-            print(f"  model-health residual: median tick J {r['J']:.1f} "
+            print(f"  tracking residual: median distance {r['J']:.1f} m "
                   f"vs baseline {results[0][1]['J']:.1f} — "
                   f"{r['J'] / results[0][1]['J']:.1f}x elevated, "
                   f"sustained => refit")

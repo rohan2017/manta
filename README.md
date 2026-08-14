@@ -278,6 +278,53 @@ nres = NoiseFit(world, noise={"imu.gyro_noise": Prior(sigma=2.0),
 nres.apply()      # EKF(world) now auto-builds Q/R from the fitted σ
 ```
 
+### Sparse RTI MPC
+
+`MPC` is a direct solver-backed runtime over a complete `World`. It uses
+tangent-space direct multiple shooting, hard native actuator bounds, an
+elastic Euler-free bank envelope, optional hard scheduled SO(3) attitude-error
+envelopes, one SQP/QP update per tick, and a shifted nonlinear warm trajectory.
+`controlled=` may name one or several crafts; the
+reference map must cover exactly those crafts, while uncontrolled crafts and
+couplings remain in the predicted dynamics.
+
+`compile=True` compiles and caches fused horizon rollout/linearization,
+horizon-objective, and accepted-plan bank-diagnostic kernels with a
+controller-specific runtime optimization profile (`-O3` and the local target
+architecture). The generic codegen path remains at its
+compile-time-conscious profile. Fixed-shape NumPy assembly buffers are reused
+between ticks instead of rebuilding horizon arrays through Python lists.
+
+`qp_backend="osqp"` uses a persistent sparse workspace through a small native
+bridge to CasADi's bundled OSQP library: only numeric values and bounds change
+each tick, with no generic conic or `DM` marshalling. Its convergence check,
+matrix-update/refactorization time, ADMM iteration time, residuals, and rho
+updates are exposed for replayable tuning; convergence is checked every five
+iterations by default instead of OSQP's stock interval of 25.
+
+`qp_backend="hpipm"` selects Manta's optional native optimal-control QP
+workspace over CasADi's bundled HPIPM/BLASFEO libraries. It preserves the
+direct-shooting objective by augmenting each stage state with the previous
+control correction for slew cost, and keeps bank slack stage-local.
+`qp_options={"condense_to": K}` enables HPIPM partial condensing while the
+uncondensed problem remains available with `K=0`. OSQP remains the default and
+reference implementation while structured-solver results are promoted
+vehicle by vehicle. The native workspace owns its stage scratch vectors, so a
+steady-state solve performs no per-stage heap allocation.
+
+Fixed sparse scatters and actuator slew/bound blocks are vectorized NumPy. The
+ordinary structure omits scheduled SO(3) constraint rows; Manta switches to a
+constrained structure only when a reference supplies that envelope.
+`MPCResult` exposes the nominal
+state/control plan, constraint metrics, solver status, and split timings for
+benchmarking. With `synthesize_feedback=True`, Manta also publishes a bounded,
+time-varying physical-actuator policy derived from that RTI quadratic. It is an
+optional ancillary policy around the accepted plan, not a vehicle-specific
+attitude controller or replacement planner.
+
+Further performance experiments and their behavioral gates are recorded in
+the [RTI MPC optimization roadmap](docs/explanation/mpc-optimization.md).
+
 ### Backends
 
 The `manta.codegen` package houses the lowering. Every transform emits
@@ -308,10 +355,10 @@ other backend bit-for-bit; it powers the live examples on
 on the descriptor — no per-transform code — so `Sim`, `EKF`, and `LQR` all
 get the same browser-ready surface.
 
-Adding a backend (torch, raw embedded C) = a way to run/translate
-a `ca.Function` plus one generic `Module` lowering. Adding a transform
-(a future `iLQR`/`MPC`) reuses the shared `LinearizedSystem` and gets
-every backend for free.
+Adding a backend (torch, raw embedded C) = a way to run/translate a
+`ca.Function` plus one generic `Module` lowering. Solver-backed algorithms do
+not have to pretend to fit that contract: sparse `MPC` is a direct runtime over
+the world model, compiled numerical kernels, and a native OSQP solve.
 
 ## Layout
 
@@ -336,7 +383,7 @@ manta/                     library package
     couplings/             Coupling ABC + Tether
     estimation/            EKF/UKF + observability/NEES + recurrence filters
                            (state layout — StateSpec — lives in ir/, not here)
-    control/               LQR + PID
+    control/               LQR + PID + sparse tangent-space RTI MPC
     codegen/               Backends (one generic Module lowering per target)
         target.py          as_module — the backend entry-point contract
         numpy/             TargetNumpy + NumpyRuntime engine + the four
@@ -400,16 +447,21 @@ GPU-rendered Windows-native viewer from WSL). Shared helpers live in
 ## Status
 
 In active development. The public API (`World`, `Craft`, `Sim`, `EKF`,
-`UKF`, `LQR`, `TargetNumpy`, `TargetCpp`) is settled enough that the demos
+`UKF`, `LQR`, `MPC`, `TargetNumpy`, `TargetCpp`) is settled enough that the demos
 and tests don't carry compat shims. The full deploy-to-robot path
 lowers to C++ — `TargetCpp` handles `Sim`, `EKF`/`UKF` (mutable state +
 covariance update), and `LQR` (feed-forward control law), each verified
 against the
 numpy backend by a compile-and-run roundtrip test. Open items:
 
-- **`iLQR` / `MPC`** — `LinearizedSystem` emits symbolic A/B/H, so
-  trajectory-tracking controllers reuse it; the iterative solve lives in
-  the backend (not the IR), per the design.
+- **Sparse RTI MPC** (shipped — `manta.control.rti`) — direct multiple
+  shooting over the complete coupled world, with tangent-space state
+  increments, one reference per controlled craft, hard actuator bounds, an
+  elastic Euler-free bank envelope, shifted nonlinear plans, fused compiled
+  horizon kernels, and a persistent native OSQP workspace. Constrained and
+  ordinary references select separate fixed sparse structures. MPC is intentionally
+  not a `Module` transform and does
+  not lower through unrelated backends.
 - **Observability analysis** (shipped — `manta.estimation.observability`)
   — a faithful EKF of a correct model is still only as good as the model's
   *observability* (a property of dynamics + sensor set + **operating

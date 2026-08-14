@@ -33,7 +33,7 @@ from ...ir.types import Vec3
 from .._declarations import (
     Output, Parameter, PartUpdate, RandomWalkNoise, WhiteNoise,
 )
-from ..base import Part
+from ..base import Part, PartRole
 from ...ir.wrench import Wrench
 
 
@@ -49,6 +49,8 @@ class IMU(Part):
     The two RW channels add bias state slots that the EKF can estimate;
     skip them by leaving sigma at 0.
     """
+
+    role = PartRole.SENSOR
 
     #: Measurement rate, Hz. `None` (default) ⇒ a fresh reading every
     #: tick; set it so `rate_gate`s and the EKF's declared sample rates

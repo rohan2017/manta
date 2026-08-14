@@ -96,6 +96,22 @@ def test_deflection_increases_section_lift():
     assert vz_defl > vz_neutral + 1e-3     # extra upward lift
 
 
+def test_control_surface_inherits_white_turbulent_flow():
+    """A fin sees turbulence through its AoA model. Local +z water motion
+    gives a stationary-neutral fin in +x flight positive incidence/lift;
+    without the flow perturbation the symmetric section has no lift."""
+    clean = TargetNumpy(Sim(_craft(_surface(), velocity=(5.0, 0.0, 0.0))))
+    noisy = TargetNumpy(Sim(_craft(
+        _surface(flow_noise_sigma=0.2), velocity=(5.0, 0.0, 0.0))))
+    noisy.state["w"]["surf.flow_noise"] = (0.0, 0.0, 0.2)
+    clean.step(0.001)
+    noisy.step(0.001)
+    clean_vz = float(np.asarray(clean.state["w"]["velocity"])[2])
+    noisy_vz = float(np.asarray(noisy.state["w"]["velocity"])[2])
+    assert abs(clean_vz) < 1e-12
+    assert noisy_vz > 0.0
+
+
 # --- saturation / blowback --------------------------------------------------
 
 def test_blowback_loses_authority_at_high_airspeed():

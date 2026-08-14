@@ -54,6 +54,12 @@ torques automatically.
 What's still deferred:
   * Lift (airfoils with angle of attack) — use Aerofoil for that.
   * Spanwise variation — DragSurface is a single panel.
+
+Turbulence is an optional per-tick white perturbation of the local fluid
+velocity.  It enters before the drag polynomial, so this surface's geometry
+and anisotropy turn the disturbed flow into force instead of an unrelated
+body wrench being added afterwards.  Its default sigma is zero; engage it
+with ``flow_noise_sigma=...`` and a ``NoiseDriver``.
 """
 
 from __future__ import annotations
@@ -64,7 +70,7 @@ import numpy as np
 from ...fields import FluidField
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3
-from .._declarations import Parameter, PartUpdate
+from .._declarations import Parameter, PartUpdate, WhiteNoise
 from ._flow import signed_powers
 from ..base import Part
 from ...ir.wrench import Wrench
@@ -143,6 +149,7 @@ class DragSurface(Part):
 
     force_tensors:  tuple = Parameter((np.zeros((3, 3)),))
     moment_tensors: tuple = Parameter((np.zeros((3, 3)),))
+    flow_noise = WhiteNoise("R3", frame=PartFrame, sigma=0.0)
 
     @classmethod
     def isotropic_quadratic(cls,
@@ -215,7 +222,11 @@ class DragSurface(Part):
         # there. ctx.orientation is the part's own world attitude, so its
         # conjugate maps world → that frame. The framework rotates the
         # returned wrench back to body.
-        v_rel_craft = ctx.orientation.conjugate().apply(v_rel_world)
+        # Each surface owns an independent channel: the white,
+        # small-coherence-length approximation. Correlated or advected
+        # turbulence belongs in FluidField instead.
+        v_rel_craft = (ctx.orientation.conjugate().apply(v_rel_world)
+                       - self.flow_noise)
         v_rel_mx    = v_rel_craft._mx
 
         # --- Σ_k ρ · A_k · (v_rel componentwise to k) ------------------------

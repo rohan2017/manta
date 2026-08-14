@@ -50,6 +50,7 @@ import casadi as ca
 from .._declarations import Input, Parameter
 from .._trace import scalar_mx as _mx
 from .joint import RevoluteDOF
+from ..base import PartRole
 
 
 class Motor(RevoluteDOF):
@@ -79,6 +80,8 @@ class Motor(RevoluteDOF):
         rate            — output-shaft rate relative to the mounting
                           body, rad/s.
     """
+
+    role = PartRole.ACTUATOR
 
     torque_constant: float = Parameter(0.05, manifold="R1")
     resistance:      float = Parameter(1.0, manifold="R1")

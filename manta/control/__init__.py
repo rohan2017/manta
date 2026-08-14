@@ -1,20 +1,39 @@
-"""manta.control — controller synthesis transforms over the model.
+"""Manta control algorithms over the shared world model.
 
-Siblings of `Sim(world)` / `EKF(world)`: each consumes the model and the
-shared `manta.linearization.Linearization` seam, and lowers to a backend
-runtime via `Target*`.
+These consume the same declarative model as `Sim(world)` / `EKF(world)`.
+Module-shaped algorithms lower through `Target*`; solver-backed MPC owns its
+specialized runtime directly.
 
   * `LQR(world, ...)` — infinite-horizon discrete LQR about an operating
     point; a baked state-feedback control law.
-  * `MPC(world, ...)` — receding-horizon point-to-point MPC; the
-    fixed-work RTI tick over the compiled world step, warm plan as
-    HELD Module state.
+  * `MPC(world, ...)` — sparse tangent-space RTI with a native OSQP solve.
+    It is intentionally a direct runtime: solver-backed control does not
+    pretend to lower through every generic Module backend.
   * `PID(kp, ki, kd, ...)` — a scalar PID controller; a freestanding
     `recurrence` block (no world needed), lowered by the same backends.
 """
 
 from .lqr import LQR, LQRSolution
-from .mpc import MPC, MPCPlan
 from .pid import PID
+from .rti import (
+    CraftHorizonReference,
+    MPC,
+    MPCFeedbackCommand,
+    MPCFeedbackPolicy,
+    MPCReference,
+    MPCResult,
+    MPCTimings,
+)
 
-__all__ = ["LQR", "LQRSolution", "MPC", "MPCPlan", "PID"]
+__all__ = [
+    "CraftHorizonReference",
+    "LQR",
+    "LQRSolution",
+    "MPC",
+    "MPCFeedbackCommand",
+    "MPCFeedbackPolicy",
+    "MPCReference",
+    "MPCResult",
+    "MPCTimings",
+    "PID",
+]

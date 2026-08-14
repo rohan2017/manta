@@ -5,12 +5,14 @@ gains, mount transforms, masses — any `Parameter` declared with a
 manifold) to a live parameter vector via `Sim(world, parameters=[...])`,
 then fits them to recorded data by windowed prediction error:
 
-    L(v) = Σ_windows Σ_sensors w_s · ‖predicted(v) − measured‖²
+    L(v) = Σ_windows (Σ_states w_x · ‖predicted(v) ⊟ truth‖²
+                         + Σ_sensors w_z · ‖predicted(v) − measured‖²)
          + Σ_params ‖(v − v_prior) / σ_prior‖²                 (MAP)
 
 Each `Window` is a short rollout: a known initial state, the recorded
-control trace, and the recorded sensor traces. The predicted readings
-come from folding the oracle `step` kernel over the window (CasADi
+control trace, and ground-truth state and/or sensor trajectories. State
+errors use each slot's manifold (including SO(3) quaternion error). Predictions
+come from folding the oracle `step` kernel over the entire window (CasADi
 `mapaccum`, noise zeroed → mean prediction); gradients are exact
 (symbolic), and IPOPT solves the resulting NLP.
 
@@ -74,7 +76,8 @@ from ..sim import Sim
 from ._common import (
     Free, Prior, Tied, Window, _FitBlock, convergence_line, decision_bounds,
     expand_or_none, format_table, laplace_sigma, pack_u_trace, pack_x0,
-    prior_penalty, resolve_traces, solve_blocks_nlp, solver_converged,
+    prior_penalty, resolve_state_traces, resolve_traces, solve_blocks_nlp,
+    solver_converged,
 )
 
 
@@ -229,7 +232,8 @@ class FitResult:
     expanded: bool = True
 
     def __init__(self, blocks, fields, tie_sources, v_opt, p_opt, JtJ,
-                 objective, stats, world) -> None:
+                 objective, stats, world, *, posterior_computed: bool,
+                 initial_objective: float) -> None:
         self._blocks = blocks
         self._fields = fields              # [(full, dim)] in port order
         self._tie_sources = tie_sources    # {tied full: source name}
@@ -239,6 +243,21 @@ class FitResult:
         self.JtJ = JtJ
         self.objective = float(objective)
         self.stats = stats
+        self.posterior_computed = posterior_computed
+        self.initial_objective = float(initial_objective)
+        iteration_objectives = stats.get("iterations", {}).get("obj", ())
+        self.objective_history = tuple(
+            float(value) for value in iteration_objectives)
+        if (not self.objective_history
+                or not np.isclose(self.objective_history[0],
+                                  self.initial_objective)):
+            self.objective_history = (self.initial_objective,
+                                      *self.objective_history)
+        if (not self.objective_history
+                or not np.isclose(self.objective_history[-1], self.objective)):
+            # A limited solve can terminate away from an earlier, better
+            # accepted iterate. The fitter restores that retained incumbent.
+            self.objective_history = (*self.objective_history, self.objective)
         self.converged = solver_converged(stats, who="Fit")
 
         # Every promoted parameter's ambient value (tied ones included),
@@ -267,7 +286,9 @@ class FitResult:
                               1.0 / np.square(self.prior_sigma))
         # eigh-based: flat-prior components the data never touched come
         # back inf, without poisoning the identified ones.
-        self.posterior_sigma = laplace_sigma(JtJ + np.diag(prior_prec))
+        self.posterior_sigma = (
+            laplace_sigma(JtJ + np.diag(prior_prec))
+            if posterior_computed else np.full_like(self.prior_sigma, np.nan))
 
     def weak_directions(self, k: int = 3):
         """The `k` least-informed directions of the DATA alone: list of
@@ -325,13 +346,14 @@ class FitResult:
             theta = b.theta_of_v(self.v[b.offset:b.offset + b.dim])
             for j, lbl in enumerate(b.labels()):
                 pri, post = self.prior_sigma[i], self.posterior_sigma[i]
-                ratio = ("—" if np.isinf(pri) or np.isinf(post)
+                ratio = ("—" if not np.isfinite(pri) or not np.isfinite(post)
                          else f"{post / pri:.3f}")
                 unit = " (rel)" if b.log else ""
                 rows.append((lbl, f"{theta[j]:.6g}",
                              ("inf" if np.isinf(pri)
                               else f"{pri:.3g}{unit}"),
-                             ("inf" if np.isinf(post)
+                             ("not computed" if np.isnan(post) else
+                              "inf" if np.isinf(post)
                               else f"{post:.3g}{unit}"),
                              ratio))
                 i += 1
@@ -476,6 +498,10 @@ class Fit:
     # ------------------------------------------------------------------
 
     def solve(self, windows: list[Window], *, weights: dict | None = None,
+              state_weights: dict | None = None,
+              state_robust_delta: float | None = None,
+              initial_values: dict | None = None,
+              compute_posterior: bool = True,
               verbose: bool = False,
               ipopt_options: dict | None = None) -> FitResult:
         """Build the windowed prediction-error + prior NLP and solve it.
@@ -485,11 +511,29 @@ class Fit:
             weights — optional per-sensor scalar weights on the squared
                       residuals (`{sensor name/suffix: w}`); use
                       `1/σ_meas²` to whiten mixed-unit sensors. Default 1.
+            state_weights — optional per-state-slot weights on tangent-space
+                      trajectory residuals. Default 1 for every recorded slot.
+            state_robust_delta — optional positive pseudo-Huber transition in
+                      normalized trajectory-RMS units. It applies to state
+                      slots carrying ``Window.x_scale`` and limits the
+                      influence of one structurally unrepresentable rollout
+                      without introducing a non-differentiable clipping point.
+            initial_values — optional warm start for decision parameters in
+                      ambient units. Keys use the same exact-or-unique-suffix
+                      resolution as parameter declarations. Priors and bounds
+                      are unchanged; only IPOPT's starting iterate moves.
+            compute_posterior — build the full residual Jacobian used only for
+                      identifiability diagnostics. Disable on large production
+                      fits to save peak memory; fitted values are unchanged.
             verbose — IPOPT iteration output.
             ipopt_options — extra `nlpsol` options, merged last.
         """
         if not windows:
             raise ValueError("Fit.solve: needs at least one Window.")
+        if (state_robust_delta is not None
+                and (not np.isfinite(state_robust_delta)
+                     or state_robust_delta <= 0.0)):
+            raise ValueError("state_robust_delta must be positive and finite")
 
         v = ca.MX.sym("v", self.n_v, 1)
         p = self._p_of_v(v)
@@ -500,35 +544,73 @@ class Fit:
         for k, val in (weights or {}).items():
             full = resolve_suffix(k, meas_names, label="sensor", who="Fit")
             w_by_full[full] = float(val)
+        state_names = [slot.name for slot in self._spec.slots]
+        wx_by_full: dict[str, float] = {}
+        for k, val in (state_weights or {}).items():
+            full = resolve_suffix(k, state_names, label="state slot", who="Fit")
+            wx_by_full[full] = float(val)
 
         loss = ca.MX(0.0)
         residuals: list[ca.MX] = []
         for w in windows:
             loss, residuals = self._add_window(
-                w, p, loss, residuals, w_by_full, meas_names)
+                w, p, loss, residuals, w_by_full, wx_by_full, meas_names,
+                state_names, state_robust_delta)
 
         # MAP prior term (skipped for flat-prior components).
         loss = loss + prior_penalty(v, self._blocks)
+        initial_v = np.concatenate([block.init for block in self._blocks])
+        block_names = [block.full for block in self._blocks]
+        for key, value in (initial_values or {}).items():
+            full = resolve_suffix(
+                key, block_names, label="warm-start parameter", who="Fit")
+            block = self._block_by_name[full]
+            ambient = np.atleast_1d(np.asarray(value, dtype=float)).ravel()
+            if ambient.size != block.dim:
+                raise ValueError(
+                    f"Fit: warm start for {full!r} has {ambient.size} "
+                    f"component(s), expected {block.dim}.")
+            if block.log:
+                if np.any(ambient <= 0.0):
+                    raise ValueError(
+                        f"Fit: warm start for log-space {full!r} must be "
+                        "strictly positive.")
+                decision = np.log(ambient)
+            else:
+                decision = ambient
+            if (np.any(decision < block.lower)
+                    or np.any(decision > block.upper)):
+                raise ValueError(
+                    f"Fit: warm start for {full!r} violates its bounds.")
+            initial_v[block.offset:block.offset + block.dim] = decision
+        initial_objective = float(ca.DM(
+            ca.Function("fit_initial_loss", [v], [loss])(initial_v)))
 
         v_opt, objective, stats, expanded = solve_blocks_nlp(
             "fit", v, loss, self._blocks,
-            verbose=verbose, ipopt_options=ipopt_options)
+            verbose=verbose, ipopt_options=ipopt_options,
+            initial=initial_v, retain_best=True)
 
-        # Data-only Gauss-Newton information JᵀJ at the solution. The
-        # Jacobian rides the same mapaccum graph as the loss — expand it
-        # too (it is the single most expensive one-shot evaluation here).
-        r = ca.vertcat(*residuals) if residuals else ca.MX.zeros(0, 1)
-        J_fn = ca.Function("J", [v], [ca.jacobian(r, v)])
-        J_fn = expand_or_none(J_fn) or J_fn
-        J = np.asarray(ca.DM(J_fn(v_opt)))
-        JtJ = J.T @ J
+        # Data-only Gauss-Newton information JᵀJ is optional. It is useful for
+        # laboratory identifiability studies but duplicates the largest graph
+        # in a production calibration whose acceptance is held-out replay.
+        if compute_posterior:
+            r = ca.vertcat(*residuals) if residuals else ca.MX.zeros(0, 1)
+            J_fn = ca.Function("J", [v], [ca.jacobian(r, v)])
+            J_fn = expand_or_none(J_fn) or J_fn
+            J = np.asarray(ca.DM(J_fn(v_opt)))
+            JtJ = J.T @ J
+        else:
+            JtJ = np.zeros((self.n_v, self.n_v))
 
         p_fn = ca.Function("p", [v], [p])
         p_opt = np.asarray(ca.DM(p_fn(v_opt))).ravel()
         tie_sources = {full: src.full
                        for full, (src, _A, _b) in self._ties.items()}
         res = FitResult(self._blocks, self._fields, tie_sources, v_opt,
-                        p_opt, JtJ, objective, stats, self.world)
+                        p_opt, JtJ, objective, stats, self.world,
+                        posterior_computed=compute_posterior,
+                        initial_objective=initial_objective)
         res.expanded = expanded
         return res
 
@@ -543,15 +625,27 @@ class Fit:
         return self._stepk_cache[K]
 
     def _add_window(self, w: Window, p: ca.MX, loss, residuals,
-                    w_by_full: dict, meas_names: list[str]):
+                    w_by_full: dict, wx_by_full: dict,
+                    meas_names: list[str], state_names: list[str],
+                    state_robust_delta: float | None):
         """Append one window's prediction-error terms to the loss."""
         ep = self.module.entry("step")
         u_fields = self.module.port("u").fields
         n_noise = self.module.port("noise").size
 
-        # Window length from the measurement traces.
+        # Window length from ground-truth state and/or measurement traces.
         dims = {n: self.module.port(n).size for n in meas_names}
-        z_resolved, K = resolve_traces(w.z, meas_names, dims, who="Fit")
+        x_resolved, Kx = resolve_state_traces(w.x, self._spec, who="Fit")
+        z_resolved, Kz = ({}, None)
+        if w.z:
+            z_resolved, Kz = resolve_traces(w.z, meas_names, dims, who="Fit")
+        if Kx is None and Kz is None:
+            raise ValueError(
+                "Fit: window needs at least one state or sensor trace.")
+        if Kx is not None and Kz is not None and Kx != Kz:
+            raise ValueError(
+                f"Fit: state trace length {Kx} != sensor trace length {Kz}.")
+        K = int(Kx if Kx is not None else Kz)
 
         # Initial state: window slots over the world's initial state.
         x0 = pack_x0(self.model_world, self._spec, w)
@@ -582,6 +676,62 @@ class Fit:
             ordered.append(call_args[key])
         res = self._stepk(K)(*ordered)
         outs = [res] if not isinstance(res, (list, tuple)) else list(res)
+
+        predicted_x = outs[0]
+        scale_by_full: dict[str, float] = {}
+        for key, value in w.x_scale.items():
+            full = resolve_suffix(
+                key, state_names, label="state scale", who="Fit")
+            scale = float(value)
+            if not np.isfinite(scale) or scale <= 0.0:
+                raise ValueError(
+                    f"Fit: state scale for {full!r} must be positive and "
+                    f"finite, got {value!r}.")
+            if full not in x_resolved:
+                raise ValueError(
+                    f"Fit: state scale supplied for {full!r}, but the window "
+                    "has no trajectory for that slot.")
+            scale_by_full[full] = scale
+        for full, X in x_resolved.items():
+            slot = self._spec.slot(full)
+            a = slot.ambient_offset
+            pred = predicted_x[a:a + slot.ambient_dim, :]
+            truth = ca.DM(X.T)
+            columns = [slot.manifold.boxminus_sym(pred[:, k], truth[:, k])
+                       for k in range(K)]
+            resid = ca.horzcat(*columns)
+            wgt = wx_by_full.get(full, 1.0)
+            raw_squared = ca.sumsqr(resid)
+            scale = scale_by_full.get(full)
+            if scale is None:
+                loss = loss + wgt * raw_squared
+                residuals.append(
+                    np.sqrt(wgt) * ca.reshape(resid, -1, 1))
+                continue
+
+            # This is exactly the square of the normalized trajectory RMS
+            # used by downstream validation (Euclidean norm across the slot,
+            # mean across time). It deliberately does not divide by tangent
+            # dimension: a 3-D vector error is one physical state error.
+            denominator = float(K) * scale * scale
+            normalized_squared = raw_squared / denominator
+            if state_robust_delta is None:
+                state_loss = normalized_squared
+                robust_factor = 1.0
+            else:
+                delta2 = float(state_robust_delta) ** 2
+                # Pseudo-Huber in normalized RMS: quadratic near zero, linear
+                # for a whole trajectory that the chosen model class cannot
+                # reproduce. Smoothness keeps exact CasADi derivatives useful.
+                state_loss = 2.0 * delta2 * (
+                    ca.sqrt(1.0 + normalized_squared / delta2) - 1.0)
+                robust_factor = ca.if_else(
+                    normalized_squared > 0.0,
+                    ca.sqrt(state_loss / normalized_squared), 1.0)
+            loss = loss + wgt * state_loss
+            residuals.append(
+                np.sqrt(wgt / denominator) * robust_factor
+                * ca.reshape(resid, -1, 1))
 
         for full, Z in z_resolved.items():
             idx = 1 + ep.returns.index(full)        # 0 is x_new
