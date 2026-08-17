@@ -112,11 +112,20 @@ class Motor(RevoluteDOF):
         k = _mx(self.torque_constant)
         R = _mx(self.resistance)
         G = float(self.declared_value("gear_ratio"))
-        i = (_mx(self.voltage) - k * (G * rate_mx)) / R
+        i = (self._terminal_voltage_mx() - k * (G * rate_mx)) / R
         i_max = float(self.declared_value("current_limit"))
         if math.isfinite(i_max):
             i = ca.fmin(ca.fmax(i, -i_max), i_max)
         return i
+
+    def _terminal_voltage_mx(self) -> ca.MX:
+        """Voltage presented to the winding.
+
+        The stock motor keeps its direct ``voltage`` input exactly as before.
+        Electrically supplied variants override this narrow seam to derive
+        terminal voltage from a rail and drive command.
+        """
+        return _mx(self.voltage)
 
     def applied_dof_force(self):
         """Electrical shaft torque on top of the base viscous damping, as

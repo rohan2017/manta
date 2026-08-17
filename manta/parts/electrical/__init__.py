@@ -9,8 +9,18 @@ from .core import (
     ElectricalBus,
     ElectricalLoad,
     ElectricalNode,
+    ElectricalPort,
+    ExternalDCSupply,
     Fuse,
     ResistiveLoad,
+)
+from .powered import (
+    ConstantPowerElectronicsLoad,
+    PoweredControlSurface,
+    PoweredDuctedPropeller,
+    PoweredLoadMixin,
+    PoweredMotor,
+    PoweredThruster,
 )
 
 __all__ = [
@@ -22,6 +32,14 @@ __all__ = [
     "ElectricalBus",
     "ElectricalLoad",
     "ElectricalNode",
+    "ElectricalPort",
+    "ExternalDCSupply",
     "Fuse",
     "ResistiveLoad",
+    "PoweredLoadMixin",
+    "PoweredMotor",
+    "PoweredThruster",
+    "PoweredDuctedPropeller",
+    "PoweredControlSurface",
+    "ConstantPowerElectronicsLoad",
 ]

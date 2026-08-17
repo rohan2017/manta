@@ -85,7 +85,7 @@ class Thruster(Part):
     torque_noise = WhiteNoise("R3", frame=PartFrame, sigma=0.0)
 
     def update(self, ctx):
-        t = self.throttle
+        t = self._effective_throttle()
         # Direction-preserving quadratic: see the module docstring.
         t_mx = scalar_mx(t)
         t2 = Scalar(t_mx * ca.fabs(t_mx))
@@ -99,3 +99,7 @@ class Thruster(Part):
             force =c1F * t + c2F * t2 + self.force_noise,
             torque=c1τ * t + c2τ * t2 + self.torque_noise,
         )
+
+    def _effective_throttle(self):
+        """Command consumed by the force law; powered variants derate it."""
+        return self.throttle

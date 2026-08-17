@@ -109,7 +109,105 @@ def _zero_wrench() -> Wrench:
     return Wrench(force=zero, torque=zero)
 
 
-class ElectricalNode(Part):
+class ElectricalPort:
+    """Connectivity shared by electrical nodes and powered part variants.
+
+    This is deliberately a plain cooperative mixin rather than a ``Part``.
+    A mechanical part can therefore opt into the radial network without
+    acquiring a second mechanical identity or duplicating its dynamics.
+    """
+
+    _is_source = False
+    _can_supply = False
+
+    def __init__(self, name: str, **overrides: Any) -> None:
+        super().__init__(name, **overrides)
+        self._upstream: ElectricalPort | None = None
+        self._electrical_children: list[ElectricalPort] = []
+
+    @property
+    def upstream(self) -> "ElectricalPort | None":
+        return self._upstream
+
+    @property
+    def electrical_children(self) -> tuple["ElectricalPort", ...]:
+        return tuple(self._electrical_children)
+
+    def connect(self, child: "ElectricalPort") -> "ElectricalPort":
+        """Supply ``child`` from this port and return the child."""
+        who = f"{type(self).__name__}({self.name!r}).connect"
+        if not isinstance(child, ElectricalPort):
+            raise TypeError(
+                f"{who}: expected an ElectricalPort, got "
+                f"{type(child).__name__}")
+        if not self._can_supply:
+            raise ValueError(f"{who}: an endpoint load cannot supply children")
+        if child._is_source:
+            raise ValueError(f"{who}: a source cannot have an upstream supply")
+        if child is self:
+            raise ValueError(f"{who}: cannot connect a node to itself")
+        if child._upstream is not None:
+            raise ValueError(
+                f"{who}: {child.name!r} already has upstream supply "
+                f"{child._upstream.name!r}; parallel source sharing is not "
+                f"supported")
+        cursor: ElectricalPort | None = self
+        while cursor is not None:
+            if cursor is child:
+                raise ValueError(f"{who}: connection would create a cycle")
+            cursor = cursor._upstream
+        child._upstream = self
+        self._electrical_children.append(child)
+        return child
+
+    def _downstream_current(self, voltage: ca.MX) -> ca.MX:
+        current = ca.MX(0.0)
+        for child in self._electrical_children:
+            current = current + child._supply_current(voltage)
+        return current
+
+    def on_world_resolve(self, world, craft) -> None:
+        """Validate the finished electrical graph before symbolic tracing."""
+        super().on_world_resolve(world, craft)
+        who = f"{type(self).__name__}({self.name!r})"
+        if self._is_source:
+            if self._upstream is not None:
+                raise ValueError(f"{who}: a source cannot have an upstream")
+        elif self._upstream is None:
+            raise ValueError(
+                f"{who}: every non-source electrical node needs exactly one "
+                f"upstream supply")
+
+        expected_root = _root_of(self)
+        neighbours = list(self._electrical_children)
+        if self._upstream is not None:
+            neighbours.append(self._upstream)
+        for other in neighbours:
+            if _root_of(other) is not expected_root:
+                raise ValueError(
+                    f"{who}: electrical connection to {other.name!r} crosses "
+                    f"crafts; electrical networks are per-craft")
+        for child in self._electrical_children:
+            if child._upstream is not self:
+                raise ValueError(
+                    f"{who}: inconsistent edge to {child.name!r}")
+
+        seen: set[int] = set()
+        cursor: ElectricalPort | None = self
+        while cursor is not None:
+            if id(cursor) in seen:
+                raise ValueError(f"{who}: electrical topology contains a cycle")
+            seen.add(id(cursor))
+            cursor = cursor._upstream
+        root = self
+        while root._upstream is not None:
+            root = root._upstream
+        if not root._is_source:
+            raise ValueError(
+                f"{who}: topology does not terminate at an electrical source")
+
+
+class ElectricalNode(ElectricalPort, Part):
     """Base contract for one node in a radial DC network.
 
     The diagnostic outputs have identical meanings on every node:
@@ -152,7 +250,6 @@ class ElectricalNode(Part):
     brownout_voltage: float = Parameter(0.0)
     recovery_voltage: float = Parameter(0.0)
 
-    _is_source = False
     _can_supply = True
 
     def __init__(self, name: str, **overrides: Any) -> None:
@@ -166,50 +263,6 @@ class ElectricalNode(Part):
             raise ValueError(
                 f"{who}.recovery_voltage must be >= brownout_voltage; "
                 f"got {high} < {low}")
-        self._upstream: ElectricalNode | None = None
-        self._electrical_children: list[ElectricalNode] = []
-
-    @property
-    def upstream(self) -> "ElectricalNode | None":
-        return self._upstream
-
-    @property
-    def electrical_children(self) -> tuple["ElectricalNode", ...]:
-        return tuple(self._electrical_children)
-
-    def connect(self, child: "ElectricalNode") -> "ElectricalNode":
-        """Supply ``child`` from this node and return the child.
-
-        A second supply, a cycle, source-as-child, or a load used as a supply
-        fails immediately.  Same-craft membership is validated on the
-        transform's private snapshot because parts may be wired before being
-        attached to a craft.
-        """
-        who = f"{type(self).__name__}({self.name!r}).connect"
-        if not isinstance(child, ElectricalNode):
-            raise TypeError(
-                f"{who}: expected an ElectricalNode, got "
-                f"{type(child).__name__}")
-        if not self._can_supply:
-            raise ValueError(f"{who}: an endpoint load cannot supply children")
-        if child._is_source:
-            raise ValueError(f"{who}: a source cannot have an upstream supply")
-        if child is self:
-            raise ValueError(f"{who}: cannot connect a node to itself")
-        if child._upstream is not None:
-            raise ValueError(
-                f"{who}: {child.name!r} already has upstream supply "
-                f"{child._upstream.name!r}; parallel source sharing is not "
-                f"supported")
-        cursor: ElectricalNode | None = self
-        while cursor is not None:
-            if cursor is child:
-                raise ValueError(f"{who}: connection would create a cycle")
-            cursor = cursor._upstream
-        child._upstream = self
-        self._electrical_children.append(child)
-        return child
-
     def _brownout_gate(self, voltage: ca.MX) -> ca.MX:
         return _c1_gate(
             voltage,
@@ -223,12 +276,6 @@ class ElectricalNode(Part):
     def _supply_current(self, upstream_voltage: ca.MX) -> ca.MX:
         """Current this node requests from its parent (positive into node)."""
         raise NotImplementedError
-
-    def _downstream_current(self, voltage: ca.MX) -> ca.MX:
-        current = ca.MX(0.0)
-        for child in self._electrical_children:
-            current = current + child._supply_current(voltage)
-        return current
 
     def _status(self, voltage: ca.MX) -> tuple[ca.MX, ca.MX, ca.MX]:
         return 1.0 - self._brownout_gate(voltage), ca.MX(0.0), ca.MX(0.0)
@@ -252,44 +299,6 @@ class ElectricalNode(Part):
         """Electrical loss available to ``ThermalMass(source=...)``."""
         raise NotImplementedError
 
-    def on_world_resolve(self, world, craft) -> None:
-        """Validate the finished electrical graph before symbolic tracing."""
-        who = f"{type(self).__name__}({self.name!r})"
-        if self._is_source:
-            if self._upstream is not None:
-                raise ValueError(f"{who}: a source cannot have an upstream")
-        elif self._upstream is None:
-            raise ValueError(
-                f"{who}: every non-source electrical node needs exactly one "
-                f"upstream supply")
-
-        expected_root = _root_of(self)
-        neighbours = list(self._electrical_children)
-        if self._upstream is not None:
-            neighbours.append(self._upstream)
-        for other in neighbours:
-            if _root_of(other) is not expected_root:
-                raise ValueError(
-                    f"{who}: electrical connection to {other.name!r} crosses "
-                    f"crafts; electrical networks are per-craft")
-        for child in self._electrical_children:
-            if child._upstream is not self:
-                raise ValueError(
-                    f"{who}: inconsistent edge to {child.name!r}")
-
-        seen: set[int] = set()
-        cursor: ElectricalNode | None = self
-        while cursor is not None:
-            if id(cursor) in seen:
-                raise ValueError(f"{who}: electrical topology contains a cycle")
-            seen.add(id(cursor))
-            cursor = cursor._upstream
-        root = self
-        while root._upstream is not None:
-            root = root._upstream
-        if not root._is_source:
-            raise ValueError(
-                f"{who}: topology does not terminate at an electrical source")
 
 
 class _CapacitiveRail(ElectricalNode):
@@ -426,6 +435,48 @@ class DCSource(_CapacitiveRail):
     def dissipated_heat(self) -> ca.MX:
         return ((_mx(self.open_circuit_voltage) - self._local_voltage())
                 * self._internal_current())
+
+
+class ExternalDCSupply(ElectricalNode):
+    """Runtime boundary for a simulation-only or hardware DC source.
+
+    ``supplied_voltage`` enters the Manta tick as an ordinary input and the
+    aggregate downstream demand leaves as ``output_current``.  A battery
+    plant may therefore keep cell, thermal, and fault state in a
+    non-differentiable simulator while powered mechanical parts retain their
+    normal compiled model.  Source-internal heat remains owned by that plant;
+    endpoint conversion loss is still available through each load's
+    ``dissipated_heat()``.
+    """
+
+    _is_source = True
+
+    supplied_voltage: float = Input(default=0.0)
+
+    def _local_voltage(self) -> ca.MX:
+        return _mx(self.supplied_voltage)
+
+    def _supply_current(self, upstream_voltage: ca.MX) -> ca.MX:
+        raise RuntimeError("ExternalDCSupply cannot be connected downstream")
+
+    def _electrical_update(self, ctx):
+        voltage = self._local_voltage()
+        current = self._downstream_current(voltage)
+        power = voltage * current
+        zero = ca.MX(0.0)
+        return {
+            "voltage": voltage,
+            "input_current": current,
+            "output_current": current,
+            "input_power": power,
+            "output_power": power,
+            "loss_power": zero,
+            "kcl_residual": zero,
+            "energy_residual": zero,
+        }, {}
+
+    def dissipated_heat(self) -> ca.MX:
+        return ca.MX(0.0)
 
 
 class ElectricalBus(_CapacitiveRail):
@@ -794,6 +845,8 @@ __all__ = [
     "ElectricalBus",
     "ElectricalLoad",
     "ElectricalNode",
+    "ElectricalPort",
+    "ExternalDCSupply",
     "Fuse",
     "ResistiveLoad",
 ]

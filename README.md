@@ -146,6 +146,8 @@ node with no extra wiring), a radial lumped-DC electrical network
 (`DCSource`, `ElectricalBus`, `DCConverter`, `Contactor`, `Fuse`, and
 constant resistance/current/power loads) whose connectivity is independent
 of the mechanical tree and lowers through simulation, estimation, and codegen,
+plus opt-in powered motor, propulsor, servo, and compute-load variants that
+leave existing direct-command callers unchanged,
 `DragSurface`, `Aerofoil` (Re-aware, with the `naca()` helper)
 and `ControlSurface`, `IMU` (gyro+accel, with Kalibr 4-parameter noise
 model), `VelocitySensor`, `Magnetometer`, `PositionSensor`, `Barometer`,

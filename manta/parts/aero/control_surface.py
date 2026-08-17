@@ -134,9 +134,7 @@ class ControlSurface(Aerofoil):
         # Quasi-static hinge balance → δ̇ (massless, so no δ̈ state).
         E = float(self.flap_chord_fraction)
         cmd = _as_mx(self.deflection_cmd)
-        stall = float(self.stall_torque)
-        servo = ca.fmin(ca.fmax(float(self.servo_gain) * (cmd - delta),
-                                -stall), stall)
+        servo = self._servo_torque(cmd - delta)
         # Restoring aerodynamic hinge moment: H = q·S_f·c_f·(Chα·α + Chδ·δ),
         # with the flap area/chord a fraction E of the section's.
         H_aero = (q_dyn * (E * float(self.area)) * (E * float(self.chord))
@@ -150,3 +148,9 @@ class ControlSurface(Aerofoil):
 
         return PartUpdate(wrench=Wrench(force=F_part, torque=tau_part),
                           new_state={"deflection": Scalar(new_delta)})
+
+    def _servo_torque(self, command_error):
+        """Hinge torque produced by the servo before aerodynamic load."""
+        stall = float(self.stall_torque)
+        return ca.fmin(ca.fmax(float(self.servo_gain) * command_error,
+                               -stall), stall)

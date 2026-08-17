@@ -22,8 +22,11 @@ from .articulation.motor import Motor
 from .thermal.thermal_mass import ThermalMass
 from .electrical import (
     ConstantCurrentLoad, ConstantPowerLoad, Contactor, DCConverter,
-    DCSource, ElectricalBus, ElectricalLoad, ElectricalNode, Fuse,
-    ResistiveLoad,
+    DCSource, ElectricalBus, ElectricalLoad, ElectricalNode, ElectricalPort,
+    ExternalDCSupply,
+    Fuse, ResistiveLoad, ConstantPowerElectronicsLoad,
+    PoweredControlSurface, PoweredDuctedPropeller, PoweredLoadMixin,
+    PoweredMotor, PoweredThruster,
 )
 from .sensor.imu import IMU
 from .sensor.antenna import Antenna
@@ -57,7 +60,11 @@ __all__ = [
     "Mass", "PointBuoy", "Collider", "ThermalMass",
     "ElectricalNode", "ElectricalLoad", "DCSource", "ElectricalBus",
     "DCConverter", "Contactor", "Fuse", "ResistiveLoad",
-    "ConstantCurrentLoad", "ConstantPowerLoad",
+    "ConstantCurrentLoad", "ConstantPowerLoad", "ElectricalPort",
+    "ExternalDCSupply",
+    "PoweredLoadMixin", "PoweredMotor", "PoweredThruster",
+    "PoweredDuctedPropeller", "PoweredControlSurface",
+    "ConstantPowerElectronicsLoad",
     "ArticulatedJoint", "Motor", "PrismaticJoint", "RevoluteDOF",
     "RevoluteJoint",
     "Antenna", "IMU", "VelocitySensor", "Magnetometer", "PositionSensor", "Barometer",

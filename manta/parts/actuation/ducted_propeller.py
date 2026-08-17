@@ -128,7 +128,7 @@ class DuctedPropeller(Part):
                 / (float(self.reference_density) * disk_area))
 
     def update(self, ctx) -> PartUpdate:
-        command = scalar_mx(self.thrust_command)
+        command = scalar_mx(self._effective_thrust_command())
         command_abs = ca.sqrt(command * command + _COMMAND_EPS_N ** 2)
         direction = command / command_abs
 
@@ -180,6 +180,10 @@ class DuctedPropeller(Part):
                 "oblique_factor": Scalar.from_mx(oblique),
             },
         )
+
+    def _effective_thrust_command(self):
+        """Static-thrust command consumed by the open-water model."""
+        return self.thrust_command
 
 
 __all__ = ["DuctedPropeller"]

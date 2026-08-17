@@ -39,6 +39,8 @@ a craft.
 
 ::: manta.parts.DCSource
 
+::: manta.parts.ExternalDCSupply
+
 ::: manta.parts.ElectricalBus
 
 ::: manta.parts.DCConverter
@@ -54,6 +56,16 @@ a craft.
 ::: manta.parts.ConstantCurrentLoad
 
 ::: manta.parts.ConstantPowerLoad
+
+::: manta.parts.ConstantPowerElectronicsLoad
+
+::: manta.parts.PoweredMotor
+
+::: manta.parts.PoweredThruster
+
+::: manta.parts.PoweredDuctedPropeller
+
+::: manta.parts.PoweredControlSurface
 
 ## Actuation
 

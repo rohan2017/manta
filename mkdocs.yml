@@ -72,6 +72,7 @@ nav:
       - Parts and the declaration model: explanation/parts.md
       - Articulation vs coupling: explanation/articulation-vs-coupling.md
       - Lumped-DC electrical networks: explanation/electrical.md
+      - Powered mechanical parts: explanation/powered-loads.md
       - Fields and disturbances: explanation/fields.md
       - Planets: explanation/planets.md
       - State estimation (error-state EKF): explanation/estimation.md
