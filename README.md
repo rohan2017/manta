@@ -142,7 +142,10 @@ either a scriptable `ambient_temperature` input or, with
 `ambient="fluid"`, the FluidField's temperature at the part's position
 — a hull node feels the water it is in; and a `source=` hook that reads
 any part's `dissipated_heat()` — a Motor's i²R winding loss heats its
-node with no extra wiring),
+node with no extra wiring), a radial lumped-DC electrical network
+(`DCSource`, `ElectricalBus`, `DCConverter`, `Contactor`, `Fuse`, and
+constant resistance/current/power loads) whose connectivity is independent
+of the mechanical tree and lowers through simulation, estimation, and codegen,
 `DragSurface`, `Aerofoil` (Re-aware, with the `naca()` helper)
 and `ControlSurface`, `IMU` (gyro+accel, with Kalibr 4-parameter noise
 model), `VelocitySensor`, `Magnetometer`, `PositionSensor`, `Barometer`,

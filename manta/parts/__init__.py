@@ -20,6 +20,11 @@ from .articulation.joint import (ArticulatedJoint, PrismaticJoint,
                                  RevoluteDOF, RevoluteJoint)
 from .articulation.motor import Motor
 from .thermal.thermal_mass import ThermalMass
+from .electrical import (
+    ConstantCurrentLoad, ConstantPowerLoad, Contactor, DCConverter,
+    DCSource, ElectricalBus, ElectricalLoad, ElectricalNode, Fuse,
+    ResistiveLoad,
+)
 from .sensor.imu import IMU
 from .sensor.antenna import Antenna
 from .sensor.magnetometer import Magnetometer
@@ -50,6 +55,9 @@ __all__ = [
     "Noise", "WhiteNoise", "RandomWalkNoise", "unit_axis",
     "Wrench",
     "Mass", "PointBuoy", "Collider", "ThermalMass",
+    "ElectricalNode", "ElectricalLoad", "DCSource", "ElectricalBus",
+    "DCConverter", "Contactor", "Fuse", "ResistiveLoad",
+    "ConstantCurrentLoad", "ConstantPowerLoad",
     "ArticulatedJoint", "Motor", "PrismaticJoint", "RevoluteDOF",
     "RevoluteJoint",
     "Antenna", "IMU", "VelocitySensor", "Magnetometer", "PositionSensor", "Barometer",

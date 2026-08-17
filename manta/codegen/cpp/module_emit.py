@@ -430,8 +430,15 @@ def _body_buffers(ep, ctx, reads, writes_manifold, matrix_writes):
             L.append(f"    double {buf}[{_buf_dim(ydim)}];")
             ret_bufs.append((name, buf))
         elif len(port.shape) == 2:
+            # Eigen forbids an explicitly column-major fixed row vector.
+            # A 1×N matrix has identical contiguous storage either way, so
+            # use RowMajor for that shape while retaining CasADi-compatible
+            # column-major storage for every genuine matrix.
+            storage = ("Eigen::RowMajor"
+                       if port.shape[0] == 1 and port.shape[1] != 1
+                       else "Eigen::ColMajor")
             L.append(f"    Eigen::Matrix<double, {port.shape[0]}, "
-                     f"{port.shape[1]}, Eigen::ColMajor> {buf};")
+                     f"{port.shape[1]}, {storage}> {buf};")
             ret_bufs.append((name, f"{buf}.data()"))
         elif port.size == 1:
             L.append(f"    double {buf} = 0.0;")

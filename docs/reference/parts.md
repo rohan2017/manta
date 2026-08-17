@@ -33,6 +33,28 @@ a craft.
 
 ::: manta.parts.ThermalMass
 
+## Electrical
+
+::: manta.parts.ElectricalNode
+
+::: manta.parts.DCSource
+
+::: manta.parts.ElectricalBus
+
+::: manta.parts.DCConverter
+
+::: manta.parts.Contactor
+
+::: manta.parts.Fuse
+
+::: manta.parts.ElectricalLoad
+
+::: manta.parts.ResistiveLoad
+
+::: manta.parts.ConstantCurrentLoad
+
+::: manta.parts.ConstantPowerLoad
+
 ## Actuation
 
 ::: manta.parts.Thruster
