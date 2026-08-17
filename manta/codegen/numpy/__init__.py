@@ -38,7 +38,7 @@ from __future__ import annotations
 
 from ...ir.module import Hosting, Role
 from ._compile import CompilationError, compile_functions
-from ._filter import NumpyFilter
+from ._filter import FilterCheckpoint, NumpyFilter, UpdateResult
 from ._noise import NoiseDriver
 from ._recurrence import NumpyRecurrence
 from ._regulator import NumpyRegulator
@@ -48,11 +48,13 @@ from ._sim import NumpySim
 __all__ = [
     "CompilationError",
     "NoiseDriver",
+    "FilterCheckpoint",
     "NumpyFilter",
     "NumpyRecurrence",
     "NumpyRegulator",
     "NumpyRuntime",
     "NumpySim",
+    "UpdateResult",
     "TargetNumpy",
     "compile_functions",
 ]

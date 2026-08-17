@@ -70,9 +70,10 @@ from ..ir.module import entry_ident
 from ..linearization import LinearizedSystem
 from ._assembly import (
     _FilterBase, _q_auto, emit_filter_module, initial_ambient,
-    prepared_sensors,
+    prepared_sensors, resolve_gates,
 )
 from ._kalman import sigma_deltas, unscented_weights, ut_predict, ut_update
+from ..ir._linalg import spd_solve
 
 
 class UKF(_FilterBase):
@@ -90,7 +91,8 @@ class UKF(_FilterBase):
                  beta: float = 2.0,
                  kappa: float = 0.0,
                  mean_iters: int = 1,
-                 jitter: float = 1e-12) -> None:
+                 jitter: float = 1e-12,
+                 gates: float | dict[str, float] | None = None) -> None:
         """Args:
             track:   `{craft_name: SlotSet}` lower bound of what to estimate
                      (closed under the dynamics; the rest freezes). `None`
@@ -121,6 +123,10 @@ class UKF(_FilterBase):
                      iterated covariance, so roundoff can leave it
                      marginally indefinite; the jitter turns the NaN cliff
                      into a regularized factor. 0 disables.
+            gates:   optional normalized-innovation-squared threshold: one
+                     positive scalar for every sensor, or a mapping from
+                     sensor name/suffix to threshold. Rejection preserves
+                     the prior state and covariance.
 
         An *explicit* tuning that produces a negative central covariance
         weight (`w_c[0] < 0`) is accepted but warns: the covariance sums
@@ -137,6 +143,7 @@ class UKF(_FilterBase):
         sys = LinearizedSystem(world, track=track, sensors=sensors,
                                inputs=inputs, track_mode="closure")
         self._bind_system(world, sys)
+        resolved_gates = resolve_gates(sys, gates, who="UKF")
 
         n_tan = sys.spec.tangent_dim
         explicit_alpha = alpha is not None
@@ -196,20 +203,55 @@ class UKF(_FilterBase):
         # (x, P, z, u, t).
         x0 = initial_ambient(world, spec)
         updates: dict[str, ca.Function] = {}
+        diagnostic_updates: dict[str, ca.Function] = {}
+        override_updates: dict[str, ca.Function] = {}
         for ps in prepared_sensors(sys, spec, x0=x0, who="UKF"):
             measured = [ca.substitute(ps.h, x, Xi) for Xi in sigma_pts]
-            x_upd, P_upd, _, _ = ut_update(x, P, deltas, measured, ps.R,
-                                           ps.z, w_m, w_c, spec)
-            x_upd, P_upd = ca.cse([x_upd, P_upd])
+
+            threshold = resolved_gates[ps.full]
+
+            def expressions(R):
+                x_candidate, P_candidate, nu, S = ut_update(
+                    x, P, deltas, measured, R, ps.z, w_m, w_c, spec)
+                nis = ca.dot(nu, spd_solve(S, nu))
+                accepted = (ca.MX.ones(1, 1) if threshold is None
+                            else nis <= threshold)
+                return (ca.if_else(accepted, x_candidate, x),
+                        ca.if_else(accepted, P_candidate, P),
+                        nu, S, nis, accepted)
+
+            x_upd, P_upd, nu, S, nis, accepted = expressions(ps.R)
+            x_upd, P_upd, nu, S, nis, accepted = ca.cse(
+                [x_upd, P_upd, nu, S, nis, accepted])
             updates[ps.full] = ca.Function(
                 f"ukf_update_{entry_ident(ps.full)}",
                 [x, P, ps.z, u, t], [x_upd, P_upd],
                 ["x", "P", "z", "u", "t"], ["x_new", "P_new"])
+            diagnostic_updates[ps.full] = ca.Function(
+                f"ukf_update_diagnostic_{entry_ident(ps.full)}",
+                [x, P, ps.z, u, t],
+                [x_upd, P_upd, nu, S, nis, accepted],
+                ["x", "P", "z", "u", "t"],
+                ["x_new", "P_new", "innovation", "innovation_covariance",
+                 "nis", "accepted"])
+            R_override = ca.MX.sym(f"R_{entry_ident(ps.full)}", ps.dim,
+                                   ps.dim)
+            xo, Po, nuo, So, niso, acceptedo = expressions(R_override)
+            xo, Po, nuo, So, niso, acceptedo = ca.cse(
+                [xo, Po, nuo, So, niso, acceptedo])
+            override_updates[ps.full] = ca.Function(
+                f"ukf_update_with_R_{entry_ident(ps.full)}",
+                [x, P, ps.z, R_override, u, t],
+                [xo, Po, nuo, So, niso, acceptedo],
+                ["x", "P", "z", "R", "u", "t"],
+                ["x_new", "P_new", "innovation", "innovation_covariance",
+                 "nis", "accepted"])
 
         self._module = emit_filter_module(
             sys, spec, name=f"{world.name}_ukf", x0=x0,
             predict_fn=predict_fn, predict_q_fn=predict_q_fn,
-            updates=updates)
+            updates=updates, diagnostic_updates=diagnostic_updates,
+            override_updates=override_updates, gates=resolved_gates)
 
     # module() / n_blocks / observability() / sigma_horizon() / __repr__
     # are the shared `_FilterBase` analysis tail (estimation/_assembly.py).

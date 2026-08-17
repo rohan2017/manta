@@ -143,6 +143,10 @@ class Role(Enum):
                         value as default), so a caller that doesn't fit
                         anything can pass the defaults and recover the
                         baked-constant model exactly.
+    * ``DIAGNOSTIC``  — a return-only numeric diagnostic. Unlike OUTPUT it
+                        is not a structured recurrence readout, and unlike
+                        MEASUREMENT it is not a sensor channel that a filter
+                        may consume. Filters use it for innovation/NIS data.
     """
     CONTROL = "control"
     MEASUREMENT = "measurement"
@@ -153,6 +157,7 @@ class Role(Enum):
     OUTPUT = "output"
     MATRIX = "matrix"
     PARAMETER = "parameter"
+    DIAGNOSTIC = "diagnostic"
 
 
 #: Roles a Port may have when it appears as an EntryPoint ARGUMENT.
@@ -160,7 +165,7 @@ class Role(Enum):
 #: backend's argument dispatch must cover exactly this set — enforced by
 #: tests/test_role_dispatch.py, so growing the enum fails there instead
 #: of at a runtime fallback.
-ARG_ROLES = frozenset(Role) - {Role.OUTPUT}
+ARG_ROLES = frozenset(Role) - {Role.OUTPUT, Role.DIAGNOSTIC}
 
 
 @dataclass(frozen=True)
@@ -257,10 +262,13 @@ class Module:
     functions: Mapping[str, Any]              # {name: ca.Function}
     entry_points: tuple[EntryPoint, ...]
     hosting: Hosting = Hosting.THREADED
+    metadata: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "functions",
                            MappingProxyType(dict(self.functions)))
+        object.__setattr__(self, "metadata", MappingProxyType(
+            dict(self.metadata or {})))
         # `entry_ident` (dot → underscore) is not injective over dotted
         # names — `a_b.c` and `a.b_c` both flatten to `a_b_c`, which
         # would alias two entry points / kernel symbols / C++ methods

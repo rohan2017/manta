@@ -57,11 +57,13 @@ __version__ = _distribution_version("mantapilot")
 from . import ir, smoothing
 from .codegen import (
     CompilationError,
+    FilterCheckpoint,
     NoiseDriver,
     TargetCpp,
     TargetJax,
     TargetNumpy,
     TargetWasm,
+    UpdateResult,
     compile_functions,
 )
 from .control import (
@@ -98,8 +100,10 @@ __all__ = [
     "POSE",
     "TWIST",
     "UKF",
+    "UpdateResult",
     "CommandLatch",
     "CompilationError",
+    "FilterCheckpoint",
     "Coupling",
     "Craft",
     "Fit",

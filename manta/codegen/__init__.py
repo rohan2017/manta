@@ -29,6 +29,7 @@ Adding a backend = translate a `ca.Function` + one generic lowering of a
 from .cpp import TargetCpp
 from .numpy import (
     CompilationError,
+    FilterCheckpoint,
     NoiseDriver,
     NumpyFilter,
     NumpyRecurrence,
@@ -36,6 +37,7 @@ from .numpy import (
     NumpyRuntime,
     NumpySim,
     TargetNumpy,
+    UpdateResult,
     compile_functions,
 )
 from .wasm import TargetWasm
@@ -52,6 +54,7 @@ def TargetJax(x):
 
 __all__ = [
     "CompilationError",
+    "FilterCheckpoint",
     "NoiseDriver",
     "NumpyFilter",
     "NumpyRecurrence",
@@ -62,5 +65,6 @@ __all__ = [
     "TargetJax",
     "TargetNumpy",
     "TargetWasm",
+    "UpdateResult",
     "compile_functions",
 ]

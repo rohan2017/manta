@@ -13,7 +13,9 @@ filter argument through the helpers at the bottom of this file.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any
 
 import casadi as ca
@@ -38,6 +40,38 @@ class PreparedSensor:
     z: ca.MX
     h: ca.MX
     R: ca.MX
+
+
+def resolve_gates(sys, gates, *, who: str) -> dict[str, float | None]:
+    """Resolve construction-time NIS gates to full sensor names.
+
+    ``None`` disables gating, one positive scalar applies to every sensor,
+    and a mapping may use full or unambiguous suffix names. Unmentioned
+    sensors remain ungated. The threshold is deliberately part of the
+    generated estimator artifact: deployed and numpy filters cannot silently
+    disagree because of runtime-only policy.
+    """
+    out: dict[str, float | None] = {name: None for name in sys.sensors}
+    if gates is None:
+        return out
+    if isinstance(gates, (int, float)):
+        items = [(name, gates) for name in sys.sensors]
+    elif isinstance(gates, Mapping):
+        items = []
+        for name, value in gates.items():
+            full = resolve_suffix(name, list(sys.sensors), label="sensor",
+                                  who=who)
+            items.append((full, value))
+    else:
+        raise TypeError(f"{who}: gates must be None, a scalar, or a mapping")
+    for full, value in items:
+        threshold = float(value)
+        if not np.isfinite(threshold) or threshold <= 0.0:
+            raise ValueError(
+                f"{who}: NIS gate for {full!r} must be finite and > 0, "
+                f"got {value!r}")
+        out[full] = threshold
+    return out
 
 
 def initial_ambient(world, spec: StateSpec) -> np.ndarray:
@@ -81,14 +115,19 @@ def prepared_sensors(sys, spec: StateSpec, *, x0: np.ndarray,
 
 def emit_filter_module(sys, spec: StateSpec, *, name: str, x0: np.ndarray,
                        predict_fn: ca.Function, predict_q_fn: ca.Function,
-                       updates: dict[str, ca.Function]) -> Module:
+                       updates: dict[str, ca.Function],
+                       diagnostic_updates: dict[str, ca.Function],
+                       override_updates: dict[str, ca.Function],
+                       gates: dict[str, float | None]) -> Module:
     """The typed filter Module both twins emit — identical shape by
     construction:
 
         state    x  (manifold)              P  (tangent covariance)
         entries  predict(x,P, u,dt,t)              — auto process noise
                  predict_with_Q(x,P, Q,u,dt,t)     — explicit-Q override
-                 update_<sensor>(x,P, z,u,t)       — one per chosen sensor
+                 update_<sensor>(x,P, z,u,t)       — compatible state fold
+                 update_diagnostic_<sensor>(...)  — fold + innovation/NIS
+                 update_with_R_<sensor>(...,R,...) — per-sample covariance
     """
     n_tan = spec.tangent_dim
     fields = (
@@ -121,15 +160,44 @@ def emit_filter_module(sys, spec: StateSpec, *, name: str, x0: np.ndarray,
         ident = entry_ident(full)
         ports.append(Port(full, Role.MEASUREMENT, (s.dim,),
                           rate=sys.sample_rates.get(full)))
+        r_name = f"R_{ident}"
+        innovation = f"innovation_{ident}"
+        innovation_cov = f"innovation_covariance_{ident}"
+        nis = f"nis_{ident}"
+        accepted = f"accepted_{ident}"
+        ports.extend((
+            Port(r_name, Role.MATRIX, (s.dim, s.dim)),
+            Port(innovation, Role.DIAGNOSTIC, (s.dim,)),
+            Port(innovation_cov, Role.DIAGNOSTIC, (s.dim, s.dim)),
+            Port(nis, Role.DIAGNOSTIC, (1,)),
+            Port(accepted, Role.DIAGNOSTIC, (1,)),
+        ))
         functions[f"update_{ident}"] = updates[full]
+        functions[f"update_diagnostic_{ident}"] = diagnostic_updates[full]
+        functions[f"update_with_R_{ident}"] = override_updates[full]
         entries.append(EntryPoint(
             f"update_{ident}", f"update_{ident}",
             (StateRef("x"), StateRef("P"), PortRef(full),
              PortRef("u"), PortRef("t")),
             writes=("x", "P")))
+        returns = (innovation, innovation_cov, nis, accepted)
+        entries.append(EntryPoint(
+            f"update_diagnostic_{ident}", f"update_diagnostic_{ident}",
+            (StateRef("x"), StateRef("P"), PortRef(full),
+             PortRef("u"), PortRef("t")),
+            writes=("x", "P"), returns=returns))
+        entries.append(EntryPoint(
+            f"update_with_R_{ident}", f"update_with_R_{ident}",
+            (StateRef("x"), StateRef("P"), PortRef(full), PortRef(r_name),
+             PortRef("u"), PortRef("t")),
+            writes=("x", "P"), returns=returns))
+    # Keep deploy/runtime metadata out of naming conventions. Backends and
+    # consumers can inspect this immutable map directly.
+    metadata = {"nis_gates": MappingProxyType(dict(gates))}
     return Module(name=name, state=StateLayout(fields),
                   ports=tuple(ports), functions=functions,
-                  entry_points=tuple(entries), hosting=Hosting.HELD)
+                  entry_points=tuple(entries), hosting=Hosting.HELD,
+                  metadata=metadata)
 
 
 def _q_auto(sys) -> ca.MX:

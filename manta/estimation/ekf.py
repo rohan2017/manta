@@ -47,9 +47,10 @@ from ..ir.state_spec import StateSpec
 from ..linearization import LinearizedSystem
 from ._assembly import (
     _FilterBase, _q_auto, emit_filter_module, initial_ambient,
-    prepared_sensors,
+    prepared_sensors, resolve_gates,
 )
 from ._kalman import joseph_update, symmetrize
+from ..ir._linalg import spd_solve
 
 
 class EKF(_FilterBase):
@@ -61,7 +62,8 @@ class EKF(_FilterBase):
                  track: dict | None = None,
                  sensors: list[str] | None = None,
                  inputs: list[str] | None = None,
-                 discretization: str = "exact") -> None:
+                 discretization: str = "exact",
+                 gates: float | dict[str, float] | None = None) -> None:
         """Args:
             track:   `{craft_name: SlotSet}` lower bound of what to estimate
                      (closed under the dynamics; the rest freezes). `None`
@@ -74,11 +76,17 @@ class EKF(_FilterBase):
                      (default; jacobian of the full discrete tick) or
                      "euler" (F = I + dt·∂ẋ/∂δ; O(dt²) from exact, much
                      smaller generated deploy code). See LinearizedSystem.
+            gates:   optional normalized-innovation-squared threshold: one
+                     positive scalar for every sensor, or a mapping from
+                     sensor name/suffix to threshold. Rejected updates leave
+                     both state and covariance unchanged while still
+                     returning their innovation diagnostics.
         """
         sys = LinearizedSystem(world, track=track, sensors=sensors,
                                inputs=inputs, track_mode="closure",
                                discretization=discretization)
         self._bind_system(world, sys)
+        resolved_gates = resolve_gates(sys, gates, who="EKF")
 
         # ---- the Kalman recursion, symbolically, once -------------------
         spec, n_tan = sys.spec, sys.spec.tangent_dim
@@ -107,19 +115,50 @@ class EKF(_FilterBase):
         x0 = initial_ambient(world, spec)
         zero_dt = ca.MX.zeros(1, 1)
         updates: dict[str, ca.Function] = {}
+        diagnostic_updates: dict[str, ca.Function] = {}
+        override_updates: dict[str, ca.Function] = {}
         for ps in prepared_sensors(sys, spec, x0=x0, who="EKF"):
             H = ca.substitute(sys.sensors[ps.full].H_sym, dt, zero_dt)
-            x_upd, P_upd, _, _ = joseph_update(x, P, ps.h, H, ps.R, ps.z,
-                                               spec)
+            threshold = resolved_gates[ps.full]
+
+            def expressions(R):
+                x_candidate, P_candidate, nu, S = joseph_update(
+                    x, P, ps.h, H, R, ps.z, spec)
+                nis = ca.dot(nu, spd_solve(S, nu))
+                accepted = (ca.MX.ones(1, 1) if threshold is None
+                            else nis <= threshold)
+                x_result = ca.if_else(accepted, x_candidate, x)
+                P_result = ca.if_else(accepted, P_candidate, P)
+                return x_result, P_result, nu, S, nis, accepted
+
+            x_upd, P_upd, nu, S, nis, accepted = expressions(ps.R)
             updates[ps.full] = ca.Function(
                 f"ekf_update_{entry_ident(ps.full)}",
                 [x, P, ps.z, u, t], [x_upd, P_upd],
                 ["x", "P", "z", "u", "t"], ["x_new", "P_new"])
+            diagnostic_updates[ps.full] = ca.Function(
+                f"ekf_update_diagnostic_{entry_ident(ps.full)}",
+                [x, P, ps.z, u, t],
+                [x_upd, P_upd, nu, S, nis, accepted],
+                ["x", "P", "z", "u", "t"],
+                ["x_new", "P_new", "innovation", "innovation_covariance",
+                 "nis", "accepted"])
+            R_override = ca.MX.sym(f"R_{entry_ident(ps.full)}", ps.dim,
+                                   ps.dim)
+            xo, Po, nuo, So, niso, acceptedo = expressions(R_override)
+            override_updates[ps.full] = ca.Function(
+                f"ekf_update_with_R_{entry_ident(ps.full)}",
+                [x, P, ps.z, R_override, u, t],
+                [xo, Po, nuo, So, niso, acceptedo],
+                ["x", "P", "z", "R", "u", "t"],
+                ["x_new", "P_new", "innovation", "innovation_covariance",
+                 "nis", "accepted"])
 
         self._module = emit_filter_module(
             sys, spec, name=f"{world.name}_ekf", x0=x0,
             predict_fn=predict_fn, predict_q_fn=predict_q_fn,
-            updates=updates)
+            updates=updates, diagnostic_updates=diagnostic_updates,
+            override_updates=override_updates, gates=resolved_gates)
 
     # module() / n_blocks / observability() / sigma_horizon() / __repr__
     # are the shared `_FilterBase` analysis tail (estimation/_assembly.py).

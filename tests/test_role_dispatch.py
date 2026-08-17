@@ -1,7 +1,8 @@
 """Backend Role-dispatch exhaustiveness.
 
-`manta.ir.module.ARG_ROLES` is the contract: every Role except OUTPUT
-(return-only) may appear as an EntryPoint argument, and each backend's
+`manta.ir.module.ARG_ROLES` is the contract: every Role except the
+return-only OUTPUT and DIAGNOSTIC roles may appear as an EntryPoint argument,
+and each backend's
 argument dispatch must cover all of them. Growing the `Role` enum makes
 these tests fail at the contract, instead of surfacing as a
 NotImplementedError deep inside a backend at lowering time.
@@ -32,8 +33,8 @@ def _fake_ctx(port: Port) -> SimpleNamespace:
     )
 
 
-def test_arg_roles_is_role_minus_output():
-    assert ARG_ROLES == frozenset(Role) - {Role.OUTPUT}
+def test_arg_roles_excludes_return_only_roles():
+    assert ARG_ROLES == frozenset(Role) - {Role.OUTPUT, Role.DIAGNOSTIC}
 
 
 def test_cpp_param_dispatch_covers_every_arg_role():

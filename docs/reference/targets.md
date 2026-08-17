@@ -27,6 +27,10 @@ The view `TargetNumpy(x)` returns is determined by the Module's shape.
 
 ::: manta.codegen.NumpyFilter
 
+::: manta.FilterCheckpoint
+
+::: manta.UpdateResult
+
 ::: manta.codegen.NumpyRegulator
 
 ::: manta.codegen.NumpyRecurrence
