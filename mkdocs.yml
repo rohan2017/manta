@@ -102,4 +102,5 @@ nav:
       - Estimation filters and analysis: reference/estimation.md
       - System identification: reference/fit.md
       - Targets and runtimes: reference/targets.md
+      - Simulation-only plants: reference/simulation.md
       - IR primitives: reference/ir.md
