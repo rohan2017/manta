@@ -88,6 +88,7 @@ nav:
       - Deploy a model to C++: how-to/deploy-cpp.md
       - Run a model in the browser (WASM): how-to/deploy-wasm.md
       - Fit parameters from a log: how-to/fit-parameters.md
+      - Model a displacement hull: how-to/displacement-hull.md
       - Write a custom Part: how-to/custom-part.md
       - Write a custom Field or Disturbance: how-to/custom-field.md
   - API reference:

@@ -15,6 +15,7 @@ from .base import CompositePart, Part, PartRole, RootPart
 from ..ir.wrench import Wrench
 from .structure.mass import Mass
 from .structure.point_buoy import PointBuoy
+from .structure.displacement_hull import DisplacementHull, HullSample
 from .structure.collider import Collider
 from .articulation.joint import (ArticulatedJoint, PrismaticJoint,
                                  RevoluteDOF, RevoluteJoint)
@@ -49,7 +50,8 @@ __all__ = [
     "Parameter", "Input", "Output", "State", "PartUpdate",
     "Noise", "WhiteNoise", "RandomWalkNoise", "unit_axis",
     "Wrench",
-    "Mass", "PointBuoy", "Collider", "ThermalMass",
+    "Mass", "PointBuoy", "Collider", "DisplacementHull", "HullSample",
+    "ThermalMass",
     "ArticulatedJoint", "Motor", "PrismaticJoint", "RevoluteDOF",
     "RevoluteJoint",
     "Antenna", "IMU", "VelocitySensor", "Magnetometer", "PositionSensor", "Barometer",

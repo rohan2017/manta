@@ -29,6 +29,8 @@ a craft.
 
 ::: manta.parts.PointBuoy
 
+::: manta.parts.DisplacementHull
+
 ::: manta.parts.Collider
 
 ::: manta.parts.ThermalMass
