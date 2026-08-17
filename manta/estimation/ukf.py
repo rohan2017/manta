@@ -66,14 +66,18 @@ import warnings
 
 import casadi as ca
 
+from ..ir._linalg import spd_solve
 from ..ir.module import entry_ident
 from ..linearization import LinearizedSystem
 from ._assembly import (
-    _FilterBase, _q_auto, emit_filter_module, initial_ambient,
-    prepared_sensors, resolve_gates,
+    _FilterBase,
+    _q_auto,
+    emit_filter_module,
+    initial_ambient,
+    prepared_sensors,
+    resolve_gates,
 )
 from ._kalman import sigma_deltas, unscented_weights, ut_predict, ut_update
-from ..ir._linalg import spd_solve
 
 
 class UKF(_FilterBase):
@@ -210,7 +214,9 @@ class UKF(_FilterBase):
 
             threshold = resolved_gates[ps.full]
 
-            def expressions(R):
+            def expressions(
+                R, measured=measured, ps=ps, threshold=threshold
+            ):
                 x_candidate, P_candidate, nu, S = ut_update(
                     x, P, deltas, measured, R, ps.z, w_m, w_c, spec)
                 nis = ca.dot(nu, spd_solve(S, nu))

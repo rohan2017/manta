@@ -27,16 +27,15 @@ from pathlib import Path
 
 import numpy as np
 
+from ...ir.module import Hosting, PortRef, Role, StateRef
+from ...ir.module import entry_ident as _ident
+from ..target import for_role
 from . import _structs as S
 from ._casadi import densify as _densify
 from ._casadi import emit_kernel_call as _call
 from .cmake import emit_cmakelists
 from .kernels import emit_kernel_list
 from .types import cpp_type_for
-from ..target import for_role
-from ...ir.module import Hosting, PortRef, Role, StateRef
-from ...ir.module import entry_ident as _ident
-
 
 # ---------------------------------------------------------------------------
 # Resolved per-module context
@@ -210,7 +209,12 @@ def _params(ep, ctx, *, decl: bool) -> list[str]:
                 break
     for a in ep.args:
         if isinstance(a, PortRef):
-            out.append(_param_for(ctx.port(a.name), decl, ctx))
+            parameter = _param_for(ctx.port(a.name), decl, ctx)
+            if parameter is None:
+                raise TypeError(
+                    f"entry {ep.method!r} port {a.name!r} has no C++ parameter"
+                )
+            out.append(parameter)
     return out
 
 

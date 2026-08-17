@@ -42,15 +42,19 @@ from __future__ import annotations
 
 import casadi as ca
 
+from ..ir._linalg import spd_solve
 from ..ir.module import entry_ident
 from ..ir.state_spec import StateSpec
 from ..linearization import LinearizedSystem
 from ._assembly import (
-    _FilterBase, _q_auto, emit_filter_module, initial_ambient,
-    prepared_sensors, resolve_gates,
+    _FilterBase,
+    _q_auto,
+    emit_filter_module,
+    initial_ambient,
+    prepared_sensors,
+    resolve_gates,
 )
 from ._kalman import joseph_update, symmetrize
-from ..ir._linalg import spd_solve
 
 
 class EKF(_FilterBase):
@@ -121,7 +125,7 @@ class EKF(_FilterBase):
             H = ca.substitute(sys.sensors[ps.full].H_sym, dt, zero_dt)
             threshold = resolved_gates[ps.full]
 
-            def expressions(R):
+            def expressions(R, ps=ps, H=H, threshold=threshold):
                 x_candidate, P_candidate, nu, S = joseph_update(
                     x, P, ps.h, H, R, ps.z, spec)
                 nis = ca.dot(nu, spd_solve(S, nu))

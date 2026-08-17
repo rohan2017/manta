@@ -21,11 +21,12 @@ any backend or transform. Each transform's `.module()` produces it.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from math import prod
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any
 
 
 def entry_ident(name: str) -> str:
@@ -304,7 +305,7 @@ class Module:
     def ports_by_role(self, role: Role) -> tuple[Port, ...]:
         return tuple(p for p in self.ports if p.role is role)
 
-    def sole_port(self, role: Role) -> "Port | None":
+    def sole_port(self, role: Role) -> Port | None:
         """The single Port of `role`, or None when there is none. Raises on
         duplicates rather than silently picking one (per-channel roles like
         MEASUREMENT go through `ports_by_role`) — except STATE, where

@@ -21,12 +21,21 @@ from typing import Any
 import casadi as ca
 import numpy as np
 
+from ..ir._names import resolve_suffix
 from ..ir.module import (
-    EntryPoint, Hosting, Module, Port, PortField, PortRef, Role, StateField,
-    StateLayout, StateRef, entry_ident,
+    EntryPoint,
+    Hosting,
+    Module,
+    Port,
+    PortField,
+    PortRef,
+    Role,
+    StateField,
+    StateLayout,
+    StateRef,
+    entry_ident,
 )
 from ..ir.state_spec import StateSpec, flatten_nested
-from ..ir._names import resolve_suffix
 from ._kalman import lin_cov, require_active_R
 
 
@@ -217,6 +226,8 @@ class _FilterBase:
     between the twins. The analysis is *linearized* either way (it reads
     the shared `LinearizedSystem`), which is exactly why it is shared."""
 
+    _module: Module
+
     def _bind_system(self, world, sys) -> None:
         """The ctor attribute block both filters open with."""
         self.sys = sys
@@ -274,7 +285,7 @@ def _resolve_estimator(world, estimator):
     (`observability_trajectory`, `nees`): an `EKF`/`UKF` *instance* over
     `world`, or a class/callable applied to it; `None` defaults to `EKF`."""
     if estimator is None:
-        from .ekf import EKF          # deferred — ekf.py imports this module
+        from .ekf import EKF  # deferred — ekf.py imports this module
         estimator = EKF
     return _resolve_ir(estimator if not callable(estimator)
                        else estimator(world))

@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 import casadi as ca
 import numpy as np
 
 from ..._validation import require_finite, require_positive
 from ...estimation._kalman import joseph_update_np
-from ...ir.module import entry_ident
 from ...ir._names import resolve_suffix
+from ...ir.module import entry_ident
 from ._runtime import NumpyRuntime
 
 
