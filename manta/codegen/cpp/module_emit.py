@@ -55,6 +55,9 @@ class _Ctx:
         self.y_port = module.sole_port(Role.OUTPUT)
         self.x_port = module.sole_port(Role.STATE)
         self.x_init = module.initial_x      # manifold init → struct defaults
+        self.has_clock = self.held and any(
+            isinstance(a, PortRef) and module.port(a.name).role is Role.TIME
+            for ep in module.entry_points for a in ep.args)
 
     def port(self, name):
         return self.m.port(name)
@@ -180,7 +183,8 @@ def _port_abi(port, ctx, *, decl: bool = False) -> _PortABI:
             scalar_or_data("params", _buf_dim(port.size))),
         Role.TIMESTEP: lambda: _PortABI("double dt", "dt", "&dt"),
         Role.TIME: lambda: _PortABI(
-            "double t = 0.0" if decl else "double t", "t", "&t"),
+            ("double t = 0.0" if decl and not ctx.held else "double t"),
+            "t", "&t"),
         Role.STATE: lambda: _PortABI(
             "const State& x" if port is ctx.x_port
             else f"const State& {_ident(port.name)}",
@@ -368,6 +372,24 @@ def _ref_overloads(ep, ctx) -> list[str]:
     return out
 
 
+def _clock_overload(ep, ctx) -> str | None:
+    """Held modules own logical time; omit a trailing TIME argument by
+    forwarding the runtime's clock. Predict-like methods resynchronize and
+    advance the clock in their primary method body."""
+    if not ctx.has_clock or not ep.args or not isinstance(ep.args[-1], PortRef):
+        return None
+    if ctx.port(ep.args[-1].name).role is not Role.TIME:
+        return None
+    kept = replace(ep, args=ep.args[:-1])
+    params = ", ".join(_params(kept, ctx, decl=True))
+    names = [_param_name(a, ctx) for a in kept.args if isinstance(a, PortRef)]
+    call = ", ".join(names + ["logical_time_"])
+    ret = _ret_type(ep, ctx)
+    invoke = f"{ep.method}({call})"
+    body = f"{invoke};" if ret == "void" else f"return {invoke};"
+    return f"{ret} {ep.method}({params}){_const(ep, ctx)} {{ {body} }}"
+
+
 # ---------------------------------------------------------------------------
 # Method bodies (typed-arg gather → kernel call → scatter/return)
 # ---------------------------------------------------------------------------
@@ -478,6 +500,10 @@ def _body_return(ep, ctx, reads, writes_manifold, composite, ret_bufs,
         L.append("    unpack_state(x_out, x);")
     for w in matrix_writes:
         L.append(f"    {w} = {w}_out;")
+    roles = {ctx.port(a.name).role for a in ep.args
+             if isinstance(a, PortRef)}
+    if ctx.has_clock and Role.TIME in roles and Role.TIMESTEP in roles:
+        L.append("    logical_time_ = t + dt;")
 
     rt = _ret_type(ep, ctx)
     if rt == "void":
@@ -572,18 +598,32 @@ def emit_module_cpp(module, out_dir, *, class_name: str,
         if _is_composite(ep, ctx):
             H += _result_struct(ep, ctx) + [""]
     if ctx.held:
+        if ctx.has_clock:
+            H += ["    struct Checkpoint {", "        State x;"]
+            for mf in ctx.mats:
+                H.append(f"        Cov {mf.name};")
+            H += ["        double time;", "    };", ""]
         H.append("    State x;")
         for mf in ctx.mats:
             H.append(f"    Cov {mf.name};")
+        if ctx.has_clock:
+            H.append("    double logical_time_ = 0.0;")
         H += ["", f"    {q}();"]
         if ctx.mats:
             H.append("    void reset(const State& x0, const Cov& P0);")
         else:
-            H.append("    void reset(const State& x0) { x = x0; }")
+            reset = "x = x0;"
+            if ctx.has_clock:
+                reset += " logical_time_ = 0.0;"
+            H.append(f"    void reset(const State& x0) {{ {reset} }}")
         H.append("    const State& state() const { return x; }")
         for mf in ctx.mats:
             H.append(f"    const Cov& covariance() const "
                      f"{{ return {mf.name}; }}")
+        if ctx.has_clock:
+            H += ["    double time() const { return logical_time_; }",
+                  "    Checkpoint checkpoint() const;",
+                  "    void restore(const Checkpoint& checkpoint);"]
         H.append("")
     elif ctx.spec is not None:
         H += ["    State initial_state() const { return State{}; }", ""]
@@ -592,6 +632,9 @@ def emit_module_cpp(module, out_dir, *, class_name: str,
         H.append("")
     for ep in entries:
         H.append(f"    {_method_decl(ep, ctx)};")
+        clock_overload = _clock_overload(ep, ctx)
+        if clock_overload is not None:
+            H.append(f"    {clock_overload}")
         for ov in _ref_overloads(ep, ctx):
             H.append(f"    {ov}")
     H += ["};", "", f"}}  // namespace {namespace}"]
@@ -618,7 +661,19 @@ def emit_module_cpp(module, out_dir, *, class_name: str,
                              + [f"const Cov& {mf.name}0" for mf in ctx.mats])
             sets = " ".join(["x = x0;"]
                             + [f"{mf.name} = {mf.name}0;" for mf in ctx.mats])
+            if ctx.has_clock:
+                sets += " logical_time_ = 0.0;"
             C += [f"void {q}::reset({args}) {{ {sets} }}", ""]
+        if ctx.has_clock:
+            checkpoint_values = ["x"] + [mf.name for mf in ctx.mats]
+            checkpoint_values.append("logical_time_")
+            C += [f"{q}::Checkpoint {q}::checkpoint() const {{",
+                  f"    return Checkpoint{{{', '.join(checkpoint_values)}}};",
+                  "}", "", f"void {q}::restore(const Checkpoint& c) {{",
+                  "    x = c.x;"]
+            for mf in ctx.mats:
+                C.append(f"    {mf.name} = c.{mf.name};")
+            C += ["    logical_time_ = c.time;", "}", ""]
     for ep in entries:
         C += [f"{_method_def_head(ep, ctx, q)} {{"]
         C += _method_body(ep, ctx)

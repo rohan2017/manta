@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Callable
 
 import casadi as ca
@@ -12,6 +13,32 @@ from ...estimation._kalman import joseph_update_np
 from ...ir.module import entry_ident
 from ...ir._names import resolve_suffix
 from ._runtime import NumpyRuntime
+
+
+@dataclass(frozen=True)
+class FilterCheckpoint:
+    """Complete restart point for a filter runtime.
+
+    Arrays are owned snapshots rather than views into the live runtime.
+    ``time`` is the filter's logical model time, not a wall clock.
+    """
+
+    x: np.ndarray
+    P: np.ndarray
+    time: float
+
+
+@dataclass(frozen=True)
+class UpdateResult:
+    """Diagnostics and disposition of one measurement fold."""
+
+    sensor: str
+    innovation: np.ndarray
+    innovation_covariance: np.ndarray
+    nis: float
+    accepted: bool
+    gate: float | None
+    covariance_overridden: bool
 
 
 class NumpyFilter(NumpyRuntime):
@@ -55,6 +82,11 @@ class NumpyFilter(NumpyRuntime):
     def estimate_vector(self) -> np.ndarray:
         return self._state["x"]
 
+    @property
+    def time(self) -> float:
+        """Current logical filter time (advanced only by ``predict``)."""
+        return self._t
+
     def state_dict(self) -> dict[str, dict[str, Any]]:
         """Current estimate nested by owner."""
         return self._spec.to_nested(self._state["x"])
@@ -84,6 +116,40 @@ class NumpyFilter(NumpyRuntime):
                     f"reset: P shape {P.shape} doesn't match tangent dim "
                     f"{expected}")
             self._state["P"] = P.copy()
+
+    def checkpoint(self) -> FilterCheckpoint:
+        """Capture nominal state, covariance, and logical time atomically."""
+        return FilterCheckpoint(self._state["x"].copy(),
+                                self._state["P"].copy(), float(self._t))
+
+    def restore(self, checkpoint: FilterCheckpoint) -> None:
+        """Restore a checkpoint after strict shape/finite validation.
+
+        Restore never partially mutates the live filter: all values are
+        validated and copied before any runtime field changes.
+        """
+        if not isinstance(checkpoint, FilterCheckpoint):
+            raise TypeError("restore: expected FilterCheckpoint")
+        x = np.asarray(checkpoint.x, dtype=float)
+        P = np.asarray(checkpoint.P, dtype=float)
+        expected_x = (self._spec.ambient_dim,)
+        expected_P = (self._spec.tangent_dim, self._spec.tangent_dim)
+        if x.shape != expected_x:
+            raise ValueError(
+                f"restore: x shape {x.shape} doesn't match {expected_x}")
+        if P.shape != expected_P:
+            raise ValueError(
+                f"restore: P shape {P.shape} doesn't match {expected_P}")
+        t = float(checkpoint.time)
+        if not np.all(np.isfinite(x)) or not np.all(np.isfinite(P)) \
+                or not np.isfinite(t):
+            raise ValueError("restore: checkpoint contains non-finite values")
+        if not np.allclose(P, P.T, rtol=1e-10, atol=1e-12):
+            raise ValueError("restore: P must be symmetric")
+        if np.linalg.eigvalsh(P).min() < -1e-12:
+            raise ValueError("restore: P must be positive semidefinite")
+        new_x, new_P = x.copy(), P.copy()
+        self._state["x"], self._state["P"], self._t = new_x, new_P, t
 
     def set_state_keep_covariance(self, state: dict) -> None:
         """Replace the nominal state while preserving covariance and clock.
@@ -124,11 +190,13 @@ class NumpyFilter(NumpyRuntime):
         self._t = t0 + dt
 
     def update(self, target, z=None, R=None, *, t: float | None = None,
-               u: dict[str, Any] | None = None) -> None:
+               u: dict[str, Any] | None = None) -> UpdateResult:
         """Fold one measurement at the current state.
 
         * `update("gps.position", z)` — by sensor name (full or suffix),
-          through the baked Joseph-update kernel.
+          through the baked covariance and gate.
+        * `update("gps.position", z, R=sample_R)` — typed per-sample
+          covariance override through the deployable Module entry point.
         * `update(h_sym, z, R=R)` — a caller-supplied `h(x)` callable +
           measurement covariance (custom measurements; numpy-only).
 
@@ -139,10 +207,10 @@ class NumpyFilter(NumpyRuntime):
             if z is None or R is None:
                 raise TypeError("update(h_sym, z, R=...): z and R required")
             return self._update_custom(target, z, R)
-        self._fold_sensor(self._resolve_sensor(target), z,
-                          self.build_u(u),
-                          t=self._t if t is None else float(require_finite(
-                              t, name=f"{type(self).__name__}.update t")))
+        return self._fold_sensor(
+            self._resolve_sensor(target), z, self.build_u(u), R=R,
+            t=self._t if t is None else float(require_finite(
+                t, name=f"{type(self).__name__}.update t")))
 
     # ---- kernels ---------------------------------------------------------
 
@@ -161,16 +229,55 @@ class NumpyFilter(NumpyRuntime):
                               label="sensor", who=type(self).__name__)
 
     def _fold_sensor(self, full: str, z, u_vec: np.ndarray, *,
-                     t: float = 0.0) -> None:
-        """Fold one measurement (full sensor name) through its baked kernel."""
+                     R=None, t: float = 0.0) -> UpdateResult:
+        """Fold a sensor and return the generated kernel's diagnostics."""
         port = self.module.port(full)
         z_arr = np.atleast_1d(np.asarray(z, dtype=float)).reshape(-1)
         if z_arr.size != port.size:
             raise ValueError(
                 f"update {full}: expected z of size {port.size}, got "
                 f"{z_arr.size}.")
-        self._run(self.module.entry(f"update_{entry_ident(full)}"),
-                  {full: z_arr, "u": u_vec, "t": t})
+        ident = entry_ident(full)
+        values = {full: z_arr, "u": u_vec, "t": t}
+        if R is None:
+            method = f"update_diagnostic_{ident}"
+        else:
+            R = self._validate_measurement_covariance(R, port.size, full)
+            method = f"update_with_R_{ident}"
+            values[f"R_{ident}"] = R
+        result = self._run(self.module.entry(method), values)
+        gate = self.module.metadata.get("nis_gates", {}).get(full)
+        return UpdateResult(
+            sensor=full,
+            innovation=np.asarray(result[f"innovation_{ident}"], dtype=float)
+            .reshape(-1).copy(),
+            innovation_covariance=np.asarray(
+                result[f"innovation_covariance_{ident}"], dtype=float).copy(),
+            nis=float(np.asarray(result[f"nis_{ident}"]).reshape(-1)[0]),
+            accepted=bool(
+                np.asarray(result[f"accepted_{ident}"]).reshape(-1)[0]),
+            gate=gate,
+            covariance_overridden=R is not None,
+        )
+
+    @staticmethod
+    def _validate_measurement_covariance(R, dim: int,
+                                         full: str) -> np.ndarray:
+        R = np.asarray(R, dtype=float)
+        if R.shape != (dim, dim):
+            raise ValueError(
+                f"update {full}: R shape {R.shape} doesn't match "
+                f"{(dim, dim)}")
+        if not np.all(np.isfinite(R)):
+            raise ValueError(f"update {full}: R contains non-finite values")
+        if not np.allclose(R, R.T, rtol=1e-10, atol=1e-12):
+            raise ValueError(f"update {full}: R must be symmetric")
+        try:
+            np.linalg.cholesky(R)
+        except np.linalg.LinAlgError as exc:
+            raise ValueError(
+                f"update {full}: R must be positive definite") from exc
+        return R.copy()
 
     def _custom_h_fns(self, h_sym: Callable):
         """The `(h, H)` `ca.Function` pair for a caller-supplied `h(x)`,
@@ -200,15 +307,11 @@ class NumpyFilter(NumpyRuntime):
             pass
         return fns
 
-    def _update_custom(self, h_sym: Callable, z, R) -> None:
+    def _update_custom(self, h_sym: Callable, z, R) -> UpdateResult:
         """Joseph update for a caller-supplied `h(x)` — built on the spec's
         manifold ops; the one genuinely runtime-defined measurement."""
         spec = self._spec
         z = np.asarray(z, dtype=float).reshape(-1)
-        R = np.asarray(R, dtype=float)
-        if R.shape != (z.size, z.size):
-            raise ValueError(
-                f"update: R shape {R.shape} doesn't match z size {z.size}")
         h_fn, H_fn = self._custom_h_fns(h_sym)
         x_now = self._state["x"]
         h_x = np.asarray(h_fn(x_now)).reshape(-1)
@@ -216,8 +319,12 @@ class NumpyFilter(NumpyRuntime):
         if h_x.size != z.size:
             raise ValueError(
                 f"update: h(x) size {h_x.size} doesn't match z size {z.size}")
-        x_new, P_new, _, _ = joseph_update_np(
+        R = self._validate_measurement_covariance(R, z.size, "custom")
+        x_new, P_new, innovation, S = joseph_update_np(
             self._state["P"], H, R,
             x=x_now, z=z, h=h_x, boxplus=spec.boxplus_num)
         self._state["x"] = x_new
         self._state["P"] = P_new
+        nis = float(innovation @ np.linalg.solve(S, innovation))
+        return UpdateResult("custom", innovation.copy(), S.copy(), nis,
+                            True, None, True)

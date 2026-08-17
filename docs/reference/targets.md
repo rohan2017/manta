@@ -9,6 +9,8 @@ emits a jitted rollout.
 
 ::: manta.TargetNumpy
 
+::: manta.TargetFilterReplay
+
 ::: manta.TargetCpp
 
 ::: manta.TargetWasm
@@ -26,6 +28,14 @@ The view `TargetNumpy(x)` returns is determined by the Module's shape.
 ::: manta.codegen.NumpySim
 
 ::: manta.codegen.NumpyFilter
+
+::: manta.FilterCheckpoint
+
+::: manta.UpdateResult
+
+::: manta.FilterReplayProgram
+
+::: manta.FilterReplayResult
 
 ::: manta.codegen.NumpyRegulator
 
