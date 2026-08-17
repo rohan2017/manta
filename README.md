@@ -130,7 +130,8 @@ scope:
   i.i.d. Gaussian noise. `RandomWalkNoise(...)` — RW bias state
   (synthesizes its own state slot + driver input). Both subclass `Noise`.
 
-Stock parts: `Mass`, `PointBuoy`, `Collider`, `Thruster` (polynomial
+Stock parts: `Mass`, `PointBuoy`, `DisplacementHull` (a distributed,
+surface-piercing buoyancy/drag composite), `Collider`, `Thruster` (polynomial
 in throttle), `RevoluteJoint` and `PrismaticJoint` (1-DOF joints, with Mass children for
 rotors), `Motor` (voltage-commanded DC motor on a revolute DOF:
 back-EMF torque-speed rolloff, current limit, gearbox),

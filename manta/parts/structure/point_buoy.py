@@ -14,10 +14,10 @@ omits the buoy. With Part.mount_offset set to a
 non-zero offset, the framework's wrench-at-offset lift rolls the force
 up into the parent's torque automatically.
 
-A future Hull part will be a multi-sample version: a list of points
-distributing the buoyancy across the submerged shape. With enough
-samples + a smooth water/air boundary, surface-crossing torques (the
-"righting moment" of a hull) emerge naturally.
+``DisplacementHull`` is the stock multi-sample composition: it distributes
+``PointBuoy`` and ``DragSurface`` children through a calibrated ellipsoidal
+envelope. With enough samples and a smooth water/air boundary,
+surface-crossing torques (the "righting moment" of a hull) emerge naturally.
 """
 
 from __future__ import annotations

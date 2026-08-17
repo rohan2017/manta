@@ -10,6 +10,8 @@ done.
   Module to a WebAssembly + JS bundle via Emscripten.
 - **[Fit parameters from a log](fit-parameters.md)** — system-ID against
   recorded controls + measurements.
+- **[Model a displacement hull](displacement-hull.md)** — calibrate a
+  distributed, surface-piercing hydrostatic and drag model.
 - **[Write a custom Part](custom-part.md)** — add a new part with its own
   state, inputs, and wrench contribution.
 - **[Write a custom Field or Disturbance](custom-field.md)** — add a new
