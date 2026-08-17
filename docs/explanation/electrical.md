@@ -12,6 +12,69 @@ It is not SPICE. AC behavior, arbitrary circuit loops, parallel source
 sharing, reverse current and charging require an implicit circuit solve and
 are outside this model.
 
+## Series battery packs
+
+Battery chemistry, BMS latches, and fault injection are simulation-only Python
+state. They intentionally do not become Manta `Part` states: a navigation
+filter, controller, or generated deploy model should not acquire twelve SOC
+states merely because the simulation is realistic.
+
+```python
+from manta.simulation import (
+    BatteryCell, BatteryCellFaults, BatteryStepInput, OCVCurve,
+    PassiveBalancer, SeriesBatteryPack,
+)
+
+cells = [BatteryCell(usable_capacity_ah=30.0) for _ in range(12)]
+pack = SeriesBatteryPack(
+    cells, initial_soc=[0.94] * 12,
+    balancers=[PassiveBalancer(cell_index=i) for i in range(12)],
+    seed=7,
+)
+tick = BatteryStepInput(
+    requested_series_current=8.0,
+    cell_temperatures=(298.15,) * 12,
+    cell_faults=(BatteryCellFaults(),) * 12,
+    balance_enabled=(False,) * 12,
+)
+telemetry = pack.step(0.01, tick)
+```
+
+`OCVCurve` is calibrated with piecewise-linear SOC/voltage points. Pack
+stepping rejects an SOC transition outside `[0, 1]` rather than silently
+clamping energy or propagating a NaN. `checkpoint()` / `restore()` include the
+seeded random stream for exact replay.
+
+Cell failures are explicit immutable `BatteryCellFaults` values:
+
+| Input | Plant behavior |
+| --- | --- |
+| `open_cell` | Blocks the shared series current |
+| `short_cell` | Removes that cell's terminal OCV and creates an internal short current/heat path |
+| `high_resistance` | Applies `high_resistance_multiplier` |
+| `capacity_loss_fraction` | Directly reduces usable Ah |
+| `forced_overtemperature` | Forces the configured hot-cell resistance behavior |
+
+Temperature is a per-tick input. Crossing `maximum_temperature` changes cell
+resistance and telemetry but does not invent a second thermal state. The
+caller can send each cell's internal plus passive-balancer heat to an existing
+`ThermalMass.heat_input` using `telemetry.thermal_inputs(...)`.
+
+`BatteryTelemetry` exposes minimum/maximum cell voltage and SOC, imbalance,
+cell-open and overtemperature aggregates, pack current, and pack voltage.
+`BMSPlant` gives its commanded contactor an explicit latching
+`trip_command` / `reset_command` state.
+It does not decide when a vehicle should trip, abort, surface, or shed loads;
+the simulated/real BMS driver and Shiver/Voyage own those policies.
+
+The integration with the A1 electrical graph is explicit co-simulation. After
+the powered-load branch lands, drive its `ExternalDCSupply.supplied_voltage`
+from battery telemetry, run the Manta tick, and feed the supply's
+`output_current` into the next `BatteryStepInput`. This is a declared one-tick
+zero-order hold, not a hidden algebraic solve. A post-merge integration test
+should pin that schedule; this branch does not duplicate the other branch's
+supply adapter.
+
 ## Two independent trees
 
 Every electrical node is an ordinary `Part`, so its states and equations pass
