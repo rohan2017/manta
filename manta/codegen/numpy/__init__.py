@@ -39,6 +39,17 @@ from __future__ import annotations
 from ...ir.module import Hosting, Role
 from ._compile import CompilationError, compile_functions
 from ._filter import FilterCheckpoint, NumpyFilter, UpdateResult
+from ._filter_replay import (
+    FilterReplayProgram,
+    FilterReplayResult,
+    NativeFilterReplay,
+    ReplayBoundary,
+    ReplayCheckpointResult,
+    ReplayOperation,
+    ReplayPredict,
+    ReplayUpdate,
+    TargetFilterReplay,
+)
 from ._noise import NoiseDriver
 from ._recurrence import NumpyRecurrence
 from ._regulator import NumpyRegulator
@@ -47,15 +58,24 @@ from ._sim import NumpySim
 
 __all__ = [
     "CompilationError",
-    "NoiseDriver",
     "FilterCheckpoint",
+    "FilterReplayProgram",
+    "FilterReplayResult",
+    "NativeFilterReplay",
+    "NoiseDriver",
     "NumpyFilter",
     "NumpyRecurrence",
     "NumpyRegulator",
     "NumpyRuntime",
     "NumpySim",
-    "UpdateResult",
+    "ReplayBoundary",
+    "ReplayCheckpointResult",
+    "ReplayOperation",
+    "ReplayPredict",
+    "ReplayUpdate",
+    "TargetFilterReplay",
     "TargetNumpy",
+    "UpdateResult",
     "compile_functions",
 ]
 

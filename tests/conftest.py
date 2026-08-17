@@ -29,6 +29,7 @@ _CPP_NAME_MARKERS = (
 # Whole modules dominated by toolchain work (cc / emcc / node shells).
 _CPP_MODULES = frozenset({
     "test_codegen_wasm",
+    "test_filter_replay",
 })
 
 # Whole modules dominated by long fits / Monte-Carlo work.

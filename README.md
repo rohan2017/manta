@@ -331,6 +331,7 @@ of a Module — no per-transform code anywhere:
 | Target | Accepts | Produces |
 |---|---|---|
 | `TargetNumpy(x)` | any Module / transform | `NumpyRuntime` — surface derived from the Module's shape (sim `step`/`outputs`, filter `predict`/`update`, regulator `control`, recurrence `step`) |
+| `TargetFilterReplay(x, max_operations=…, max_checkpoints=…)` | EKF/UKF Module / transform | bounded native exact-sequential span executor over caller-ordered predicts, updates, and checkpoint boundaries |
 | `TargetCpp(x, out_dir, class_name)` | any Module / transform | C++ static lib: typed Eigen class over flat-C kernels (+ CMake) |
 | `TargetJax(x)` | any Module / transform | `JaxModule` — every kernel as a jitted JAX function + a `lax.scan` rollout you can `jax.grad`/`jax.vmap` through (needs `pip install jax`; not a core dependency) |
 | `TargetWasm(x, out_dir, class_name)` | any Module / transform | browser bundle: the C++ backend's flat-C kernels behind a flat-double C ABI + Emscripten `build.sh`, a JSON descriptor, and an ES-module JS runtime (generic `Runtime.call` + typed `Sim`/`Filter`/`Regulator` views mirroring the numpy ones) |
