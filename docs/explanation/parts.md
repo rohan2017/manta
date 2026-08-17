@@ -36,3 +36,13 @@ at compile time to build the symbolic graph.
 
 - Reference: [Parts](../reference/parts.md)
 - Code: `manta/parts/base.py`, `manta/parts/_declarations.py`
+
+## Kinematic markers
+
+[`Antenna`][manta.parts.Antenna] is a pure kinematic marker for RF models. It
+reports the antenna phase center in world coordinates, the world-from-antenna
+orientation as a `(w, x, y, z)` quaternion, and the antenna frame's absolute
+angular velocity expressed in world coordinates. The craft pose, static mount
+orientation, and articulation chain are already composed into these outputs by
+the common kinematic pass. Propagation, radiation patterns, tracking, and link
+policy remain outside the part.
