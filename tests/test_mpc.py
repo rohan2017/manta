@@ -211,7 +211,7 @@ def test_closed_loop_moves_toward_the_reference():
     ref = _reference(12, (5, 0, 0))
     start = plant.state["tug"]["position"].copy()
     for _ in range(12):
-        result = mpc.tick(plant.state, ref)
+        result = mpc.tick(plant.model_state(), ref)
         plant.step(.1, u={"prop.throttle": result.control_vector[0]})
     assert plant.state["tug"]["position"][0] > start[0]+0.1
 

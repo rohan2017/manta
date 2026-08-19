@@ -154,8 +154,9 @@ def test_model_Q_keeps_filter_alive_in_closed_loop():
     sim.state["c"]["position"] = np.array([3.0, -2.0, 7.0])
 
     ekf = TargetNumpy(EKF(w))
-    ekf.reset(state={"c": c.initial_state(position=(0, 0, 10))},
-              P=np.eye(ekf.spec.tangent_dim))
+    ekf.reset_from_model_record(
+        {"c": c.initial_state(position=(0, 0, 10))},
+        P=np.eye(ekf.spec.tangent_dim))
     assert ekf.Q is None                      # no hand-tuned process noise
 
     lqr = TargetNumpy(LQR(

@@ -104,7 +104,7 @@ def test_closed_loop_regulates_to_setpoint():
     sim = TargetNumpy(Sim(w))
     sim.state["c"]["position"] = np.array([2.0, -1.0, 8.0])
     for _ in range(600):
-        for full, v in ctrl.control(sim.state).items():
+        for full, v in ctrl.control(sim.model_state()).items():
             owner, rest = full.split(".", 1)      # "c.tx.throttle" → c / tx.throttle
             sim.state[owner][rest] = v
         sim.step(0.02)
@@ -142,7 +142,7 @@ def test_retarget_closed_loop_chases_new_setpoint():
     ctrl.retarget({"c": {"position": (3.0, 1.0, 12.0)}})
     sim = TargetNumpy(Sim(w))
     for _ in range(600):
-        for full, v in ctrl.control(sim.state).items():
+        for full, v in ctrl.control(sim.model_state()).items():
             owner, rest = full.split(".", 1)
             sim.state[owner][rest] = v
         sim.step(0.02)
@@ -242,7 +242,7 @@ def test_reprogram_installs_gain_trim_and_reference_together():
 def test_reprogram_rejects_a_non_solution():
     lqr, _ = _lqr()
     ctrl = TargetNumpy(lqr)
-    with pytest.raises(TypeError, match="missing"):
+    with pytest.raises(TypeError, match="expected LQRSolution"):
         ctrl.reprogram(object())
 
 
@@ -289,7 +289,7 @@ def _fly_to_yawed_goal(lqr, w, *, reprogram: bool, steps: int = 2000):
     sim = TargetNumpy(Sim(w))
     sim.state["c"]["orientation"] = YAW180.copy()
     for _ in range(steps):
-        for full, v in ctrl.control(sim.state).items():
+        for full, v in ctrl.control(sim.model_state()).items():
             owner, rest = full.split(".", 1)
             sim.state[owner][rest] = v
         sim.step(0.02)

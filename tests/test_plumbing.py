@@ -126,8 +126,9 @@ def test_closed_loop_regulates_to_setpoint():
     sim.state["c"]["position"] = np.array([3.0, -2.0, 7.0])
 
     ekf = TargetNumpy(EKF(w))
-    ekf.reset(state={"c": c.initial_state(position=(0, 0, 10))},
-              P=np.eye(ekf.spec.tangent_dim))
+    ekf.reset_from_model_record(
+        {"c": c.initial_state(position=(0, 0, 10))},
+        P=np.eye(ekf.spec.tangent_dim))
     ekf.Q = np.eye(ekf.spec.tangent_dim) * 1e-4
 
     lqr = TargetNumpy(LQR(

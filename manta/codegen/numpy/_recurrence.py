@@ -6,6 +6,7 @@ from typing import Any
 
 import numpy as np
 
+from ..._validation import require_finite, require_positive
 from ._runtime import NumpyRuntime, pack_fields, unpack_fields
 
 
@@ -28,15 +29,21 @@ class NumpyRecurrence(NumpyRuntime):
         self._state["x"] = np.asarray(
             x_field.init, dtype=float).reshape(-1).copy()
         self._y = np.zeros(self._y_port.size)
+        self._t = 0.0
 
     def step(self, dt: float, *, t: float | None = None,
              **inputs) -> dict[str, Any]:
-        tt = self._t if t is None else t
+        dt = require_positive(dt, name=f"{type(self).__name__}.step dt")
+        tt = self._t if t is None else float(require_finite(
+            t, name=f"{type(self).__name__}.step t"))
+        next_t = float(require_finite(
+            tt + dt, name=f"{type(self).__name__}.step resulting time"))
         u = pack_fields(self._u_fields(), inputs, required=True, who="step")
         ret = self._run(self.module.entry("step"),
                         {"u": u, "dt": dt, "t": tt})
-        self._y = ret[self._y_port.name]
-        self._t = tt + dt
+        next_y = ret[self._y_port.name].copy()
+        self._y = next_y
+        self._t = next_t
         return self.readouts()
 
     def readouts(self) -> dict[str, Any]:

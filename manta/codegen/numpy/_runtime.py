@@ -6,7 +6,7 @@ from typing import Any
 
 import numpy as np
 
-from ...ir.module import Hosting, Module, Role
+from ...ir.module import Hosting, Module, Role, StateRef
 from ...ir._names import resolve_suffix
 from ..target import resolve_args
 from ._compile import _compiled_functions
@@ -15,6 +15,23 @@ from ._compile import _compiled_functions
 def _split(full: str) -> tuple[str, str]:
     owner, rest = full.split(".", 1)
     return owner, rest
+
+
+def finite_array(value, *, who: str, size: int | None = None,
+                 shape: tuple[int, ...] | None = None) -> np.ndarray:
+    """Own and validate real finite runtime data without coercing text/bools."""
+    raw = np.asarray(value)
+    if raw.dtype.kind not in "iuf" or raw.dtype.kind == "b":
+        raise TypeError(
+            f"{who}: expected real numeric data, got dtype {raw.dtype}")
+    arr = np.asarray(value, dtype=float)
+    if not np.all(np.isfinite(arr)):
+        raise ValueError(f"{who}: contains non-finite values")
+    if size is not None and arr.size != size:
+        raise ValueError(f"{who}: expected {size} value(s), got {arr.size}")
+    if shape is not None and arr.shape != shape:
+        raise ValueError(f"{who}: expected shape {shape}, got {arr.shape}")
+    return arr.copy()
 
 
 def pack_fields(fields, source, *, default=0.0, required: bool = False,
@@ -26,22 +43,29 @@ def pack_fields(fields, source, *, default=0.0, required: bool = False,
     unless `required`, which raises. The one place the numpy views pack a
     named-field dict (controls, params, noise, recurrence inputs) into the
     flat kernel vector."""
+    names = {f.name for f in fields}
+    unknown = sorted(set(source) - names)
+    if unknown:
+        raise TypeError(f"{who}: unknown field(s) {unknown}")
     chunks = []
     for f in fields:
         if f.name in source:
-            v = np.atleast_1d(np.asarray(source[f.name], dtype=float)).ravel()
-            if v.size != f.dim:
-                raise ValueError(
-                    f"{who}: {f.name!r} expects dim {f.dim}, got {v.size}.")
+            v = np.atleast_1d(finite_array(
+                source[f.name], who=f"{who}: {f.name!r}", size=f.dim)).ravel()
         elif required:
             raise KeyError(
                 f"{who}: missing {f.name!r}; required: "
                 f"{[g.name for g in fields]}")
         else:
             d = default(f) if callable(default) else default
-            v = np.atleast_1d(np.asarray(d, dtype=float)).ravel()
+            v = np.atleast_1d(finite_array(
+                d, who=f"{who}: default for {f.name!r}")).ravel()
             if v.size == 1 and f.dim > 1:
                 v = np.full(f.dim, v[0])
+            elif v.size != f.dim:
+                raise ValueError(
+                    f"{who}: default for {f.name!r} expects dim {f.dim}, "
+                    f"got {v.size}.")
         chunks.append(v)
     return np.concatenate(chunks) if chunks else np.zeros(0)
 
@@ -50,7 +74,8 @@ def unpack_fields(fields, vec) -> dict[str, Any]:
     """Inverse of `pack_fields`: split a flat vector over `fields` (in
     order) into `{field name: value}` — scalar fields unwrapped to float,
     vector fields as owned copies."""
-    v = np.asarray(vec, dtype=float).reshape(-1)
+    expected = sum(f.dim for f in fields)
+    v = finite_array(vec, who="unpack_fields", size=expected).reshape(-1)
     out: dict[str, Any] = {}
     off = 0
     for f in fields:
@@ -70,7 +95,8 @@ class NumpyRuntime:
         self._spec = module.spec
         self._state: dict[str, np.ndarray] = {}
         for f in module.state.fields:
-            a = np.asarray(f.init, dtype=float)
+            a = finite_array(f.init, who=f"{module.name} state {f.name!r}",
+                             size=int(np.prod(f.shape)))
             # Always copy: the Module is shared, immutable IR — a view
             # here would alias every runtime built from the same
             # transform onto one array (and let a runtime mutate the
@@ -116,8 +142,17 @@ class NumpyRuntime:
         args = resolve_args(m, ep, values,
                             state_lookup=lambda n: self._state[n],
                             param_default=self.param_vector)
+        checked_args = []
+        for ref, arg in zip(ep.args, args):
+            if isinstance(ref, StateRef):
+                expected_size = int(np.prod(m.state.field(ref.name).shape))
+            else:
+                expected_size = m.port(ref.name).size
+            checked_args.append(finite_array(
+                arg, who=f"{m.name}.{ep.method} argument {ref.name!r}",
+                size=expected_size))
         fn = self._functions[ep.fn]
-        res = fn(*args)
+        res = fn(*checked_args)
         outs = [res] if fn.n_out() == 1 else list(res)
         expected = len(ep.writes) + len(ep.returns)
         if len(outs) != expected:
@@ -127,21 +162,31 @@ class NumpyRuntime:
                 f"{len(ep.writes)} writes + {len(ep.returns)} returns "
                 f"= {expected}.")
         threaded = m.hosting is Hosting.THREADED
+        staged_state: dict[str, np.ndarray] = {}
         ret: dict[str, np.ndarray] = {}
         for i, w in enumerate(ep.writes):
             fld = m.state.field(w)
-            arr = np.asarray(outs[i], dtype=float)
+            arr = finite_array(
+                outs[i], who=f"{m.name}.{ep.method} state result {w!r}",
+                size=int(np.prod(fld.shape)))
             val = (arr.reshape(fld.shape) if fld.kind == "matrix"
                    else arr.reshape(-1))
-            self._state[w] = val
+            staged_state[w] = val
             if threaded:                  # THREADED: writes go to the caller
                 ret[w] = val
         for name, o in zip(ep.returns, outs[len(ep.writes):]):
             port = m.port(name)
-            a = np.asarray(o, dtype=float)
+            a = finite_array(
+                o, who=f"{m.name}.{ep.method} return {name!r}",
+                size=port.size)
             ret[name] = (a.reshape(port.shape) if len(port.shape) == 2
                          else a.reshape(-1))
+        self._validate_staged_state(staged_state)
+        self._state.update(staged_state)
         return ret
+
+    def _validate_staged_state(self, state: dict[str, np.ndarray]) -> None:
+        """View-specific invariants checked before any live state changes."""
 
     # ---- shared metadata helpers (all from the Module) ----------------
 
@@ -174,15 +219,14 @@ class NumpyRuntime:
                 f"tunable Parameters.")
         names = [f.name for f in self._param_port.fields]
         dims = {f.name: f.dim for f in self._param_port.fields}
+        staged = dict(self._param_overrides)
         for k, v in values.items():
             full = resolve_suffix(k, names, label="parameter",
                                   who=type(self).__name__)
-            arr = np.asarray(v, dtype=float).ravel()
-            if arr.size != dims[full]:
-                raise ValueError(
-                    f"set_parameters: {full!r} expects {dims[full]} "
-                    f"value(s), got {arr.size}.")
-            self._param_overrides[full] = arr
+            arr = finite_array(v, who=f"set_parameters: {full!r}",
+                               size=dims[full]).ravel()
+            staged[full] = arr
+        self._param_overrides = staged
 
     def param_vector(self) -> np.ndarray:
         """The flat promoted-parameter vector: declared defaults merged

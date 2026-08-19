@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import casadi as ca
 
+from .._validation import require_positive
 from ..ir.manifold import SO3Manifold
 from ..recurrence import RecurrenceBlock
 
@@ -46,7 +47,7 @@ class Madgwick(RecurrenceBlock):
     """
 
     def __init__(self, beta: float = 0.1, *, name: str = "madgwick") -> None:
-        self.beta = float(beta)
+        self.beta = require_positive(beta, name="Madgwick.beta", allow_zero=True)
         b = self.beta
 
         def rec(x, u, dt, t):

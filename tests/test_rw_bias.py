@@ -195,9 +195,7 @@ def test_ekf_estimates_rw_bias_from_gyro_readings():
 def test_auto_Q_for_rw_bias_scales_as_dt_sigma_squared():
     """Auto-Q from `L · Σ · Lᵀ`: with ∂bias_next/∂driver = sqrt(dt)·I
     and Σ_driver = σ²·I, Q[bias_block, bias_block] = dt · σ² · I."""
-    _, c = _build_world()
-    w = World().add_field(GravityField().add_uniform((0.0, 0.0, -9.81)))
-    w.add_craft(c, position=(0.0, 0.0, 5.0))
+    w, _ = _build_world()
     ekf_t = EKF(w)
     ekf = TargetNumpy(ekf_t)
     # The bias slot is tangent index 12-14 (after pos, ori, vel, ω).

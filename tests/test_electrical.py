@@ -98,7 +98,7 @@ def test_rejects_disconnected_and_cross_craft_nodes_at_compile():
 
 
 @pytest.mark.parametrize("factory, message", [
-    (lambda: DCSource("s", capacitance="1 F"), "scalar SI value"),
+    (lambda: DCSource("s", capacitance="1 F"), "real numeric data"),
     (lambda: ElectricalBus("b", capacitance=0.0), "capacitance must be > 0"),
     (lambda: DCConverter("r", efficiency=1.1), "efficiency must be"),
     (lambda: ConstantPowerLoad("l", current_limit=0.0),

@@ -68,7 +68,7 @@ DECK_Z = 0.70                     # GPS mast: antennas well clear of the wave ba
 # axis AND the co-rotating ocean is locally still (Ω×r = 0 on the axis). A
 # mid-latitude scene would put a NORTH component on the gyro — the gyrocompass
 # signal — but the co-rotating ocean would then sweep past at Ω·R·cos(lat).
-ANCHOR = (0.0, 0.0, Earth.R_EQ)       # north-pole surface point (planet frame)
+ANCHOR = (0.0, 0.0, Earth.R_EQ * (1.0 - Earth.FLATTENING))  # north-pole sea surface (planet frame)
 START = (0.0, 0.0, -0.2)              # scene-local: 0.2 m below the surface
 
 # --- thrust (N, N) ----------------------------------------------------------

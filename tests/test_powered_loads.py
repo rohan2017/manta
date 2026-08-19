@@ -306,6 +306,6 @@ def test_powered_load_numpy_jax_generated_kernel_parity():
     numpy_runtime = TargetNumpy(transform)
     numpy_runtime.step(0.001, u={"thruster.throttle": 0.6})
     from manta.ir.state_spec import flatten_nested
-    numpy_state = module.spec.pack_any(flatten_nested(numpy_runtime.state))
+    numpy_state = module.spec.pack_projected(flatten_nested(numpy_runtime.state))
     np.testing.assert_allclose(
         np.asarray(result[0]).ravel(), numpy_state, atol=1e-12)

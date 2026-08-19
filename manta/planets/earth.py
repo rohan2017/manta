@@ -1,16 +1,27 @@
 """Earth — concrete Planet preset for near-Earth simulations.
 
-`Earth` registers its standing field contributions on the World's
-shared GravityField, FluidField, and MagField:
+The Earth is the **WGS-84 ellipsoid**: equatorial radius `R_EQ`,
+flattening `FLATTENING`, spinning about +z at the sidereal rate. Sea
+level is the ellipsoid (plus `sea_level`), "up" is the geodetic normal,
+and lat/lon/alt (`ecef_from_geodetic`, `scene_at_geodetic`) are the same
+geodetic coordinates a GNSS receiver reports — so a craft placed at a
+WGS-84 position sits at the same height above the simulated sea as it
+would above the real one, and a consumer's own WGS-84 geodesy agrees
+with the truth world to the millimetre.
 
-  * GravityField : point-mass at planet origin (μ = gravity_mu) plus
-                   an optional J2 oblateness perturbation. Skipped
-                   entirely when `gravity_mu == 0`.
+`Earth` registers its standing field contributions on the World's
+shared GravityField, FluidField, CollisionField, and MagField:
+
+  * GravityField : point-mass at planet origin (μ = gravity_mu) plus the
+                   J2 oblateness perturbation (on by default; see
+                   `include_j2`). Skipped entirely when `gravity_mu == 0`.
   * FluidField   : an ocean co-rotating with the planet (density =
-                   water_density, active below sea level) and an
+                   water_density, active below the sea surface) and an
                    atmosphere co-rotating with the planet (density =
-                   air_density, active above sea level). Bound by
-                   `planet_radius + sea_level` from the planet center.
+                   air_density, active above it). The sea surface is the
+                   ellipsoid raised by `sea_level` (plus `waves`).
+  * CollisionField : the sea surface as a solid obstacle
+                   (`surface_collision`).
   * MagField     : a magnetic dipole at planet origin, aligned along
                    the spin axis (pointing along `-rotation_axis`).
                    Skipped when `dipole_moment == 0`.
@@ -18,9 +29,10 @@ shared GravityField, FluidField, and MagField:
 By default Earth spins at its true sidereal rate (`Earth.SIDEREAL`)
 about +z, so Coriolis + centrifugal effects and the co-rotating
 ocean/atmosphere are on out of the box — a craft pinned to the surface
-should be placed via `earth.scene_at(...).at_rest(...)` to get the
-matching orbital velocity + body spin rate. Pass `rotation_rate=0.0` for
-a non-rotating Earth (drops those pseudo-forces, handy for a simpler sim).
+should be placed via `earth.scene_at_geodetic(...).at_rest(...)` to get
+the matching orbital velocity + body spin rate. Pass `rotation_rate=0.0`
+for a non-rotating Earth (drops those pseudo-forces, handy for a simpler
+sim); pass `flattening=0.0` for a spherical Earth of radius `R_EQ`.
 """
 
 from __future__ import annotations
@@ -31,10 +43,9 @@ import casadi as ca
 import numpy as np
 
 from ..fields import (
-    CollisionField, DipoleMag, GravityField, FluidField, J2Gravity,
-    MagField, PointMassGravity, below_surface,
+    CollisionField, DipoleMag, Ellipsoid, GravityField, FluidField,
+    J2Gravity, MagField, PointMassGravity, below_surface,
 )
-from ..smoothing import soft_norm
 from ..fields.fluid_props import LAPSE_ISA, R_AIR, T0_ISA
 from .base import Planet
 from .disturbances import Atmosphere, Ocean
@@ -44,7 +55,7 @@ from .disturbances import Atmosphere, Ocean
 class SeaWaves:
     """Planar deep-water sinusoid riding a planet's sea surface.
 
-    The surface elevation (above the sea-level sphere) is
+    The surface elevation (above the mean sea surface) is
 
         η(p, t) = amplitude · cos(k·ξ − ω·t),   ξ = p_planet · direction
 
@@ -59,7 +70,7 @@ class SeaWaves:
     at the physically correct (depth-filtered) amplitude — the signal a
     wave-detecting barometer works with.
 
-    `direction` is a planet-frame vector (normalized; its radial
+    `direction` is a planet-frame vector (normalized; its vertical
     component at the point of interest should be ~0). The wave is a
     PLANAR field in planet coordinates — valid for a local patch of
     ocean, not a globe-wrapping solution.
@@ -105,9 +116,13 @@ class Earth(Planet):
                          sidereal rate (`Earth.SIDEREAL`). Pass 0.0 for a
                          non-rotating Earth. Most users never set this —
                          place craft with `earth.scene_at(...)` instead.
-        sea_level      — elevation of the ocean's top above the
-                         planet's equatorial radius, m. Default 0
-                         (sea-level surface coincides with R_EQ).
+        flattening     — of the reference ellipsoid. Default WGS-84
+                         (`Earth.FLATTENING`); 0 gives a sphere of
+                         radius `R_EQ`.
+        sea_level      — geodetic height of the ocean's top above the
+                         reference ellipsoid, m. Default 0 (the sea
+                         surface IS the ellipsoid, as for a WGS-84
+                         altitude with no geoid model).
         water_density  — ocean density, kg/m³. Default 1025 (seawater).
         air_density    — atmosphere density at sea level, kg/m³. Default
                          1.225 (ISA). Sets the sea-level pressure via the
@@ -120,14 +135,26 @@ class Earth(Planet):
                          6.5e-3.
         gravity_mu     — gravitational parameter μ (m³/s²). 0 disables
                          gravity. Default `Earth.MU`.
-        include_j2     — register a J2 oblateness perturbation
-                         alongside the point-mass term. Default False.
+        include_j2     — register the J2 oblateness perturbation
+                         alongside the point-mass term. Default `None`
+                         → on whenever `flattening > 0`, off for a
+                         sphere. Point mass + J2 + the centrifugal
+                         term of the spinning frame make the ellipsoid
+                         an equipotential to O(f²), so gravity is
+                         normal to the sea surface (residual tangential
+                         acceleration < 1e-4 m/s²); with a point mass
+                         alone a craft at rest on the ellipsoid would
+                         feel a ~1.7e-2 m/s² pull toward the equator.
+                         An explicit False is honoured (physically
+                         inconsistent on an oblate Earth — for isolated
+                         gravity tests only).
         dipole_moment  — magnetic dipole strength, A·m². 0 disables
                          magnetic. Default 0.
         waves          — optional `SeaWaves`: a sinusoidal moving sea
                          surface (boundary elevation + underwater
                          orbital velocity). Default None (flat sea).
-        surface_collision — register the sea-level sphere as a solid
+        surface_collision — register the sea surface (the ellipsoid
+                         raised by `sea_level`) as a solid
                          `CollisionField` obstacle (a rough model of
                          the surface), so `Collider`-footed craft can
                          stand anywhere on the planet without a
@@ -143,12 +170,13 @@ class Earth(Planet):
                          height slope). Default 0 (hard boundary).
     """
 
-    # CODATA / WGS84 / IGRF leading-term constants.
-    SIDEREAL: float = 7.2921159e-5       # rad/s
-    MU:       float = 3.986004418e14     # m^3/s^2
-    R_EQ:     float = 6.378137e6         # m
-    J2:       float = 1.0826267e-3
-    DIPOLE:   float = 7.94e22            # A·m²
+    # WGS-84 / IGRF leading-term constants.
+    SIDEREAL:   float = 7.2921159e-5        # rad/s
+    MU:         float = 3.986004418e14      # m^3/s^2
+    R_EQ:       float = 6378137.0           # m (WGS-84 semi-major axis)
+    FLATTENING: float = 1.0 / 298.257223563 # WGS-84
+    J2:         float = 1.0826267e-3
+    DIPOLE:     float = 7.94e22             # A·m²
 
     def __init__(self,
                  name: str = "earth",
@@ -156,6 +184,7 @@ class Earth(Planet):
                  position: tuple[float, float, float] = (0.0, 0.0, 0.0),
                  rotation_rate: float | None = None,
                  rotation_axis: tuple[float, float, float] = (0.0, 0.0, 1.0),
+                 flattening: float = FLATTENING,
                  sea_level: float = 0.0,
                  water_density: float = 1025.0,
                  ocean_current: tuple[float, float, float] = (0.0, 0.0, 0.0),
@@ -163,7 +192,7 @@ class Earth(Planet):
                  sea_level_temperature: float = T0_ISA,
                  lapse_rate: float = LAPSE_ISA,
                  gravity_mu: float = MU,
-                 include_j2: bool = False,
+                 include_j2: bool | None = None,
                  dipole_moment: float = 0.0,
                  waves: SeaWaves | None = None,
                  surface_collision: bool = True,
@@ -178,7 +207,9 @@ class Earth(Planet):
         super().__init__(name=name,
                          position=position,
                          rotation_axis=rotation_axis,
-                         omega=omega)
+                         omega=omega,
+                         equatorial_radius=self.R_EQ,
+                         flattening=flattening)
         self.sea_level     = float(sea_level)
         self.water_density = float(water_density)
         self.ocean_current = tuple(float(v) for v in ocean_current)
@@ -186,7 +217,10 @@ class Earth(Planet):
         self.sea_level_temperature = float(sea_level_temperature)
         self.lapse_rate    = float(lapse_rate)
         self.gravity_mu    = float(gravity_mu)
-        self.include_j2    = bool(include_j2)
+        # J2 is what makes gravity normal to an oblate sea surface (see
+        # the class docstring); a sphere has no bulge to account for.
+        self.include_j2    = (self.flattening > 0.0 if include_j2 is None
+                              else bool(include_j2))
         self.dipole_moment = float(dipole_moment)
         self.waves         = waves
         self.surface_collision = bool(surface_collision)
@@ -196,9 +230,28 @@ class Earth(Planet):
 
     @property
     def planet_radius(self) -> float:
-        """Radius from planet center to sea-level surface.
-        Equal to R_EQ + sea_level."""
+        """Equatorial radius of the sea surface, `R_EQ + sea_level` (m).
+
+        Also the radius that sets the surface gravity `g0 = μ / R²` the
+        hydrostatic and barometric columns use — a single value for the
+        whole planet, so those columns carry the equatorial g0 at every
+        latitude (the pole is 0.5% stronger). The dynamics use the real
+        gravity field; only the fluid pressure profiles take this
+        shortcut.
+        """
         return self.R_EQ + self.sea_level
+
+    def sea_surface(self) -> Ellipsoid:
+        """The mean sea surface as a solid `Ellipsoid` — the reference
+        ellipsoid raised by `sea_level`, in WorldFrame about the planet
+        centre. Its `signed_height_sym` is the geodetic altitude every
+        Earth field is built on."""
+        return Ellipsoid(center=tuple(self.center.tolist()),
+                         equatorial_radius=self.R_EQ,
+                         flattening=self.flattening,
+                         polar_axis=tuple(self.axis.tolist()),
+                         height=self.sea_level,
+                         name=f"{self.name}_surface")
 
     # ------------------------------------------------------------------
 
@@ -225,6 +278,7 @@ class Earth(Planet):
         # in `manta.fields.fluid_props`, so other planets reuse this.
         ff = world.get_or_create_field(FluidField)
         R_planet = self.planet_radius
+        surface  = self.sea_surface()
         rho_w    = self.water_density
         T0       = self.sea_level_temperature
         L        = self.lapse_rate
@@ -250,10 +304,14 @@ class Earth(Planet):
             omega_wave = k_wave * c_wave
             dir_dm = ca.DM(wave_dir.reshape(3, 1))
 
+        # `surface.signed_height_sym(p_planet)` → (geodetic altitude above
+        # the mean sea surface, geodetic up), both in PlanetFrame: the spin
+        # axis has the same coordinates there as in WorldFrame, which is
+        # all the spheroid geometry depends on.
         def _signed_altitude(p_planet, t):
             """Signed height (m) of a PlanetFrame point above the local
             (waving) sea surface — negative when submerged."""
-            alt_mean = soft_norm(p_planet) - R_planet
+            alt_mean, _ = surface.signed_height_sym(p_planet)
             if waves is None:
                 return alt_mean
             xi  = ca.dot(p_planet, dir_dm)
@@ -274,7 +332,7 @@ class Earth(Planet):
             barometer would be tuned against. In the splash zone
             (|alt| ≲ a) the exponent clamps to 0 and the two forms
             agree. The exponent clamp mirrors `ocean_velocity_fn`."""
-            alt_mean = soft_norm(p_planet) - R_planet
+            alt_mean, _ = surface.signed_height_sym(p_planet)
             if waves is None:
                 return ca.fmax(0.0, -alt_mean)
             xi    = ca.dot(p_planet, dir_dm)
@@ -301,8 +359,7 @@ class Earth(Planet):
                 # radius `amplitude·e^{k·z}` in phase with the crest. No
                 # explicit wet-gate — the ocean membership in the field's
                 # baseline blend confines it to the water.
-                alt_mean = soft_norm(p_planet) - R_planet
-                up = p_planet / soft_norm(p_planet)
+                alt_mean, up = surface.signed_height_sym(p_planet)
                 xi = ca.dot(p_planet, dir_dm)
                 phase = k_wave * xi - omega_wave * t
                 decay = ca.exp(k_wave * ca.fmin(alt_mean, 0.0))
@@ -329,13 +386,11 @@ class Earth(Planet):
                      membership=below_surface(_surface_height_world, delta),
                      name=f"{self.name}_ocean"))
 
-        # Solid surface: the sea-level sphere as a collision obstacle —
+        # Solid surface: the mean sea surface as a collision obstacle —
         # locally indistinguishable from a ground plane (the outward
-        # normal is the local radial), valid anywhere on the planet.
+        # normal is the geodetic up), valid anywhere on the planet.
         if self.surface_collision:
-            cf = world.get_or_create_field(CollisionField)
-            cf.add_sphere(center=tuple(self.center.tolist()),
-                          radius=R_planet)
+            world.get_or_create_field(CollisionField).add(surface)
 
         # Magnetic dipole along the spin axis (-axis for a planet whose
         # spin axis points away from the geographic-north magnetic dip).

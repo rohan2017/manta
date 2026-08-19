@@ -242,7 +242,7 @@ def test_numpy_and_jax_step_parity():
     np_runtime.step(0.002)
     from manta.ir.state_spec import flatten_nested
 
-    got_numpy = module.spec.pack_any(flatten_nested(np_runtime.state))
+    got_numpy = module.spec.pack_projected(flatten_nested(np_runtime.state))
     np.testing.assert_allclose(got_jax.ravel(), got_numpy.ravel(), atol=1e-11)
 
 

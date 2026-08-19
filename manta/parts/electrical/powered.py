@@ -28,13 +28,12 @@ from ..actuation.ducted_propeller import DuctedPropeller
 from ..actuation.thruster import Thruster
 from ..aero.control_surface import ControlSurface
 from ..articulation.motor import Motor
-from .core import (
-    ConstantPowerLoad,
-    ElectricalPort,
-    _c1_gate,
-    _finite_scalar,
-    _positive,
-    _unit_interval,
+from .core import ConstantPowerLoad, ElectricalPort
+from ._invariants import (
+    c1_gate as _c1_gate,
+    finite_scalar as _finite_scalar,
+    positive as _positive,
+    unit_interval as _unit_interval,
 )
 
 

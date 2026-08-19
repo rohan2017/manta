@@ -117,8 +117,9 @@ def test_ukf_python_cpp_roundtrip(tmp_path: Path):
 
     # ---- identical loop in numpy ----
     ukf = TargetNumpy(UKF(w))
-    ukf.reset(state={"drone": c.initial_state(position=(0.2, -0.1, 5.0))},
-              P=np.eye(ukf.spec.tangent_dim) * 0.1)
+    ukf.reset_from_model_record(
+        {"drone": c.initial_state(position=(0.2, -0.1, 5.0))},
+        P=np.eye(ukf.spec.tangent_dim) * 0.1)
     thr = 1.5 * 9.81
     for i in range(100):
         ukf.predict(0.01, t=0.0, u={"t.throttle": thr})

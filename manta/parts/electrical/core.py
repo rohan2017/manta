@@ -27,7 +27,6 @@ quietly.
 from __future__ import annotations
 
 import math
-from numbers import Real
 from typing import Any
 
 import casadi as ca
@@ -40,33 +39,14 @@ from .._declarations import (
 )
 from .._trace import scalar_mx as _mx
 from ..base import Part
-
-
-def _finite_scalar(value: Any, *, name: str) -> float:
-    """A strict authoring-boundary scalar validator (SI values only)."""
-    if not isinstance(value, Real):
-        raise TypeError(f"{name} must be a scalar SI value, got {value!r}")
-    number = float(value)
-    if not math.isfinite(number):
-        raise ValueError(f"{name} must be finite, got {value!r}")
-    return number
-
-
-def _positive(value: Any, *, name: str, allow_zero: bool = False) -> float:
-    number = _finite_scalar(value, name=name)
-    if number < 0.0 or (number == 0.0 and not allow_zero):
-        relation = ">= 0" if allow_zero else "> 0"
-        raise ValueError(f"{name} must be {relation}, got {number!r}")
-    return number
-
-
-def _positive_or_inf(value: Any, *, name: str) -> float:
-    if not isinstance(value, Real):
-        raise TypeError(f"{name} must be a scalar SI value, got {value!r}")
-    number = float(value)
-    if math.isnan(number) or number <= 0.0:
-        raise ValueError(f"{name} must be > 0, got {value!r}")
-    return number
+from ._invariants import (
+    bounded_positive as _bounded_positive,
+    c1_gate as _c1_gate,
+    finite_scalar as _finite_scalar,
+    positive as _positive,
+    positive_or_inf as _positive_or_inf,
+    unit_interval as _unit_interval,
+)
 
 
 def _root_of(part: Part) -> Part:
@@ -74,34 +54,6 @@ def _root_of(part: Part) -> Part:
     while node.parent is not None:
         node = node.parent
     return node
-
-
-def _bounded_positive(value: ca.MX, limit: float) -> ca.MX:
-    """Unidirectional current with an optional physical hard limit."""
-    positive = ca.fmax(value, 0.0)
-    if math.isinf(limit):
-        return positive
-    return ca.fmin(positive, limit)
-
-
-def _bounded_min(value: ca.MX, limit: float) -> ca.MX:
-    """A non-negative quantity limited without an unbounded branch."""
-    return _bounded_positive(value, limit)
-
-
-def _unit_interval(value: Any, *, name: str) -> float:
-    number = _finite_scalar(value, name=name)
-    if not 0.0 <= number <= 1.0:
-        raise ValueError(f"{name} must be in [0, 1], got {number!r}")
-    return number
-
-
-def _c1_gate(value: ca.MX, low: float, high: float) -> ca.MX:
-    """C1 smoothstep: exactly 0 below ``low`` and 1 above ``high``."""
-    if high == low:
-        return ca.if_else(value >= high, 1.0, 0.0)
-    x = ca.fmin(ca.fmax((value - low) / (high - low), 0.0), 1.0)
-    return x * x * (3.0 - 2.0 * x)
 
 
 def _zero_wrench() -> Wrench:
@@ -833,7 +785,7 @@ class ConstantPowerLoad(ElectricalLoad):
     def _requested_current(self, voltage: ca.MX) -> ca.MX:
         raw = _mx(self.power) / ca.fmax(
             voltage, float(self.declared_value("voltage_floor")))
-        return _bounded_min(raw, float(self.declared_value("current_limit")))
+        return _bounded_positive(raw, float(self.declared_value("current_limit")))
 
 
 __all__ = [

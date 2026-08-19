@@ -56,14 +56,25 @@ class Parameter(_Declaration):
         frame    — Frame tag, consumed when `manifold` is a shortcut
                    resolving to a vector manifold. The promoted input's
                    frame; must match what `update()` composes it with.
+        numeric  — whether the declaration participates in the framework's
+                   finite-number validation. Set false only for typed object
+                   configuration whose protocol the owning Part validates.
     """
 
-    __slots__ = ("manifold", "allow_infinite")
+    __slots__ = ("manifold", "allow_infinite", "numeric")
 
     def __init__(self, default: Any, *, manifold=None, frame=None,
-                 allow_infinite: bool = False) -> None:
+                 allow_infinite: bool = False,
+                 numeric: bool = True) -> None:
         super().__init__(default)
+        if not isinstance(numeric, bool):
+            raise TypeError("Parameter.numeric must be a bool")
+        if not numeric and (manifold is not None or allow_infinite):
+            raise ValueError(
+                "non-numeric Parameters cannot declare a manifold or "
+                "allow_infinite")
         self.allow_infinite = allow_infinite
+        self.numeric = numeric
         if manifold is None:
             self.manifold = None
         else:

@@ -23,6 +23,12 @@ jobs:
       - name: Install
         run: pip install -e ".[dev,jax]"
 
+      - name: Static checks
+        run: ruff check manta tests
+
+      - name: Build package
+        run: python -m build
+
       - name: Run the suite
         # GitHub runners have 4 cores / 16 GB — the pyproject maxprocesses
         # cap keeps the CasADi-heavy workers within memory either way.

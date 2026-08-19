@@ -2,7 +2,18 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+import json
+
 import numpy as np
+
+
+@dataclass(frozen=True)
+class NoiseCheckpoint:
+    """Immutable exact restart point for a bound noise stream."""
+
+    rng_state: str
+    channels: tuple[tuple[str, int, float], ...]
 
 
 class NoiseDriver:
@@ -29,6 +40,28 @@ class NoiseDriver:
 
     def reset(self) -> None:
         self._rng = np.random.default_rng(self._seed)
+
+    def checkpoint(self) -> NoiseCheckpoint:
+        return NoiseCheckpoint(
+            json.dumps(self._rng.bit_generator.state, sort_keys=True),
+            tuple(self._channels))
+
+    def validate_checkpoint(self, checkpoint: NoiseCheckpoint) -> dict:
+        if not isinstance(checkpoint, NoiseCheckpoint):
+            raise TypeError("NoiseDriver.restore: expected NoiseCheckpoint")
+        if checkpoint.channels != tuple(self._channels):
+            raise ValueError("NoiseDriver.restore: channel layout differs")
+        try:
+            state = json.loads(checkpoint.rng_state)
+            probe = np.random.default_rng()
+            probe.bit_generator.state = state
+        except (TypeError, ValueError, KeyError) as exc:
+            raise ValueError("NoiseDriver.restore: invalid RNG state") from exc
+        return state
+
+    def restore(self, checkpoint: NoiseCheckpoint) -> None:
+        state = self.validate_checkpoint(checkpoint)
+        self._rng.bit_generator.state = state
 
     def __repr__(self) -> str:
         active = sum(1 for _, _, s in self._channels if s > 0.0)

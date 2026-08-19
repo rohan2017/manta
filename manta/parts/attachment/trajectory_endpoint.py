@@ -97,7 +97,7 @@ class TrajectoryEndpoint(Part):
     the attitude channel.
     """
 
-    trajectory: Callable = Parameter(None)
+    trajectory: Callable = Parameter(None, numeric=False)
     kp_pos: float = Parameter(40.0)
     kd_pos: float = Parameter(12.0)
     kp_att: float = Parameter(8.0)

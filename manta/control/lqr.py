@@ -54,12 +54,14 @@ world-frame position feedback comes out rotated with it).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
 
 import casadi as ca
 import numpy as np
 
 from ..ir.module import (
-    EntryPoint, Hosting, Module, Port, PortField, PortRef, Role, StateLayout,
+    EntryPoint, Hosting, Module, ModuleKind, Port, PortField, PortRef, Role,
+    StateLayout,
 )
 from ..ir._names import resolve_suffix
 from ..ir.state_spec import flatten_nested
@@ -133,6 +135,30 @@ class LQRSolution:
     A:     np.ndarray
     B:     np.ndarray
     P:     np.ndarray
+    controller_id: str
+
+    def __post_init__(self) -> None:
+        arrays = {}
+        for name in ("K", "u_ff", "x_ref", "A", "B", "P"):
+            raw = np.asarray(getattr(self, name))
+            if raw.dtype.kind not in "iuf":
+                raise TypeError(f"LQRSolution.{name} must be real numeric data")
+            value = np.asarray(raw, dtype=float).copy()
+            if not np.all(np.isfinite(value)):
+                raise ValueError(f"LQRSolution.{name} must be finite")
+            value.flags.writeable = False
+            arrays[name] = value
+            object.__setattr__(self, name, value)
+        K, u_ff, x_ref, A, B, P = (arrays[n] for n in
+                                    ("K", "u_ff", "x_ref", "A", "B", "P"))
+        if K.ndim != 2 or A.ndim != 2 or A.shape[0] != A.shape[1]:
+            raise ValueError("LQRSolution: K and square A matrices are required")
+        if B.shape != (A.shape[0], K.shape[0]) or K.shape[1] != A.shape[0]:
+            raise ValueError("LQRSolution: A, B, and K dimensions are inconsistent")
+        if P.shape != A.shape or u_ff.size != K.shape[0] or x_ref.ndim != 1:
+            raise ValueError("LQRSolution: P, u_ff, or x_ref dimensions are inconsistent")
+        if not isinstance(self.controller_id, str) or not self.controller_id:
+            raise ValueError("LQRSolution.controller_id is required")
 
     @property
     def closed_loop_eigs(self) -> np.ndarray:
@@ -212,7 +238,15 @@ class LQR:
         u_ref_vec = self._u_vector(self._u_full)
         self.x_ref, self.u_ref = sys.pack_ref(sys.full_spec), u_ref_vec
         self.dt = float(dt)
+        if not np.isfinite(self.dt) or self.dt <= 0.0:
+            raise ValueError("LQR.dt must be finite and positive")
         n_x = sys.spec.tangent_dim
+
+        identity = sha256()
+        identity.update(sys._cf.serialize().encode())
+        identity.update(repr((tuple(sys.tracked), tuple(sys.input_names),
+                              self.dt)).encode())
+        self.controller_id = identity.hexdigest()
 
         self.Q = self._check_Q(np.eye(n_x) if Q is None else Q)
         self.R = self._check_R(np.eye(n_u) if R is None else R)
@@ -276,7 +310,9 @@ class LQR:
                                      (PortRef("x"), PortRef("x_ref"),
                                       PortRef("K"), PortRef("u_ff")),
                                      returns=("u",)),),
-            hosting=Hosting.THREADED)
+            kind=ModuleKind.REGULATOR,
+            hosting=Hosting.THREADED,
+            metadata={"controller_id": self.controller_id})
 
     def module(self) -> Module:
         """The typed `Module` IR a backend lowers."""
@@ -336,14 +372,15 @@ class LQR:
     def _solve(self, ref_flat: dict, u_vec: np.ndarray, Qm, Rm) -> LQRSolution:
         """Linearize at `(ref_flat, u_vec)` and solve the DARE there."""
         sys = self.sys
-        x_sub = sys.spec.pack_any(ref_flat)
+        x_sub = sys.spec.pack_projected(ref_flat)
         A = np.array(sys.F_fn(x_sub, u_vec, self.dt, 0.0))
         B = np.array(sys.B_fn(x_sub, u_vec, self.dt, 0.0))
         K, P = _solve_dare(A, B, Qm, Rm, tol=self._tol,
                            max_iter=self._max_iter)
         return LQRSolution(K=K, u_ff=u_vec,
-                           x_ref=sys.full_spec.pack_any(ref_flat),
-                           A=A, B=B, P=P)
+                           x_ref=sys.full_spec.pack_projected(ref_flat),
+                           A=A, B=B, P=P,
+                           controller_id=self.controller_id)
 
     def _check_movable(self, moved: dict) -> None:
         """Reject a reference move this LQR cannot honour.
@@ -416,7 +453,8 @@ class LQR:
         """The built solve as data — what every Port defaults to, and the
         identity element for `reprogram()`."""
         return LQRSolution(K=self.K, u_ff=self.u_ref, x_ref=self.x_ref,
-                           A=self.A, B=self.B, P=self.P)
+                           A=self.A, B=self.B, P=self.P,
+                           controller_id=self.controller_id)
 
     @property
     def closed_loop_eigs(self) -> np.ndarray:

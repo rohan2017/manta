@@ -20,15 +20,11 @@ from numbers import Real
 from typing import Any, Mapping, Sequence
 
 import numpy as np
+from krill import finite_real
 
 
 def _finite(value: Any, *, name: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, Real):
-        raise TypeError(f"{name} must be a finite scalar SI value")
-    result = float(value)
-    if not math.isfinite(result):
-        raise ValueError(f"{name} must be finite, got {value!r}")
-    return result
+    return finite_real(value, name)
 
 
 def _positive(value: Any, *, name: str, allow_zero: bool = False) -> float:
@@ -157,6 +153,17 @@ class BatteryPackState:
     cells: tuple[BatteryCellState, ...]
     bms: BMSState = field(default_factory=BMSState)
 
+    def __post_init__(self) -> None:
+        cells = tuple(self.cells)
+        if not cells or any(not isinstance(cell, BatteryCellState)
+                            for cell in cells):
+            raise TypeError(
+                "BatteryPackState.cells must be a non-empty sequence of "
+                "BatteryCellState")
+        if not isinstance(self.bms, BMSState):
+            raise TypeError("BatteryPackState.bms must be BMSState")
+        object.__setattr__(self, "cells", cells)
+
 
 @dataclass(frozen=True)
 class BatteryStepInput:
@@ -169,6 +176,27 @@ class BatteryStepInput:
     contactor_command: bool = True
     trip_command: bool = False
     reset_command: bool = False
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "requested_series_current", _finite(
+            self.requested_series_current,
+            name="BatteryStepInput.requested_series_current"))
+        temperatures = tuple(_positive(
+            value, name="BatteryStepInput.cell_temperature")
+            for value in self.cell_temperatures)
+        faults = tuple(self.cell_faults)
+        balance = tuple(self.balance_enabled)
+        if any(not isinstance(value, BatteryCellFaults) for value in faults):
+            raise TypeError(
+                "BatteryStepInput.cell_faults must contain BatteryCellFaults")
+        if any(not isinstance(value, bool) for value in balance):
+            raise TypeError("BatteryStepInput.balance_enabled must contain bools")
+        for name in ("contactor_command", "trip_command", "reset_command"):
+            if not isinstance(getattr(self, name), bool):
+                raise TypeError(f"BatteryStepInput.{name} must be bool")
+        object.__setattr__(self, "cell_temperatures", temperatures)
+        object.__setattr__(self, "cell_faults", faults)
+        object.__setattr__(self, "balance_enabled", balance)
 
 
 @dataclass(frozen=True)
@@ -285,7 +313,9 @@ class PassiveBalancer:
     current_limit: float = math.inf
 
     def __post_init__(self) -> None:
-        if isinstance(self.cell_index, bool) or self.cell_index < 0:
+        if isinstance(self.cell_index, bool) or not isinstance(self.cell_index, int):
+            raise TypeError("PassiveBalancer.cell_index must be an integer")
+        if self.cell_index < 0:
             raise ValueError("PassiveBalancer.cell_index must be >= 0")
         _positive(self.resistance, name="PassiveBalancer.resistance")
         if math.isnan(float(self.current_limit)) or self.current_limit <= 0.0:

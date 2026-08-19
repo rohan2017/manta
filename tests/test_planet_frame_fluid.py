@@ -165,8 +165,10 @@ def test_custom_planet_frame_fluid_lambda():
 # ---------------------------------------------------------------------------
 
 def _wave_world(**earth_kw):
-    """Earth centred at (0,0,-R_EQ): sea level ≈ world z=0 at the origin."""
-    earth = Earth(rotation_rate=0.0, position=(0, 0, -Earth.R_EQ), **earth_kw)
+    """Earth centred at (0,0,-polar radius): the north-pole sea level is
+    world z=0 at the origin."""
+    polar_r = Earth.R_EQ * (1.0 - Earth.FLATTENING)
+    earth = Earth(rotation_rate=0.0, position=(0, 0, -polar_r), **earth_kw)
     w = World(); w.add_planet(earth)
     c = Craft("probe"); c.add(Mass("body", mass=1.0))
     w.add_craft(c, position=(0, 0, 1.0))

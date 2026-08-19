@@ -46,8 +46,7 @@ def test_ekf_predict_with_per_tick_input():
     w.add_craft(c)
     sim = TargetNumpy(Sim(w))
     # EKF
-    _ekf_world = World().add_field(GravityField(g=g))
-    _ekf_world.add_craft(c)
+    _ekf_world = w
     ekf = TargetNumpy(EKF(_ekf_world, sensors=[]))
 
     # Thrust profile: zero for 0.2s, then m·g (hover) for 0.5s, then 2·m·g.
@@ -138,13 +137,12 @@ def test_hover_with_eskf_tracks_ground_truth():
 
     # EKF path. Initial estimate offset from truth so we can watch it pull
     # in via measurement updates.
-    _ekf_world = World().add_field(GravityField(g=g_world))
-    _ekf_world.add_craft(c)
+    _ekf_world = w
     ekf = TargetNumpy(EKF(_ekf_world, sensors=[]))
     init = c.initial_state(position=(0.0, 0.0, 4.0),
                            velocity=(0.5, 0.0, 0.0))
     P0   = np.eye(ekf.spec.tangent_dim) * 1e-1
-    ekf.reset(state={"drone": init}, P=P0)
+    ekf.reset_from_model_record({"drone": init}, P=P0)
 
     # Noise model.
     sigma_gyro = 0.01     # rad/s standard deviation
@@ -255,13 +253,12 @@ def test_eskf_nees_consistency_over_seeds():
         w.add_craft(c, position=(0, 0, 5))
         cw = TargetNumpy(Sim(w))
 
-        _ekf_world = World().add_field(GravityField(g=g_world))
-
-        _ekf_world.add_craft(c)
+        _ekf_world = w
 
         ekf = TargetNumpy(EKF(_ekf_world, sensors=[]))
         init = c.initial_state(position=(0, 0, 4), velocity=(0.5, 0, 0))
-        ekf.reset(state={"drone": init}, P=np.eye(ekf.spec.tangent_dim) * 1e-1)
+        ekf.reset_from_model_record(
+            {"drone": init}, P=np.eye(ekf.spec.tangent_dim) * 1e-1)
 
         h_pos  = measurement_slot(ekf.spec, "position")
         h_gyro = measurement_slot(ekf.spec, "angular_velocity")

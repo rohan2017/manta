@@ -242,6 +242,17 @@ class Field:
             disturbance.name = check_name(
                 f"{type(disturbance).__name__}_{n}",
                 who=type(disturbance).__name__)
+        if any(d.name == disturbance.name for d in self._disturbances):
+            raise ValueError(
+                f"{type(self).__name__}.add: disturbance name "
+                f"{disturbance.name!r} already exists")
+        owner = getattr(disturbance, "_field", None)
+        if owner is not None and owner is not self:
+            raise ValueError(
+                f"{type(self).__name__}.add: disturbance "
+                f"{disturbance.name!r} already belongs to "
+                f"{type(owner).__name__}")
+        disturbance._field = self
         self._disturbances.append(disturbance)
         return self
 

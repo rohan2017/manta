@@ -40,7 +40,7 @@ from .state_spec import (
 from .wrench import Wrench
 from .graph import Graph
 from .module import (
-    EntryPoint, Hosting, Module, Port, PortField, PortRef, Role,
+    EntryPoint, Hosting, Module, ModuleKind, Port, PortField, PortRef, Role,
     StateField, StateLayout, StateRef, entry_ident,
 )
 
@@ -55,6 +55,6 @@ __all__ = [
     "resolve_slotset",
     "Wrench",
     "Graph",
-    "Module", "StateLayout", "StateField", "Port", "PortField", "Role",
+    "Module", "ModuleKind", "StateLayout", "StateField", "Port", "PortField", "Role",
     "EntryPoint", "StateRef", "PortRef", "Hosting", "entry_ident",
 ]

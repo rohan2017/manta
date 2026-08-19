@@ -11,13 +11,25 @@ fields.
 
 - **The planet-fixed frame** — axis + rotation rate, and the symbolic +
   numpy transforms between `PlanetFrame` and `WorldFrame`.
+- **The reference shape** — a `Planet` is a sphere or an oblate spheroid
+  (`equatorial_radius`, `flattening`) about its spin axis. `Earth` is the
+  WGS-84 ellipsoid: "up" is the geodetic normal, altitude is height above
+  the ellipsoid, and `earth.ecef_from_geodetic(lat, lon, alt)` /
+  `earth.geodetic_from_ecef(p)` / `earth.scene_at_geodetic(lat, lon, alt)`
+  use the same geodetic lat/lon/alt a GNSS receiver reports (PlanetFrame
+  axes = WGS-84 ECEF for the default spin axis). A spherical Earth is
+  `Earth(flattening=0.0)`.
 - **Standing disturbances** — what `Earth` auto-registers on the world's
-  shared fields: point-mass (+ optional J2) gravity, an `Ocean` + ISA
-  `Atmosphere` pair of fluid regimes (baseline media built on
-  `PlanetFrameFluid`), a dipole magnetic field.
+  shared fields: point-mass + J2 gravity (J2 on by default for the oblate
+  Earth — with the spinning frame's centrifugal term it makes the
+  ellipsoid an equipotential, so gravity is normal to the sea surface), an
+  `Ocean` + ISA `Atmosphere` pair of fluid regimes (baseline media built on
+  `PlanetFrameFluid`) split at the ellipsoid, the sea surface as a solid
+  `Ellipsoid` collision obstacle, a dipole magnetic field.
 - **Initial-state factories** — `earth.position(...)`, `earth.velocity(...)`,
   `earth.velocity(0, 0, 0)` and how they resolve to WorldFrame seeds at compile time.
-- **`Scene`** — `earth.scene_at(planet_point)` returns a local East/North/Up
+- **`Scene`** — `earth.scene_at(planet_point)` / `scene_at_geodetic(lat, lon)`
+  returns a local East/North/Up
   frame fixed in the planet's body frame, used as numeric I/O glue while the
   dynamics stay in WorldFrame: `scene.at_rest(...)` for full rigid-attachment
   placement (orbital velocity + body spin rate + local-tangent attitude) in

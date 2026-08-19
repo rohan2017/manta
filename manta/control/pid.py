@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import casadi as ca
 
+from .._validation import require_finite, require_positive
 from ..ir.manifold import ScalarManifold
 from ..recurrence import RecurrenceBlock
 
@@ -57,13 +58,15 @@ class PID(RecurrenceBlock):
                  integral_limit: float | None = None,
                  output_limit: float | None = None,
                  name: str = "pid") -> None:
-        self.kp = float(kp)
-        self.ki = float(ki)
-        self.kd = float(kd)
+        self.kp = float(require_finite(kp, name="PID.kp"))
+        self.ki = float(require_finite(ki, name="PID.ki"))
+        self.kd = float(require_finite(kd, name="PID.kd"))
         self.integral_limit = (None if integral_limit is None
-                               else float(integral_limit))
+                               else require_positive(
+                                   integral_limit, name="PID.integral_limit"))
         self.output_limit = (None if output_limit is None
-                             else float(output_limit))
+                             else require_positive(
+                                 output_limit, name="PID.output_limit"))
 
         kp_, ki_, kd_ = self.kp, self.ki, self.kd
         i_lim, o_lim = self.integral_limit, self.output_limit

@@ -198,7 +198,7 @@ def nees(world, *, dt: float, steps: int,
     names = resolve_sensor_set(ekf_ir, sensors, who="nees")
 
     def truth_vec(world_rt) -> np.ndarray:
-        return spec.pack_any(world_rt.state)
+        return spec.pack_projected(world_rt.state)
 
     nees_samples: list[float] = []
     for r in range(runs):

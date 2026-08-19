@@ -1,8 +1,8 @@
 """Hydrofoil — climbs out of a waving Earth ocean onto its foils.
 
 The world is a real-scale `Earth` (point-mass gravity, ocean +
-atmosphere) centred at ``(0, 0, −R_EQ)`` so sea level is the world
-``z ≈ 0`` plane, with `SeaWaves` riding the boundary: the water/air
+atmosphere) centred one polar radius below the origin so the north-pole
+sea level is the world ``z ≈ 0`` plane, with `SeaWaves` riding the boundary: the water/air
 interface is a moving sinusoid carrying deep-water orbital velocity, so
 the hull genuinely bobs at rest and the foils feel the moving water.
 
@@ -178,7 +178,8 @@ def build_world():
     pan.add(tilt)
     b.add(pan)
 
-    earth = Earth(position=(0.0, 0.0, -Earth.R_EQ), waves=WAVES,
+    polar_r = Earth.R_EQ * (1.0 - Earth.FLATTENING)
+    earth = Earth(position=(0.0, 0.0, -polar_r), waves=WAVES,
                   surface_smoothing=SMOOTH)
     w = World().add_planet(earth)
     w.add_craft(b, position=(0.0, 0.0, 0.02))

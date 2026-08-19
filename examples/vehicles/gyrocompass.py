@@ -60,7 +60,6 @@ LAT = np.radians(45.0)                       # latitude (sets the north signal)
 GYRO_SIGMA = 1.0e-5                           # FOG/RLG-grade: resolves 7e-5 rad/s
 # A real point on Earth at 45°N (the planet keeps its true +z spin axis — no
 # axis-tilt trick). The buoy floats 0.2 m below the surface in SCENE coords.
-ANCHOR = (Earth.R_EQ * float(np.cos(LAT)), 0.0, Earth.R_EQ * float(np.sin(LAT)))
 BELOW = (0.0, 0.0, -0.2)
 
 
@@ -88,7 +87,7 @@ def build_world(heading_deg: float):
     earth = Earth(waves=SeaWaves(amplitude=0.0, wavelength=12.0),
                   surface_smoothing=0.3)
     w = World().add_planet(earth)
-    scene = earth.scene_at(ANCHOR)
+    scene = earth.scene_at_geodetic(np.degrees(LAT), 0.0)
     # `scene.at_rest` rigidly attaches the buoy to the spinning Earth: it
     # derives the co-orbit velocity (Ω×r, so the buoy is at rest in the sea —
     # no current) AND the body spin rate (so the IMU senses Ω). `heading`

@@ -5,7 +5,13 @@ A `Planet` defines:
   1. A coordinate frame (`PlanetFrame`) whose origin is at the planet's
      center in `WorldFrame` and which rotates with constant angular
      velocity `omega` about a fixed axis.
-  2. A set of field disturbances the planet contributes to the World's
+  2. A reference shape — a sphere or an oblate spheroid (`flattening`)
+     about the spin axis — that fixes what "up" and "altitude" mean at
+     a point: geodetic, i.e. along the spheroid's surface normal, which
+     is what a plumb line, an ellipsoidal GNSS height, and a WGS-84
+     latitude all refer to. A spherical planet (flattening 0) reduces
+     to the radial.
+  3. A set of field disturbances the planet contributes to the World's
      shared GravityField / FluidField / MagField when it's added via
      `World.add_planet(planet)`.
 
@@ -36,6 +42,36 @@ if TYPE_CHECKING:
     from .state import PlanetState
 
 
+def geodetic_from_cylindrical(rho: float, z: float,
+                              equatorial_radius: float, flattening: float
+                              ) -> tuple[float, float]:
+    """Geodetic latitude (rad) and height (m) of a point at equatorial
+    distance `rho` and axial coordinate `z` on/above an oblate spheroid.
+
+    Bowring's method (reduced-latitude seed, one closed-form correction,
+    then one fixed-point refinement) — sub-micrometre in height for
+    anything from the core to well beyond LEO. With `flattening == 0`
+    the formulas collapse exactly to `atan2(z, rho)` and `r − a`.
+    `manta.fields.collision.Ellipsoid` carries the same formulas in
+    CasADi form for the symbolic surface; the two are cross-checked in
+    the tests.
+    """
+    a = float(equatorial_radius)
+    f = float(flattening)
+    e2 = f * (2.0 - f)
+    b = a * (1.0 - f)
+    ep2 = e2 / (1.0 - e2)
+    beta = np.arctan2(a * z, b * rho)
+    lat = np.arctan2(z + ep2 * b * np.sin(beta) ** 3,
+                     rho - e2 * a * np.cos(beta) ** 3)
+    beta = np.arctan2((1.0 - f) * np.sin(lat), np.cos(lat))
+    lat = np.arctan2(z + ep2 * b * np.sin(beta) ** 3,
+                     rho - e2 * a * np.cos(beta) ** 3)
+    height = (rho * np.cos(lat) + z * np.sin(lat)
+              - a * np.sqrt(1.0 - e2 * np.sin(lat) ** 2))
+    return float(lat), float(height)
+
+
 class Planet:
     """Body-fixed rotating planet frame + field-disturbance source.
 
@@ -46,6 +82,16 @@ class Planet:
         omega          — angular rate, rad/s. Positive ⇒ right-hand-rule
                          rotation about `rotation_axis`. Earth sidereal
                          is ~7.272e-5 rad/s; default 0 (non-rotating).
+        equatorial_radius — semi-major axis of the reference spheroid, m.
+                         Required for geodetic lat/lon/alt (`
+                         ecef_from_geodetic`, `scene_at_geodetic`) and
+                         for an oblate planet; `None` (default) leaves
+                         the planet a shape-less rotating frame whose
+                         Cartesian API still works.
+        flattening     — `(a − b)/a` of the reference spheroid about the
+                         spin axis. 0 (default) is a sphere. Sets the
+                         geodetic Up used by `local_tangent_basis` and
+                         everything built on it (`Scene`).
     """
 
     def __init__(self,
@@ -53,7 +99,9 @@ class Planet:
                  *,
                  position: tuple[float, float, float] = (0.0, 0.0, 0.0),
                  rotation_axis: tuple[float, float, float] = (0.0, 0.0, 1.0),
-                 omega: float = 0.0) -> None:
+                 omega: float = 0.0,
+                 equatorial_radius: float | None = None,
+                 flattening: float = 0.0) -> None:
         from ..ir.module import check_name
         self.name = check_name(str(name), who=type(self).__name__)
         pos = np.asarray(position, dtype=float)
@@ -66,6 +114,33 @@ class Planet:
             raise ValueError("Planet: rotation_axis must be nonzero.")
         self.axis = axis / n
         self.omega = float(omega)
+        self.flattening = float(flattening)
+        if not (0.0 <= self.flattening < 1.0):
+            raise ValueError(
+                f"Planet: flattening must be in [0, 1), got {flattening!r}")
+        self.equatorial_radius = (None if equatorial_radius is None
+                                  else float(equatorial_radius))
+        if self.equatorial_radius is not None and self.equatorial_radius <= 0.0:
+            raise ValueError(
+                f"Planet: equatorial_radius must be > 0, got {equatorial_radius!r}")
+        if self.flattening > 0.0 and self.equatorial_radius is None:
+            raise ValueError(
+                "Planet: an oblate planet (flattening > 0) needs its "
+                "equatorial_radius — geodetic latitude off the surface "
+                "depends on the spheroid's size.")
+        # Planet-fixed Cartesian axes for geodetic coordinates: +z is the
+        # spin axis, +x the prime meridian (WorldFrame +x projected off the
+        # axis; +y if the axis IS +x), +y = z × x. For the default axis
+        # (0, 0, 1) these are the WorldFrame axes themselves, so a
+        # PlanetFrame vector IS the ECEF vector of WGS-84 (x through
+        # Greenwich on the equator, z through the north pole).
+        for ref in (np.array([1.0, 0.0, 0.0]), np.array([0.0, 1.0, 0.0])):
+            x_axis = ref - float(np.dot(ref, self.axis)) * self.axis
+            if float(np.linalg.norm(x_axis)) > 1e-9:
+                break
+        x_axis = x_axis / float(np.linalg.norm(x_axis))
+        self._geodetic_axes = np.column_stack(
+            [x_axis, np.cross(self.axis, x_axis), self.axis])
 
     # ------------------------------------------------------------------
     # Numpy transforms (numeric, eager)
@@ -179,12 +254,16 @@ class Planet:
                             position: tuple[float, float, float]
                             ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Local East/North/Up unit vectors (WorldFrame) at a WorldFrame
-        point — a purely Cartesian local-tangent frame, no lat/lon.
+        point — a purely Cartesian local-tangent frame, no lon needed.
 
-        `Up` is the local radial (from the planet centre out through the
-        point). `North` is the planet's spin axis projected into the
-        tangent plane and normalised — the same true-north direction a
-        gyrocompass finds from the spin vector. `East = North × Up`.
+        `Up` is the **geodetic** normal of the reference spheroid: the
+        direction a plumb line (gravity + centrifugal) hangs along on a
+        planet in hydrostatic balance, and the one geodetic latitude /
+        ellipsoidal height refer to. For a spherical planet (flattening
+        0) it is exactly the local radial. `North` is the planet's spin
+        axis projected into the tangent plane and normalised — the same
+        true-north direction a gyrocompass finds from the spin vector.
+        `East = North × Up`.
 
         Where North is undefined — the planet isn't rotating, or the
         point sits on the spin axis — it falls back to a stable
@@ -198,7 +277,17 @@ class Planet:
             raise ValueError(
                 f"{type(self).__name__}.local_tangent_basis: undefined at "
                 f"the planet centre")
-        up = r_world / n
+        if self.flattening == 0.0:
+            up = r_world / n
+        else:
+            z = float(np.dot(r_world, self.axis))
+            rho_vec = r_world - z * self.axis
+            rho = float(np.linalg.norm(rho_vec))
+            lat, _ = geodetic_from_cylindrical(
+                rho, z, self.equatorial_radius, self.flattening)
+            e_rho = rho_vec / rho if rho > 0.0 else np.zeros(3)
+            up = np.cos(lat) * e_rho + np.sin(lat) * self.axis
+            up = up / float(np.linalg.norm(up))
         north = self.axis - float(np.dot(self.axis, up)) * up
         nn = float(np.linalg.norm(north))
         if nn < 1e-9:
@@ -226,8 +315,8 @@ class Planet:
                                   heading: float = 0.0) -> tuple:
         """World-from-craft quaternion `(w, x, y, z)` placing the craft in
         the local-tangent frame at WorldFrame point `position`: body
-        forward (+x) along North, up (+z) along the local radial, yawed by
-        `heading` (radians, right-handed about Up — 0 faces North).
+        forward (+x) along North, up (+z) along the geodetic normal, yawed
+        by `heading` (radians, right-handed about Up — 0 faces North).
 
         Cartesian and general: 'North' is the spin-axis tangential
         projection (see `local_tangent_basis`)."""
@@ -246,13 +335,79 @@ class Planet:
         `position` is in the planet-fixed frame (origin at the planet
         centre), so a point on the surface is a planet-radius vector — with
         the planet left at the world origin you place a craft anywhere on
-        it: north pole `(0, 0, R_EQ)`, equator `(R_EQ, 0, 0)`. The scene's
-        axes are the local tangent frame there (+z up, +x north), optionally
-        yawed by `heading` (radians) about up. See `Scene` for the full API
-        (`at_rest`, `relative`, `world_pose`).
+        it: equator `(R_EQ, 0, 0)`, north pole `(0, 0, R_EQ·(1 − f))`. For
+        a lat/lon/alt anchor use `scene_at_geodetic`. The scene's axes are
+        the local tangent frame there (+z geodetic up, +x north),
+        optionally yawed by `heading` (radians) about up. See `Scene` for
+        the full API (`at_rest`, `relative`, `world_pose`).
         """
         from .scene import Scene
         return Scene(self, position, heading=heading)
+
+    # ------------------------------------------------------------------
+    # Geodetic coordinates — lat/lon/alt on the reference spheroid. Numpy
+    # only (placement + reporting), self-contained: Manta must not import
+    # a geodesy library, and a consumer that owns one can cross-check.
+    # ------------------------------------------------------------------
+
+    def _require_shape(self, who: str) -> float:
+        if self.equatorial_radius is None:
+            raise ValueError(
+                f"{type(self).__name__}.{who}: geodetic coordinates need "
+                f"the planet's equatorial_radius (this planet has no "
+                f"reference shape).")
+        return self.equatorial_radius
+
+    def ecef_from_geodetic(self, lat_deg: float, lon_deg: float,
+                           alt_m: float = 0.0) -> np.ndarray:
+        """PlanetFrame position (m) of geodetic `(lat_deg, lon_deg,
+        alt_m)` on this planet's reference spheroid.
+
+        Latitude is geodetic (normal to the spheroid), altitude is height
+        along that normal. Planet-frame axes: +z along the spin axis, +x
+        through the prime meridian (lon 0) on the equator, +y at 90° E —
+        for the default `rotation_axis=(0, 0, 1)` these coincide with the
+        WorldFrame axes and the WGS-84 ECEF convention. Pass the result to
+        `scene_at` / `World.add_craft(position=planet.position(*p))`.
+        """
+        a = self._require_shape("ecef_from_geodetic")
+        lat = np.radians(float(lat_deg))
+        lon = np.radians(float(lon_deg))
+        if not (abs(lat) <= np.pi / 2 + 1e-12 and np.isfinite(lon)
+                and np.isfinite(float(alt_m))):
+            raise ValueError(
+                f"{type(self).__name__}.ecef_from_geodetic: lat must be in "
+                f"[-90, 90] deg and lon/alt finite; got "
+                f"({lat_deg!r}, {lon_deg!r}, {alt_m!r})")
+        e2 = self.flattening * (2.0 - self.flattening)
+        sin_lat, cos_lat = np.sin(lat), np.cos(lat)
+        N = a / np.sqrt(1.0 - e2 * sin_lat * sin_lat)
+        local = np.array([(N + alt_m) * cos_lat * np.cos(lon),
+                          (N + alt_m) * cos_lat * np.sin(lon),
+                          (N * (1.0 - e2) + alt_m) * sin_lat])
+        return self._geodetic_axes @ local
+
+    def geodetic_from_ecef(self, p_planet) -> tuple[float, float, float]:
+        """Geodetic `(lat_deg, lon_deg, alt_m)` of a PlanetFrame point —
+        the inverse of `ecef_from_geodetic` (same axis convention)."""
+        a = self._require_shape("geodetic_from_ecef")
+        p = np.asarray(p_planet, dtype=float).reshape(3)
+        local = self._geodetic_axes.T @ p
+        rho = float(np.hypot(local[0], local[1]))
+        lat, alt = geodetic_from_cylindrical(rho, float(local[2]),
+                                             a, self.flattening)
+        lon = float(np.arctan2(local[1], local[0]))
+        return float(np.degrees(lat)), float(np.degrees(lon)), alt
+
+    def scene_at_geodetic(self, lat_deg: float, lon_deg: float,
+                          alt_m: float = 0.0, *,
+                          heading: float = 0.0) -> "Scene":
+        """`scene_at` anchored by geodetic lat/lon/alt — the natural way
+        to place a site on a real planet (`Earth`): +z is the geodetic
+        normal there, +x north, yawed by `heading` (radians) about up."""
+        return self.scene_at(
+            tuple(self.ecef_from_geodetic(lat_deg, lon_deg, alt_m)),
+            heading=heading)
 
     # ------------------------------------------------------------------
     # Disturbance registration (subclass override hook)

@@ -144,6 +144,7 @@ class NoiseFitResult:
         if not self.converged:
             raise RuntimeError(
                 "NoiseFitResult.apply refuses to write an unconverged solve")
+        staged = []
         for c in self._channels:
             pieces = c.alias.split(".")
             owner = None
@@ -162,7 +163,18 @@ class NoiseFitResult:
                 raise KeyError(
                     f"NoiseFitResult.apply: no owner for channel {c.alias!r} "
                     f"in the authoring world — was it rebuilt since the fit?")
-            setattr(owner, f"{c.decl_name}_sigma", self.values[c.alias])
+            value = self.values[c.alias]
+            if not np.isfinite(value) or value < 0.0:
+                raise ValueError(
+                    f"NoiseFitResult.apply: invalid sigma for {c.alias!r}")
+            attr = f"{c.decl_name}_sigma"
+            if not hasattr(owner, attr):
+                raise KeyError(
+                    f"NoiseFitResult.apply: owner of {c.alias!r} no longer "
+                    f"declares {attr!r}")
+            staged.append((owner, attr, value))
+        for owner, attr, value in staged:
+            setattr(owner, attr, value)
 
     def summary(self) -> str:
         rows = [("channel", "fitted σ", "prior σ(rel)", "post σ(rel)",
@@ -314,7 +326,7 @@ class NoiseFit:
         s0 = np.concatenate([c.init for c in self.channels]).reshape(-1, 1)
         sys = self.sys
         flat = flatten_nested(self.model_world._initial_state_dict())
-        x0 = np.asarray(sys.spec.pack_any(flat), dtype=float)
+        x0 = np.asarray(sys.spec.pack_projected(flat), dtype=float)
         s_sym = ca.MX.sym("s", self.n_s, 1)
         zero_dt = ca.MX.zeros(1, 1)
         for full, sm in sys.sensors.items():

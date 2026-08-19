@@ -310,6 +310,7 @@ class FitResult:
         if not self.converged:
             raise RuntimeError(
                 "FitResult.apply refuses to write an unconverged solve")
+        staged = []
         for full, dim in self._fields:
             try:
                 craft_name, part_name, pname = full.split(".", 2)
@@ -328,8 +329,17 @@ class FitResult:
                     f"in this world for fitted parameter {full!r} — was "
                     f"the world rebuilt since the fit?")
             theta = np.atleast_1d(self.values[full])
-            setattr(part, pname,
-                    float(theta[0]) if dim == 1 else tuple(theta))
+            if theta.size != dim or not np.all(np.isfinite(theta)):
+                raise ValueError(
+                    f"FitResult.apply: fitted parameter {full!r} is invalid")
+            if not hasattr(part, pname):
+                raise KeyError(
+                    f"FitResult.apply: part {craft_name}.{part_name} has no "
+                    f"parameter {pname!r}")
+            staged.append((part, pname,
+                           float(theta[0]) if dim == 1 else tuple(theta)))
+        for part, pname, value in staged:
+            setattr(part, pname, value)
 
     def summary(self) -> str:
         """Per-component table: fitted value, prior σ vs posterior σ.

@@ -179,9 +179,13 @@ estimable through the EKF.
 
 - Holds a planet-fixed frame (axis + rotation rate) and provides
   symbolic + numpy transforms between PlanetFrame and WorldFrame.
+- Has a reference shape — sphere or oblate spheroid. `Earth` is the
+  WGS-84 ellipsoid with geodetic up/altitude and lat/lon/alt helpers
+  (`ecef_from_geodetic`, `geodetic_from_ecef`, `scene_at_geodetic`).
 - Auto-registers standing disturbances on the world's shared fields
-  (Earth: point-mass + optional J2 gravity, ocean + ISA atmosphere
-  via `PlanetFrameFluid`, dipole magnetic field).
+  (Earth: point-mass + J2 gravity, ocean + ISA atmosphere split at the
+  ellipsoid via `PlanetFrameFluid`, the sea surface as a collision
+  obstacle, dipole magnetic field).
 - Provides initial-state factories — `earth.position(x, y, z)`,
   `earth.velocity(vx, vy, vz)` — that resolve to
   WorldFrame seeds at compile time via the planet's transform.

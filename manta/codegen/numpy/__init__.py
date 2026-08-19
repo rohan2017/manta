@@ -36,7 +36,7 @@ backend never mentions a transform.
 
 from __future__ import annotations
 
-from ...ir.module import Hosting, Role
+from ...ir.module import ModuleKind
 from ._compile import CompilationError, compile_functions
 from ._filter import FilterCheckpoint, NumpyFilter, UpdateResult
 from ._filter_replay import (
@@ -50,11 +50,11 @@ from ._filter_replay import (
     ReplayUpdate,
     TargetFilterReplay,
 )
-from ._noise import NoiseDriver
+from ._noise import NoiseCheckpoint, NoiseDriver
 from ._recurrence import NumpyRecurrence
 from ._regulator import NumpyRegulator
 from ._runtime import NumpyRuntime
-from ._sim import NumpySim
+from ._sim import NumpySim, SimCheckpoint
 
 __all__ = [
     "CompilationError",
@@ -62,6 +62,7 @@ __all__ = [
     "FilterReplayProgram",
     "FilterReplayResult",
     "NativeFilterReplay",
+    "NoiseCheckpoint",
     "NoiseDriver",
     "NumpyFilter",
     "NumpyRecurrence",
@@ -73,6 +74,7 @@ __all__ = [
     "ReplayOperation",
     "ReplayPredict",
     "ReplayUpdate",
+    "SimCheckpoint",
     "TargetFilterReplay",
     "TargetNumpy",
     "UpdateResult",
@@ -99,24 +101,11 @@ def TargetNumpy(x, *, compile: bool = False) -> NumpyRuntime:
 
 
 def _select_view(m):
-    """Pick the matching view class from the Module's SHAPE — Hosting plus the
-    Role/field signature, never an entry-point name (the C++ emitter's
-    no-name-matching discipline, applied to view selection):
-
-      * HELD + a matrix State field (the EKF covariance `P`)  → NumpyFilter
-      * HELD + an OUTPUT port (a recurrence's readouts)       → NumpyRecurrence
-      * a NOISE port (the simulation oracle's live draw)      → NumpySim
-      * returns a CONTROL port (a control law's `u`)          → NumpyRegulator
-      * anything else (e.g. the Sim's noiseless deploy bundle) → the engine
-    """
-    if m.hosting is Hosting.HELD:
-        if m.matrix_fields:
-            return NumpyFilter
-        if m.sole_port(Role.OUTPUT) is not None:
-            return NumpyRecurrence
-        return NumpyRuntime
-    if m.sole_port(Role.NOISE) is not None:
-        return NumpySim
-    if m.returns_role(Role.CONTROL):
-        return NumpyRegulator
-    return NumpyRuntime
+    """Select a runtime view from the Module's explicit capability."""
+    return {
+        ModuleKind.KERNEL: NumpyRuntime,
+        ModuleKind.SIMULATOR: NumpySim,
+        ModuleKind.FILTER: NumpyFilter,
+        ModuleKind.RECURRENCE: NumpyRecurrence,
+        ModuleKind.REGULATOR: NumpyRegulator,
+    }[m.kind]

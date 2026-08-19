@@ -302,7 +302,7 @@ class LinearizedSystem:
 
     def pack_ref(self, spec) -> np.ndarray:
         """Pack the operating-point reference into `spec`'s ambient layout."""
-        return spec.pack_any(self.ref_flat)
+        return spec.pack_projected(self.ref_flat)
 
     def resolve_u(self, u: dict[str, float] | None, *,
                   who: str = "LinearizedSystem") -> np.ndarray:

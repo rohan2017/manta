@@ -7,8 +7,8 @@ a flat vector (FossenDamping's 6x6 damping tensor as R36) and for
 `Noise(signal_manifold="R7")`-style declarations.
 
 This file exists because the pair shipped with zero coverage: a missing
-module-level numpy import made `VecN.constant` — and with it
-`VecN.coerce` and `RnManifold.ir_zero` — raise NameError on first call,
+module-level numpy import made `VecN[n].constant` — and with it
+`VecN[n].coerce` and `RnManifold.ir_zero` — raise NameError on first call,
 and the whole IR suite still passed. The tests below exercise every
 entry point that touches numpy, plus the `"R<n>"` shortcut grammar and
 the manifold identities.
@@ -30,29 +30,26 @@ from manta.ir.types import VecN
 # ---------------------------------------------------------------------------
 
 def test_constant_from_sequence_infers_dim():
-    v = VecN.constant([1.0, 2.0, 3.5, -4.0])
+    v = VecN[4].constant([1.0, 2.0, 3.5, -4.0])
     assert v.dim == 4
     assert np.allclose(np.asarray(v._mx.to_DM()).reshape(-1),
                        [1.0, 2.0, 3.5, -4.0])
 
 
 def test_constant_with_matching_dim_is_accepted():
-    v = VecN.constant(np.zeros(7), 7)
+    v = VecN[7].constant(np.zeros(7))
     assert v.dim == 7
 
 
 def test_constant_with_wrong_dim_raises():
     with pytest.raises(ValueError, match="expected 3 entries"):
-        VecN.constant([1.0, 2.0], 3)
+        VecN[3].constant([1.0, 2.0])
 
 
-def test_class_getitem_grammar_matches_the_dim_argument_form():
-    """`VecN[n].input(name)` is the house `Cls[param].constructor` grammar;
-    `VecN.input(name, n)` is the older keyword form that `RnManifold`
-    calls. They must build the same thing."""
+def test_class_getitem_grammar_builds_dimensioned_inputs():
     with ir.Graph():
         a = VecN[5].input("a")
-        b = VecN.input("b", 5)
+        b = VecN[5].input("b")
     assert a.dim == b.dim == 5
     assert a._mx.shape == b._mx.shape == (5, 1)
 
@@ -75,8 +72,8 @@ def test_coerce_passes_a_vecn_through_and_wraps_a_plain_value():
     Python sequence becomes a constant of the declared dim."""
     with ir.Graph():
         promoted = VecN[6].input("D")
-        assert VecN.coerce(promoted, 6) is promoted
-    wrapped = VecN.coerce([0.0] * 6, 6)
+        assert VecN[6].coerce(promoted) is promoted
+    wrapped = VecN[6].coerce([0.0] * 6)
     assert isinstance(wrapped, VecN) and wrapped.dim == 6
 
 

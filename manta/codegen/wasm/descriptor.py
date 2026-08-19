@@ -109,6 +109,9 @@ def build_descriptor(module, layouts, *, class_name: str,
 
     return {
         "name": module.name,
+        "kind": module.kind.value,
+        "artifactId": module.artifact_id,
+        "controllerId": module.metadata.get("controller_id"),
         "className": class_name,
         "basename": basename,
         "hosting": module.hosting.value,

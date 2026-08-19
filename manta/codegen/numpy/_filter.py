@@ -27,6 +27,26 @@ class FilterCheckpoint:
     x: np.ndarray
     P: np.ndarray
     time: float
+    artifact_id: str
+
+    def __post_init__(self) -> None:
+        x = np.asarray(self.x)
+        P = np.asarray(self.P)
+        if x.dtype.kind not in "iuf" or P.dtype.kind not in "iuf":
+            raise TypeError("FilterCheckpoint: x and P must be real numeric arrays")
+        x = np.asarray(x, dtype=float).copy()
+        P = np.asarray(P, dtype=float).copy()
+        if not np.all(np.isfinite(x)) or not np.all(np.isfinite(P)):
+            raise ValueError("FilterCheckpoint: x and P must be finite")
+        if not np.isfinite(self.time):
+            raise ValueError("FilterCheckpoint: time must be finite")
+        if not isinstance(self.artifact_id, str) or not self.artifact_id:
+            raise ValueError("FilterCheckpoint: artifact_id is required")
+        x.flags.writeable = False
+        P.flags.writeable = False
+        object.__setattr__(self, "x", x)
+        object.__setattr__(self, "P", P)
+        object.__setattr__(self, "time", float(self.time))
 
 
 @dataclass(frozen=True)
@@ -101,27 +121,34 @@ class NumpyFilter(NumpyRuntime):
         state while deliberately preserving covariance, use
         :meth:`set_state_keep_covariance`.
         """
-        self._t = 0.0
         x_field = self.module.state.field("x")
-        self._state["x"] = self._spec.pack_any(
+        next_x = self._spec.pack_any(
             state, base=x_field.init) if state is not None else np.asarray(
                 x_field.init, dtype=float).reshape(-1).copy()
         pf = self.module.state.field("P")
-        self._state["P"] = np.asarray(
+        next_P = np.asarray(
             pf.init, dtype=float).reshape(pf.shape).copy()
         if P is not None:
-            P = np.asarray(P, dtype=float)
-            expected = (self._spec.tangent_dim, self._spec.tangent_dim)
-            if P.shape != expected:
-                raise ValueError(
-                    f"reset: P shape {P.shape} doesn't match tangent dim "
-                    f"{expected}")
-            self._state["P"] = P.copy()
+            next_P = self._validate_covariance(P, who="reset P",
+                                               positive_definite=False)
+        self._validate_staged_state({"x": next_x, "P": next_P})
+        self._state["x"], self._state["P"], self._t = next_x, next_P, 0.0
+
+    def reset_from_model_record(self, record: dict, *,
+                                P: np.ndarray | None = None) -> None:
+        """Reset from a broader authoring record containing inputs/noise.
+
+        This explicit projection is for ``Craft.initial_state()``-style
+        records.  Ordinary :meth:`reset` remains strict so typoed state keys
+        cannot disappear among unrelated model fields.
+        """
+        projected = self._spec.pack_projected(record)
+        self.reset(self._spec.to_nested(projected), P=P)
 
     def checkpoint(self) -> FilterCheckpoint:
         """Capture nominal state, covariance, and logical time atomically."""
-        return FilterCheckpoint(self._state["x"].copy(),
-                                self._state["P"].copy(), float(self._t))
+        return FilterCheckpoint(self._state["x"], self._state["P"],
+                                float(self._t), self.module.artifact_id)
 
     def restore(self, checkpoint: FilterCheckpoint) -> None:
         """Restore a checkpoint after strict shape/finite validation.
@@ -131,6 +158,9 @@ class NumpyFilter(NumpyRuntime):
         """
         if not isinstance(checkpoint, FilterCheckpoint):
             raise TypeError("restore: expected FilterCheckpoint")
+        if checkpoint.artifact_id != self.module.artifact_id:
+            raise ValueError(
+                "restore: checkpoint belongs to a different Module artifact")
         x = np.asarray(checkpoint.x, dtype=float)
         P = np.asarray(checkpoint.P, dtype=float)
         expected_x = (self._spec.ambient_dim,)
@@ -170,7 +200,8 @@ class NumpyFilter(NumpyRuntime):
 
     @Q.setter
     def Q(self, value) -> None:
-        self._Q = value
+        self._Q = (None if value is None else self._validate_covariance(
+            value, who="Q", positive_definite=False))
 
     # ---- predict / update (the uniform kernel surface) -------------------
 
@@ -186,9 +217,14 @@ class NumpyFilter(NumpyRuntime):
         dt = require_positive(dt, name=f"{type(self).__name__}.predict dt")
         t0 = self._t if t is None else float(require_finite(
             t, name=f"{type(self).__name__}.predict t"))
-        self._predict_kernel(dt, t0, self.build_u(u),
-                             Q if Q is not None else self._Q)
-        self._t = t0 + dt
+        next_t = float(require_finite(
+            t0 + dt, name=f"{type(self).__name__}.predict resulting time"))
+        process_Q = Q if Q is not None else self._Q
+        if process_Q is not None:
+            process_Q = self._validate_covariance(
+                process_Q, who="predict Q", positive_definite=False)
+        self._predict_kernel(dt, t0, self.build_u(u), process_Q)
+        self._t = next_t
 
     def update(self, target, z=None, R=None, *, t: float | None = None,
                u: dict[str, Any] | None = None) -> UpdateResult:
@@ -238,6 +274,8 @@ class NumpyFilter(NumpyRuntime):
             raise ValueError(
                 f"update {full}: expected z of size {port.size}, got "
                 f"{z_arr.size}.")
+        if not np.all(np.isfinite(z_arr)):
+            raise ValueError(f"update {full}: z contains non-finite values")
         ident = entry_ident(full)
         values = {full: z_arr, "u": u_vec, "t": t}
         if R is None:
@@ -280,6 +318,36 @@ class NumpyFilter(NumpyRuntime):
                 f"update {full}: R must be positive definite") from exc
         return R.copy()
 
+    def _validate_covariance(self, value, *, who: str,
+                             positive_definite: bool) -> np.ndarray:
+        dim = self._spec.tangent_dim
+        matrix = np.asarray(value)
+        if matrix.dtype.kind not in "iuf":
+            raise TypeError(f"{who}: covariance must be real numeric data")
+        matrix = np.asarray(matrix, dtype=float)
+        if matrix.shape != (dim, dim):
+            raise ValueError(
+                f"{who}: shape {matrix.shape} doesn't match {(dim, dim)}")
+        if not np.all(np.isfinite(matrix)):
+            raise ValueError(f"{who}: contains non-finite values")
+        if not np.allclose(matrix, matrix.T, rtol=1e-10, atol=1e-12):
+            raise ValueError(f"{who}: must be symmetric")
+        eigen_min = float(np.linalg.eigvalsh(matrix).min())
+        invalid = (eigen_min <= 0.0 if positive_definite
+                   else eigen_min < -1e-12)
+        if invalid:
+            relation = "positive definite" if positive_definite \
+                else "positive semidefinite"
+            raise ValueError(f"{who}: must be {relation}")
+        return matrix.copy()
+
+    def _validate_staged_state(self, state: dict[str, np.ndarray]) -> None:
+        if "x" in state and not np.all(np.isfinite(state["x"])):
+            raise ValueError("filter state x contains non-finite values")
+        if "P" in state:
+            self._validate_covariance(
+                state["P"], who="filter state P", positive_definite=False)
+
     def _custom_h_fns(self, h_sym: Callable):
         """The `(h, H)` `ca.Function` pair for a caller-supplied `h(x)`,
         built once per callable and memoized — the symbolic construction
@@ -313,10 +381,14 @@ class NumpyFilter(NumpyRuntime):
         manifold ops; the one genuinely runtime-defined measurement."""
         spec = self._spec
         z = np.asarray(z, dtype=float).reshape(-1)
+        if not np.all(np.isfinite(z)):
+            raise ValueError("update custom: z contains non-finite values")
         h_fn, H_fn = self._custom_h_fns(h_sym)
         x_now = self._state["x"]
         h_x = np.asarray(h_fn(x_now)).reshape(-1)
         H = np.asarray(H_fn(x_now))
+        if not np.all(np.isfinite(h_x)) or not np.all(np.isfinite(H)):
+            raise ValueError("update custom: measurement model is non-finite")
         if h_x.size != z.size:
             raise ValueError(
                 f"update: h(x) size {h_x.size} doesn't match z size {z.size}")
@@ -324,8 +396,12 @@ class NumpyFilter(NumpyRuntime):
         x_new, P_new, innovation, S = joseph_update_np(
             self._state["P"], H, R,
             x=x_now, z=z, h=h_x, boxplus=spec.boxplus_num)
+        nis = float(innovation @ np.linalg.solve(S, innovation))
+        if not np.isfinite(nis) or not np.all(np.isfinite(innovation)) \
+                or not np.all(np.isfinite(S)):
+            raise ValueError("update custom: update produced non-finite diagnostics")
+        self._validate_staged_state({"x": x_new, "P": P_new})
         self._state["x"] = x_new
         self._state["P"] = P_new
-        nis = float(innovation @ np.linalg.solve(S, innovation))
         return UpdateResult("custom", innovation.copy(), S.copy(), nis,
                             True, None, True)

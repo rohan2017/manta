@@ -13,7 +13,7 @@ from manta import World, Craft, Sim, LQR, PID, TargetNumpy
 from manta.estimation import EKF
 from manta.fields import GravityField
 from manta.parts import Mass, Thruster, PositionSensor
-from manta.ir.module import Hosting, Module, PortRef, Role, StateRef
+from manta.ir.module import Hosting, Module, ModuleKind, PortRef, Role, StateRef
 
 M, G = 2.0, 9.81
 
@@ -113,7 +113,7 @@ def test_sim_predict_equals_noiseless_step():
             vals["x"] = x          # feed the returned write back in
         x = b.call("predict", vals)["x"]   # first call: module's initial x
     np.testing.assert_allclose(
-        oracle.spec.pack_any(a.state), x, rtol=1e-12, atol=1e-12)
+        oracle.spec.pack_projected(a.state), x, rtol=1e-12, atol=1e-12)
 
 
 def test_threaded_call_returns_writes_and_honors_supplied_state():
@@ -161,7 +161,7 @@ def test_build_u_packs_vector_fields():
     g, a = np.array([0.1, -0.2, 0.3]), np.array([0.0, 0.0, 9.81])
     u = rt.build_u({"gyro": g, "accel": a})
     np.testing.assert_array_equal(u, np.concatenate([g, a]))
-    with pytest.raises(ValueError, match="dim 3"):
+    with pytest.raises(ValueError, match="expected 3"):
         rt.build_u({"gyro": [1.0, 2.0]})
 
 
@@ -221,13 +221,16 @@ def test_recurrence_module_runtime():
 
 def test_sole_port_unique_missing_and_duplicate():
     from manta.ir.module import Port, StateLayout
+    from manta.ir.manifold import SO3Manifold
+    from manta.ir.state_spec import StateSpec
+    spec = StateSpec.from_layout((("q", SO3Manifold()),))
     u = Port("u", Role.CONTROL, shape=(2,))
     za = Port("a.s.za", Role.MEASUREMENT, shape=(3,))
     zb = Port("a.s.zb", Role.MEASUREMENT, shape=(3,))
-    x = Port("x", Role.STATE, shape=(4,))
-    x_ref = Port("x_ref", Role.STATE, shape=(4,))
+    x = Port("x", Role.STATE, shape=(4,), spec=spec)
+    x_ref = Port("x_ref", Role.STATE, shape=(4,), spec=spec)
     m = Module(name="m", state=StateLayout(), ports=(u, za, zb, x, x_ref),
-               functions={}, entry_points=())
+               functions={}, entry_points=(), kind=ModuleKind.KERNEL)
     assert m.sole_port(Role.CONTROL) is u
     assert m.sole_port(Role.NOISE) is None
     # per-channel roles refuse to pick one silently
@@ -237,14 +240,14 @@ def test_sole_port_unique_missing_and_duplicate():
     assert m.sole_port(Role.STATE) is x
 
 
-def test_initial_x_and_spec_fall_back_past_none_manifold_field():
-    """A manifold State field with init=None must not short-circuit the
-    STATE-port fallback (and the same for `spec`)."""
-    from manta.ir.module import Port, StateField, StateLayout
+def test_initial_x_and_spec_can_come_from_state_port():
+    from manta.ir.manifold import SO3Manifold
+    from manta.ir.module import Port, StateLayout
+    from manta.ir.state_spec import StateSpec
     init = np.arange(4.0)
-    f = StateField("x", "manifold", (4,), init=None, spec=None)
-    p = Port("x", Role.STATE, shape=(4,), spec="the-spec", init=init)
-    m = Module(name="m", state=StateLayout((f,)), ports=(p,),
-               functions={}, entry_points=())
-    assert m.initial_x is init
-    assert m.spec == "the-spec"
+    spec = StateSpec.from_layout((("q", SO3Manifold()),))
+    p = Port("x", Role.STATE, shape=(4,), spec=spec, init=init)
+    m = Module(name="m", state=StateLayout(), ports=(p,),
+               functions={}, entry_points=(), kind=ModuleKind.KERNEL)
+    np.testing.assert_array_equal(m.initial_x, init)
+    assert m.spec is spec

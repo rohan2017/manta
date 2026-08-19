@@ -117,8 +117,9 @@ def test_ekf_python_cpp_roundtrip(tmp_path: Path):
 
     # ---- identical loop in numpy ----
     ekf = TargetNumpy(EKF(w))
-    ekf.reset(state={"drone": c.initial_state(position=(0.2, -0.1, 5.0))},
-              P=np.eye(ekf.spec.tangent_dim) * 0.1)
+    ekf.reset_from_model_record(
+        {"drone": c.initial_state(position=(0.2, -0.1, 5.0))},
+        P=np.eye(ekf.spec.tangent_dim) * 0.1)
     g_part = next(p for p in c.parts if p.name == "g")
     gps_part = next(p for p in c.parts if p.name == "gps")
     thr = 1.5 * 9.81
@@ -235,9 +236,10 @@ def test_ekf_multicraft_roundtrip(tmp_path: Path):
            for l in p.stdout.strip().splitlines()}
 
     ekf = TargetNumpy(EKF(w))
-    ekf.reset(state={"a": a.initial_state(position=(0.1, 0, 5)),
-                     "b": b.initial_state(position=(3, 0, 5))},
-              P=np.eye(ekf.spec.tangent_dim) * 0.1)
+    ekf.reset_from_model_record(
+        {"a": a.initial_state(position=(0.1, 0, 5)),
+         "b": b.initial_state(position=(3, 0, 5))},
+        P=np.eye(ekf.spec.tangent_dim) * 0.1)
     gps_a = next(p for p in a.parts if p.name == "gps")
     gps_b = next(p for p in b.parts if p.name == "gps")
     for i in range(80):

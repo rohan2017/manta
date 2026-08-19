@@ -15,6 +15,7 @@ disturbance that adds a globally-constant velocity to the FluidField.
 
 import casadi as ca
 import numpy as np
+import pytest
 
 from manta import Craft, EKF, Sim, TargetNumpy, World
 from manta.fields import (
@@ -189,14 +190,8 @@ def test_vec_disturbance_state_reaches_ekf():
 
 
 def test_unique_disturbance_names_required():
-    """Two disturbances with the same `name` should raise at compile."""
-    w = World().add_field(GravityField(g=(0, 0, -9.81)))
+    """Duplicate names are rejected at the owning collection boundary."""
     ff = FluidField()
     ff.add(WindBias(name="wind"))
-    ff.add(WindBias(name="wind"))   # collision
-    w.add_field(ff)
-    c = Craft("d"); c.add(Mass("body", mass=1.0))
-    w.add_craft(c)
-    import pytest
-    with pytest.raises(ValueError, match="duplicate disturbance name"):
-        Sim(w)
+    with pytest.raises(ValueError, match="already exists"):
+        ff.add(WindBias(name="wind"))

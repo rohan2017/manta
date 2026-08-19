@@ -44,8 +44,8 @@ import casadi as ca
 import numpy as np
 
 from .ir.module import (
-    EntryPoint, Hosting, Module, Port, PortField, PortRef, Role, StateField,
-    StateLayout, StateRef, entry_ident,
+    EntryPoint, Hosting, Module, ModuleKind, Port, PortField, PortRef, Role,
+    StateField, StateLayout, StateRef, entry_ident,
 )
 from .ir.state_spec import flatten_nested
 from .linearization import LinearizedSystem
@@ -92,7 +92,7 @@ class Sim:
         sys = self._sys
         spec = sys.spec
         init_flat = flatten_nested(self.world._initial_state_dict())
-        x0 = spec.pack_any(init_flat)
+        x0 = spec.pack_projected(init_flat)
         x_field = StateField("x", "manifold", (spec.ambient_dim,),
                              init=x0, spec=spec)
         # A command's declared default is the MODEL's initial value: an
@@ -157,6 +157,7 @@ class Sim:
             entry_points=(EntryPoint(
                 "step", "step", tuple(eargs),
                 writes=("x",), returns=tuple(sensor_fulls)),),
+            kind=ModuleKind.SIMULATOR,
             hosting=Hosting.THREADED)
 
     def deploy_module(self) -> Module:
@@ -208,7 +209,8 @@ class Sim:
         return Module(
             name=self.world.name, state=StateLayout((x_field,)),
             ports=tuple(ports), functions=functions,
-            entry_points=tuple(entries), hosting=Hosting.THREADED)
+            entry_points=tuple(entries), kind=ModuleKind.KERNEL,
+            hosting=Hosting.THREADED)
 
     def __repr__(self) -> str:
         names = ", ".join(c.name for c in self.crafts)

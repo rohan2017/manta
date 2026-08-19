@@ -75,6 +75,21 @@ class CollisionField(SuperposedField):
         Returns self."""
         return self.add(Sphere(center=center, radius=radius))
 
+    def add_ellipsoid(self,
+                      center: tuple[float, float, float],
+                      equatorial_radius: float,
+                      flattening: float,
+                      polar_axis: tuple[float, float, float] = (0.0, 0.0, 1.0),
+                      *, height: float = 0.0) -> "Ellipsoid":
+        """Attach a solid oblate-spheroid obstacle (a WGS-84 Earth).
+        Returns the `Ellipsoid` (not self) so the caller can reuse its
+        geodetic height for other surface-relative queries."""
+        el = Ellipsoid(center=center, equatorial_radius=equatorial_radius,
+                       flattening=flattening, polar_axis=polar_axis,
+                       height=height)
+        self.add(el)
+        return el
+
     def add_heightfield(self, heights, *,
                         x0: float = 0.0, y0: float = 0.0,
                         dx: float = 1.0, dy: float = 1.0
@@ -175,6 +190,107 @@ class Sphere(Disturbance):
 
     def __repr__(self) -> str:
         return f"<Sphere center={self.center} radius={self.radius}>"
+
+
+class Ellipsoid(Disturbance):
+    """Solid oblate spheroid — a planet with an equatorial bulge, e.g.
+    the WGS-84 Earth (`flattening` = 1/298.257…).
+
+    Points at negative geodetic height are inside; the outward direction
+    is the geodetic normal (the direction gravity + centrifugal force
+    hangs a plumb line along on a planet in hydrostatic balance), so a
+    craft standing anywhere on the surface gets the same "up" the
+    planet's `local_tangent_basis` and a GNSS receiver use. The spheroid
+    is symmetric about `polar_axis`, so it is the same shape whether the
+    planet spins beneath it or not — a world-fixed obstacle serves a
+    rotating planet.
+
+    `signed_height_sym` is the reusable core: the geodetic height of a
+    point (Bowring's method, CasADi-symbolic and smooth) together with the
+    geodetic up direction. `Earth` uses it for the sea surface (fluid
+    membership, hydrostatic column, wave orbital direction) so the water
+    line and the solid surface are one geometry. It mirrors the numpy
+    `manta.planets.base.geodetic_from_cylindrical`; the two are
+    cross-checked in the tests.
+
+    Args:
+        center            — spheroid centre (world frame), m.
+        equatorial_radius — semi-major axis `a`, m.
+        flattening        — `(a − b)/a`; 0 is a sphere.
+        polar_axis        — symmetry (spin) axis, world frame.
+        height            — m; the solid surface sits this far above the
+                            reference spheroid along the geodetic normal
+                            (a mean-sea-level offset). Default 0.
+    """
+
+    field_value_shape = _VEC3_W
+
+    def __init__(self,
+                 center: tuple[float, float, float],
+                 equatorial_radius: float,
+                 flattening: float,
+                 polar_axis: tuple[float, float, float] = (0.0, 0.0, 1.0),
+                 *, height: float = 0.0, name: str | None = None) -> None:
+        from ..parts._declarations import unit_axis
+        super().__init__(name=name)
+        self.center = tuple(float(x) for x in center)
+        if len(self.center) != 3:
+            raise ValueError(
+                f"Ellipsoid: center must be length-3; got {center!r}")
+        self.equatorial_radius = float(equatorial_radius)
+        if self.equatorial_radius <= 0.0:
+            raise ValueError(
+                f"Ellipsoid: equatorial_radius must be > 0; got "
+                f"{equatorial_radius!r}")
+        self.flattening = float(flattening)
+        if not (0.0 <= self.flattening < 1.0):
+            raise ValueError(
+                f"Ellipsoid: flattening must be in [0, 1); got {flattening!r}")
+        self.polar_axis = unit_axis(polar_axis, who="Ellipsoid",
+                                    what="polar_axis")
+        self.height = float(height)
+        self._axis_dm = ca.DM(list(self.polar_axis))
+
+    def signed_height_sym(self, r_mx: ca.MX) -> tuple[ca.MX, ca.MX]:
+        """`(height, up)` for an offset `r_mx` (3×1 MX) from the centre —
+        geodetic height above the surface (negative inside; the `height`
+        offset already subtracted) and the geodetic up unit vector, both
+        in the frame `r_mx` is expressed in. That frame must share the
+        `polar_axis` coordinates (true for the world frame and for any
+        frame rotated about the axis, e.g. a planet's body frame)."""
+        a = self.equatorial_radius
+        f = self.flattening
+        e2 = f * (2.0 - f)
+        b = a * (1.0 - f)
+        ep2 = e2 / (1.0 - e2)
+        axis = self._axis_dm
+        z = ca.dot(r_mx, axis)
+        rho_vec = r_mx - z * axis
+        rho = soft_norm(rho_vec)
+        beta = ca.atan2(a * z, b * rho)
+        lat = ca.atan2(z + ep2 * b * ca.sin(beta) ** 3,
+                       rho - e2 * a * ca.cos(beta) ** 3)
+        beta = ca.atan2((1.0 - f) * ca.sin(lat), ca.cos(lat))
+        lat = ca.atan2(z + ep2 * b * ca.sin(beta) ** 3,
+                       rho - e2 * a * ca.cos(beta) ** 3)
+        sin_lat, cos_lat = ca.sin(lat), ca.cos(lat)
+        h = (rho * cos_lat + z * sin_lat
+             - a * ca.sqrt(1.0 - e2 * sin_lat * sin_lat)) - self.height
+        # e_rho = rho_vec / rho vanishes smoothly on the axis, where
+        # cos(lat) → 0 anyway, so `up` stays a unit vector there.
+        up = cos_lat * (rho_vec / rho) + sin_lat * axis
+        return h, up
+
+    def contribute_at_sym(self, point, t):
+        center_v = _VEC3_W.constant(self.center)
+        h, up = self.signed_height_sym((point - center_v)._mx)
+        depth = smooth_max0(-h, _SMOOTH_EPS_SQ)
+        return _VEC3_W.from_mx(up * depth)
+
+    def __repr__(self) -> str:
+        return (f"<Ellipsoid center={self.center} "
+                f"a={self.equatorial_radius} f={self.flattening:.6g} "
+                f"axis={self.polar_axis} height={self.height}>")
 
 
 class Heightfield(Disturbance):

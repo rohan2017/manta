@@ -322,10 +322,10 @@ class RnManifold(_EuclideanManifold):
         return np.zeros(int(self.dim), dtype=float)
 
     def ir_input(self, name, *, default_frame=None):
-        return VecN.input(name, self.dim)
+        return VecN[self.dim].input(name)
 
     def ir_zero(self, *, default_frame=None):
-        return VecN.constant(np.zeros(int(self.dim)), self.dim)
+        return VecN[self.dim].constant(np.zeros(int(self.dim)))
 
     def ir_add(self, value, delta_mx, *, default_frame=None):
         return VecN(value._mx + delta_mx, self.dim)

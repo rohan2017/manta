@@ -96,12 +96,20 @@ def resolve_slotset(craft_name: str, slotset: SlotSet) -> set[str]:
 def flatten_nested(nested: dict) -> dict[str, Any]:
     """`{owner: {slot: v}}` → `{"owner.slot": v}`; passes flat entries
     (and dotless keys) through unchanged. The one nested→flat rule."""
+    if not isinstance(nested, dict):
+        raise TypeError(
+            f"state must be a dict, got {type(nested).__name__}")
     flat: dict[str, Any] = {}
     for owner, slots in nested.items():
         if isinstance(slots, dict):
             for slot, v in slots.items():
-                flat[f"{owner}.{slot}"] = v
+                full = f"{owner}.{slot}"
+                if full in flat:
+                    raise ValueError(f"duplicate state key {full!r}")
+                flat[full] = v
         else:
+            if owner in flat:
+                raise ValueError(f"duplicate state key {owner!r}")
             flat[owner] = slots
     return flat
 
@@ -129,6 +137,21 @@ class StateSlot:
     manifold: Manifold
     tangent_offset: int
 
+    def __post_init__(self) -> None:
+        if (not isinstance(self.name, str) or not self.name
+                or any(not part.isidentifier()
+                       for part in self.name.split("."))):
+            raise ValueError(f"StateSlot: invalid qualified name {self.name!r}")
+        for attr in ("ambient_offset", "tangent_offset"):
+            value = getattr(self, attr)
+            if (not isinstance(value, int) or isinstance(value, bool)
+                    or value < 0):
+                raise ValueError(
+                    f"StateSlot {self.name!r}: {attr} must be a non-negative int")
+        if not isinstance(self.manifold, Manifold):
+            raise TypeError(
+                f"StateSlot {self.name!r}: manifold must be a Manifold")
+
     @property
     def ambient_dim(self) -> int:
         return self.manifold.ambient_dim
@@ -142,7 +165,25 @@ class StateSpec:
     """Layout descriptor for a flat ambient state vector."""
 
     def __init__(self, slots: list[StateSlot]) -> None:
-        self._slots = list(slots)
+        self._slots = tuple(slots)
+        ambient_offset = tangent_offset = 0
+        for slot in self._slots:
+            if not isinstance(slot, StateSlot):
+                raise TypeError(
+                    f"StateSpec: slots must be StateSlot instances, got "
+                    f"{type(slot).__name__}")
+            if (slot.ambient_offset != ambient_offset
+                    or slot.tangent_offset != tangent_offset):
+                raise ValueError(
+                    f"StateSpec: slot {slot.name!r} has offsets "
+                    f"({slot.ambient_offset}, {slot.tangent_offset}); expected "
+                    f"dense offsets ({ambient_offset}, {tangent_offset})")
+            ambient_offset += slot.ambient_dim
+            tangent_offset += slot.tangent_dim
+        names = [s.name for s in self._slots]
+        duplicates = sorted({name for name in names if names.count(name) > 1})
+        if duplicates:
+            raise ValueError(f"StateSpec: duplicate slot name(s) {duplicates}")
         self._slot_by_name = {s.name: s for s in self._slots}
         self._ambient_dim = sum(s.ambient_dim for s in self._slots)
         self._tangent_dim = sum(s.tangent_dim for s in self._slots)
@@ -306,24 +347,52 @@ class StateSpec:
 
     def pack(self, state_dict: dict[str, Any]) -> np.ndarray:
         """Flatten a tick-style dict into the ambient vector."""
+        if not isinstance(state_dict, dict):
+            raise TypeError(
+                f"StateSpec.pack: expected dict, got {type(state_dict).__name__}")
+        expected = set(self._slot_by_name)
+        supplied = set(state_dict)
+        unknown = sorted(supplied - expected)
+        missing = sorted(expected - supplied)
+        if unknown or missing:
+            details = []
+            if unknown:
+                details.append(f"unknown keys {unknown}")
+            if missing:
+                details.append(f"missing keys {missing}")
+            raise ValueError(f"StateSpec.pack: {'; '.join(details)}")
         flat = np.zeros(self._ambient_dim, dtype=float)
         for slot in self._slots:
             value = state_dict[slot.name]
-            arr = np.atleast_1d(np.asarray(value, dtype=float)).reshape(-1)
+            raw = np.asarray(value)
+            if raw.dtype.kind not in "iuf":
+                raise TypeError(
+                    f"StateSpec.pack: slot {slot.name!r} must contain real "
+                    f"numeric data, got dtype {raw.dtype}")
+            arr = np.atleast_1d(np.asarray(raw, dtype=float)).reshape(-1)
             if arr.size != slot.ambient_dim:
                 raise ValueError(
                     f"StateSpec.pack: slot {slot.name!r} expects dim {slot.ambient_dim}, "
                     f"got len={arr.size}")
+            if not np.all(np.isfinite(arr)):
+                raise ValueError(
+                    f"StateSpec.pack: slot {slot.name!r} contains non-finite values")
             flat[slot.ambient_offset : slot.ambient_offset + slot.ambient_dim] = arr
         return flat
 
     def unpack(self, flat: np.ndarray) -> dict[str, Any]:
         """Slice an ambient vector back into a tick-style dict."""
-        flat = np.asarray(flat, dtype=float)
+        raw = np.asarray(flat)
+        if raw.dtype.kind not in "iuf":
+            raise TypeError(
+                f"StateSpec.unpack: expected real numeric data, got {raw.dtype}")
+        flat = np.asarray(raw, dtype=float)
         if flat.shape != (self._ambient_dim,):
             raise ValueError(
                 f"StateSpec.unpack: expected shape ({self._ambient_dim},), "
                 f"got {flat.shape}")
+        if not np.all(np.isfinite(flat)):
+            raise ValueError("StateSpec.unpack: state contains non-finite values")
         out: dict[str, Any] = {}
         for slot in self._slots:
             chunk = flat[slot.ambient_offset : slot.ambient_offset + slot.ambient_dim]
@@ -343,17 +412,23 @@ class StateSpec:
 
         Rules:
           * `state` is an ndarray → taken verbatim (length-checked).
-          * `state` is a dict     → flattened; unknown keys ignored; merged
+          * `state` is a dict     → flattened; unknown keys rejected; merged
             over `base`.
           * `state` is None       → `base` packed as-is.
           * every slot must be covered by `state` or `base`.
         """
         if isinstance(state, np.ndarray):
+            if state.dtype.kind not in "iuf":
+                raise TypeError(
+                    f"StateSpec.pack_any: expected real numeric data, got "
+                    f"{state.dtype}")
             arr = np.asarray(state, dtype=float).reshape(-1)
             if arr.shape != (self._ambient_dim,):
                 raise ValueError(
                     f"StateSpec.pack_any: expected ambient vector of length "
                     f"{self._ambient_dim}, got {arr.shape}")
+            if not np.all(np.isfinite(arr)):
+                raise ValueError("StateSpec.pack_any: state contains non-finite values")
             return arr.copy()
         merged: dict[str, Any] = {}
         if base is not None:
@@ -362,7 +437,23 @@ class StateSpec:
                           else flatten_nested(base))
         if state is not None:
             merged.update(flatten_nested(state))
-        return self.pack({k: v for k, v in merged.items() if k in self})
+        unknown = sorted(set(merged) - set(self._slot_by_name))
+        if unknown:
+            raise ValueError(f"StateSpec.pack_any: unknown keys {unknown}")
+        return self.pack(merged)
+
+    def pack_projected(self, source: dict[str, Any]) -> np.ndarray:
+        """Pack this spec's slots from a deliberately broader model record.
+
+        World authoring records also contain commands and noise placeholders.
+        Internal code that consumes that mixed record must opt into projection
+        explicitly; ordinary state APIs use :meth:`pack_any` and reject every
+        unknown key.
+        """
+        flat = flatten_nested(source)
+        selected = {slot.name: flat[slot.name]
+                    for slot in self._slots if slot.name in flat}
+        return self.pack(selected)
 
     def to_nested(self, flat_vector: np.ndarray) -> dict[str, Any]:
         """Ambient vector → nested `{owner: {slot: v}}` dict (the runtime's

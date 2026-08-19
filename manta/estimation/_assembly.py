@@ -26,6 +26,7 @@ from ..ir.module import (
     EntryPoint,
     Hosting,
     Module,
+    ModuleKind,
     Port,
     PortField,
     PortRef,
@@ -86,7 +87,7 @@ def resolve_gates(sys, gates, *, who: str) -> dict[str, float | None]:
 def initial_ambient(world, spec: StateSpec) -> np.ndarray:
     """The world's initial state packed into the tracked spec's ambient
     vector — the filter's `x` init and the R-probe operating point."""
-    return spec.pack_any(flatten_nested(world._initial_state_dict()))
+    return spec.pack_projected(flatten_nested(world._initial_state_dict()))
 
 
 def sensor_R_expr(sys, sm) -> ca.MX:
@@ -205,7 +206,8 @@ def emit_filter_module(sys, spec: StateSpec, *, name: str, x0: np.ndarray,
     metadata = {"nis_gates": MappingProxyType(dict(gates))}
     return Module(name=name, state=StateLayout(fields),
                   ports=tuple(ports), functions=functions,
-                  entry_points=tuple(entries), hosting=Hosting.HELD,
+                  entry_points=tuple(entries), kind=ModuleKind.FILTER,
+                  hosting=Hosting.HELD,
                   metadata=metadata)
 
 

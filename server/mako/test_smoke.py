@@ -246,11 +246,12 @@ def test_bundle_meta_contract():
         assert all(abs(v) < 1.0 for n, v in by_name.items() if "_prop" in n)
         assert sum(abs(v) > 5.0 for n, v in by_name.items() if "_v" in n) == 4
 
-        # scene: rotation about +z at the sidereal rate, anchored at R_EQ
+        # scene: rotation about +z at the sidereal rate, anchored at the
+        # north-pole sea surface (the WGS-84 polar radius)
         sc = meta["scene"]
         assert abs(sc["omega"] - 7.2921159e-5) < 1e-9
         assert sc["axis"] == [0.0, 0.0, 1.0]
-        assert abs(sc["anchor_planet"][2] - 6.378137e6) < 1.0
+        assert abs(sc["anchor_planet"][2] - 6.356752314e6) < 1.0
         R = np.asarray(sc["R_planet_from_scene"])
         assert np.allclose(R @ R.T, np.eye(3), atol=1e-9)   # orthonormal
 

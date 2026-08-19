@@ -1416,6 +1416,8 @@ class MPC:
             nominal, self._U, dynamics_A, dynamics_B, ref)
         assembled_at = time.perf_counter_ns()
         H, g, A_values, clo, chi, lower, upper, slack_scales = matrices
+        next_lam_x = self._qp_lam_x.copy()
+        next_lam_a = self._qp_lam_a.copy()
         if self.compiled:
             if self.qp_backend == "osqp":
                 self._native_a_values[self._native_a_from_base] = A_values
@@ -1452,8 +1454,8 @@ class MPC:
                     f"MPC RTI QP failed: {status}{residual_detail}")
             qp_step = native.x
             if self.qp_backend == "osqp":
-                self._qp_lam_a[:] = native.y[:self._ncon]
-                self._qp_lam_x[:] = native.y[self._ncon:]
+                next_lam_a = np.asarray(native.y[:self._ncon], dtype=float).copy()
+                next_lam_x = np.asarray(native.y[self._ncon:], dtype=float).copy()
             qp_cost = native.cost
             iterations = native.iterations
             qp_update_ms = native.update_ms
@@ -1483,10 +1485,10 @@ class MPC:
                     or status.lower().startswith("solved")):
                 raise RuntimeError(f"MPC RTI QP failed: {status}")
             qp_step = np.asarray(result["x"], dtype=float).reshape(-1)
-            self._qp_lam_x[:] = np.asarray(
-                result["lam_x"], dtype=float).reshape(-1)
-            self._qp_lam_a[:] = np.asarray(
-                result["lam_a"], dtype=float).reshape(-1)
+            next_lam_x = np.asarray(
+                result["lam_x"], dtype=float).reshape(-1).copy()
+            next_lam_a = np.asarray(
+                result["lam_a"], dtype=float).reshape(-1).copy()
             qp_cost = float(result["cost"])
             iterations = max(
                 0, int(stats.get(
@@ -1500,7 +1502,9 @@ class MPC:
         solved_at = time.perf_counter_ns()
         if not np.all(np.isfinite(qp_step)):
             raise RuntimeError("MPC RTI QP returned a nonfinite step")
-        self._qp_x[:] = qp_step
+        if (not np.all(np.isfinite(next_lam_x))
+                or not np.all(np.isfinite(next_lam_a))):
+            raise RuntimeError("MPC RTI QP returned nonfinite dual state")
         normalized_delta_u = qp_step[
             self._control_offset:self._slack_offset].reshape(
                 self.horizon, self.nu)
@@ -1514,10 +1518,25 @@ class MPC:
             out=accepted_controls)
         accepted_states, accepted_body_left = self._rollout_accepted(
             x0, accepted_controls)
+        if (not np.all(np.isfinite(accepted_controls))
+                or not np.all(np.isfinite(accepted_states))
+                or not np.all(np.isfinite(accepted_body_left))):
+            raise RuntimeError("MPC accepted rollout contains nonfinite values")
         peak_bank, bank_violation = self._bank_metrics(accepted_body_left)
         attitude_constraint_violation = (
             self._attitude_constraint_violation(accepted_states, ref))
+        if not all(math.isfinite(float(v)) for v in (
+                qp_cost, peak_bank, bank_violation,
+                attitude_constraint_violation)):
+            raise RuntimeError("MPC solve produced nonfinite cost or diagnostics")
         command = accepted_controls[0].copy()
+        if not np.all(np.isfinite(command)):
+            raise RuntimeError("MPC command contains nonfinite values")
+        # Commit the complete warm state only after the solve and accepted
+        # rollout have passed every validation above.
+        self._qp_x[:] = qp_step
+        self._qp_lam_x[:] = next_lam_x
+        self._qp_lam_a[:] = next_lam_a
         self._last_u = command.copy()
         self._U[:] = accepted_controls
         self._advance_blocks(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 import casadi as ca
@@ -13,8 +14,58 @@ from ...ir.state_spec import flatten_nested
 from ...ir._names import resolve_suffix
 from ...rates import CommandLatch, RateGate
 from ..target import for_role
-from ._noise import NoiseDriver
-from ._runtime import NumpyRuntime, _split, pack_fields
+from ._noise import NoiseCheckpoint, NoiseDriver
+from ._runtime import NumpyRuntime, _split, finite_array, pack_fields
+
+
+@dataclass(frozen=True)
+class SimCheckpoint:
+    """Complete deterministic restart point for a simulation runtime."""
+
+    values: tuple[tuple[str, tuple[float, ...]], ...]
+    outputs: tuple[tuple[str, tuple[float, ...]], ...]
+    time: float
+    artifact_id: str
+    noise: NoiseCheckpoint | None
+
+    def __post_init__(self) -> None:
+        def own(entries, *, who):
+            try:
+                entries = tuple(entries)
+            except TypeError as exc:
+                raise TypeError(f"SimCheckpoint.{who} must be an iterable") from exc
+            owned = []
+            names = set()
+            for entry in entries:
+                if not isinstance(entry, (tuple, list)) or len(entry) != 2:
+                    raise TypeError(
+                        f"SimCheckpoint.{who} entries must be (name, values) pairs")
+                name, values = entry
+                if (not isinstance(name, str) or "." not in name
+                        or any(not part.isidentifier()
+                               for part in name.split("."))):
+                    raise ValueError(
+                        f"SimCheckpoint.{who}: invalid name {name!r}")
+                if name in names:
+                    raise ValueError(
+                        f"SimCheckpoint.{who}: duplicate name {name!r}")
+                names.add(name)
+                arr = finite_array(
+                    values, who=f"SimCheckpoint.{who} {name!r}").reshape(-1)
+                if arr.size == 0:
+                    raise ValueError(
+                        f"SimCheckpoint.{who} {name!r}: values cannot be empty")
+                owned.append((name, tuple(float(v) for v in arr)))
+            return tuple(owned)
+
+        object.__setattr__(self, "values", own(self.values, who="values"))
+        object.__setattr__(self, "outputs", own(self.outputs, who="outputs"))
+        object.__setattr__(self, "time", float(require_finite(
+            self.time, name="SimCheckpoint.time")))
+        if not isinstance(self.artifact_id, str) or not self.artifact_id:
+            raise ValueError("SimCheckpoint.artifact_id is required")
+        if self.noise is not None and not isinstance(self.noise, NoiseCheckpoint):
+            raise TypeError("SimCheckpoint.noise must be a NoiseCheckpoint or None")
 
 
 def _stepn_port_arg(role: Role, *, hold, u, noise, params, dt, t, n):
@@ -96,6 +147,11 @@ class NumpySim(NumpyRuntime):
         self._check_state_keys(flat)
         self._sim_state = value
 
+    def model_state(self) -> dict[str, dict[str, Any]]:
+        """Only manifold state slots, excluding commands/noise placeholders."""
+        flat = flatten_nested(self.state)
+        return self._spec.to_nested(self._spec.pack_projected(flat))
+
     def _known_state_keys(self) -> set[str]:
         """Every legitimate flat key of the state dict: manifold slots,
         command inputs, and noise placeholders."""
@@ -132,9 +188,87 @@ class NumpySim(NumpyRuntime):
                 "removed — pass commands as step(dt, u={...}).")
         dt = require_positive(dt, name="NumpySim.step dt")
         t0 = self._t if t is None else float(require_finite(t, name="NumpySim.step t"))
-        self._sim_state = self._advance(self.state, dt, t0, u)
-        self._t = t0 + dt
+        next_t = float(require_finite(
+            t0 + dt, name="NumpySim.step resulting time"))
+        noise_before = self._driver.checkpoint() if self._driver else None
+        x_before = self._state["x"].copy()
+        try:
+            self._sim_state = self._advance(self.state, dt, t0, u)
+        except Exception:
+            self._state["x"] = x_before
+            if self._driver is not None and noise_before is not None:
+                self._driver.restore(noise_before)
+            raise
+        self._t = next_t
         return self._sim_state
+
+    @staticmethod
+    def _snapshot_values(nested: dict) -> tuple[tuple[str, tuple[float, ...]], ...]:
+        flat = flatten_nested(nested)
+        values = []
+        for name in sorted(flat):
+            raw = np.asarray(flat[name])
+            if raw.dtype.kind not in "iuf":
+                raise TypeError(f"checkpoint: {name!r} is not real numeric data")
+            arr = np.asarray(raw, dtype=float).reshape(-1)
+            if not np.all(np.isfinite(arr)):
+                raise ValueError(f"checkpoint: {name!r} is non-finite")
+            values.append((name, tuple(float(v) for v in arr)))
+        return tuple(values)
+
+    @staticmethod
+    def _nested_values(values) -> dict[str, dict[str, Any]]:
+        nested: dict[str, dict[str, Any]] = {}
+        for full, data in values:
+            owner, slot = _split(full)
+            value = float(data[0]) if len(data) == 1 else np.asarray(data)
+            nested.setdefault(owner, {})[slot] = value
+        return nested
+
+    def checkpoint(self) -> SimCheckpoint:
+        return SimCheckpoint(
+            self._snapshot_values(self.state),
+            self._snapshot_values(self._outputs),
+            float(self._t), self.module.artifact_id,
+            self._driver.checkpoint() if self._driver else None)
+
+    def restore(self, checkpoint: SimCheckpoint) -> None:
+        if not isinstance(checkpoint, SimCheckpoint):
+            raise TypeError("NumpySim.restore: expected SimCheckpoint")
+        if checkpoint.artifact_id != self.module.artifact_id:
+            raise ValueError("NumpySim.restore: checkpoint belongs to another artifact")
+        if not np.isfinite(checkpoint.time):
+            raise ValueError("NumpySim.restore: time must be finite")
+        next_state = self._nested_values(checkpoint.values)
+        flat = flatten_nested(next_state)
+        self._check_state_keys(flat)
+        if set(flat) != self._known_state_keys():
+            raise ValueError("NumpySim.restore: checkpoint state layout is incomplete")
+        self._spec.pack_projected(flat)
+        self._pack_u(flat, None)
+        self._noise_vec(flat)
+        next_outputs = self._nested_values(checkpoint.outputs)
+        if self._driver is None and checkpoint.noise is not None:
+            raise ValueError("NumpySim.restore: checkpoint requires an attached driver")
+        if self._driver is not None and checkpoint.noise is None:
+            raise ValueError("NumpySim.restore: checkpoint has no attached-driver state")
+        if self._driver is not None:
+            self._driver.validate_checkpoint(checkpoint.noise)
+        if self._driver is not None:
+            self._driver.restore(checkpoint.noise)
+        if self._sim_state is None:
+            self._sim_state = next_state
+        else:
+            for owner in tuple(self._sim_state):
+                if owner not in next_state:
+                    del self._sim_state[owner]
+            for owner, slots in next_state.items():
+                live = self._sim_state.setdefault(owner, {})
+                live.clear()
+                live.update(slots)
+        self._outputs = next_outputs
+        self._t = float(checkpoint.time)
+        self._state["x"] = self._spec.pack_projected(flat)
 
     def _pack_u(self, flat: dict, u: dict[str, Any] | None) -> np.ndarray:
         """The flat control vector: the held `sim.state` inputs overlaid with
@@ -152,7 +286,7 @@ class NumpySim(NumpyRuntime):
                  u: dict[str, Any] | None = None) -> dict:
         flat = flatten_nested(state)
         self._check_state_keys(flat)
-        self._state["x"] = self._spec.pack_any(flat)
+        self._state["x"] = self._spec.pack_projected(flat)
         u = self._pack_u(flat, u)
         ep = self.module.entry("step")
         res = self._run(ep, {"u": u, "noise": self._noise_vec(flat),
@@ -194,12 +328,24 @@ class NumpySim(NumpyRuntime):
         if t is not None:
             t = float(require_finite(t, name="NumpySim.step_n t"))
         if n <= 1 or self._driver is not None:
-            for k in range(n):
-                self.step(dt, t=None if t is None else t + k * dt, u=u)
+            before = self.checkpoint()
+            try:
+                for k in range(n):
+                    self.step(dt, t=None if t is None else t + k * dt, u=u)
+            except Exception:
+                self.restore(before)
+                raise
             return self.state          # property: seeds when n == 0
         t0 = self._t if t is None else t
-        self._sim_state = self._advance_n(self.state, dt, n, t0, u)
-        self._t = t0 + n * dt
+        next_t = float(require_finite(
+            t0 + n * dt, name="NumpySim.step_n resulting time"))
+        before = self.checkpoint()
+        try:
+            self._sim_state = self._advance_n(self.state, dt, n, t0, u)
+        except Exception:
+            self.restore(before)
+            raise
+        self._t = next_t
         return self._sim_state
 
     def _step_n_fn(self, n: int):
@@ -213,7 +359,8 @@ class NumpySim(NumpyRuntime):
     def _advance_n(self, state: dict, dt: float, n: int, t: float,
                    u: dict[str, Any] | None = None) -> dict:
         flat = flatten_nested(state)
-        x0 = np.asarray(self._spec.pack_any(flat),
+        self._check_state_keys(flat)
+        x0 = np.asarray(self._spec.pack_projected(flat),
                         dtype=float).reshape(-1, 1)
         u = self._pack_u(flat, u)
         noise = self._noise_vec(flat)
@@ -236,10 +383,21 @@ class NumpySim(NumpyRuntime):
                 params=params, dt=dt, t=t, n=n))
         res = fn(*call_args)
         outs = [res] if not isinstance(res, (list, tuple)) else list(res)
-        self._state["x"] = np.asarray(outs[0])[:, -1].reshape(-1)
+        expected = len(ep.writes) + len(ep.returns)
+        if len(outs) != expected:
+            raise RuntimeError(
+                f"{self.module.name}.step_n: folded kernel produced "
+                f"{len(outs)} outputs, expected {expected}")
+        next_x = finite_array(
+            np.asarray(outs[0])[:, -1], who="NumpySim.step_n state",
+            size=self._spec.ambient_dim).reshape(-1)
         readings = {
-            name: np.asarray(outs[len(ep.writes) + i])[:, -1].reshape(-1)
+            name: finite_array(
+                np.asarray(outs[len(ep.writes) + i])[:, -1],
+                who=f"NumpySim.step_n output {name!r}",
+                size=self.module.port(name).size).reshape(-1)
             for i, name in enumerate(ep.returns)}
+        self._state["x"] = next_x
         return self._commit_step(state, readings)
 
     def _noise_vec(self, flat: dict | None = None) -> np.ndarray:
@@ -252,7 +410,9 @@ class NumpySim(NumpyRuntime):
         source = dict(flat) if flat is not None else {}
         if self._driver is not None:
             source.update(self._driver.sample())   # a draw wins over the dict
-        return pack_fields(port.fields, source, default=0.0, who="noise")
+        selected = {f.name: source[f.name]
+                    for f in port.fields if f.name in source}
+        return pack_fields(port.fields, selected, default=0.0, who="noise")
 
     def outputs(self) -> dict[str, dict[str, Any]]:
         """Sensor readings from the most recent step (nested, realized

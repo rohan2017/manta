@@ -376,9 +376,14 @@ def laplace_sigma(H: np.ndarray) -> np.ndarray:
 def pack_x0(world, spec, w: Window) -> np.ndarray:
     """A window's initial state as the spec's ambient column: `Window.x0`
     slots overlaid on the world's initial state."""
-    flat = flatten_nested(world._initial_state_dict())
-    flat.update(flatten_nested(w.x0))
-    return np.asarray(spec.pack_any(flat), dtype=float).reshape(-1, 1)
+    base_record = flatten_nested(world._initial_state_dict())
+    overrides = flatten_nested(w.x0)
+    unknown = sorted(set(overrides) - set(base_record))
+    if unknown:
+        raise ValueError(f"Window.x0 contains unknown model keys {unknown}")
+    base_record.update(overrides)
+    return np.asarray(spec.pack_projected(base_record),
+                      dtype=float).reshape(-1, 1)
 
 
 def pack_u_trace(u: dict, input_names: list[str], defaults, K: int, *,

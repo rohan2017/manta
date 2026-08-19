@@ -131,8 +131,6 @@ def test_ekf_euler_covariance_tracks_exact():
         ekf = TargetNumpy(EKF(_rover(), sensors=[], discretization=mode))
         nested = {"rover": {k.split(".", 1)[1]: v
                             for k, v in _STATE.items()}}
-        for k, v in _INPUTS.items():
-            nested["rover"][k.split(".", 1)[1]] = v
         ekf.reset(state=nested, P=np.eye(ekf.spec.tangent_dim) * 0.1)
         Q = np.eye(ekf.spec.tangent_dim) * 1e-9
         for _ in range(100):

@@ -111,7 +111,7 @@ def test_scan_rollout_matches_numpy_sim():
     for _ in range(K):
         ref.step(DT)
     from manta.ir.state_spec import flatten_nested
-    x_ref = mod.spec.pack_any(flatten_nested(ref.state))
+    x_ref = mod.spec.pack_projected(flatten_nested(ref.state))
     assert np.allclose(np.array(Xs[-1]), x_ref, atol=1e-12)
     assert readings["drone.imu.gyro"].shape == (K, 3)
     # Last readings row matches the numpy sim's final outputs.
@@ -216,8 +216,8 @@ def test_call_unknown_value_key_raises():
 
 
 def test_initial_state_on_stateless_module_raises():
-    from manta.ir.module import Module, StateLayout
+    from manta.ir.module import Module, ModuleKind, StateLayout
     m = Module(name="empty", state=StateLayout(), ports=(),
-               functions={}, entry_points=())
+               functions={}, entry_points=(), kind=ModuleKind.KERNEL)
     with pytest.raises(ValueError, match="manifold state"):
         JaxModule(m).initial_state()

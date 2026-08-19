@@ -3,20 +3,31 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from numbers import Number
+from numbers import Real
 from typing import Any
 
 import numpy as np
+from krill import finite_real
 
 
 def require_finite(value: Any, *, name: str) -> Any:
-    """Return ``value`` after rejecting any non-finite numeric component."""
-    if isinstance(value, Number) or isinstance(value, np.ndarray):
-        try:
-            finite = np.isfinite(value)
-        except TypeError:
-            return value
-        if not bool(np.all(finite)):
+    """Return a real numeric value/container after strict finite checking.
+
+    Strings and booleans are deliberately not coerced.  This is the common
+    numeric boundary used before values enter symbolic model construction;
+    accepting ``True`` as one kilogram or ``"1.0"`` as a gain hides the
+    mistake until much later in the pipeline.
+    """
+    if isinstance(value, (bool, np.bool_)):
+        raise TypeError(f"{name} must be real numeric data, not bool")
+    if isinstance(value, Real):
+        finite_real(value, name)
+        return value
+    if isinstance(value, np.ndarray):
+        if value.dtype.kind not in "iuf":
+            raise TypeError(
+                f"{name} must contain real numeric data, got dtype {value.dtype}")
+        if not bool(np.all(np.isfinite(value))):
             raise ValueError(f"{name} must be finite, got {value!r}")
         return value
     if isinstance(value, (tuple, list)):
@@ -25,13 +36,18 @@ def require_finite(value: Any, *, name: str) -> Any:
     elif isinstance(value, Mapping):
         for item in value.values():
             require_finite(item, name=name)
+    else:
+        raise TypeError(
+            f"{name} must be real numeric data, got {type(value).__name__}")
     return value
 
 
 def require_positive(value: Any, *, name: str, allow_zero: bool = False) -> float:
     """Return a finite float that is positive (or non-negative)."""
-    number = float(value)
-    require_finite(number, name=name)
+    require_finite(value, name=name)
+    if not isinstance(value, Real) or isinstance(value, (bool, np.bool_)):
+        raise TypeError(f"{name} must be a real scalar")
+    number = finite_real(value, name)
     valid = number >= 0.0 if allow_zero else number > 0.0
     if not valid:
         relation = ">= 0" if allow_zero else "> 0"

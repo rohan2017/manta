@@ -180,6 +180,8 @@ _INT32_MAX = int(np.iinfo(np.int32).max)
 def _validate_checkpoint(module, checkpoint: FilterCheckpoint) -> FilterCheckpoint:
     if not isinstance(checkpoint, FilterCheckpoint):
         raise TypeError("filter replay initial state must be a FilterCheckpoint")
+    if checkpoint.artifact_id != module.artifact_id:
+        raise ValueError("filter replay checkpoint belongs to a different Module artifact")
     spec = module.spec
     x = np.asarray(checkpoint.x, dtype=float)
     P = np.asarray(checkpoint.P, dtype=float)
@@ -205,7 +207,7 @@ def _validate_checkpoint(module, checkpoint: FilterCheckpoint) -> FilterCheckpoi
         raise ValueError(
             "filter replay checkpoint covariance must be positive semidefinite"
         )
-    return FilterCheckpoint(x.copy(), P.copy(), time)
+    return FilterCheckpoint(x, P, time, module.artifact_id)
 
 
 def _validate_covariance(value: Any, dim: int, *, name: str) -> np.ndarray:
@@ -910,7 +912,9 @@ class NativeFilterReplay:
             )
         try:
             validated_final = _validate_checkpoint(
-                self.module, FilterCheckpoint(final_x, final_P, float(final_time[0]))
+                self.module, FilterCheckpoint(
+                    final_x, final_P, float(final_time[0]),
+                    self.module.artifact_id)
             )
         except (TypeError, ValueError) as exc:
             raise ValueError(
@@ -980,6 +984,7 @@ class NativeFilterReplay:
                         checkpoint_x[checkpoint_slot],
                         checkpoint_P[checkpoint_slot],
                         returned_time,
+                        self.module.artifact_id,
                     ),
                 )
             except (TypeError, ValueError) as exc:

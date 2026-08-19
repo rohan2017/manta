@@ -57,13 +57,16 @@ class NumpyRegulator(NumpyRuntime):
         `LQRSolution` from `LQR.resolve_at`, or a plain object/namespace
         rebuilt from JSON on the far side of a retarget service.
         """
-        missing = [n for n in ("K", "u_ff", "x_ref")
-                   if getattr(solution, n, None) is None]
-        if missing:
+        from ...control.lqr import LQRSolution
+        if not isinstance(solution, LQRSolution):
             raise TypeError(
-                f"{type(self).__name__}.reprogram: solution is missing "
-                f"{missing}; expected an LQRSolution-shaped value "
-                f"(K, u_ff, x_ref).")
+                f"{type(self).__name__}.reprogram: expected LQRSolution")
+        expected_controller = self.module.metadata.get("controller_id")
+        if solution.controller_id != expected_controller:
+            raise ValueError(
+                f"{type(self).__name__}.reprogram: solution belongs to a "
+                "different controller artifact")
+        staged: dict[str, np.ndarray] = {}
         for name in ("K", "u_ff"):
             if name not in self._coeffs:
                 raise AttributeError(
@@ -71,10 +74,20 @@ class NumpyRegulator(NumpyRuntime):
                     f"declares no {name!r} port — its control law is not "
                     f"reprogrammable.")
             want = self._coeffs[name].shape
-            arr = np.asarray(getattr(solution, name),
-                             dtype=float).reshape(want)
-            self._coeffs[name] = arr
-        self.retarget(np.asarray(solution.x_ref, dtype=float).reshape(-1))
+            raw = np.asarray(getattr(solution, name))
+            if raw.dtype.kind not in "iuf" or raw.size != int(np.prod(want)):
+                raise ValueError(
+                    f"{type(self).__name__}.reprogram: {name} must contain "
+                    f"{int(np.prod(want))} real values")
+            arr = np.asarray(raw, dtype=float).reshape(want)
+            if not np.all(np.isfinite(arr)):
+                raise ValueError(
+                    f"{type(self).__name__}.reprogram: {name} must be finite")
+            staged[name] = arr.copy()
+        next_ref = self._ref_port.spec.pack_any(
+            np.asarray(solution.x_ref, dtype=float).reshape(-1))
+        self._coeffs.update(staged)
+        self._x_ref = next_ref
 
     @property
     def x_ref(self) -> np.ndarray:

@@ -63,8 +63,9 @@ def test_subset_estimate_drives_full_world_regulator():
     assert lqr.spec.ambient_dim > ekf.spec.ambient_dim     # full spans b+a
 
     # a sits 1 m below + offset from its hover ref → thrust above weight.
-    ekf.reset(state={"a": a.initial_state(position=(0.5, 0.0, 9.0))},
-              P=np.eye(ekf.spec.tangent_dim))
+    ekf.reset_from_model_record(
+        {"a": a.initial_state(position=(0.5, 0.0, 9.0))},
+        P=np.eye(ekf.spec.tangent_dim))
     u = lqr.control(ekf.state_dict())
     assert np.isfinite(list(u.values())).all()
     assert u["a.tz.throttle"] > M * G                      # climbs to recover

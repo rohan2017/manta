@@ -133,7 +133,22 @@ class DeclarationHost:
                 f"{sorted(set(decls) | noise_sigma_keys)}")
         for attr_name, decl in decls.items():
             value = overrides.get(attr_name, decl.default)
-            if not (isinstance(decl, Parameter) and decl.allow_infinite):
+            if isinstance(decl.default, str):
+                if not isinstance(value, str):
+                    raise TypeError(
+                        f"{type(self).__name__}({self.name!r}).{attr_name} "
+                        f"must be a string, got {type(value).__name__}")
+            elif value is None:
+                # ``Output`` and explicitly optional Parameters use None as
+                # absence, not as numeric data.
+                pass
+            elif isinstance(decl, Parameter) and not decl.numeric:
+                # Typed object/callable configuration is validated by the
+                # owning Part, which knows its protocol.  The opt-out is
+                # explicit on the declaration; arbitrary objects never
+                # silently bypass numeric validation.
+                pass
+            elif not (isinstance(decl, Parameter) and decl.allow_infinite):
                 require_finite(
                     value,
                     name=f"{type(self).__name__}({self.name!r}).{attr_name}",

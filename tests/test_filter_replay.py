@@ -241,7 +241,8 @@ def test_program_is_bounded_owned_and_rejects_invalid_inputs(monkeypatch, tmp_pa
     assert program.checkpoint_count == 1
     assert program.packed_bytes > 0
     assert not program._kinds.flags.writeable
-    initial.x[:] = 99.0
+    with pytest.raises(ValueError, match="read-only"):
+        initial.x[:] = 99.0
     assert not np.all(program.initial.x == 99.0)
 
     with pytest.raises(ValueError, match="configured maximum"):
@@ -320,15 +321,15 @@ def test_constructor_and_checkpoint_fail_locally(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
     transform = EKF(_world())
     module = transform.module()
-    malformed = replace(
-        module,
-        entry_points=tuple(
-            replace(entry, writes=("P", "x")) if entry.method == "predict" else entry
-            for entry in module.entry_points
-        ),
-    )
-    with pytest.raises(TypeError, match="write manifold then covariance"):
-        TargetFilterReplay(malformed, max_operations=1, max_checkpoints=0)
+    with pytest.raises(ValueError, match="output 'P'"):
+        replace(
+            module,
+            entry_points=tuple(
+                replace(entry, writes=("P", "x"))
+                if entry.method == "predict" else entry
+                for entry in module.entry_points
+            ),
+        )
     with pytest.raises(ValueError, match="positive integer"):
         TargetFilterReplay(transform, max_operations=0, max_checkpoints=0)
     with pytest.raises(ValueError, match="may not exceed"):
@@ -356,7 +357,8 @@ def test_constructor_and_checkpoint_fail_locally(monkeypatch, tmp_path):
     kernel = TargetFilterReplay(transform, max_operations=2, max_checkpoints=1)
     assert 0 < kernel.estimated_worst_case_bytes <= kernel.max_execution_bytes
     checkpoint = TargetNumpy(transform).checkpoint()
-    bad = FilterCheckpoint(checkpoint.x, -np.eye(checkpoint.P.shape[0]), 0.0)
+    bad = FilterCheckpoint(checkpoint.x, -np.eye(checkpoint.P.shape[0]), 0.0,
+                           checkpoint.artifact_id)
     with pytest.raises(ValueError, match="positive semidefinite"):
         kernel.program(bad, (ReplayBoundary(0.0),))
 
@@ -412,6 +414,7 @@ def test_constructor_and_checkpoint_fail_locally(monkeypatch, tmp_path):
                     program.initial.x.copy(),
                     -np.eye(program.initial.P.shape[0]),
                     program.initial.time,
+                    program.initial.artifact_id,
                 ),
             ),
             "positive semidefinite",

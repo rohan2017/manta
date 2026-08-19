@@ -115,11 +115,17 @@ class World:
                 f"World.add_field: expected a Field, got "
                 f"{type(field).__name__}")
         cls = type(field)
+        owner = getattr(field, "_world", None)
+        if owner is not None and owner is not self:
+            raise ValueError(
+                f"World '{self.name}': field {cls.__name__} already belongs "
+                f"to World {owner.name!r}")
         if cls in self._fields:
             raise ValueError(
                 f"World '{self.name}': field of type {cls.__name__} already "
                 f"registered. Use `world.get_field({cls.__name__}).add(...)` "
                 f"to attach additional disturbances to it.")
+        field._world = self
         self._fields[cls] = field
         return self
 
@@ -159,6 +165,11 @@ class World:
             raise TypeError(
                 f"World.add_planet: expected a Planet, got "
                 f"{type(planet).__name__}")
+        owner = getattr(planet, "_world", None)
+        if owner is not None and owner is not self:
+            raise ValueError(
+                f"World '{self.name}': planet {planet.name!r} already belongs "
+                f"to World {owner.name!r}")
         for existing in self._planets:
             if existing is planet:
                 raise ValueError(
@@ -204,6 +215,15 @@ class World:
             **extra_state    — per-part state overrides
                                (e.g., `**{"wheel.angle": 0.5}`).
         """
+        if not isinstance(craft, Craft):
+            raise TypeError(
+                f"World.add_craft: expected a Craft, got "
+                f"{type(craft).__name__}")
+        owner = getattr(craft, "_world", None)
+        if owner is not None and owner is not self:
+            raise ValueError(
+                f"World '{self.name}': craft {craft.name!r} already belongs "
+                f"to World {owner.name!r}")
         # Validate uniqueness.
         for entry in self._crafts:
             if entry["craft"] is craft:
@@ -221,6 +241,7 @@ class World:
             "angular_velocity": angular_velocity,
             **extra_state,
         }
+        craft._world = self
         self._crafts.append({
             "craft":  craft,
             "initial_state_overrides": initial_state_overrides,

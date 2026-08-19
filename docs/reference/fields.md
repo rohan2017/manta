@@ -54,6 +54,8 @@ per each disturbance's `combining` flag. See
 
 ::: manta.fields.Sphere
 
+::: manta.fields.Ellipsoid
+
 ## Optical
 
 ::: manta.fields.OpticalField

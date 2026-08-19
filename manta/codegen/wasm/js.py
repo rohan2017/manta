@@ -68,6 +68,16 @@ function resolveName(key, names, label) {
     `${label} ${JSON.stringify(key)} is not a unique name in [${names}]`);
 }
 
+function requireFiniteVector(value, size, label) {
+  const vec = value instanceof Float64Array ? value.slice()
+    : Float64Array.from(typeof value === "number" ? [value] : value);
+  if (vec.length !== size)
+    throw new Error(`${label}: expected ${size} values, got ${vec.length}`);
+  for (const x of vec)
+    if (!Number.isFinite(x)) throw new Error(`${label}: values must be finite`);
+  return vec;
+}
+
 /** Pack `{name: value}` (full or unique-suffix names), overlaid on the
  *  `base` defaults, into a flat vector over `fields` in descriptor order. */
 function packFields(overrides, base, fields, names, label) {
@@ -76,9 +86,8 @@ function packFields(overrides, base, fields, names, label) {
     merged[resolveName(k, names, label)] = v;
   const vec = [];
   for (const f of fields) {
-    const v = merged[f.name];
-    if (f.dim === 1) vec.push(typeof v === "number" ? v : v[0]);
-    else for (let i = 0; i < f.dim; i++) vec.push(v[i]);
+    const v = requireFiniteVector(merged[f.name], f.dim, `${label} ${f.name}`);
+    for (let i = 0; i < f.dim; i++) vec.push(v[i]);
   }
   return Float64Array.from(vec);
 }
@@ -138,14 +147,15 @@ export class NoiseDriver {
 /** Build a flat ambient state: a `Float64Array` is taken verbatim, otherwise
  *  a `{slotName: value}` map (full or unique-suffix) is merged over `base`. */
 function packState(state, base) {
-  if (state instanceof Float64Array) return state;
+  if (state instanceof Float64Array)
+    return requireFiniteVector(state, descriptor.ambientDim, "state");
   const vec = Float64Array.from(base);
   const names = descriptor.stateSlots.map((s) => s.name);
   for (const [k, v] of Object.entries(state || {})) {
     const s = descriptor.stateSlots.find(
       (x) => x.name === resolveName(k, names, "state slot"));
-    if (s.dim === 1 && typeof v === "number") vec[s.off] = v;
-    else for (let i = 0; i < s.dim; i++) vec[s.off + i] = v[i];
+    const values = requireFiniteVector(v, s.dim, `state slot ${s.name}`);
+    for (let i = 0; i < s.dim; i++) vec[s.off + i] = values[i];
   }
   return vec;
 }
@@ -414,19 +424,15 @@ export class Filter {
 function packMatrix(v, shape, name) {
   const [rows, cols] = shape;
   if (Array.isArray(v) && Array.isArray(v[0])) {
-    if (v.length !== rows || v[0].length !== cols)
+    if (v.length !== rows || v.some((row) => row.length !== cols))
       throw new Error(
         `${name}: expected ${rows}x${cols}, got ${v.length}x${v[0].length}`);
     const out = new Float64Array(rows * cols);
     for (let c = 0; c < cols; c++)
       for (let r = 0; r < rows; r++) out[c * rows + r] = v[r][c];
-    return out;
+    return requireFiniteVector(out, rows * cols, name);
   }
-  const flat = v instanceof Float64Array ? v.slice() : Float64Array.from(v);
-  if (flat.length !== rows * cols)
-    throw new Error(
-      `${name}: expected ${rows * cols} values, got ${flat.length}`);
-  return flat;
+  return requireFiniteVector(v, rows * cols, name);
 }
 
 /** Mirrors the numpy `NumpyRegulator`: a stateless control law mapping a
@@ -485,22 +491,32 @@ export class Regulator {
 
   /** Install a re-solved operating point: gain, feed-forward and reference
    *  together (a gain is only valid about the point it was solved at). Takes
-   *  a manta `LQRSolution` straight off the wire — `{K, u_ff, x_ref}`, with
+   *  a manta `LQRSolution` straight off the wire —
+   *  `{K, u_ff, x_ref, controller_id}`, with
    *  `K` either an array of rows (what `K.tolist()` serializes to) or a flat
-   *  column-major array. camelCase keys (`uFf`, `xRef`) are accepted too. */
+   *  column-major array. */
   reprogram(solution) {
     const K = solution.K;
-    const uFf = solution.u_ff !== undefined ? solution.u_ff : solution.uFf;
-    const xRef = solution.x_ref !== undefined ? solution.x_ref : solution.xRef;
-    if (K === undefined || uFf === undefined || xRef === undefined)
+    const uFf = solution.u_ff;
+    const xRef = solution.x_ref;
+    if (K === undefined || uFf === undefined || xRef === undefined ||
+        solution.controller_id === undefined)
       throw new Error(
-        "reprogram: solution needs K, u_ff and x_ref (a manta LQRSolution)");
+        "reprogram: solution needs K, u_ff, x_ref and controller_id");
+    if (solution.controller_id !== descriptor.controllerId)
+      throw new Error("reprogram: solution belongs to a different controller artifact");
+    const staged = {};
     for (const [name, v] of [["K", K], ["u_ff", uFf]]) {
       if (!this._shapes[name])
         throw new Error(`control law has no ${name} port — not reprogrammable`);
-      this._coeffs[name] = packMatrix(v, this._shapes[name], name);
+      staged[name] = packMatrix(v, this._shapes[name], name);
     }
-    this.retarget(xRef instanceof Float64Array ? xRef : Float64Array.from(xRef));
+    const stagedRef = packState(
+      xRef instanceof Float64Array ? xRef : Float64Array.from(xRef),
+      this._refs[this._refName]);
+    this._coeffs.K = staged.K;
+    this._coeffs.u_ff = staged.u_ff;
+    this._refs[this._refName] = stagedRef;
   }
 
   /** Map a state estimate (flat or `{slot: value}`, merged over the live

@@ -257,8 +257,12 @@ def _project_point(P, R_cw, C, c, W, H):
     in-frame measurement Jacobian stays clean."""
     x = P @ ca.vertcat(c, ca.DM(1.0))                # 3×1 homogeneous
     depth = x[2]
-    u = x[0] / depth
-    v = x[1] / depth
+    # Coordinates are irrelevant when visibility is zero, but they remain
+    # ordinary finite runtime values.  A point on the camera plane must not
+    # leak inf/NaN through an otherwise rejected measurement bundle.
+    safe_depth = ca.if_else(ca.fabs(depth) > 1e-6, depth, 1e-6)
+    u = x[0] / safe_depth
+    v = x[1] / safe_depth
     in_front = (R_cw @ (c - C))[2] > 1e-6
     in_frame = (u > 0.0) * (u < W) * (v > 0.0) * (v < H)
     return u, v, in_front * in_frame

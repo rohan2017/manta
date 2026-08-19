@@ -42,7 +42,7 @@ from manta.planets import Earth
 from .._viz import Viz
 
 OMEGA = 0.5            # rad/s (real Earth: 7.29e-5) — exaggerated to watch
-R = Earth.R_EQ        # north pole, z = R
+R = Earth.R_EQ * (1.0 - Earth.FLATTENING)   # north pole sea level, z = R
 HALF = 1.0            # pyramid base half-width [m]
 APEX = 1.5            # pivot height above base [m]
 LEN = 0.5             # pendulum length [m]
@@ -63,8 +63,9 @@ def _build_world():
     bob.add(Mass("bob", mass=1.0, moi=(1e-6, 1e-6, 1e-6)))
     bob.add(TetherEndpoint("hook"))
 
-    # No per-site ground plane: Earth registers its sea-level sphere as
-    # the collision surface, so the base's feet land on the planet itself.
+    # No per-site ground plane: Earth registers its sea surface (the WGS-84
+    # ellipsoid) as the collision surface, so the base's feet land on the
+    # planet itself.
     w = World()
     w.add_planet(earth)
     # A local Scene at the north pole (planet at the world origin). Placing

@@ -65,7 +65,9 @@ SURFACE_BLEND = 0.15              # air/water blend half-band (m)
 # (the SeaWaves field is skipped entirely).
 WAVE_AMP = (0.0, 1.5, 0.25)       # (min, max, default) m
 WAVE_LEN = (6.0, 80.0, 18.0)      # (min, max, default) m
-ANCHOR = (0.0, 0.0, Earth.R_EQ)   # north-pole surface point (planet frame)
+# North-pole sea-surface point (planet frame): the WGS-84 polar radius.
+POLAR_R = Earth.R_EQ * (1.0 - Earth.FLATTENING)
+ANCHOR = (0.0, 0.0, POLAR_R)
 G0 = Earth.MU / Earth.R_EQ ** 2   # surface gravity implied by μ
 
 # Contact: one point Collider per spine module, on the hull axis. Against a
@@ -214,7 +216,7 @@ def build_world(canonical: dict):
     # A real Earth (SPEC "Coordinate/world conventions"): sidereal spin,
     # point-mass gravity, ISA atmosphere over a SeaWaves ocean (hydrostatic
     # pressure for the Barometer, wave orbital velocities for the drag
-    # surfaces and fins). The sea-level-sphere obstacle is OFF — it would
+    # surfaces and fins). The sea-surface obstacle is OFF — it would
     # wall off the dive; the solid ground is our seabed half-space instead,
     # raised HULL_R so the axis-mounted point colliders behave as
     # hull-radius spheres against the true seabed.
@@ -227,7 +229,7 @@ def build_world(canonical: dict):
     world = (World()
              .add_planet(earth)
              .add_field(CollisionField().add_half_space(
-                 origin=(0.0, 0.0, Earth.R_EQ - SEABED_DEPTH + HULL_R))))
+                 origin=(0.0, 0.0, POLAR_R - SEABED_DEPTH + HULL_R))))
 
     # Spawn co-rotating with the planet at the scene-local design pose —
     # `at_rest` fills in the orbital velocity and body spin rate.

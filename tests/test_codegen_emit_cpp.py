@@ -99,7 +99,8 @@ def test_size1_noise_port_emits_scalar_ref(tmp_path: Path):
     scalar channel, so the typed Module is built by hand)."""
     import casadi as ca
     from manta.ir.module import (
-        EntryPoint, Module, Port, PortField, PortRef, Role, StateLayout,
+        EntryPoint, Module, ModuleKind, Port, PortField, PortRef, Role,
+        StateLayout,
     )
     n, p = ca.MX.sym("n"), ca.MX.sym("p")
     fn = ca.Function("eval", [n, p], [ca.vertcat(n + p, n * p)])
@@ -116,7 +117,8 @@ def test_size1_noise_port_emits_scalar_ref(tmp_path: Path):
         functions={"eval": fn},
         entry_points=(EntryPoint("eval", "eval",
                                  (PortRef("noise"), PortRef("params")),
-                                 returns=("y",)),))
+                                 returns=("y",)),),
+        kind=ModuleKind.KERNEL)
     result = TargetCpp(m, tmp_path, class_name="ScalarNoise")
     assert "const double& noise" in result.wrapper_hpp.read_text()
     cpp = result.wrapper_cpp.read_text()

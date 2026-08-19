@@ -331,28 +331,6 @@ class VecN(_IRValue):
                 f"{arr.shape[0]}")
         return cls(ca.MX(ca.DM(arr)), arr.shape[0])
 
-    # ---- dim-argument classmethods --------------------------------------
-    # Predate the `VecN[n]` grammar; kept (delegating) because external
-    # call sites use them — `RnManifold.ir_input` and friends.
-
-    @classmethod
-    def input(cls, name: str, dim: int) -> "VecN":
-        return cls[int(dim)].input(name)
-
-    @classmethod
-    def constant(cls, value, dim: int | None = None) -> "VecN":
-        """`dim=None` infers the dimension from `value`; a given `dim`
-        is enforced."""
-        return cls._make_constant(value, dim=dim)
-
-    @classmethod
-    def coerce(cls, value, dim: int) -> "VecN":
-        """The promotable-Parameter idiom (see
-        `_ParameterizedConstructor.coerce`): pass a promoted VecN
-        through, build a constant from a plain Python value."""
-        return cls[int(dim)].coerce(value)
-
-
 def _scalar_op(a, b, fn):
     return Scalar(fn(_as_mx(a), _as_mx(b)))
 

@@ -42,8 +42,10 @@ def test_checkpoint_restore_is_complete_and_owned(estimator):
     assert filt.time == pytest.approx(0.2)
 
     # A caller mutating its old snapshot cannot mutate a restored runtime.
-    checkpoint.x[:] = 99.0
-    checkpoint.P[:] = 99.0
+    with pytest.raises(ValueError, match="read-only"):
+        checkpoint.x[:] = 99.0
+    with pytest.raises(ValueError, match="read-only"):
+        checkpoint.P[:] = 99.0
     np.testing.assert_array_equal(filt.x, expected_x)
     np.testing.assert_array_equal(filt.P, expected_P)
 
@@ -51,7 +53,8 @@ def test_checkpoint_restore_is_complete_and_owned(estimator):
 def test_restore_rejects_bad_checkpoint_without_partial_mutation():
     filt = TargetNumpy(EKF(_world()))
     before = filt.checkpoint()
-    bad = FilterCheckpoint(before.x, -np.eye(before.P.shape[0]), before.time)
+    bad = FilterCheckpoint(before.x, -np.eye(before.P.shape[0]), before.time,
+                           before.artifact_id)
     with pytest.raises(ValueError, match="positive semidefinite"):
         filt.restore(bad)
     np.testing.assert_array_equal(filt.x, before.x)

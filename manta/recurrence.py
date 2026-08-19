@@ -127,8 +127,8 @@ class RecurrenceBlock:
         """The typed `Module` IR a backend lowers: held state `x`, one
         `step(x; u, dt, t) -> y` entry, named input/output port fields."""
         from .ir.module import (
-            EntryPoint, Hosting, Module, Port, PortField, PortRef, Role,
-            StateField, StateLayout, StateRef,
+            EntryPoint, Hosting, Module, ModuleKind, Port, PortField, PortRef,
+            Role, StateField, StateLayout, StateRef,
         )
         spec = self.spec
         return Module(
@@ -148,6 +148,7 @@ class RecurrenceBlock:
                 "step", "step",
                 (StateRef("x"), PortRef("u"), PortRef("dt"), PortRef("t")),
                 writes=("x",), returns=("y",)),),
+            kind=ModuleKind.RECURRENCE,
             hosting=Hosting.HELD)
 
     def __repr__(self) -> str:

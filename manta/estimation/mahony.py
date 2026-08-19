@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import casadi as ca
 
+from .._validation import require_positive
 from ..ir.manifold import R3Manifold, SO3Manifold
 from ..recurrence import RecurrenceBlock
 
@@ -46,8 +47,8 @@ class Mahony(RecurrenceBlock):
 
     def __init__(self, kp: float = 0.5, ki: float = 0.0, *,
                  name: str = "mahony") -> None:
-        self.kp = float(kp)
-        self.ki = float(ki)
+        self.kp = require_positive(kp, name="Mahony.kp", allow_zero=True)
+        self.ki = require_positive(ki, name="Mahony.ki", allow_zero=True)
         two_kp, two_ki = 2.0 * self.kp, 2.0 * self.ki
 
         def rec(x, u, dt, t):

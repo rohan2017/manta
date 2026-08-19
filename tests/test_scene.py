@@ -12,6 +12,7 @@ the numeric I/O translation it provides:
 """
 
 import numpy as np
+import pytest
 
 from manta import Planet
 from manta.planets import Earth, Scene
@@ -84,17 +85,20 @@ def test_scene_relative_passes_through_part_state():
 
 def test_scene_world_pose_matches_origin_and_basis():
     """`world_pose` returns the scene origin and an orientation whose +z is
-    local up (radial) and +x is local north."""
-    R = Earth.R_EQ
+    local up (the geodetic normal of the WGS-84 ellipsoid) and +x is local
+    north."""
     lat = np.radians(45.0)
     earth = Earth()
-    anchor = (R * np.cos(lat), 0.0, R * np.sin(lat))
+    anchor = tuple(earth.ecef_from_geodetic(45.0, 0.0, 0.0))
     scene = earth.scene_at(anchor)
     origin, q = scene.world_pose(0.0)
     np.testing.assert_allclose(origin, anchor, atol=1e-6)
     Rws = _rotmat(q)
-    up = np.asarray(anchor) / np.linalg.norm(anchor)
+    up = np.array([np.cos(lat), 0.0, np.sin(lat)])   # geodetic normal at 45°N
     np.testing.assert_allclose(Rws[:, 2], up, atol=1e-12)         # +z = up
+    # Not the radial: the ellipsoid's normal leans ~0.19° poleward of it.
+    radial = np.asarray(anchor) / np.linalg.norm(anchor)
+    assert np.degrees(np.arccos(radial @ up)) == pytest.approx(0.192, abs=0.01)
     # +x = north = spin axis (+z world) projected into the tangent plane.
     north = np.array([0, 0, 1.0]) - np.dot([0, 0, 1.0], up) * up
     north /= np.linalg.norm(north)
