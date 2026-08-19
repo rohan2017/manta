@@ -20,7 +20,8 @@ from numbers import Real
 from typing import Any, Mapping, Sequence
 
 import numpy as np
-from krill import finite_real
+
+from manta._validation import finite_real
 
 
 def _finite(value: Any, *, name: str) -> float:

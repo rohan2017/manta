@@ -2,12 +2,28 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from numbers import Real
 from typing import Any
 
 import numpy as np
-from krill import finite_real
+
+
+def finite_real(value: Any, name: str = "value") -> float:
+    """Coerce a real scalar to ``float``, rejecting bool and non-finite values.
+
+    Manta deliberately carries its own copy of this boundary rather than
+    importing it: the modeling library depends on numpy and CasADi only.
+    """
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, Real):
+        raise TypeError(
+            f"{name} must be a real number, not {type(value).__name__}"
+        )
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError(f"{name} must be finite, got {result}")
+    return result
 
 
 def require_finite(value: Any, *, name: str) -> Any:

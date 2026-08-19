@@ -8,7 +8,8 @@ from typing import Any
 
 import casadi as ca
 import numpy as np
-from krill import finite_real as _finite_real
+
+from manta._validation import finite_real as _finite_real
 
 
 def finite_scalar(value: Any, *, name: str) -> float:

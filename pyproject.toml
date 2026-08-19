@@ -16,7 +16,6 @@ authors = [{ name = "Rohan" }]
 dependencies = [
     "numpy>=2.0",
     "casadi>=3.7",
-    "krill>=0.1.0",
 ]
 
 [project.optional-dependencies]
