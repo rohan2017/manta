@@ -219,6 +219,14 @@ class World:
             raise TypeError(
                 f"World.add_craft: expected a Craft, got "
                 f"{type(craft).__name__}")
+        from .planets.state import PlanetState
+        for argument, value, expected_kind in (
+                ("position", position, "position"),
+                ("velocity", velocity, "velocity")):
+            if isinstance(value, PlanetState) and value.kind != expected_kind:
+                raise ValueError(
+                    f"World.add_craft: {argument} received a PlanetState of "
+                    f"kind {value.kind!r}; use planet.{expected_kind}(...)")
         owner = getattr(craft, "_world", None)
         if owner is not None and owner is not self:
             raise ValueError(
@@ -264,6 +272,29 @@ class World:
                 raise ValueError(
                     f"World.add_coupling: coupling.{label} '{c.name}' is "
                     f"not registered with this World. Call add_craft first.")
+        if coupling.craft_a is coupling.craft_b:
+            raise ValueError(
+                "World.add_coupling: an inter-craft coupling must reference "
+                "two distinct crafts")
+        if not hasattr(coupling, "name"):
+            raise TypeError(
+                f"World.add_coupling: {type(coupling).__name__} did not "
+                "initialize Coupling; call super().__init__(name)")
+        owner = getattr(coupling, "_world", None)
+        if owner is not None and owner is not self:
+            raise ValueError(
+                f"World '{self.name}': coupling {coupling.name!r} already "
+                f"belongs to World {owner.name!r}")
+        for existing in self._couplings:
+            if existing is coupling:
+                raise ValueError(
+                    f"World '{self.name}': coupling {coupling.name!r} "
+                    "already added")
+            if existing.name == coupling.name:
+                raise ValueError(
+                    f"World '{self.name}': coupling name {coupling.name!r} "
+                    "collides with an existing coupling")
+        coupling._world = self
         self._couplings.append(coupling)
         return coupling
 
@@ -347,32 +378,37 @@ class World:
             overrides = entry["initial_state_overrides"]
             pos = overrides.get("position")
             vel = overrides.get("velocity")
-            # Resolve as a pair so the planet sees both together (its
-            # velocity transform depends on the position via ω × r).
+            # Resolve each explicitly framed value according to its own
+            # contract. A plain sibling remains in WorldFrame; it is never
+            # silently reinterpreted because the other value is wrapped.
             pos_planet = pos if isinstance(pos, PlanetState) else None
             vel_planet = vel if isinstance(vel, PlanetState) else None
             if pos_planet is None and vel_planet is None:
                 continue
-            # If one is PlanetState the other should be too (or default
-            # plain (0,0,0) interpreted in the same frame). `planet` is
-            # pos_planet's planet whenever pos is wrapped, so only the
-            # velocity side can disagree.
             planet = (pos_planet or vel_planet).planet
+            if all(registered is not planet for registered in self._planets):
+                raise ValueError(
+                    f"World '{self.name}': craft {entry['craft'].name!r} "
+                    f"references unregistered planet {planet.name!r}; call "
+                    "add_planet before constructing a transform")
             if vel_planet is not None and vel_planet.planet is not planet:
                 raise ValueError(
                     f"World '{self.name}': craft "
                     f"{entry['craft'].name!r}: position and velocity "
                     f"reference different planets; pick one frame")
-            p_planet_val = (pos_planet.value
-                            if pos_planet is not None
-                            else tuple(pos))
-            v_planet_val = (vel_planet.value
-                            if vel_planet is not None
-                            else tuple(vel))
-            p_world, v_world = planet.planet_to_world(
-                p_planet_val, v_planet_val, t=0.0)
-            overrides["position"] = p_world
-            overrides["velocity"] = v_world
+            if pos_planet is not None:
+                p_world, _ = planet.planet_to_world(
+                    pos_planet.value, (0.0, 0.0, 0.0), t=0.0)
+                overrides["position"] = p_world
+            if vel_planet is not None:
+                if pos_planet is not None:
+                    p_planet_value = pos_planet.value
+                else:
+                    p_planet_value, _ = planet.world_to_planet(
+                        tuple(pos), (0.0, 0.0, 0.0), t=0.0)
+                _, v_world = planet.planet_to_world(
+                    p_planet_value, vel_planet.value, t=0.0)
+                overrides["velocity"] = v_world
 
     # ---- Repr -----------------------------------------------------------
 

@@ -257,7 +257,10 @@ fit = Fit(world, parameters={
 result = fit.solve(windows, weights={"imu.gyro": 1/σg**2,
                                      "imu.accel": 1/σa**2})
 print(result.summary())     # fitted values + prior σ vs posterior σ
-result.apply()              # bake fitted values back into the model
+artifact = result.derive(validation={"accepted": True,
+                                     "holdout_rmse": heldout_rmse})
+# Or, for an exploratory authoring loop, mutate the editable World:
+result.apply()
 ```
 
 Structure is enforced, not hoped for: `Tied` pins symmetric parameters
@@ -285,7 +288,9 @@ negative-log-likelihood (σ enters through the filter's `Q = LΣLᵀ` and
 nres = NoiseFit(world, noise={"imu.gyro_noise": Prior(sigma=2.0),
                               "imu.accel_noise": Prior(sigma=2.0)})\
     .solve(windows)
-nres.apply()      # EKF(world) now auto-builds Q/R from the fitted σ
+nartifact = nres.derive(validation={"accepted": True,
+                                    "heldout_nis": heldout_nis})
+# nres.apply() remains available for an editable authoring workflow.
 ```
 
 ### Sparse RTI MPC
@@ -381,7 +386,6 @@ manta/                     library package
                            (engine) + closure/partition + name helpers —
                            the shared seam every transform reads
     smoothing.py           Shared softened-norm / smooth-max primitives
-    rates.py               RateGate + CommandLatch (loop-level rate gating)
     tick/                  World-tick compile + kinematics/inertia/signature
     ir/                    Frames, types, Graph, Manifold, Wrench, Module
     parts/                 Part base + stock parts (sensor/actuation/aero/…)

@@ -75,6 +75,7 @@ class Sim:
             world, discretization=discretization, parameters=parameters)
         self.world = self._sys.world
         self.crafts = self._sys.crafts
+        self.model = self._sys.model
 
     # ------------------------------------------------------------------
 

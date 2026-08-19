@@ -14,23 +14,12 @@ no separate runtime to install).
 
 from __future__ import annotations
 
-import threading
 from typing import Any
 
 import casadi as ca
 import numpy as np
 
-
-_local = threading.local()
-
-
-def _current_graph() -> "Graph":
-    g = getattr(_local, "graph", None)
-    if g is None:
-        raise RuntimeError(
-            "No active Graph. Wrap IR-building code in 'with manta.ir.Graph() "
-            "as g:' before calling .input() or constructing constants.")
-    return g
+from ._graph_context import get_active_graph, set_active_graph
 
 
 class Graph:
@@ -59,12 +48,12 @@ class Graph:
     # ----- Context manager -------------------------------------------------
 
     def __enter__(self) -> "Graph":
-        self._saved_active = getattr(_local, "graph", None)
-        _local.graph = self
+        self._saved_active = get_active_graph()
+        set_active_graph(self)
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
-        _local.graph = self._saved_active
+        set_active_graph(self._saved_active)
         self._saved_active = None
 
     # ----- Internal registration (called by types.input/etc.) --------------

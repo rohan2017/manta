@@ -20,8 +20,6 @@ Validates:
 """
 
 import numpy as np
-import casadi as ca
-import pytest
 
 from manta import Craft, EKF, Sim, TargetNumpy, World
 from manta.fields import GravityField
@@ -66,9 +64,9 @@ def _build_world():
 
 def test_state_spec_picks_up_rw_bias_as_state_slot():
     """RW Noise channels add R3 state slots to the spec."""
-    from manta.ir.state_spec import StateSpec
     _, c = _build_world()
-    spec = StateSpec.from_craft(c)
+    from manta import state_spec_from_craft
+    spec = state_spec_from_craft(c)
     names = [s.name for s in spec.slots]
     assert "g.gyro_bias" in names
     slot = spec.slot("g.gyro_bias")

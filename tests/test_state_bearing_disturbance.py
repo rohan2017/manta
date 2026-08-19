@@ -84,9 +84,9 @@ def test_bias_advances_by_sqrt_dt_times_driver():
 
 
 def test_state_spec_picks_up_disturbance_bias():
-    from manta.ir.state_spec import StateSpec
     w, _ = _build_world()
-    spec = StateSpec.from_world(w)
+    from manta import state_spec_from_world
+    spec = state_spec_from_world(w)
     names = [s.name for s in spec.slots]
     assert "wind.velocity" in names
     slot = spec.slot("wind.velocity")
@@ -171,9 +171,9 @@ def test_vec_disturbance_state_is_identity_passthrough():
 
 
 def test_vec_disturbance_state_spec_slot():
-    from manta.ir.state_spec import StateSpec
     w, _ = _build_vec_state_world()
-    spec = StateSpec.from_world(w)
+    from manta import state_spec_from_world
+    spec = state_spec_from_world(w)
     slot = spec.slot("steady.velocity")
     assert slot.ambient_dim == 3
     assert slot.tangent_dim == 3

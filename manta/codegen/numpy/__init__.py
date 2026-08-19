@@ -9,8 +9,7 @@ exactly the surface its Module shape implies — nothing else:
   * `NumpySim` (`_sim`)               — THREADED + an oracle ``step``
                         entry. Held state: `sim.state` (nested dict),
                         `step(dt)`/`step_n`, `outputs()`/`reading(name)`,
-                        `attach_driver` (feeds the NOISE port),
-                        `rate_gate`/`command_latch`.
+                        `attach_driver` (feeds the NOISE port).
   * `NumpyFilter` (`_filter`)         — HELD + a ``predict`` entry.
                         `predict`/`update` (by sensor *name* or a
                         caller-supplied `h(x)`), `x`/`P`, `reset`,

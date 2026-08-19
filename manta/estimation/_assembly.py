@@ -233,7 +233,9 @@ class _FilterBase:
     def _bind_system(self, world, sys) -> None:
         """The ctor attribute block both filters open with."""
         self.sys = sys
-        self.world = world
+        self.authoring_world = world
+        self.world = sys.world
+        self.model = sys.model
         self.crafts = sys.crafts
         self.spec: StateSpec = sys.spec
 

@@ -25,6 +25,12 @@ class Coupling(ABC):
     compile unit.
     """
 
+    def __init__(self, name: str) -> None:
+        from ..ir.module import check_name
+
+        self.name = check_name(name, who=type(self).__name__)
+        self._world = None
+
     @property
     @abstractmethod
     def craft_a(self):

@@ -11,8 +11,8 @@ import copy
 import numpy as np
 import pytest
 
-from manta import Craft, Fit, Free, Prior, Sim, TargetNumpy, Tied, Window, \
-    World
+from manta import Craft, Fit, Free, ModelArtifact, Prior, Sim, TargetNumpy, \
+    Tied, Window, World
 from manta.fields import GravityField
 from manta.ir.frames import CraftFrame, PartFrame
 from manta.ir.types import Vec3
@@ -234,7 +234,26 @@ def test_fit_apply_bakes_fitted_values():
     model = _drone(kf=9.0)
     fit = Fit(model, parameters={
         **{f"t{i}.force_quad": Prior(sigma=4.0) for i in range(1, 5)}})
+    base_model = Sim(model).model
+    assert fit.sim.model.artifact_id == base_model.artifact_id
+    assert "drone.t1.force_quad" in base_model.parameter_names
     res = fit.solve(windows, weights={"imu.gyro": 1e6, "imu.accel": 1e4})
+
+    # Derivation produces a new executable revision and records held-out
+    # acceptance evidence without mutating the editable authoring World.
+    derived = res.derive(validation={"accepted": True,
+                                     "holdout_rmse": 0.01})
+    assert isinstance(derived, ModelArtifact)
+    assert derived.derivation["fit"].accepted
+    assert derived.derivation["fit"].source_artifact_id == fit.sim.model.artifact_id
+    assert derived.artifact_id != derived.model_id
+    derived_t1 = next(p for p in derived.world_copy().crafts[0].parts
+                      if p.name == "t1")
+    original_t1 = next(p for p in model.crafts[0].parts if p.name == "t1")
+    assert abs(derived_t1.force_quad[2] - 11.0) < 0.05
+    assert original_t1.force_quad[2] == 9.0
+    assert Sim(derived).model.artifact_id == derived.artifact_id
+
     res.apply()
     t1 = next(p for p in model.crafts[0].parts if p.name == "t1")
     assert abs(t1.force_quad[2] - 11.0) < 0.05
@@ -409,6 +428,8 @@ def test_fit_unconverged_sets_flag_and_warns():
     assert "NOT CONVERGED" in res.summary()
     with pytest.raises(RuntimeError, match="refuses"):
         res.apply()
+    with pytest.raises(RuntimeError, match="refuses"):
+        res.derive()
 
 
 def test_log_prior_supports_vector_parameters():

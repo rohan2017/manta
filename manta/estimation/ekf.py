@@ -116,7 +116,7 @@ class EKF(_FilterBase):
         # see estimation/_kalman.py). `prepared_sensors` eliminates dt and
         # refuses σ=0 sensors — the kernel honestly takes only
         # (x, P, z, u, t).
-        x0 = initial_ambient(world, spec)
+        x0 = initial_ambient(sys.world, spec)
         zero_dt = ca.MX.zeros(1, 1)
         updates: dict[str, ca.Function] = {}
         diagnostic_updates: dict[str, ca.Function] = {}

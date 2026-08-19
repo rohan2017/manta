@@ -21,7 +21,7 @@ Two parallel layouts:
 
 API::
 
-    spec = StateSpec.from_craft(craft)
+    spec = manta.state_spec_from_craft(craft)
     spec.ambient_dim                    # total ambient floats
     spec.tangent_dim                    # total tangent floats
     spec.slots                          # list of StateSlot
@@ -43,7 +43,7 @@ import casadi as ca
 import numpy as np
 
 from ._names import resolve_suffix
-from .manifold import Manifold, R3Manifold, SO3Manifold
+from .manifold import Manifold
 
 
 class SlotSet(IntFlag):
@@ -190,47 +190,6 @@ class StateSpec:
 
     # ----- Construction --------------------------------------------------
 
-    # `from_layout` is the ONE place offsets densify; every other
-    # constructor collects (name, manifold) pairs and delegates, so the
-    # ambient/tangent bookkeeping cannot drift between entry points.
-
-    @classmethod
-    def from_craft(cls, craft) -> "StateSpec":
-        """Build the canonical state spec for a single-craft world.
-
-        Layout:
-          position           (3, R3)
-          orientation        (4, SO3 → tangent 3)
-          velocity           (3, R3)
-          angular_velocity   (3, R3)
-          <part>.<slot>      (1, R1)  in declaration order
-
-        Future: multi-craft worlds will concatenate per-craft layouts here.
-        """
-        layout: list[tuple[str, Manifold]] = []
-        cls._add_craft_slots(craft, "",
-                             lambda name, mfd: layout.append((name, mfd)))
-        return cls.from_layout(layout)
-
-    @classmethod
-    def from_world(cls, world) -> "StateSpec":
-        """Build the joint state spec for a World — every craft's slots
-        concatenated, each prefixed with `<craft.name>.`.
-
-        Slot ordering: per-craft in world.crafts order; within each
-        craft, the same per-craft layout as `from_craft`.
-        """
-        layout: list[tuple[str, Manifold]] = []
-
-        def add(name: str, mfd: Manifold) -> None:
-            layout.append((name, mfd))
-
-        for craft in world.crafts:
-            cls._add_craft_slots(craft, f"{craft.name}.", add)
-        for field in world.fields:
-            cls._add_field_disturbance_slots(field, add)
-        return cls.from_layout(layout)
-
     @classmethod
     def from_layout(cls, layout) -> "StateSpec":
         """Build a spec from an ordered list of `(name, Manifold)` pairs.
@@ -264,50 +223,6 @@ class StateSpec:
         return cls.from_layout([(s.name, s.manifold)
                                 for s in full_spec.slots
                                 if s.name in kept])
-
-    @staticmethod
-    def _add_field_disturbance_slots(field, add) -> None:
-        """Walk a Field's disturbances; emit a state slot for each User
-        State declaration + each active RW Noise channel. Slot names
-        are prefixed `<disturbance.name>.<slot>`."""
-        from ..fields.base import Disturbance
-        for dist in field._disturbances:
-            if not isinstance(dist, Disturbance):
-                continue
-            sdecls = dist.state_declarations()
-            ndecls = dist.noise_declarations()
-            if not sdecls and not ndecls:
-                continue
-            prefix = f"{dist.name}."
-            for sname, sdecl in sdecls.items():
-                add(prefix + sname, sdecl.manifold)
-            for nname, ndecl in ndecls.items():
-                if not ndecl.contributes_state:
-                    continue
-                if not ndecl.is_active(dist, nname):
-                    continue
-                add(prefix + nname, ndecl.state_manifold())
-
-    @staticmethod
-    def _add_craft_slots(craft, prefix: str, add) -> None:
-        """Emit one craft's worth of slots into `add`, optionally prefixed."""
-        add(prefix + "position",         R3Manifold())
-        add(prefix + "orientation",      SO3Manifold())
-        add(prefix + "velocity",         R3Manifold())
-        add(prefix + "angular_velocity", R3Manifold())
-        for part in craft.parts:
-            for sname, sdecl in part.state_declarations().items():
-                key = prefix + f"{part.name}.{sname}"
-                add(key, sdecl.manifold)
-            # Noise channels that synthesize a state slot (RW today;
-            # any future state-carrying Noise subclass with
-            # `contributes_state=True`) are picked up generically.
-            for nname, ndecl in part.noise_declarations().items():
-                if not ndecl.contributes_state:
-                    continue
-                if not ndecl.is_active(part, nname):
-                    continue
-                add(prefix + f"{part.name}.{nname}", ndecl.state_manifold())
 
     # ----- Accessors -----------------------------------------------------
 

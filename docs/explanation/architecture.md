@@ -50,6 +50,26 @@ Existing transforms never change when the authoring model is edited. A later
 `Sim(world)` or `EKF(world)` captures the later revision, which makes iterative
 model comparison possible without a lock/finalize lifecycle.
 
+Every transform exposes that resolved revision as an immutable
+[`ModelArtifact`][manta.ModelArtifact] in its `.model` attribute. The artifact
+has stable content identity, a validated state/input/sensor layout, and an
+editable `world_copy()`. It can be passed directly to another transform. This
+keeps the common workflow deliberately open-ended:
+
+```python
+sim = Sim(world)                 # revision A
+world.crafts[0].remove("camera")
+ekf = EKF(world)                 # revision B
+world.crafts[0].add(camera)
+ukf = UKF(world)                 # revision C
+
+# Rebuild from exactly A, independently of later authoring edits.
+replay_filter = EKF(sim.model)
+```
+
+The validated artifact is therefore a boundary between revisions, not a
+one-way `finalize()` operation on the authoring objects.
+
 ## Layer 2 — Transform
 
 `Sim(world)`, `EKF(world)`, and `LQR(world, …)` are **pure compile-time**.

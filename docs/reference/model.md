@@ -7,6 +7,10 @@ The declarative layer: build a `World`, populate it with `Craft`s and
 
 ::: manta.World
 
+::: manta.ModelArtifact
+
+::: manta.ModelValidationReport
+
 ## Craft
 
 ::: manta.Craft

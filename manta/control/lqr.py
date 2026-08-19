@@ -207,9 +207,6 @@ class LQR:
                  regulate: list[str] | None = None,
                  tol: float = 1e-12,
                  max_iter: int = 10000) -> None:
-        if not world.crafts:
-            raise ValueError("LQR: world has no crafts.")
-
         # All the linearization plumbing — tick compile, signature, the
         # VERBATIM regulated subset frozen at the operating point, and
         # B = ∂f/∂u — lives in `LinearizedSystem`. `regulate` is taken
@@ -224,6 +221,9 @@ class LQR:
                                ref=x_ref)
         self.sys     = sys
         self.world   = sys.world
+        self.model   = sys.model
+        if not self.world.crafts:
+            raise ValueError("LQR: world has no crafts.")
         self.spec    = sys.full_spec      # full layout (the law gathers from it)
         self._spec   = sys.spec           # tracked subspec
         self.regulated = sys.tracked

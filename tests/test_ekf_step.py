@@ -7,13 +7,14 @@ the order (fold each fresh measurement, then predict) and the rate gating
 """
 
 import numpy as np
+import pytest
 
 from manta import Sim, TargetNumpy, World
 from manta.craft import Craft
-from manta.fields import GravityField
 from manta.estimation import EKF
-from manta.parts.structure.mass import Mass
+from manta.fields import GravityField
 from manta.parts.sensor.position_sensor import PositionSensor
+from manta.parts.structure.mass import Mass
 
 
 def _gps_craft(name="drone", sigma=0.1):
@@ -92,6 +93,13 @@ def test_inputs_drive_predict():
     w = World().add_field(GravityField(g=(0, 0, 0.0)))   # no gravity
     w.add_craft(craft())
     rt = TargetNumpy(EKF(w))
+
+    # Omitted inputs fall back to their declared default (zero here), while
+    # misspelled inputs fail at the public runtime boundary.
+    rt.predict(0.05)
+    assert rt.state_dict()["rocket"]["velocity"][2] == pytest.approx(0.0)
+    with pytest.raises(KeyError, match="unknown input"):
+        rt.predict(0.05, u={"nope.bad": 1.0})
 
     for _ in range(10):
         rt.predict(0.05, u={"t.throttle": 10.0})

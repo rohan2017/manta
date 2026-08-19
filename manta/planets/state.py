@@ -22,6 +22,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from .._validation import finite_real
+
 if TYPE_CHECKING:
     from .base import Planet
 
@@ -43,12 +45,18 @@ class PlanetState:
             raise ValueError(
                 f"PlanetState: kind must be 'position' or 'velocity', "
                 f"got {kind!r}")
-        self.planet = planet
-        self.kind = kind
-        self.value = tuple(float(x) for x in value)
-        if len(self.value) != 3:
+        from .base import Planet
+        if not isinstance(planet, Planet):
+            raise TypeError(
+                f"PlanetState: planet must be a Planet, got "
+                f"{type(planet).__name__}")
+        if len(value) != 3:
             raise ValueError(
                 f"PlanetState: value must be length-3, got {value!r}")
+        self.planet = planet
+        self.kind = kind
+        self.value = tuple(
+            finite_real(x, f"PlanetState.{kind}") for x in value)
 
     def __repr__(self) -> str:
         return (f"<PlanetState planet={self.planet.name!r} "

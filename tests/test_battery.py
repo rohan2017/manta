@@ -7,9 +7,13 @@ import copy
 import numpy as np
 import pytest
 
+from manta import Craft, Sim, TargetNumpy, World
+from manta.fields import GravityField
+from manta.parts import ConstantCurrentLoad, ExternalDCSupply, Mass, ThermalMass
 from manta.simulation import (
     BMSPlant,
     BatteryCell,
+    BatteryElectricalModel,
     BatteryCellFaults,
     BatteryStepInput,
     OCVCurve,
@@ -37,6 +41,73 @@ def _input(pack, current=0.0, *, faults=None, temperatures=None,
         trip_command=trip,
         reset_command=reset,
     )
+
+
+def _coupled_runtime(*, thermal=False):
+    source = ExternalDCSupply("pack_supply")
+    load = ConstantCurrentLoad(
+        "hotel", current=1.0, brownout_voltage=0.1, recovery_voltage=0.2)
+    source.connect(load)
+    craft = Craft("rig")
+    craft.add(Mass("body", mass=1.0))
+    craft.add(source)
+    craft.add(load)
+    thermal_parts = tuple(f"cell_{index}" for index in range(4)) if thermal else ()
+    for name in thermal_parts:
+        craft.add(ThermalMass(name, heat_capacity=1.0))
+    world = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
+    world.add_craft(craft)
+    runtime = TargetNumpy(Sim(world))
+    pack = _pack(count=4, initial_soc=0.8)
+    battery = runtime.attach_model(BatteryElectricalModel(
+        pack, craft="rig", supply="pack_supply",
+        thermal_parts=thermal_parts))
+    return runtime, battery
+
+
+def test_battery_and_electrical_graph_share_one_atomic_sim_tick():
+    runtime, battery = _coupled_runtime()
+    before_soc = battery.pack.state.cells[0].soc
+    runtime.step(1.0)
+    assert runtime.time == pytest.approx(1.0)
+    assert battery.pack.state.cells[0].soc < before_soc
+    assert float(np.asarray(
+        runtime.outputs()["rig"]["pack_supply.output_current"]).item()
+    ) == pytest.approx(1.0)
+
+    checkpoint = runtime.checkpoint()
+    checkpoint_soc = battery.pack.state.cells[0].soc
+    runtime.step(1.0)
+    runtime.restore(checkpoint)
+    assert runtime.time == pytest.approx(1.0)
+    assert battery.pack.state.cells[0].soc == checkpoint_soc
+
+
+def test_battery_cells_and_thermal_graph_share_the_sim_update():
+    runtime, battery = _coupled_runtime(thermal=True)
+    initial = runtime.state["rig"]["cell_0.temperature"]
+    runtime.step(1.0)  # establishes current/loss telemetry
+    runtime.step(1.0)  # prior loss heats the cell's ThermalMass via ZOH
+    temperature = runtime.state["rig"]["cell_0.temperature"]
+    assert temperature > initial
+    assert battery.cell_temperatures[0] == pytest.approx(temperature)
+
+
+def test_coupled_battery_failure_rolls_back_the_spatial_tick():
+    runtime, battery = _coupled_runtime()
+    runtime.state["rig"]["velocity"] = np.array([1.0, 0.0, 0.0])
+    before = runtime.checkpoint()
+    with pytest.raises(ValueError, match="SOC would leave"):
+        runtime.step(60_000.0)
+    assert runtime.time == before.time
+    assert runtime.checkpoint().values == before.values
+    assert battery.pack.state.cells[0].soc == pytest.approx(0.8)
+
+
+def test_coupled_battery_exclusively_owns_its_supply_input():
+    runtime, _ = _coupled_runtime()
+    with pytest.raises(ValueError, match="two owners"):
+        runtime.step(0.1, u={"pack_supply.supplied_voltage": 12.0})
 
 
 def test_ocv_curve_is_calibratable_and_integrates_exactly():

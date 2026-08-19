@@ -5,7 +5,8 @@ import copy
 import numpy as np
 import pytest
 
-from manta import NoiseDriver, NoiseFit, Prior, Sim, TargetNumpy, Window
+from manta import ModelArtifact, NoiseDriver, NoiseFit, Prior, Sim, \
+    TargetNumpy, Window
 
 from .test_fit import DT, _drone
 
@@ -73,6 +74,19 @@ def test_noise_fit_apply_writes_sigma_attrs(fitted):
     imu = next(p for p in model.crafts[0].parts if p.name == "imu")
     assert imu.gyro_noise_sigma == res.values["drone.imu.gyro_noise"]
     assert imu.accel_noise_sigma == res.values["drone.imu.accel_noise"]
+
+
+def test_noise_fit_derives_accepted_model_revision(fitted):
+    _, res = fitted
+    derived = res.derive(validation={"accepted": True, "nis_pvalue": 0.4})
+    assert isinstance(derived, ModelArtifact)
+    report = derived.derivation["noise_fit"]
+    assert report.accepted
+    assert report.source_artifact_id
+    imu = next(p for p in derived.world_copy().crafts[0].parts
+               if p.name == "imu")
+    assert imu.gyro_noise_sigma == res.values["drone.imu.gyro_noise"]
+    assert Sim(derived).model.artifact_id == derived.artifact_id
 
 
 def test_noise_fit_summary_lists_channels(fitted):
@@ -160,6 +174,8 @@ def test_noise_fit_unconverged_sets_flag_and_warns():
     assert "NOT CONVERGED" in res.summary()
     with pytest.raises(RuntimeError, match="refuses"):
         res.apply()
+    with pytest.raises(RuntimeError, match="refuses"):
+        res.derive()
 
 
 def test_noise_fit_uninformed_channel_posterior_stays_at_prior():

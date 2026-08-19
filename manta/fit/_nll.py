@@ -30,14 +30,17 @@ Usage::
     })
     result = nf.solve(windows)      # the same Window type as Fit
     print(result.summary())
-    result.apply()                  # writes <name>_sigma onto the parts
+    artifact = result.derive(validation={"accepted": True, ...})
+    # Or result.apply() to write <name>_sigma onto an editable World.
 
-Typical workflow: fit dynamics/geometry first (`Fit`), `apply()` it,
-then fit σ on the updated model — innovation statistics are only
+Typical workflow: fit dynamics/geometry first (`Fit`), derive a validated
+model revision, then fit σ on that revision — innovation statistics are only
 meaningful once the mean model is right.
 """
 
 from __future__ import annotations
+
+import copy
 
 import casadi as ca
 import numpy as np
@@ -49,11 +52,13 @@ from ..ir._linalg import spd_logdet, spd_solve
 from ..ir.state_spec import flatten_nested
 from ..ir._names import resolve_suffix
 from ..linearization import LinearizedSystem
+from ..model import ModelArtifact
 from ._common import (
     Prior, Window, _FitBlock, convergence_line, decision_bounds,
     expand_or_none, format_table, laplace_sigma, pack_u_trace, pack_x0,
     prior_penalty, resolve_traces, solve_blocks_nlp, solver_converged,
 )
+from ._report import derivation_report
 
 
 class _Channel(_FitBlock):
@@ -121,9 +126,11 @@ class NoiseFitResult:
     expanded: bool = True
 
     def __init__(self, channels, s_opt, hessian, objective, stats,
-                 world) -> None:
+                 world, source_artifact_id, source_derivation) -> None:
         self._channels = channels
         self._world = world
+        self._source_artifact_id = source_artifact_id
+        self._source_derivation = dict(source_derivation)
         self.s = np.asarray(s_opt, dtype=float).ravel()
         self.objective = float(objective)
         self.stats = stats
@@ -144,19 +151,24 @@ class NoiseFitResult:
         if not self.converged:
             raise RuntimeError(
                 "NoiseFitResult.apply refuses to write an unconverged solve")
+        staged = self._staged_updates(self._world)
+        for owner, attr, value in staged:
+            setattr(owner, attr, value)
+
+    def _staged_updates(self, world):
         staged = []
         for c in self._channels:
             pieces = c.alias.split(".")
             owner = None
             if len(pieces) >= 3:
-                craft = next((x for x in self._world.crafts
+                craft = next((x for x in world.crafts
                               if x.name == pieces[0]), None)
                 owner = (None if craft is None else
                          next((p for p in craft.parts
                                if p.name == pieces[1]), None))
             elif len(pieces) == 2:
                 owner = next(
-                    (d for field in self._world.fields
+                    (d for field in world.fields
                      for d in field.disturbances if d.name == pieces[0]),
                     None)
             if owner is None:
@@ -173,8 +185,23 @@ class NoiseFitResult:
                     f"NoiseFitResult.apply: owner of {c.alias!r} no longer "
                     f"declares {attr!r}")
             staged.append((owner, attr, value))
-        for owner, attr, value in staged:
+        return staged
+
+    def derive(self, *, validation=None):
+        """Return a structurally validated model revision with fit evidence."""
+        if not self.converged:
+            raise RuntimeError("NoiseFitResult.derive refuses an unconverged solve")
+        derived = copy.deepcopy(self._world)
+        for owner, attr, value in self._staged_updates(derived):
             setattr(owner, attr, value)
+        from ..sim import Sim
+        artifact = Sim(derived).model
+        if self._source_derivation:
+            artifact = artifact.with_derivations(self._source_derivation)
+        report = derivation_report(
+            "noise_fit", self._source_artifact_id, self.objective,
+            self.values, validation)
+        return artifact.with_derivation("noise_fit", report)
 
     def summary(self) -> str:
         rows = [("channel", "fitted σ", "prior σ(rel)", "post σ(rel)",
@@ -212,8 +239,10 @@ class NoiseFit:
 
     def __init__(self, world, noise: dict, *,
                  sensors: list[str] | None = None) -> None:
-        self.sys = LinearizedSystem(world, sensors=sensors)
-        self.world = world
+        source = world
+        self.world = (world.world_copy()
+                      if isinstance(world, ModelArtifact) else world)
+        self.sys = LinearizedSystem(source, sensors=sensors)
         self.model_world = self.sys.world
         sys = self.sys
 
@@ -396,7 +425,8 @@ class NoiseFit:
         hessian = np.asarray(ca.DM(H_fn(s_opt)))
 
         res = NoiseFitResult(self.channels, s_opt, hessian, objective,
-                             stats, self.world)
+                             stats, self.world, self.sys.model.artifact_id,
+                             self.sys.model.derivation)
         res.expanded = expanded
         return res
 

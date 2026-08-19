@@ -40,12 +40,16 @@ equations over these artifacts and emits a `Module`.
 
 from __future__ import annotations
 
+import copy
+from types import MappingProxyType
 from typing import Any
 
 import numpy as np
 
 from ..ir._names import resolve_suffix
 from ..ir.state_spec import StateSpec, flatten_nested, resolve_slotset
+from ..model_layout import state_spec_from_world
+from ..model import ModelArtifact
 from .engine import SensorModel, TickLinearizer
 from .partition import dependency_closure
 
@@ -113,9 +117,16 @@ class LinearizedSystem:
                 f"LinearizedSystem: discretization must be 'exact' or "
                 f"'euler', got {discretization!r}")
 
-        # Resolve a private snapshot. Authoring objects remain editable;
-        # this system and all artifacts derived from it retain this revision.
-        world = world.snapshot()
+        # Resolve a private snapshot. An authoring World remains editable;
+        # a ModelArtifact is already resolved and is copied without running
+        # deferred registration a second time.
+        source_artifact = world if isinstance(world, ModelArtifact) else None
+        if source_artifact is not None:
+            authoring_world = source_artifact.world_copy()
+            world = source_artifact._resolved_world_copy()
+        else:
+            authoring_world = copy.deepcopy(world)
+            world = world.snapshot()
 
         self.world = world
         self.crafts = tuple(world.crafts)
@@ -124,11 +135,20 @@ class LinearizedSystem:
         self.discretization = discretization
         self._validate_model(world)
 
-        full_spec = StateSpec.from_world(world)
+        full_spec = state_spec_from_world(world)
         self.full_spec = full_spec
 
         # --- compile the tick + classify its I/O ------------------------
-        self._compile_tick(world, self._resolve_parameters(parameters))
+        promoted_parameters = self._resolve_parameters(parameters)
+        self._compile_tick(world, promoted_parameters)
+        model_function, model_signature = self._canonical_model_tick(
+            world, promoted_parameters)
+        self.model = ModelArtifact.from_compiled(
+            world, full_spec, model_function, model_signature,
+            parameter_names=self._available_parameter_names(),
+            authoring_world=authoring_world,
+            derivation=(MappingProxyType(dict(source_artifact.derivation))
+                        if source_artifact is not None else None))
 
         # --- live-input subset (excluded inputs freeze at default) ------
         frozen = self._choose_inputs(inputs)
@@ -207,6 +227,29 @@ class LinearizedSystem:
                      for n in p.promotable_parameter_declarations()]
         return {resolve_suffix(k, available, label="parameter",
                                who="LinearizedSystem") for k in parameters}
+
+    def _available_parameter_names(self) -> tuple[str, ...]:
+        """Canonical fittable-parameter catalog for the model revision."""
+        return tuple(
+            f"{craft.name}.{part.name}.{name}"
+            for craft in self.crafts
+            for part in craft.parts
+            for name in part.promotable_parameter_declarations()
+        )
+
+    def _canonical_model_tick(self, world, promoted_parameters):
+        """Return the unpromoted tick used solely for model identity.
+
+        Parameter promotion is a Fit transform detail. It must not give the
+        same physical World a different model-revision identity.
+        """
+        if not promoted_parameters:
+            return self._cf, self._sig
+        from ..tick import compile_world_tick, walk_tick_signature
+        compiled = compile_world_tick(world, tunable_params=set())
+        function = compiled.casadi_function
+        signature = walk_tick_signature(function, world, self.full_spec)
+        return function, signature
 
     def _compile_tick(self, world, tunable_params: set[str]) -> None:
         """Compile the shared world tick and walk its signature."""

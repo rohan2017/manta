@@ -102,17 +102,13 @@ class FrameError(TypeError):
         self.source = source
 
 
-# Lazily computed root of the installed manta package (with trailing
-# separator, so a sibling like ".../manta_tools/" can't false-match).
-# Lazy because frames.py is imported while `import manta` is still running.
-_MANTA_ROOT: str | None = None
+# Root of the installed manta package (with trailing separator, so a sibling
+# like ".../manta_tools/" cannot false-match). Derive it locally: importing
+# the root package from the low-level IR creates an avoidable dependency cycle.
+_MANTA_ROOT = str(Path(__file__).resolve().parents[1]) + os.sep
 
 
 def _in_manta_package(filename: str) -> bool:
-    global _MANTA_ROOT
-    if _MANTA_ROOT is None:
-        import manta
-        _MANTA_ROOT = str(Path(manta.__file__).resolve().parent) + os.sep
     try:
         return str(Path(filename).resolve()).startswith(_MANTA_ROOT)
     except OSError:      # unresolvable pseudo-filename ("<string>", …)

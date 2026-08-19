@@ -1,10 +1,11 @@
 """Tether coupling — multi-craft component dynamics."""
 
 import numpy as np
+import pytest
 
 from manta import Craft, Sim, TargetNumpy, World
 from manta.couplings import Tether
-from manta.parts import DragSurface, Mass, TetherEndpoint, Thruster
+from manta.parts import Mass, TetherEndpoint
 
 
 def _make_craft(name: str, mass: float = 1.0) -> Craft:
@@ -216,6 +217,24 @@ def test_tether_endpoint_lookup_ignores_non_endpoints():
     a = Craft("a")
     a.add(Mass("hook", mass=1.0))      # decoy — not a TetherEndpoint
     b = _make_craft("b")
-    import pytest
     with pytest.raises(ValueError, match="no TetherEndpoint"):
         Tether(a, "hook", b, "hook", stiffness=10.0)
+
+
+@pytest.mark.parametrize(
+    ("argument", "value"),
+    (
+        ("stiffness", -1.0),
+        ("damping", -1.0),
+        ("rest_length", -1.0),
+        ("slack_smoothing", -1.0),
+        ("stiffness", float("nan")),
+        ("damping", float("inf")),
+    ),
+)
+def test_tether_rejects_nonphysical_configuration(argument, value):
+    a = _make_craft("a")
+    b = _make_craft("b")
+    kwargs = {"stiffness": 1.0, argument: value}
+    with pytest.raises(ValueError, match=argument):
+        Tether(a, "hook", b, "hook", **kwargs)

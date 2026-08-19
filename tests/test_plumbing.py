@@ -11,9 +11,7 @@ closed-loop cases the wired bus used to cover.
 import numpy as np
 import pytest
 
-from manta import (
-    Craft, EKF, LQR, NoiseDriver, RateGate, Sim, TargetNumpy, World,
-)
+from manta import Craft, EKF, LQR, NoiseDriver, Sim, TargetNumpy, World
 from manta.fields import GravityField
 from manta.parts import Mass, PositionSensor, Thruster
 
@@ -71,7 +69,7 @@ def test_reading_is_start_of_tick_state():
 
 
 # ---------------------------------------------------------------------------
-# Multi-rate: fold the filter slower than it steps, gating with a RateGate
+# Multi-rate: the downstream loop folds the filter slower than the plant
 # ---------------------------------------------------------------------------
 
 def test_multi_rate_update_tracks_truth():
@@ -87,11 +85,9 @@ def test_multi_rate_update_tracks_truth():
     ekf.Q = np.eye(ekf.spec.tangent_dim) * 1e-3
 
     dt = 0.02
-    gps = RateGate(1.0 / (4 * dt))           # one fix every 4th step
     for i in range(200):
-        t = i * dt
         sim.step(dt)
-        if gps.due(t):                       # fold a slower stream...
+        if i % 4 == 0:                       # fold a slower stream...
             ekf.update("c.gps.position", sim.reading("c.gps.position"))
         ekf.predict(dt)                      # ...predicting between fixes
 

@@ -7,8 +7,11 @@ model.  A3's ``ExternalDCSupply`` is the boundary to the electrical graph:
 drive its supplied-voltage input from this plant, then feed its measured
 output current into the next battery step.
 
-The co-simulation boundary is explicit/ZOH by design.  A caller chooses the
-ordering and timestep; no wall clock or hidden global state is consulted.
+The co-simulation boundary is explicit/ZOH by design. Raw
+``SeriesBatteryPack.step`` lets a caller choose ordering; the
+``BatteryElectricalModel`` adapter attaches it to ``NumpySim`` so spatial,
+thermal/electrical Part, and battery states share one timestep, checkpoint,
+and rollback boundary. No wall clock or hidden global state is consulted.
 """
 
 from __future__ import annotations
@@ -603,3 +606,168 @@ class SeriesBatteryPack:
             # stream advances, so correcting the input and retrying replays.
             self._rng.bit_generator.state = rng_state
             raise
+
+
+class BatteryElectricalModel:
+    """Clock-coupled battery state behind one ``ExternalDCSupply``.
+
+    The battery remains a non-spatial graph model, but ``NumpySim`` advances
+    it in the same atomic update as kinematics, thermal state, and the Manta
+    electrical Parts. Terminal voltage is a one-tick ZOH input; aggregate
+    source current from that tick advances the pack for the next one.
+    """
+
+    def __init__(self, pack: SeriesBatteryPack, *, craft: str, supply: str,
+                 cell_temperatures: Sequence[float] | float = 298.15,
+                 thermal_parts: Sequence[str] = (),
+                 name: str | None = None) -> None:
+        from ..ir.module import check_name
+
+        if not isinstance(pack, SeriesBatteryPack):
+            raise TypeError("pack must be a SeriesBatteryPack")
+        self.pack = pack
+        self.craft = check_name(craft, who="BatteryElectricalModel.craft")
+        self.supply = check_name(supply, who="BatteryElectricalModel.supply")
+        self.name = check_name(
+            name or f"{craft}_{supply}_battery", who="BatteryElectricalModel")
+        if isinstance(cell_temperatures, Real):
+            cell_temperatures = (float(cell_temperatures),) * len(pack.cells)
+        self.cell_temperatures = tuple(float(value) for value in cell_temperatures)
+        self.thermal_parts = tuple(thermal_parts)
+        if self.thermal_parts and len(self.thermal_parts) != len(pack.cells):
+            raise ValueError("thermal_parts must name one ThermalMass per cell")
+        for part in self.thermal_parts:
+            check_name(part, who="BatteryElectricalModel.thermal_parts")
+        self.cell_faults = (BatteryCellFaults(),) * len(pack.cells)
+        self.balance_enabled = (False,) * len(pack.balancers)
+        self.contactor_command = True
+        self.trip_command = False
+        self.reset_command = False
+        initial = self._step_input(0.0)
+        self.telemetry = pack.preview(initial)
+        self._latched_voltage = float(self.telemetry.terminal_voltage)
+
+    def _step_input(self, current: float) -> BatteryStepInput:
+        return BatteryStepInput(
+            requested_series_current=current,
+            cell_temperatures=self.cell_temperatures,
+            cell_faults=self.cell_faults,
+            balance_enabled=self.balance_enabled,
+            contactor_command=self.contactor_command,
+            trip_command=self.trip_command,
+            reset_command=self.reset_command,
+        )
+
+    def bind(self, runtime) -> None:
+        voltage = f"{self.craft}.{self.supply}.supplied_voltage"
+        if voltage not in runtime.input_names:
+            raise ValueError(
+                f"BatteryElectricalModel: Manta model has no input {voltage!r}")
+        output = f"{self.craft}.{self.supply}.output_current"
+        try:
+            runtime.module.port(output)
+        except KeyError as exc:
+            raise ValueError(
+                f"BatteryElectricalModel: Manta model has no output {output!r}") from exc
+        for part in self.thermal_parts:
+            heat = f"{self.craft}.{part}.heat_input"
+            temperature = f"{self.craft}.{part}.temperature"
+            if heat not in runtime.input_names:
+                raise ValueError(
+                    f"BatteryElectricalModel: Manta model has no input {heat!r}")
+            if temperature not in {slot.name for slot in runtime.spec.slots}:
+                raise ValueError(
+                    f"BatteryElectricalModel: Manta model has no state "
+                    f"{temperature!r}")
+        if self.thermal_parts:
+            self.cell_temperatures = self._thermal_temperatures(runtime)
+
+    def _thermal_temperatures(self, runtime) -> tuple[float, ...]:
+        return tuple(float(runtime.state[self.craft][f"{part}.temperature"])
+                     for part in self.thermal_parts)
+
+    def inputs(self, runtime, time: float, dt: float) -> dict[str, float]:
+        del runtime, time, dt
+        values = {
+            f"{self.craft}.{self.supply}.supplied_voltage": self._latched_voltage,
+        }
+        if self.thermal_parts:
+            values.update(self.telemetry.thermal_inputs(self.thermal_parts))
+        return values
+
+    def post_step(self, runtime, acquisition_time: float, dt: float) -> None:
+        del acquisition_time
+        if self.thermal_parts:
+            self.cell_temperatures = self._thermal_temperatures(runtime)
+        try:
+            current = float(np.asarray(
+                runtime.outputs()[self.craft][f"{self.supply}.output_current"]
+            ).reshape(-1)[0])
+        except KeyError as exc:
+            raise KeyError(
+                f"BatteryElectricalModel: missing output "
+                f"{self.craft}.{self.supply}.output_current") from exc
+        self.telemetry = self.pack.step(dt, self._step_input(current))
+        self._latched_voltage = float(self.telemetry.terminal_voltage)
+        # Commands are edges. Persistent trip state lives in the pack.
+        self.trip_command = False
+        self.reset_command = False
+
+    def checkpoint(self) -> dict[str, Any]:
+        # Mutable fault/temperature/command controls are part of the replay
+        # boundary. Refuse an invalid live configuration before a spatial
+        # tick can advance and need rollback to an invalid snapshot.
+        self._step_input(0.0)
+        if (not isinstance(self.telemetry, BatteryTelemetry)
+                or _finite(self._latched_voltage,
+                           name="latched_voltage") < 0.0):
+            raise ValueError("invalid BatteryElectricalModel live state")
+        return {
+            "version": 1,
+            "pack": self.pack.checkpoint(),
+            "telemetry": copy.deepcopy(self.telemetry),
+            "latched_voltage": self._latched_voltage,
+            "cell_temperatures": self.cell_temperatures,
+            "thermal_parts": self.thermal_parts,
+            "cell_faults": self.cell_faults,
+            "balance_enabled": self.balance_enabled,
+            "contactor_command": self.contactor_command,
+            "trip_command": self.trip_command,
+            "reset_command": self.reset_command,
+        }
+
+    def validate_checkpoint(self, checkpoint: Mapping[str, Any]) -> None:
+        if not isinstance(checkpoint, Mapping) or checkpoint.get("version") != 1:
+            raise ValueError("unsupported BatteryElectricalModel checkpoint")
+        candidate = copy.deepcopy(self.pack)
+        candidate.restore(checkpoint["pack"])
+        temperatures = tuple(checkpoint["cell_temperatures"])
+        thermal_parts = tuple(checkpoint["thermal_parts"])
+        if thermal_parts != self.thermal_parts:
+            raise ValueError("checkpoint thermal layout does not match model")
+        faults = tuple(checkpoint["cell_faults"])
+        balances = tuple(checkpoint["balance_enabled"])
+        BatteryStepInput(
+            requested_series_current=0.0,
+            cell_temperatures=temperatures,
+            cell_faults=faults,
+            balance_enabled=balances,
+            contactor_command=checkpoint["contactor_command"],
+            trip_command=checkpoint["trip_command"],
+            reset_command=checkpoint["reset_command"],
+        )
+        voltage = _finite(checkpoint["latched_voltage"], name="latched_voltage")
+        if voltage < 0.0 or not isinstance(checkpoint["telemetry"], BatteryTelemetry):
+            raise ValueError("invalid BatteryElectricalModel checkpoint telemetry")
+
+    def restore(self, checkpoint: Mapping[str, Any]) -> None:
+        self.validate_checkpoint(checkpoint)
+        self.pack.restore(checkpoint["pack"])
+        self.telemetry = copy.deepcopy(checkpoint["telemetry"])
+        self._latched_voltage = float(checkpoint["latched_voltage"])
+        self.cell_temperatures = tuple(checkpoint["cell_temperatures"])
+        self.cell_faults = tuple(checkpoint["cell_faults"])
+        self.balance_enabled = tuple(checkpoint["balance_enabled"])
+        self.contactor_command = checkpoint["contactor_command"]
+        self.trip_command = checkpoint["trip_command"]
+        self.reset_command = checkpoint["reset_command"]

@@ -190,12 +190,12 @@ def test_attitude_integrator_matches_closed_form_quaternion_product():
 # ---------------------------------------------------------------------------
 
 def test_state_spec_picks_up_so3_state_slot():
-    from manta.ir.state_spec import StateSpec
     c = Craft("c"); c.add(Mass("body", mass=1.0))
     c.add(_SO3PassthroughPart("att"))
     w = World().add_field(GravityField(g=(0, 0, 0)))
     w.add_craft(c)
-    spec = StateSpec.from_world(w)
+    from manta import state_spec_from_world
+    spec = state_spec_from_world(w)
     slot = spec.slot("c.att.orientation_est")
     assert slot.ambient_dim              == 4
     assert slot.tangent_dim      == 3

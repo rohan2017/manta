@@ -337,6 +337,23 @@ class Craft:
         `craft.root.add(part)`."""
         return self.root.add(part)
 
+    def remove(self, part: Part | str) -> Part:
+        """Detach a part anywhere in this craft's tree.
+
+        Existing transforms retain their private model revision. A later
+        transform captures the edited tree.
+        """
+        match = next(
+            (candidate for candidate in self.parts
+             if candidate is part
+             or (isinstance(part, str) and candidate.name == part)),
+            None,
+        )
+        if match is None:
+            label = part if isinstance(part, str) else getattr(part, "name", part)
+            raise KeyError(f"Craft('{self.name}').remove: no part {label!r}")
+        return match.parent.remove(match)
+
     @property
     def parts(self) -> tuple[Part, ...]:
         """Flat tuple of every part in the tree, root first (DFS order).

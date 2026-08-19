@@ -212,15 +212,20 @@ def nees(world, *, dt: float, steps: int,
         x_est0 = spec.boxplus_num(x_truth0, L0 @ rng.standard_normal(n))
         ekf.reset(state=x_est0, P=P0)
         ekf.Q = Q
-        gates = {full: sim.rate_gate(full) for full in names}
+        rates = {full: sim.module.port(full).rate for full in names}
+        last_fold = {full: None for full in names}
 
         for i in range(steps):
             t = i * dt
             u = _controls_at(control, t)
             sim.step(dt, u=u)
             for full in names:
-                if gates[full].due(t):
+                rate = rates[full]
+                previous = last_fold[full]
+                if (rate is None or previous is None
+                        or t - previous >= 1.0 / rate - 1e-9):
                     ekf.update(full, sim.reading(full), u=u, t=t)
+                    last_fold[full] = t
             ekf.predict(dt, u=u, t=t)
             if i >= warmup:
                 e = np.asarray(boxminus(truth_vec(sim), ekf.x)).reshape(-1)

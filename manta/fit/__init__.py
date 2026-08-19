@@ -14,16 +14,17 @@ Two complementary fitters, one data format (`Window`):
 Typical workflow::
 
     result = Fit(world, parameters={...}).solve(windows)   # dynamics
-    result.apply()
-    nresult = NoiseFit(world, noise={...}).solve(windows)  # then σ
-    nresult.apply()
-    # world now carries the identified physics AND noise model:
-    # Sim(world), EKF(world) (auto-Q/R from the fitted σ), TargetCpp...
+    physics = result.derive(validation={"accepted": True, ...})
+    nresult = NoiseFit(physics, noise={...}).solve(windows)  # then σ
+    model = nresult.derive(validation={"accepted": True, ...})
+    # model is an immutable, replayable ModelArtifact. For an exploratory
+    # authoring loop, result.apply() still writes back to the editable World.
 """
 
 from ._common import Free, Prior, Tied, Window
 from ._map import Fit, FitResult
 from ._nll import NoiseFit, NoiseFitResult
+from ._report import FitDerivationReport
 
-__all__ = ["Fit", "FitResult", "Free", "NoiseFit", "NoiseFitResult",
+__all__ = ["Fit", "FitResult", "FitDerivationReport", "Free", "NoiseFit", "NoiseFitResult",
            "Prior", "Tied", "Window"]

@@ -44,6 +44,9 @@ dev = [
 packages = ["manta"]
 
 [tool.pytest.ini_options]
+# The website demo under server/mako has its own smoke tests and dependency
+# surface.  Keep the package's default test command scoped to core Manta.
+testpaths = ["tests"]
 # Run in parallel by default (pytest-xdist), but cap the worker count:
 # CasADi-heavy tests (EKF/UKF/Fit graph construction + SX expansion) peak
 # at 1-3 GB EACH, and `-n auto` on a many-core box spawns one per core —

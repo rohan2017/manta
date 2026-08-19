@@ -67,13 +67,30 @@ cell-open and overtemperature aggregates, pack current, and pack voltage.
 It does not decide when a vehicle should trip, abort, surface, or shed loads;
 the simulated/real BMS driver and Shiver/Voyage own those policies.
 
-The integration with the A1 electrical graph is explicit co-simulation. After
-the powered-load branch lands, drive its `ExternalDCSupply.supplied_voltage`
-from battery telemetry, run the Manta tick, and feed the supply's
-`output_current` into the next `BatteryStepInput`. This is a declared one-tick
-zero-order hold, not a hidden algebraic solve. A post-merge integration test
-should pin that schedule; this branch does not duplicate the other branch's
-supply adapter.
+The integration with the electrical graph is explicit co-simulation. Attach a
+`BatteryElectricalModel` to a numpy simulation runtime; it drives
+`ExternalDCSupply.supplied_voltage`, reads that supply's `output_current`, and
+advances the pack in the same atomic simulation tick:
+
+```python
+from manta import Sim, TargetNumpy
+from manta.simulation import BatteryElectricalModel
+
+runtime = TargetNumpy(Sim(world))
+runtime.attach_model(BatteryElectricalModel(
+    pack, craft="auv", supply="battery_supply",
+    thermal_parts=("cell_0_thermal", "cell_1_thermal", ...)))
+runtime.step(0.01)
+```
+
+The battery stays a separate non-spatial graph with no clock of its own. Its
+terminal voltage is a declared one-tick zero-order hold, not a hidden algebraic
+solve. Runtime checkpoint, restore, and failed-step rollback cover the spatial
+state, electrical/thermal Manta parts, noise stream, and battery state as one
+unit. Shiver still owns protection, load-shedding, and scheduling policy.
+When `thermal_parts` are supplied, prior-tick cell and balancing losses drive
+those `ThermalMass.heat_input` channels, and their updated temperatures feed
+the next battery evaluation on that same clock.
 
 ## Two independent trees
 

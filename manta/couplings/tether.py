@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import casadi as ca
 
+from .._validation import require_positive
 from ..ir.frames import WorldFrame, CraftFrame
 from ..ir.types import Vec3
 from ..ir.wrench import Wrench
@@ -72,18 +73,29 @@ class Tether(Coupling):
                  craft_b,
                  endpoint_b: str,
                  *,
+                 name: str | None = None,
                  stiffness: float,
                  damping: float = 0.0,
                  rest_length: float = 0.0,
                  slack_smoothing: float = 1e-3) -> None:
+        if name is None:
+            name = (f"{craft_a.name}_{endpoint_a}_to_"
+                    f"{craft_b.name}_{endpoint_b}_tether")
+        super().__init__(name)
         self._craft_a = craft_a
         self._craft_b = craft_b
         self.endpoint_a_name = str(endpoint_a)
         self.endpoint_b_name = str(endpoint_b)
-        self.stiffness = float(stiffness)
-        self.damping   = float(damping)
-        self.rest_length = float(rest_length)
-        self.slack_smoothing = float(slack_smoothing)
+        self.stiffness = require_positive(
+            stiffness, name=f"Tether {self.name!r}.stiffness", allow_zero=True)
+        self.damping = require_positive(
+            damping, name=f"Tether {self.name!r}.damping", allow_zero=True)
+        self.rest_length = require_positive(
+            rest_length, name=f"Tether {self.name!r}.rest_length",
+            allow_zero=True)
+        self.slack_smoothing = require_positive(
+            slack_smoothing, name=f"Tether {self.name!r}.slack_smoothing",
+            allow_zero=True)
         # Resolve endpoints now — a bad name fails here, at the line that
         # wrote it, not at compile. Add endpoint Parts before the Tether.
         self.endpoint_a = self._find_endpoint(craft_a, self.endpoint_a_name)

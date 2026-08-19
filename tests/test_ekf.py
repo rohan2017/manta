@@ -6,14 +6,13 @@ KF math.
 import math
 
 import numpy as np
-import pytest
 
 from manta import Sim, TargetNumpy, World
 from manta.craft import Craft
 from manta.fields import GravityField
 from manta.estimation import EKF, measurement_component, measurement_slot
 from manta.parts import Mass
-from manta.ir.state_spec import StateSpec
+from manta import state_spec_from_craft
 
 
 # ---------------------------------------------------------------------------
@@ -23,7 +22,7 @@ from manta.ir.state_spec import StateSpec
 def test_state_spec_rigid_body_layout():
     c = Craft("body_only")
     c.add(Mass("body", mass=1.0))
-    spec = StateSpec.from_craft(c)
+    spec = state_spec_from_craft(c)
 
     assert spec.ambient_dim == 13   # 3 + 4 + 3 + 3
     assert spec.tangent_dim == 12   # SO(3) collapses 4→3
@@ -44,7 +43,7 @@ def test_state_spec_with_parts():
     motor.add(Mass("motor_rotor", mass=0.05, moi=(0.001, 0.001, 0.005)))
     c.add(motor)
 
-    spec = StateSpec.from_craft(c)
+    spec = state_spec_from_craft(c)
     # Each RevoluteJoint contributes 2 state slots (angle, rate) → 13 + 2 + 2 = 17.
     assert spec.ambient_dim == 13 + 2 + 2
     names = [s.name for s in spec.slots]
@@ -57,7 +56,7 @@ def test_state_spec_with_parts():
 def test_state_spec_pack_unpack_roundtrip():
     c = Craft("roundtrip")
     c.add(Mass("body", mass=1.0))
-    spec = StateSpec.from_craft(c)
+    spec = state_spec_from_craft(c)
 
     state = {
         "position":         np.array([1.0, 2.0, 3.0]),

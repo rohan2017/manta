@@ -35,7 +35,7 @@ from .frames import (
     _is_frame,
     _validate_frame,
 )
-from .graph import _current_graph
+from ._graph_context import current_graph as _current_graph
 
 
 # ---------------------------------------------------------------------------

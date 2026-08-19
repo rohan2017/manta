@@ -95,11 +95,42 @@ def test_transform_resolves_private_snapshot_and_authoring_world_stays_editable(
     c.add(Thruster("late", force=(1.0, 0.0, 0.0)))
     second = Sim(w)
 
+    removed = c.remove("late")
+    from manta import EKF, UKF
+    third = EKF(w, sensors=[])
+
+    from manta.parts import PositionSensor
+    c.add(PositionSensor("gps", position_noise_sigma=0.1))
+    fourth = UKF(w)
+
     assert first.world is not w and second.world is not w
     assert first.world is not second.world
+    assert removed.name == "late" and removed.parent is None
     assert not first.module().port("u").fields
     assert [f.name for f in second.module().port("u").fields] == [
         "c.late.throttle"]
+    assert not third.module().port("u").fields
+    assert fourth.model.sensor_names == ("c.gps.position",)
+    assert first.model.artifact_id == third.model.artifact_id
+    assert second.model.artifact_id != first.model.artifact_id
+    assert fourth.model.artifact_id != third.model.artifact_id
+    assert first.model.validation.valid
+    assert (EKF(first.model, sensors=[]).model.artifact_id
+            == first.model.artifact_id)
+    assert (UKF(first.model, sensors=[]).model.artifact_id
+            == first.model.artifact_id)
+    reviewed = first.model.with_derivation("review", ("accepted", True))
+    rebuilt = EKF(reviewed, sensors=[]).model
+    assert rebuilt.model_id == first.model.model_id
+    assert rebuilt.artifact_id == reviewed.artifact_id
+    assert rebuilt.derivation == reviewed.derivation
+
+    # An artifact can branch back into authoring without reusing its resolved
+    # private World (where deferred hooks have already run).
+    branch = first.model.world_copy()
+    branch.crafts[0].add(PositionSensor("branch_gps", position_noise_sigma=0.1))
+    branch_filter = EKF(branch)
+    assert branch_filter.model.sensor_names == ("c.branch_gps.position",)
 
 
 # ---------------------------------------------------------------------------
@@ -163,6 +194,7 @@ def test_add_coupling_rejects_unregistered_craft():
 
     class FakeCoupling(Coupling):
         def __init__(self, ca, cb):
+            super().__init__("fake")
             self._a = ca; self._b = cb
         @property
         def craft_a(self): return self._a
@@ -175,6 +207,54 @@ def test_add_coupling_rejects_unregistered_craft():
         w.add_coupling(FakeCoupling(a, b))
 
 
+def test_coupling_identity_and_ownership_are_unique():
+    from manta.couplings import Tether
+    from manta.parts import TetherEndpoint
+
+    def tether_craft(name):
+        craft = Craft(name)
+        craft.add(Mass("body", mass=1.0))
+        craft.add(TetherEndpoint("hook"))
+        return craft
+
+    a, b = tether_craft("a"), tether_craft("b")
+    first = World("first")
+    first.add_craft(a)
+    first.add_craft(b)
+    coupling = Tether(a, "hook", b, "hook", name="tow", stiffness=1.0)
+    first.add_coupling(coupling)
+
+    with pytest.raises(ValueError, match="already added"):
+        first.add_coupling(coupling)
+    with pytest.raises(ValueError, match="collides"):
+        first.add_coupling(
+            Tether(a, "hook", b, "hook", name="tow", stiffness=2.0))
+
+    a2, b2 = tether_craft("a2"), tether_craft("b2")
+    second = World("second")
+    second.add_craft(a2)
+    second.add_craft(b2)
+    foreign = Tether(a2, "hook", b2, "hook", stiffness=1.0)
+    foreign._world = first
+    with pytest.raises(ValueError, match="already belongs"):
+        second.add_coupling(foreign)
+
+
+def test_coupling_rejects_same_craft_endpoints():
+    from manta.couplings import Tether
+    from manta.parts import TetherEndpoint
+
+    craft = Craft("loop")
+    craft.add(Mass("body", mass=1.0))
+    craft.add(TetherEndpoint("left"))
+    craft.add(TetherEndpoint("right"))
+    world = World()
+    world.add_craft(craft)
+    with pytest.raises(ValueError, match="distinct crafts"):
+        world.add_coupling(
+            Tether(craft, "left", craft, "right", stiffness=1.0))
+
+
 def test_compile_handles_multiple_independent_crafts():
     """A world with multiple crafts and no couplings compiles to a
     single tick spanning all of them."""
@@ -184,7 +264,7 @@ def test_compile_handles_multiple_independent_crafts():
     w.add_craft(_make_craft("c"))
     sim = Sim(w)
     assert {c.name for c in sim.crafts} == {"a", "b", "c"}
-    cw = TargetNumpy(sim)
+    TargetNumpy(sim)
 
 
 def _make_craft(name: str) -> Craft:

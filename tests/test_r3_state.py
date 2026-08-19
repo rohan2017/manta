@@ -7,13 +7,12 @@ Use case: a Part that carries its own 3-vector state internally
 local to one Part, etc.).
 """
 
-import casadi as ca
 import numpy as np
 import pytest
 
 from manta import Craft, EKF, Sim, TargetNumpy, World
 from manta.fields import GravityField
-from manta.ir.frames import CraftFrame, PartFrame, WorldFrame
+from manta.ir.frames import PartFrame, WorldFrame
 from manta.ir.types import Vec3
 from manta.ir.wrench import Wrench
 from manta.parts import Mass
@@ -105,11 +104,11 @@ def test_r3_state_appears_in_outputs():
 # ---------------------------------------------------------------------------
 
 def test_state_spec_picks_up_r3_state_slot():
-    from manta.ir.state_spec import StateSpec
     c = Craft("c"); c.add(Mass("body", mass=1.0)); c.add(_R3StatePart("p"))
     w = World().add_field(GravityField(g=(0, 0, 0)))
     w.add_craft(c)
-    spec = StateSpec.from_world(w)
+    from manta import state_spec_from_world
+    spec = state_spec_from_world(w)
     slot = spec.slot("c.p.bias")
     assert slot.ambient_dim              == 3
     assert slot.tangent_dim      == 3

@@ -3,6 +3,7 @@
 from .battery import (
     BMSPlant,
     BMSState,
+    BatteryElectricalModel,
     BatteryCell,
     BatteryCellFaults,
     BatteryCellState,
@@ -17,6 +18,7 @@ from .battery import (
 __all__ = [
     "BMSPlant",
     "BMSState",
+    "BatteryElectricalModel",
     "BatteryCell",
     "BatteryCellFaults",
     "BatteryCellState",

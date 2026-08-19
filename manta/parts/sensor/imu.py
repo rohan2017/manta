@@ -53,8 +53,8 @@ class IMU(Part):
     role = PartRole.SENSOR
 
     #: Measurement rate, Hz. `None` (default) ⇒ a fresh reading every
-    #: tick; set it so `rate_gate`s and the EKF's declared sample rates
-    #: see the real sensor cadence — same knob as `Barometer`/
+    #: tick; set it so downstream schedulers and the EKF's declared sample
+    #: rates see the real sensor cadence — same knob as `Barometer`/
     #: `PositionSensor` (the sensor family shares it uniformly).
     rate: float = Parameter(None)
 

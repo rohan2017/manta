@@ -270,7 +270,10 @@ class MPC:
 
         from ..sim import Sim
 
-        sim_module = Sim(world).module()
+        sim_transform = Sim(world)
+        self.world = sim_transform.world
+        self.model = sim_transform.model
+        sim_module = sim_transform.module()
         step = sim_module.functions["step"].expand()
         self.spec = sim_module.state.fields[0].spec
         if self.spec is None:
@@ -281,7 +284,7 @@ class MPC:
         all_input_names = tuple(field.name for field in u_port.fields)
         all_defaults = np.asarray(
             [float(field.default) for field in u_port.fields], dtype=float)
-        craft_names = tuple(craft.name for craft in world.crafts)
+        craft_names = tuple(craft.name for craft in self.world.crafts)
         if not craft_names:
             raise ValueError("MPC world has no crafts")
 

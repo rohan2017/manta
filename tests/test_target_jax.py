@@ -182,8 +182,8 @@ def test_jointed_craft_step_parity():
         x_c = np.array(step_ca(x_c, u, noise, dt, t)).ravel()
     assert np.allclose(x_j, x_c, atol=1e-9)
     # The joint actually moved (the solve did real work).
-    from manta.ir.state_spec import StateSpec
-    spec = StateSpec.from_world(w)
+    from manta import state_spec_from_world
+    spec = state_spec_from_world(w)
     slot = spec.slot("spinner.wheel.angle")
     assert abs(x_j[slot.ambient_offset]) > 1e-3
 

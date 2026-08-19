@@ -65,18 +65,22 @@ EKF-innovation-likelihood fitter — after applying this fit's result.
 
 from __future__ import annotations
 
+import copy
+
 import casadi as ca
 import numpy as np
 
 from ..ir.module import PortRef, Role
 from ..ir._names import resolve_suffix
 from ..sim import Sim
+from ..model import ModelArtifact
 from ._common import (
     Free, Prior, Tied, Window, _FitBlock, convergence_line, decision_bounds,
     expand_or_none, format_table, laplace_sigma, pack_u_trace, pack_x0,
     prior_penalty, resolve_state_traces, resolve_traces, solve_blocks_nlp,
     solver_converged,
 )
+from ._report import derivation_report
 
 
 # ---------------------------------------------------------------------------
@@ -230,12 +234,15 @@ class FitResult:
     expanded: bool = True
 
     def __init__(self, blocks, fields, tie_sources, v_opt, p_opt, JtJ,
-                 objective, stats, world, *, posterior_computed: bool,
+                 objective, stats, world, source_artifact_id,
+                 source_derivation, *, posterior_computed: bool,
                  initial_objective: float) -> None:
         self._blocks = blocks
         self._fields = fields              # [(full, dim)] in port order
         self._tie_sources = tie_sources    # {tied full: source name}
         self._world = world
+        self._source_artifact_id = source_artifact_id
+        self._source_derivation = dict(source_derivation)
         self.v = np.asarray(v_opt, dtype=float).ravel()
         self._p = np.asarray(p_opt, dtype=float).ravel()
         self.JtJ = JtJ
@@ -310,6 +317,11 @@ class FitResult:
         if not self.converged:
             raise RuntimeError(
                 "FitResult.apply refuses to write an unconverged solve")
+        staged = self._staged_updates(self._world)
+        for part, pname, value in staged:
+            setattr(part, pname, value)
+
+    def _staged_updates(self, world):
         staged = []
         for full, dim in self._fields:
             try:
@@ -318,7 +330,7 @@ class FitResult:
                 raise ValueError(
                     f"FitResult.apply: parameter name {full!r} does not "
                     f"fit the `craft.part.param` shape.") from None
-            craft = next((c for c in self._world.crafts
+            craft = next((c for c in world.crafts
                           if c.name == craft_name), None)
             part = (None if craft is None else
                     next((p for p in craft.parts if p.name == part_name),
@@ -338,8 +350,29 @@ class FitResult:
                     f"parameter {pname!r}")
             staged.append((part, pname,
                            float(theta[0]) if dim == 1 else tuple(theta)))
-        for part, pname, value in staged:
-            setattr(part, pname, value)
+        return staged
+
+    def derive(self, *, validation=None):
+        """Return a new validated model revision carrying fit provenance.
+
+        ``validation`` records caller-computed held-out evidence. Set its
+        explicit ``accepted`` flag true only after the deployment acceptance
+        criteria pass. Omitting it preserves exploratory fitting while making
+        the resulting artifact visibly unaccepted.
+        """
+        if not self.converged:
+            raise RuntimeError("FitResult.derive refuses an unconverged solve")
+        derived = copy.deepcopy(self._world)
+        for part, name, value in self._staged_updates(derived):
+            setattr(part, name, value)
+        from ..sim import Sim
+        artifact = Sim(derived).model
+        if self._source_derivation:
+            artifact = artifact.with_derivations(self._source_derivation)
+        report = derivation_report(
+            "parameter_fit", self._source_artifact_id, self.objective,
+            self.values, validation)
+        return artifact.with_derivation("fit", report)
 
     def summary(self) -> str:
         """Per-component table: fitted value, prior σ vs posterior σ.
@@ -417,8 +450,13 @@ class Fit:
                 "Fit: no promotable parameters named — Free variables "
                 "alone fit nothing.")
 
-        self.world = world
-        self.sim = Sim(world, parameters=promoted_keys)
+        # A ModelArtifact is an immutable executable revision, not an
+        # authoring surface.  Fit against an editable copy so derive/apply
+        # semantics remain coherent without mutating the source artifact.
+        source = world
+        self.world = (world.world_copy()
+                      if isinstance(world, ModelArtifact) else world)
+        self.sim = Sim(source, parameters=promoted_keys)
         self.model_world = self.sim.world
         self.module = self.sim.module()
         self._spec = self.module.spec
@@ -615,6 +653,8 @@ class Fit:
                        for full, (src, _A, _b) in self._ties.items()}
         res = FitResult(self._blocks, self._fields, tie_sources, v_opt,
                         p_opt, JtJ, objective, stats, self.world,
+                        self.sim.model.artifact_id,
+                        self.sim.model.derivation,
                         posterior_computed=compute_posterior,
                         initial_objective=initial_objective)
         res.expanded = expanded

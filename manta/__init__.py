@@ -94,10 +94,21 @@ from .estimation.imu_integrator import IMUIntegrator
 from .estimation.madgwick import Madgwick
 from .estimation.mahony import Mahony
 from .estimation.ukf import UKF
-from .fit import Fit, FitResult, Free, NoiseFit, NoiseFitResult, Prior, Tied, Window
+from .fit import (
+    Fit,
+    FitDerivationReport,
+    FitResult,
+    Free,
+    NoiseFit,
+    NoiseFitResult,
+    Prior,
+    Tied,
+    Window,
+)
 from .ir.state_spec import ALL, POSE, TWIST, SlotSet
+from .model_layout import state_spec_from_craft, state_spec_from_world
+from .model import ModelArtifact, ModelValidationReport
 from .planets import Planet
-from .rates import CommandLatch, RateGate
 from .recurrence import RecurrenceBlock
 from .sim import Sim
 from .world import World
@@ -107,11 +118,12 @@ __all__ = [
     "EKF",
     "LQR",
     "MPC",
+    "ModelArtifact",
+    "ModelValidationReport",
     "PID",
     "POSE",
     "TWIST",
     "UKF",
-    "CommandLatch",
     "CompilationError",
     "Coupling",
     "Craft",
@@ -120,6 +132,7 @@ __all__ = [
     "FilterReplayProgram",
     "FilterReplayResult",
     "Fit",
+    "FitDerivationReport",
     "FitResult",
     "Free",
     "IMUIntegrator",
@@ -136,7 +149,6 @@ __all__ = [
     "NoiseFitResult",
     "Planet",
     "Prior",
-    "RateGate",
     "RecurrenceBlock",
     "ReplayBoundary",
     "ReplayCheckpointResult",
@@ -159,4 +171,6 @@ __all__ = [
     "compile_functions",
     "ir",
     "smoothing",
+    "state_spec_from_craft",
+    "state_spec_from_world",
 ]

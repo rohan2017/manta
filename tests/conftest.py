@@ -47,7 +47,6 @@ _SLOW_NAME_MARKERS = (
     "gimbal_pendulum_precesses_at_minus_omega",
     "no_precession_without_hub_spin",
     "gimbal_conserves_momentum_and_energy",
-    "eskf_nees_consistency_over_seeds",
     "random_walk_bias_walks_with_driver",
     "grad_through_rollout_is_finite",
 )

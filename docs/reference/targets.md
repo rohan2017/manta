@@ -40,9 +40,3 @@ The view `TargetNumpy(x)` returns is determined by the Module's shape.
 ::: manta.codegen.NumpyRegulator
 
 ::: manta.codegen.NumpyRecurrence
-
-## Rate helpers
-
-::: manta.RateGate
-
-::: manta.CommandLatch

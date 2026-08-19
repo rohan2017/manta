@@ -12,8 +12,9 @@ Validates:
 
 import casadi as ca
 import numpy as np
+import pytest
 
-from manta import Craft, Sim, TargetNumpy, World
+from manta import Craft, Planet, Sim, TargetNumpy, World
 from manta.fields import FluidField, FluidState
 from manta.fields.fluid_props import (
     R_AIR, ideal_gas_density, isa_pressure, isa_temperature,
@@ -135,6 +136,45 @@ def test_co_rotating_at_rest_in_planet_frame():
     np.testing.assert_allclose(
         state["buoy"]["velocity"],
         (0.0, expected_v_y, 0.0), atol=1e-9)
+
+
+def test_planet_state_arguments_enforce_their_declared_kind():
+    planet = Planet()
+    craft = Craft("craft")
+    craft.add(Mass("body", mass=1.0))
+    with pytest.raises(ValueError, match="planet.position"):
+        World().add_craft(craft, position=planet.velocity(0.0, 0.0, 0.0))
+
+
+def test_planet_state_requires_a_registered_planet():
+    planet = Planet(name="unregistered")
+    craft = Craft("craft")
+    craft.add(Mass("body", mass=1.0))
+    world = World()
+    world.add_craft(
+        craft,
+        position=planet.position(1.0, 0.0, 0.0),
+        velocity=planet.velocity(0.0, 0.0, 0.0),
+    )
+    with pytest.raises(ValueError, match="unregistered planet"):
+        Sim(world)
+
+
+def test_plain_world_velocity_is_not_reinterpreted_by_planet_position():
+    planet = Planet(name="rotating", omega=2.0)
+    craft = Craft("craft")
+    craft.add(Mass("body", mass=1.0))
+    world = World().add_planet(planet)
+    world.add_craft(
+        craft,
+        position=planet.position(10.0, 0.0, 0.0),
+        velocity=(1.0, 2.0, 3.0),
+    )
+    sim = Sim(world)
+    np.testing.assert_allclose(
+        sim.world._initial_state_dict()["craft"]["velocity"],
+        (1.0, 2.0, 3.0),
+    )
 
 
 def test_custom_planet_frame_fluid_lambda():

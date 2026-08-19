@@ -10,11 +10,19 @@ for a worked recipe.
 
 ::: manta.FitResult
 
+`FitResult.derive(validation=...)` returns an immutable `ModelArtifact` with
+the source revision, objective, fitted values, and explicit held-out acceptance
+evidence. `apply()` remains the mutable alternative for iterative authoring.
+
 ## Noise fit
 
 ::: manta.NoiseFit
 
 ::: manta.NoiseFitResult
+
+Noise fits support the same `derive()` / `apply()` split.
+
+::: manta.FitDerivationReport
 
 ## Inputs
 

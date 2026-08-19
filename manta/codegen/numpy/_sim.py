@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from typing import Any
 
@@ -12,7 +13,6 @@ from ..._validation import require_finite, require_positive
 from ...ir.module import Role, StateRef
 from ...ir.state_spec import flatten_nested
 from ...ir._names import resolve_suffix
-from ...rates import CommandLatch, RateGate
 from ..target import for_role
 from ._noise import NoiseCheckpoint, NoiseDriver
 from ._runtime import NumpyRuntime, _split, finite_array, pack_fields
@@ -27,6 +27,7 @@ class SimCheckpoint:
     time: float
     artifact_id: str
     noise: NoiseCheckpoint | None
+    models: tuple[tuple[str, Any], ...] = ()
 
     def __post_init__(self) -> None:
         def own(entries, *, who):
@@ -66,6 +67,16 @@ class SimCheckpoint:
             raise ValueError("SimCheckpoint.artifact_id is required")
         if self.noise is not None and not isinstance(self.noise, NoiseCheckpoint):
             raise TypeError("SimCheckpoint.noise must be a NoiseCheckpoint or None")
+        models = tuple(self.models)
+        if any(not isinstance(item, (tuple, list)) or len(item) != 2
+               for item in models):
+            raise TypeError("SimCheckpoint.models entries must be (name, state) pairs")
+        names = [item[0] for item in models]
+        if (any(not isinstance(name, str) or not name.isidentifier()
+                for name in names) or len(names) != len(set(names))):
+            raise ValueError("SimCheckpoint.models needs unique identifier names")
+        object.__setattr__(self, "models", tuple(
+            (name, copy.deepcopy(state)) for name, state in models))
 
 
 def _stepn_port_arg(role: Role, *, hold, u, noise, params, dt, t, n):
@@ -85,8 +96,7 @@ class NumpySim(NumpyRuntime):
     """The simulation oracle. The runtime holds the nested state dict
     (`sim.state`); `step(dt, u={...})` applies the commands and advances it,
     realizing that step's sensor readings. The kernel is pure: rate gating is
-    the loop's job — build a `rate_gate(...)` / `command_latch()` from the
-    model's declared rates and apply them yourself (uniform across backends).
+    the downstream driving loop's job; declared rates remain Module metadata.
     Read sensors with `outputs()` (raw nested) or `reading(name)` (one, by
     name)."""
 
@@ -96,6 +106,7 @@ class NumpySim(NumpyRuntime):
         self._outputs: dict[str, dict[str, Any]] = {}
         self._sim_state: dict | None = None
         self._stepn_cache: dict[int, Any] = {}   # n → folded step kernel
+        self._coupled_models: list[Any] = []
 
     # ---- held state ----------------------------------------------------
 
@@ -128,6 +139,11 @@ class NumpySim(NumpyRuntime):
         if self._sim_state is None:
             self._sim_state = self.initial_state()
         return self._sim_state
+
+    @property
+    def time(self) -> float:
+        """Current logical time shared by the spatial and coupled models."""
+        return self._t
 
     @state.setter
     def state(self, value: dict) -> None:
@@ -181,7 +197,7 @@ class NumpySim(NumpyRuntime):
         """Advance the held state by `dt`. `u` is `{input: value}` (full or
         suffix names) applied this step over the held `sim.state` inputs.
         Runs the oracle kernel (one noise draw) and returns the new state
-        dict. Rate-gated actuators: pass a `command_latch()`-held `u`."""
+        dict. Downstream code owns any actuator intake hold policy."""
         if isinstance(dt, dict):
             raise TypeError(
                 "NumpySim.step: the functional step(state, dt) form was "
@@ -190,14 +206,27 @@ class NumpySim(NumpyRuntime):
         t0 = self._t if t is None else float(require_finite(t, name="NumpySim.step t"))
         next_t = float(require_finite(
             t0 + dt, name="NumpySim.step resulting time"))
-        noise_before = self._driver.checkpoint() if self._driver else None
-        x_before = self._state["x"].copy()
+        if not self._coupled_models:
+            noise_before = self._driver.checkpoint() if self._driver else None
+            x_before = self._state["x"].copy()
+            try:
+                self._sim_state = self._advance(self.state, dt, t0, u)
+            except Exception:
+                self._state["x"] = x_before
+                if self._driver is not None and noise_before is not None:
+                    self._driver.restore(noise_before)
+                raise
+            self._t = next_t
+            return self._sim_state
+
+        before = self.checkpoint()
         try:
-            self._sim_state = self._advance(self.state, dt, t0, u)
+            merged_u = self._coupled_inputs(u, t0, dt)
+            self._sim_state = self._advance(self.state, dt, t0, merged_u)
+            for model in self._coupled_models:
+                model.post_step(self, next_t, dt)
         except Exception:
-            self._state["x"] = x_before
-            if self._driver is not None and noise_before is not None:
-                self._driver.restore(noise_before)
+            self.restore(before)
             raise
         self._t = next_t
         return self._sim_state
@@ -226,11 +255,17 @@ class NumpySim(NumpyRuntime):
         return nested
 
     def checkpoint(self) -> SimCheckpoint:
+        self._check_state_keys(flatten_nested(self.state))
+        models = []
+        for model in self._coupled_models:
+            state = model.checkpoint()
+            models.append((model.name, state))
         return SimCheckpoint(
             self._snapshot_values(self.state),
             self._snapshot_values(self._outputs),
             float(self._t), self.module.artifact_id,
-            self._driver.checkpoint() if self._driver else None)
+            self._driver.checkpoint() if self._driver else None,
+            tuple(models))
 
     def restore(self, checkpoint: SimCheckpoint) -> None:
         if not isinstance(checkpoint, SimCheckpoint):
@@ -254,6 +289,13 @@ class NumpySim(NumpyRuntime):
             raise ValueError("NumpySim.restore: checkpoint has no attached-driver state")
         if self._driver is not None:
             self._driver.validate_checkpoint(checkpoint.noise)
+        model_names = tuple(model.name for model in self._coupled_models)
+        checkpoint_names = tuple(name for name, _ in checkpoint.models)
+        if checkpoint_names != model_names:
+            raise ValueError(
+                "NumpySim.restore: coupled-model layout differs from checkpoint")
+        for model, (_, state) in zip(self._coupled_models, checkpoint.models):
+            model.validate_checkpoint(state)
         if self._driver is not None:
             self._driver.restore(checkpoint.noise)
         if self._sim_state is None:
@@ -269,6 +311,52 @@ class NumpySim(NumpyRuntime):
         self._outputs = next_outputs
         self._t = float(checkpoint.time)
         self._state["x"] = self._spec.pack_projected(flat)
+        for model, (_, state) in zip(self._coupled_models, checkpoint.models):
+            model.restore(copy.deepcopy(state))
+
+    def attach_model(self, model):
+        """Attach physical non-spatial state to this simulation clock.
+
+        A coupled model contributes pre-step Manta inputs and advances once
+        after the corresponding physics tick. Checkpoint/restore and failures
+        are atomic across the spatial model, noise driver, and every attached
+        model.
+        """
+        required = ("name", "bind", "inputs", "post_step", "checkpoint",
+                    "validate_checkpoint", "restore")
+        missing = [name for name in required if not hasattr(model, name)]
+        if missing:
+            raise TypeError(f"coupled model is missing {missing}")
+        if (not isinstance(model.name, str) or not model.name.isidentifier()
+                or any(existing.name == model.name
+                       for existing in self._coupled_models)):
+            raise ValueError("coupled model name must be a unique identifier")
+        model.bind(self)
+        self._coupled_models.append(model)
+        return model
+
+    def _coupled_inputs(self, supplied, time: float, dt: float) -> dict:
+        names = self._input_names()
+        merged = {}
+        owners = {}
+        for key, value in (supplied or {}).items():
+            full = resolve_suffix(key, names, label="input", who="NumpySim.step")
+            merged[full] = value
+            owners[full] = "caller"
+        for model in self._coupled_models:
+            values = model.inputs(self, time, dt)
+            if not isinstance(values, dict):
+                raise TypeError(f"coupled model {model.name!r} inputs must be a dict")
+            for key, value in values.items():
+                full = resolve_suffix(
+                    key, names, label="input", who=f"coupled model {model.name}")
+                if full in owners:
+                    raise ValueError(
+                        f"Manta input {full!r} has two owners: "
+                        f"{owners[full]!r} and {model.name!r}")
+                owners[full] = model.name
+                merged[full] = value
+        return merged
 
     def _pack_u(self, flat: dict, u: dict[str, Any] | None) -> np.ndarray:
         """The flat control vector: the held `sim.state` inputs overlaid with
@@ -327,7 +415,7 @@ class NumpySim(NumpyRuntime):
         n = int(n)
         if t is not None:
             t = float(require_finite(t, name="NumpySim.step_n t"))
-        if n <= 1 or self._driver is not None:
+        if n <= 1 or self._driver is not None or self._coupled_models:
             before = self.checkpoint()
             try:
                 for k in range(n):
@@ -442,26 +530,11 @@ class NumpySim(NumpyRuntime):
     def reading(self, name: str) -> Any:
         """The latest raw reading for a sensor (full or suffix name) from the
         most recent step. Readings are realized every step; gate feeding
-        yourself with a `rate_gate(name)` if the sensor is rate-limited."""
+        downstream according to the measurement port's declared rate."""
         full = resolve_suffix(name, [p.name for p in self._meas_ports_ir],
                               label="output", who=type(self).__name__)
         owner, slot = _split(full)
         return self._outputs.get(owner, {}).get(slot)
-
-    def rate_gate(self, name: str) -> RateGate:
-        """A `RateGate` at sensor `name`'s declared rate (fires every step if
-        the sensor has none). Apply it in your loop:
-        `if g.due(t): ekf.update(name, sim.reading(name), u=u)`."""
-        full = resolve_suffix(name, [p.name for p in self._meas_ports_ir],
-                              label="output", who=type(self).__name__)
-        return RateGate(self.module.port(full).rate)
-
-    def command_latch(self) -> CommandLatch:
-        """A `CommandLatch` over the actuators' declared intake rates (ZOH).
-        Apply it once per step and pass the held `u` to BOTH `sim.step` and
-        `ekf.predict`, so the filter predicts on the command truth acted on."""
-        return CommandLatch({f.name: f.rate for f in self._u_fields()
-                             if f.rate is not None})
 
     def __repr__(self) -> str:
         drv = "" if self._driver is None else f" +{self._driver!r}"

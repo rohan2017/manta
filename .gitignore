@@ -3,6 +3,7 @@ build/
 build_ci/
 build_examples/
 build_double/
+dist/
 *.o
 *.a
 *.so

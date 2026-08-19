@@ -459,6 +459,23 @@ class CompositePart(Part):
     def children(self) -> tuple[Part, ...]:
         return tuple(self._children)
 
+    def remove(self, child: Part | str) -> Part:
+        """Detach one direct child by instance or name and return it."""
+        match = next(
+            (candidate for candidate in self._children
+             if candidate is child
+             or (isinstance(child, str) and candidate.name == child)),
+            None,
+        )
+        if match is None:
+            label = child if isinstance(child, str) else getattr(child, "name", child)
+            raise KeyError(
+                f"{type(self).__name__}('{self.name}').remove: no direct "
+                f"child {label!r}")
+        self._children.remove(match)
+        match.parent = None
+        return match
+
     def walk(self):
         """DFS over this part's subtree, yielding self then each descendant."""
         yield self
