@@ -327,7 +327,8 @@ def _controls_at(control, t) -> dict[str, Any]:
     return control(t) if callable(control) else dict(control)
 
 
-def estimator_inputs(estimator, controls, *, reading=None) -> dict[str, Any]:
+def estimator_inputs(estimator, controls, *, reading=None,
+                     dt: float | None = None) -> dict[str, Any]:
     """Merge physical controls with any sensor samples driving prediction.
 
     EKF/UKF declare no ``prediction_inputs`` and pass through unchanged. INS
@@ -336,7 +337,26 @@ def estimator_inputs(estimator, controls, *, reading=None) -> dict[str, Any]:
     transform-neutral adapter.
     """
     out = dict(controls or {})
-    names = estimator.module().metadata.get("prediction_inputs", ())
+    metadata = estimator.module().metadata
+    names = metadata.get("prediction_inputs", ())
+    packet_map = dict(metadata.get("preintegration_input_map", {}))
+    if packet_map and reading is not None:
+        if dt is None:
+            raise ValueError(
+                f"{type(estimator).__name__}: preintegrated truth adapter "
+                "needs dt")
+        from .imu_preintegrator import _single_sample_packet
+        accel_name = packet_map["end_accel"]
+        gyro_name = packet_map["end_gyro"]
+        accel = out[accel_name] if accel_name in out else reading(accel_name)
+        gyro = out[gyro_name] if gyro_name in out else reading(gyro_name)
+        packet = _single_sample_packet(
+            accel=accel, gyro=gyro, dt=dt,
+            accel_noise_sigma=float(estimator.sys.imu.accel_noise_sigma),
+            gyro_noise_sigma=float(estimator.sys.imu.gyro_noise_sigma))
+        for short, full in packet_map.items():
+            out.setdefault(full, packet[short])
+        return out
     if names and reading is None:
         missing = [name for name in names if name not in out]
         if missing:

@@ -10,7 +10,7 @@ Public surface:
   * `measurement_component` — h_sym builder for "observe one component
                               of a slot" (e.g. z position only).
 Plus the recurrence attitude filters (`Madgwick`, `Mahony`,
-`IMUIntegrator`) and the analysis tools (`observability`,
+`IMUIntegrator`, `IMUPreintegrator`) and the analysis tools (`observability`,
 `sigma_horizon`, `nees`).
 
 The state-layout types (`StateSpec`, `StateSlot`, `SlotSet`, …) live in
@@ -20,6 +20,7 @@ The state-layout types (`StateSpec`, `StateSlot`, `SlotSet`, …) live in
 from .consistency import NEESReport, nees
 from .ekf import EKF, measurement_component, measurement_slot
 from .imu_integrator import IMUIntegrator
+from .imu_preintegrator import IMUPreintegrator
 from .madgwick import Madgwick
 from .mahony import Mahony
 from .observability import (
@@ -36,6 +37,7 @@ __all__ = [
     "INS",
     "UKF",
     "IMUIntegrator",
+    "IMUPreintegrator",
     "Madgwick",
     "Mahony",
     "NEESReport",

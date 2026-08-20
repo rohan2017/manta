@@ -266,6 +266,40 @@ ins.update("model_force.specific_force", accel, u=sample)
 ins.predict(dt, u=sample)
 ```
 
+For a high-rate IMU next to an MCU, preintegrate the ordered samples and run
+the main filter only when a packet arrives:
+
+```python
+from manta import IMUPreintegrator
+
+pre = TargetNumpy(IMUPreintegrator(
+    accel_noise_density=accel_density,
+    gyro_noise_density=gyro_density,
+))
+ins = TargetNumpy(INS(world, imu="imu", propagation="preintegrated"))
+
+for accel, gyro, sample_dt in high_rate_samples:
+    packet = pre.step(sample_dt, accel=accel, gyro=gyro,
+                      accel_bias=bias_ref_a, gyro_bias=bias_ref_g)
+
+ins.predict_preintegrated(packet, u=actuator_commands)
+pre.reset()  # begin the next packet at one fixed bias reference
+```
+
+The packet contains ordered `SO(3)` rotation, velocity and position deltas, a
+9×9 covariance, 9×6 bias Jacobian, bias references, boundary gyro samples, and
+endpoint raw samples. The INS uses the boundary samples for exact rigid-mount
+lever-arm transforms and keeps the endpoint accelerometer available to
+`ModelForce`. Packet covariance is always included; an explicit `Q` remains an
+override for the separate model/bias process covariance. Both transforms lower
+independently through `TargetCpp`. Run the desktop rate comparison (and,
+optionally, emit both generated implementations) with:
+
+```console
+.venv/bin/python -m examples.vehicles.ins_preintegration
+.venv/bin/python -m examples.vehicles.ins_preintegration --emit-cpp build/preintegration
+```
+
 The innovation `r_f = f_IMU - f_model` has
 `∂r_f/∂δb_a = -I`: it is an accelerometer-bias and external-force
 disturbance observer, not generic model aiding. A `CraftWindBubble.wind`
@@ -492,6 +526,8 @@ a self-running scripted fallback so they work unattended):
 .venv/bin/python -m examples.vehicles.quadcopter         # Sim + EKF + LQR closed loop
 .venv/bin/python -m examples.vehicles.airplane           # control surfaces on RevoluteJoint hinges
 .venv/bin/python -m examples.vehicles.submarine          # PointBuoy + VelocitySensor + EKF
+.venv/bin/python -m examples.vehicles.ins_vs_ekf         # reduced-model EKF vs strapdown INS A/B
+.venv/bin/python -m examples.vehicles.ins_preintegration # 500 Hz preintegrator -> 50 Hz INS
 .venv/bin/python -m examples.vehicles.hydrofoil          # nested-RevoluteJoint laser gimbal (PID)
 
 # system identification — headless, no rerun needed

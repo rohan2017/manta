@@ -25,7 +25,13 @@ import numpy as np
 from ..fields import GravityField
 from ..ir._linalg import spd_solve
 from ..ir._names import resolve_suffix
-from ..ir._rotation import quat_mul, quat_to_rotmat, so3_exp
+from ..ir._rotation import (
+    quat_conj,
+    quat_from_rotmat_np,
+    quat_mul,
+    quat_to_rotmat,
+    so3_exp,
+)
 from ..ir.frames import WorldFrame
 from ..ir.module import PortField, entry_ident
 from ..ir.state_spec import StateSpec, flatten_nested, resolve_slotset
@@ -87,7 +93,8 @@ def _rigid_mount(craft, part, *, who: str) -> tuple[np.ndarray, np.ndarray]:
 class _INSSystem:
     """Linearized-system-compatible IR over a strapdown recurrence."""
 
-    def __init__(self, source, *, imu, track, sensors, inputs) -> None:
+    def __init__(self, source, *, imu, track, sensors, inputs,
+                 propagation: str) -> None:
         # Reuse the one authoritative model snapshot/compiler. The resulting
         # dynamics transition is only a source of ordinary measurement models
         # and non-navigation state recurrences; navigation is replaced below.
@@ -112,18 +119,45 @@ class _INSSystem:
             source_world, self.world, imu, IMU, who="INS")
         self.craft_name = self.imu_name.split(".", 1)[0]
         self.craft = next(c for c in self.crafts if c.name == self.craft_name)
+        self.propagation = propagation
         self.lever_arm, self.R_craft_from_sensor = _rigid_mount(
             self.craft, self.imu, who="INS")
 
         self.accel_input = f"{self.imu_name}.accel"
         self.gyro_input = f"{self.imu_name}.gyro"
+        self.preintegration_input_map: dict[str, str] = {}
+        preintegration_fields: list[PortField] = []
+        if propagation == "preintegrated":
+            prefix = f"{self.imu_name}.preintegrated"
+            packet_dims = {
+                "delta_orientation": 4,
+                "delta_velocity": 3,
+                "delta_position": 3,
+                "covariance": 81,
+                "bias_jacobian": 54,
+                "gyro_bias_reference": 3,
+                "accel_bias_reference": 3,
+                "start_gyro": 3,
+            }
+            packet_defaults = {
+                "delta_orientation": (1.0, 0.0, 0.0, 0.0),
+            }
+            for short, dim in packet_dims.items():
+                full = f"{prefix}.{short}"
+                self.preintegration_input_map[short] = full
+                preintegration_fields.append(PortField(
+                    full, dim, packet_defaults.get(short, np.zeros(dim))))
+
         self.input_names = [*self.model_input_names,
-                            self.accel_input, self.gyro_input]
+                            self.accel_input, self.gyro_input,
+                            *self.preintegration_input_map.values()]
         self.input_defaults = {
             **{name: base.input_defaults[name]
                for name in self.model_input_names},
             self.accel_input: np.zeros(3),
             self.gyro_input: np.zeros(3),
+            **{field.name: np.atleast_1d(field.default).copy()
+               for field in preintegration_fields},
         }
         self.input_fields = tuple([
             PortField(name, 1, float(base.input_defaults[name]),
@@ -134,7 +168,7 @@ class _INSSystem:
                       rate=self.sample_rates.get(self.accel_input)),
             PortField(self.gyro_input, 3, (0.0, 0.0, 0.0),
                       rate=self.sample_rates.get(self.gyro_input)),
-        ])
+        ] + preintegration_fields)
         self._input_slices: dict[str, slice] = {}
         off = 0
         for field in self.input_fields:
@@ -264,6 +298,15 @@ class _INSSystem:
         accel_bias_name = f"{self.imu_name}.accel_bias"
         R_bs = ca.DM(self.R_craft_from_sensor)
         lever = ca.DM(self.lever_arm)
+        q_bs = ca.DM(quat_from_rotmat_np(self.R_craft_from_sensor))
+        q_sb = quat_conj(q_bs)
+
+        def packet_chunk(name, dim):
+            full = self.preintegration_input_map[name]
+            return ca.reshape(u[self._input_slices[full]], dim, 1)
+
+        packet_covariance = (ca.reshape(packet_chunk("covariance", 81), 9, 9)
+                             if self.propagation == "preintegrated" else None)
 
         def state_chunk(xv, name, dim):
             if name not in spec:
@@ -275,13 +318,20 @@ class _INSSystem:
             sl = noise_slices.get(name)
             return ca.MX.zeros(3, 1) if sl is None else nv[sl]
 
-        def evaluate(xv, nv):
+        def evaluate(xv, nv, packet_error=None):
             gyro_bias = state_chunk(xv, gyro_bias_name, 3)
             accel_bias = state_chunk(xv, accel_bias_name, 3)
             gyro_noise = noise_chunk(nv, f"{self.imu_name}.gyro_noise")
             accel_noise = noise_chunk(nv, f"{self.imu_name}.accel_noise")
-            gyro_corrected = gyro_sample - gyro_bias - gyro_noise
-            accel_corrected = accel_sample - accel_bias - accel_noise
+            if self.propagation == "raw":
+                gyro_corrected = gyro_sample - gyro_bias - gyro_noise
+                accel_corrected = accel_sample - accel_bias - accel_noise
+            else:
+                # The packet covariance already represents the raw IMU white
+                # noise. Endpoint readings remain available to ordinary
+                # measurement models but must not inject that noise twice.
+                gyro_corrected = gyro_sample - gyro_bias
+                accel_corrected = accel_sample - accel_bias
             omega_body = R_bs @ gyro_corrected
 
             frozen = dict(frozen_base)
@@ -294,33 +344,80 @@ class _INSSystem:
             v = state_chunk(xv, v_name, 3)
             R_wb = quat_to_rotmat(q)
 
-            # The IMU is not generally at the craft origin. Centripetal
-            # acceleration is driven directly by the measured gyro. The
-            # tangential term uses the compiled model's instantaneous alpha
-            # only as a kinematic lever correction; it is not an angular
-            # residual and creates no omega state.
-            omega_model_next = outs[omega_name]
-            alpha_body = ca.substitute(ca.jacobian(omega_model_next, dt),
-                                       dt, ca.MX.zeros(1, 1))
-            lever_accel = (ca.cross(alpha_body, lever)
-                           + ca.cross(omega_body,
-                                      ca.cross(omega_body, lever)))
-
-            sensor_position = p + R_wb @ lever
             gravity_origin = self._gravity(p, t)
-            gravity_sensor = self._gravity(sensor_position, t)
-            gravity_delta_body = R_wb.T @ (gravity_sensor - gravity_origin)
-            force_origin_body = (R_bs @ accel_corrected
-                                 + gravity_delta_body - lever_accel)
-            accel_world = R_wb @ force_origin_body + gravity_origin
+            if self.propagation == "raw":
+                # The IMU is not generally at the craft origin. Centripetal
+                # acceleration is driven directly by the measured gyro. The
+                # tangential term uses the compiled model's instantaneous
+                # alpha only as a kinematic lever correction; it is not an
+                # angular residual and creates no omega state.
+                omega_model_next = outs[omega_name]
+                alpha_body = ca.substitute(ca.jacobian(omega_model_next, dt),
+                                           dt, ca.MX.zeros(1, 1))
+                lever_accel = (ca.cross(alpha_body, lever)
+                               + ca.cross(omega_body,
+                                          ca.cross(omega_body, lever)))
+                sensor_position = p + R_wb @ lever
+                gravity_sensor = self._gravity(sensor_position, t)
+                gravity_delta_body = R_wb.T @ (
+                    gravity_sensor - gravity_origin)
+                force_origin_body = (R_bs @ accel_corrected
+                                     + gravity_delta_body - lever_accel)
+                accel_world = R_wb @ force_origin_body + gravity_origin
+                q_next = quat_mul(q, so3_exp(omega_body * dt))
+                q_next = q_next / ca.sqrt(
+                    ca.dot(q_next, q_next) + 1e-30)
+                replacements = {
+                    p_name: p + v * dt + 0.5 * accel_world * dt * dt,
+                    q_name: q_next,
+                    v_name: v + accel_world * dt,
+                }
+            else:
+                delta_q = packet_chunk("delta_orientation", 4)
+                delta_v = packet_chunk("delta_velocity", 3)
+                delta_p = packet_chunk("delta_position", 3)
+                J_bias = ca.reshape(packet_chunk("bias_jacobian", 54), 9, 6)
+                bias_delta = ca.vertcat(
+                    gyro_bias - packet_chunk("gyro_bias_reference", 3),
+                    accel_bias - packet_chunk("accel_bias_reference", 3),
+                )
+                correction = J_bias @ bias_delta
+                delta_q = quat_mul(delta_q, so3_exp(correction[0:3]))
+                delta_v = delta_v + correction[3:6]
+                delta_p = delta_p + correction[6:9]
+                if packet_error is not None:
+                    delta_q = quat_mul(
+                        delta_q, so3_exp(packet_error[0:3]))
+                    delta_v = delta_v + packet_error[3:6]
+                    delta_p = delta_p + packet_error[6:9]
+                delta_q = delta_q / ca.sqrt(
+                    ca.dot(delta_q, delta_q) + 1e-30)
 
-            q_next = quat_mul(q, so3_exp(omega_body * dt))
-            q_next = q_next / ca.sqrt(ca.dot(q_next, q_next) + 1e-30)
-            replacements = {
-                p_name: p + v * dt + 0.5 * accel_world * dt * dt,
-                q_name: q_next,
-                v_name: v + accel_world * dt,
-            }
+                # Propagate the sensor origin, then transform both endpoints
+                # back to the craft origin. This makes the lever arm exact at
+                # packet boundaries without differentiating the gyro or using
+                # the vehicle torque model.
+                omega_start = R_bs @ (
+                    packet_chunk("start_gyro", 3) - gyro_bias)
+                q_ws = quat_mul(q, q_bs)
+                R_ws = quat_to_rotmat(q_ws)
+                sensor_p = p + R_wb @ lever
+                sensor_v = v + R_wb @ ca.cross(omega_start, lever)
+                sensor_p_next = (sensor_p + sensor_v * dt
+                                 + 0.5 * gravity_origin * dt * dt
+                                 + R_ws @ delta_p)
+                sensor_v_next = (sensor_v + gravity_origin * dt
+                                 + R_ws @ delta_v)
+                q_next = quat_mul(quat_mul(q_ws, delta_q), q_sb)
+                q_next = q_next / ca.sqrt(
+                    ca.dot(q_next, q_next) + 1e-30)
+                R_wb_next = quat_to_rotmat(q_next)
+                replacements = {
+                    p_name: sensor_p_next - R_wb_next @ lever,
+                    q_name: q_next,
+                    v_name: (sensor_v_next
+                             - R_wb_next @ ca.cross(omega_body, lever)),
+                }
             chunks = []
             for slot in spec.slots:
                 value = replacements.get(slot.name, outs[slot.name])
@@ -329,6 +426,16 @@ class _INSSystem:
 
         x_new_noisy, outs_noisy = evaluate(x, noise)
         x_new = ca.substitute(x_new_noisy, noise, zero_noise)
+
+        packet_Q = ca.MX.zeros(n_tan, n_tan)
+        if self.propagation == "preintegrated":
+            packet_error = ca.MX.sym("packet_error", 9, 1)
+            x_packet, _ = evaluate(x, zero_noise, packet_error)
+            packet_state_error = spec.boxminus_sym(x_packet, x_new)
+            G_packet = ca.substitute(
+                ca.jacobian(packet_state_error, packet_error), packet_error,
+                ca.MX.zeros(9, 1))
+            packet_Q = G_packet @ packet_covariance @ G_packet.T
 
         delta = ca.MX.sym("delta", n_tan, 1)
         x_pert = spec.boxplus_sym(x, delta)
@@ -380,6 +487,7 @@ class _INSSystem:
             "x": x, "u": u, "dt": dt, "t": t, "noise": noise,
             "x_new": x_new, "x_new_noisy": x_new_noisy,
             "F_sym": F, "F_pattern": F_pattern,
+            "packet_Q_sym": packet_Q,
             "L_sym": L, "L_pattern": L_pattern, "Sigma": Sigma,
             "sensors": sensors, "predict_fn": predict_fn,
             "F_fn": F_fn, "L_fn": L_fn, "blocks": blocks,
@@ -394,6 +502,7 @@ class _INSSystem:
         self.x_new = result["x_new"]
         self.x_new_noisy = result["x_new_noisy"]
         self.F_sym = result["F_sym"]
+        self.packet_Q_sym = result["packet_Q_sym"]
         self.L_sym = result["L_sym"]
         self.Sigma = result["Sigma"]
         self.sensors = result["sensors"]
@@ -426,6 +535,12 @@ class INS(_FilterBase):
     inputs in ``u``. Its own outputs are removed from the ordinary update set.
     A selected, colocated ``ModelForce.specific_force`` is automatically
     sourced from that IMU's accelerometer by analysis tools.
+
+    ``propagation="raw"`` consumes one accelerometer/gyro pair per predict.
+    ``propagation="preintegrated"`` consumes packets emitted by
+    :class:`~manta.estimation.imu_preintegrator.IMUPreintegrator`; the
+    high-rate recurrence and the lower-rate INS can both be lowered to
+    generated C/C++.
     """
 
     def __init__(self, world, *, imu,
@@ -433,15 +548,27 @@ class INS(_FilterBase):
                  sensors: list[str] | None = None,
                  inputs: list[str] | None = None,
                  discretization: str = "exact",
-                 gates: float | dict[str, float] | None = None) -> None:
+                 gates: float | dict[str, float] | None = None,
+                 propagation: str = "raw") -> None:
         if discretization != "exact":
             raise ValueError(
                 "INS derives its exact strapdown F by autodiff; "
                 "discretization must be 'exact'")
+        if propagation not in {"raw", "preintegrated"}:
+            raise ValueError(
+                "INS propagation must be 'raw' or 'preintegrated', got "
+                f"{propagation!r}")
         sys = _INSSystem(world, imu=imu, track=track,
-                         sensors=sensors, inputs=inputs)
+                         sensors=sensors, inputs=inputs,
+                         propagation=propagation)
         self._bind_system(world, sys)
         self.imu = sys.imu_name
+        self.propagation = propagation
+        self.preintegration_input_map = MappingProxyType({
+            **dict(sys.preintegration_input_map),
+            **({"end_accel": sys.accel_input, "end_gyro": sys.gyro_input}
+               if propagation == "preintegrated" else {}),
+        })
         self.measurement_sources = MappingProxyType(dict(sys.measurement_sources))
         self.rho_by_sensor = MappingProxyType(dict(sys.rho_by_sensor))
         resolved_gates = resolve_gates(sys, gates, who="INS")
@@ -451,14 +578,17 @@ class INS(_FilterBase):
         P = ca.MX.sym("P", n_tan, n_tan)
         Q = ca.MX.sym("Q", n_tan, n_tan)
         F = sys.F_sym
-        Q_auto = _q_auto(sys)
+        # Packet uncertainty is intrinsic to a preintegrated measurement and
+        # is therefore retained even when the caller overrides the model's Q.
+        Q_packet = sys.packet_Q_sym
+        Q_auto = _q_auto(sys) + Q_packet
         predict_fn = ca.Function(
             "ins_predict", [x, P, u, dt, t],
             [sys.x_new, symmetrize(F @ P @ F.T + Q_auto)],
             ["x", "P", "u", "dt", "t"], ["x_new", "P_new"])
         predict_q_fn = ca.Function(
             "ins_predict_with_Q", [x, P, Q, u, dt, t],
-            [sys.x_new, symmetrize(F @ P @ F.T + Q)],
+            [sys.x_new, symmetrize(F @ P @ F.T + Q + Q_packet)],
             ["x", "P", "Q", "u", "dt", "t"], ["x_new", "P_new"])
 
         x0 = initial_ambient(sys.world, spec)
@@ -500,7 +630,13 @@ class INS(_FilterBase):
 
         metadata = {
             "estimator": "ins",
-            "prediction_inputs": (sys.accel_input, sys.gyro_input),
+            "propagation": propagation,
+            "prediction_inputs": (
+                (sys.accel_input, sys.gyro_input)
+                if propagation == "raw"
+                else (*sys.preintegration_input_map.values(),
+                      sys.accel_input, sys.gyro_input)),
+            "preintegration_input_map": self.preintegration_input_map,
             "measurement_sources": MappingProxyType(dict(sys.measurement_sources)),
             "rho_by_sensor": MappingProxyType(dict(sys.rho_by_sensor)),
             "lever_arm_m": tuple(float(v) for v in sys.lever_arm),

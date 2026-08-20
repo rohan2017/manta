@@ -261,7 +261,7 @@ def observability_trajectory(world, *, dt: float, steps: int,
         x_before = truth_vec()
         sim.step(dt, u=u_dict)
         estimator_u = estimator_inputs(
-            ekf_ir, u_dict, reading=sim.reading)
+            ekf_ir, u_dict, reading=sim.reading, dt=dt)
         if i % every == 0:
             blocks.append(_local_O(
                 ekf_ir, x_before,

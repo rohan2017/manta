@@ -70,6 +70,54 @@ selection, gating, `observability`, `observability_trajectory`, NEES, and
 the selected IMU from their truth simulation; open-loop `sigma_horizon` callers
 must include accel and gyro samples in `control`.
 
+## High-rate preintegration
+
+When the IMU is sampled faster than the main estimator loop, use
+[`IMUPreintegrator`][manta.IMUPreintegrator] as a high-rate recurrence and
+construct the filter with `INS(..., propagation="preintegrated")`. Each packet
+accumulates ordered rotation products on SO(3), specific-force velocity and
+position deltas, a 9×9 covariance over `[δθ, δv, δp]`, and a 9×6 Jacobian with
+respect to `[δb_g, δb_a]`. Bias values are latched on the first sample after
+reset; the Jacobian lets the main INS correct a packet at its current bias
+estimate without replaying the samples.
+
+```python
+pre = TargetNumpy(IMUPreintegrator(
+    accel_noise_density=accel_density,
+    gyro_noise_density=gyro_density,
+))
+ins = TargetNumpy(INS(world, imu="imu", sensors=[...],
+                      propagation="preintegrated"))
+
+for accel, gyro, sample_dt in high_rate_samples:
+    packet = pre.step(sample_dt, accel=accel, gyro=gyro,
+                      accel_bias=bias_ref_a, gyro_bias=bias_ref_g)
+
+packet_u = ins.preintegrated_inputs(packet, u=actuator_commands)
+ins.predict_preintegrated(packet, u=actuator_commands)
+ins.update("model_force.specific_force", packet["end_accel"], u=packet_u,
+           t=ins.time)
+pre.reset()
+```
+
+The deltas live in the sensor frame at the packet start. Boundary gyro samples
+let INS propagate the sensor origin and transform back to the craft origin at
+both endpoints, so a nonzero lever arm is retained without differentiating the
+gyro or invoking the torque model. The endpoint accelerometer remains the
+ordinary `ModelForce` measurement source. Packet covariance is intrinsic and
+is added in both automatic-Q and explicit-Q prediction; the latter overrides
+only the separate model/bias process covariance.
+
+The packet spans an interval, so predict it first and then fold endpoint
+measurements. This differs from the raw sample loop's update-at-interval-start
+convention; packet `t0`/`t1` timestamps make the boundary explicit.
+
+`IMUPreintegrator` and the packet-consuming INS are independent Modules. Lower
+the recurrence to an MCU with `TargetCpp`, and lower or run the main filter on
+the companion computer through any filter backend. The packet matrices use
+column-major CasADi/Eigen flattening. Transport framing still owns timestamps,
+sequence numbers, health/saturation flags, calibration identity, and CRC.
+
 ## Model-derived filters
 
 - **Why error-state** — the rigid-body state lives on a manifold

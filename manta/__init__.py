@@ -92,6 +92,7 @@ from .couplings import Coupling
 from .craft import Craft
 from .estimation.ekf import EKF
 from .estimation.imu_integrator import IMUIntegrator
+from .estimation.imu_preintegrator import IMUPreintegrator
 from .estimation.ins import INS
 from .estimation.madgwick import Madgwick
 from .estimation.mahony import Mahony
@@ -137,6 +138,7 @@ __all__ = [
     "FitResult",
     "Free",
     "IMUIntegrator",
+    "IMUPreintegrator",
     "LQRSolution",
     "MPCReference",
     "MPCResult",

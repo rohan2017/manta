@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -226,6 +226,55 @@ class NumpyFilter(NumpyRuntime):
             value, who="Q", positive_definite=False))
 
     # ---- predict / update (the uniform kernel surface) -------------------
+
+    def preintegrated_inputs(
+            self, packet: Mapping[str, Any], *,
+            u: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Merge an ``IMUPreintegrator`` readout into INS inputs.
+
+        This is a naming/validation convenience for the NumPy runtime. The
+        generated C++ filter exposes the same fields directly on ``Inputs``.
+        ``packet`` is the dict returned by the recurrence's ``step`` or
+        ``readouts`` method.
+        """
+        mapping = dict(self.module.metadata.get(
+            "preintegration_input_map", {}))
+        if not mapping:
+            raise TypeError(
+                "preintegrated_inputs requires an INS constructed with "
+                "propagation='preintegrated'")
+        if not isinstance(packet, Mapping):
+            raise TypeError("preintegrated_inputs packet must be a mapping")
+        missing = sorted(set(mapping) - set(packet))
+        if missing:
+            raise KeyError(
+                f"preintegrated_inputs packet is missing {missing}")
+        merged = dict(u or {})
+        input_names = self._input_names()
+        occupied = {
+            resolve_suffix(key, input_names, label="input",
+                           who="preintegrated_inputs")
+            for key in merged
+        }
+        collisions = sorted(occupied & set(mapping.values()))
+        if collisions:
+            raise ValueError(
+                "preintegrated_inputs: u also supplies packet-owned input(s) "
+                f"{collisions}")
+        merged.update({full: packet[short]
+                       for short, full in mapping.items()})
+        return merged
+
+    def predict_preintegrated(
+            self, packet: Mapping[str, Any], *, t: float | None = None,
+            u: dict[str, Any] | None = None,
+            Q: np.ndarray | None = None) -> None:
+        """Advance a preintegrated INS by the packet's accumulated duration."""
+        if "duration" not in packet:
+            raise KeyError("predict_preintegrated packet is missing 'duration'")
+        dt = require_positive(
+            packet["duration"], name="predict_preintegrated packet duration")
+        self.predict(dt, t=t, u=self.preintegrated_inputs(packet, u=u), Q=Q)
 
     def predict(self, dt: float, *, t: float | None = None,
                 u: dict[str, Any] | None = None,

@@ -226,7 +226,7 @@ def nees(world, *, dt: float, steps: int,
             u = _controls_at(control, t)
             sim.step(dt, u=u)
             estimator_u = estimator_inputs(
-                ekf_ir, u, reading=sim.reading)
+                ekf_ir, u, reading=sim.reading, dt=dt)
             sources = ekf_ir.module().metadata.get("measurement_sources", {})
             for full in names:
                 rate = rates[full]

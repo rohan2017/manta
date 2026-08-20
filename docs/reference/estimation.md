@@ -11,6 +11,8 @@ and the observability / consistency analysis tools.
 
 ::: manta.IMUIntegrator
 
+::: manta.IMUPreintegrator
+
 ## Observability and consistency
 
 ::: manta.estimation.observability
