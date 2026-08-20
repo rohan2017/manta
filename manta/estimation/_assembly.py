@@ -1,4 +1,4 @@
-"""Shared EKF/UKF plumbing — everything identical between the twin filters.
+"""Shared EKF/UKF/INS plumbing for the common filter contract.
 
 The two filters differ only in the math between `(x, P)` in and `(x, P)`
 out (Jacobian push vs sigma-point sample). Everything around that math —
@@ -128,7 +128,8 @@ def emit_filter_module(sys, spec: StateSpec, *, name: str, x0: np.ndarray,
                        updates: dict[str, ca.Function],
                        diagnostic_updates: dict[str, ca.Function],
                        override_updates: dict[str, ca.Function],
-                       gates: dict[str, float | None]) -> Module:
+                       gates: dict[str, float | None],
+                       metadata_extra: Mapping[str, Any] | None = None) -> Module:
     """The typed filter Module both twins emit — identical shape by
     construction:
 
@@ -146,11 +147,15 @@ def emit_filter_module(sys, spec: StateSpec, *, name: str, x0: np.ndarray,
         StateField("P", "matrix", (n_tan, n_tan),
                    init=np.eye(n_tan) * 1e-2),
     )
-    ports = [
-        Port("u", Role.CONTROL, (len(sys.input_names),), fields=tuple(
+    input_fields = getattr(sys, "input_fields", None)
+    if input_fields is None:
+        input_fields = tuple(
             PortField(n, 1, float(sys.input_defaults[n]),
                       rate=sys.sample_rates.get(n))
-            for n in sys.input_names)),
+            for n in sys.input_names)
+    ports = [
+        Port("u", Role.CONTROL, (sum(f.dim for f in input_fields),),
+             fields=tuple(input_fields)),
         Port("dt", Role.TIMESTEP),
         Port("t", Role.TIME),
         Port("Q", Role.MATRIX, (n_tan, n_tan)),
@@ -204,6 +209,12 @@ def emit_filter_module(sys, spec: StateSpec, *, name: str, x0: np.ndarray,
     # Keep deploy/runtime metadata out of naming conventions. Backends and
     # consumers can inspect this immutable map directly.
     metadata = {"nis_gates": MappingProxyType(dict(gates))}
+    if metadata_extra:
+        overlap = set(metadata) & set(metadata_extra)
+        if overlap:
+            raise ValueError(
+                f"emit_filter_module: duplicate metadata keys {sorted(overlap)}")
+        metadata.update(metadata_extra)
     return Module(name=name, state=StateLayout(fields),
                   ports=tuple(ports), functions=functions,
                   entry_points=tuple(entries), kind=ModuleKind.FILTER,
@@ -221,7 +232,7 @@ def _q_auto(sys) -> ca.MX:
 
 
 class _FilterBase:
-    """The twin filters' shared non-math surface. Each subclass's ctor
+    """The filters' shared non-math surface. Each subclass's ctor
     does its own recursion math, then everything after — the system/spec
     attribute block (`_bind_system`), the Module accessor, and the
     analysis tail — is identical by inheritance, so it can never drift
@@ -274,13 +285,13 @@ class _FilterBase:
 # ---------------------------------------------------------------------------
 
 def _resolve_ir(ekf):
-    """Require a filter transform carrying the IR (`EKF`/`UKF`); the runtime
+    """Require a filter transform carrying the IR (`EKF`/`UKF`/`INS`); the runtime
     view doesn't carry it. The analysis is the *linearized* observability of
     the model's sensor set, so it applies to either filter unchanged."""
     if isinstance(ekf, _FilterBase):
         return ekf
     raise TypeError(
-        f"observability: expected the EKF/UKF transform (e.g. "
+        f"observability: expected an EKF/UKF/INS transform (e.g. "
         f"EKF(world, ...)), got {type(ekf).__name__}")
 
 
@@ -314,3 +325,28 @@ def _controls_at(control, t) -> dict[str, Any]:
     if control is None:
         return {}
     return control(t) if callable(control) else dict(control)
+
+
+def estimator_inputs(estimator, controls, *, reading=None) -> dict[str, Any]:
+    """Merge physical controls with any sensor samples driving prediction.
+
+    EKF/UKF declare no ``prediction_inputs`` and pass through unchanged. INS
+    declares its selected IMU outputs in Module metadata; trajectory/NEES
+    tools supply those readings from the truth simulator through this one
+    transform-neutral adapter.
+    """
+    out = dict(controls or {})
+    names = estimator.module().metadata.get("prediction_inputs", ())
+    if names and reading is None:
+        missing = [name for name in names if name not in out]
+        if missing:
+            raise ValueError(
+                f"{type(estimator).__name__}: prediction needs readings "
+                f"{missing}")
+    for name in names:
+        if name not in out:
+            value = reading(name)
+            if value is None:
+                raise ValueError(f"prediction input {name!r} has no reading")
+            out[name] = value
+    return out

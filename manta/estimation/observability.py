@@ -17,7 +17,7 @@ below is the tool that resolves such slow channels.)
 
 manta is well placed to catch this automatically, because the symbolic
 state-transition `F` and per-sensor measurement Jacobians `H` already
-exist on the `EKF` IR (via the shared `Linearization`). This module builds
+exist on each model-derived estimator IR. This module builds
 the discrete observability matrix at an operating point
 
     O = [H; H·F; H·F²; …; H·F^(n-1)]            (n = tangent dimension)
@@ -51,14 +51,18 @@ there is weakly observable, with the convergence time read off directly.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
 import numpy as np
 
 from ..ir.module import entry_ident
 from ._assembly import (
-    _controls_at, _resolve_estimator, _resolve_ir, resolve_sensor_set,
+    _controls_at,
+    _resolve_estimator,
+    _resolve_ir,
+    estimator_inputs,
+    resolve_sensor_set,
     sensor_R_expr,
 )
 from ._kalman import joseph_update_np, lin_cov, symmetrize, zero_R_message
@@ -112,7 +116,7 @@ class ObservabilityReport:
         return self.summary()
 
 
-def _empty_report(spec, n: int) -> "ObservabilityReport":
+def _empty_report(spec, n: int) -> ObservabilityReport:
     """The report for an empty sensor set: nothing is observable, every slot
     keeps its prior. Built identically by the point and trajectory tests."""
     return ObservabilityReport(n, 0, [], [(s.name, 1.0) for s in spec.slots],
@@ -139,7 +143,7 @@ def observability(ekf, *, state=None, inputs=None, sensors=None,
     """Local observability of an `EKF` at an operating point.
 
     Args:
-        ekf      — the `EKF` transform (`EKF(world, ...)`).
+        ekf      — an `EKF`, `UKF`, or `INS` transform.
         state    — operating-point state (nested `{owner: {slot: v}}` or
                    flat), merged over the world's initial state. Defaults
                    to the world's initial state.
@@ -206,7 +210,7 @@ def _report_from_O(O, spec, names, rtol) -> ObservabilityReport:
 
 
 def observability_trajectory(world, *, dt: float, steps: int,
-                             control: "Callable | dict | None" = None,
+                             control: Callable | dict | None = None,
                              sensors: list[str] | None = None,
                              samples: int = 30,
                              rtol: float = 1e-6,
@@ -228,7 +232,7 @@ def observability_trajectory(world, *, dt: float, steps: int,
     Args mirror `nees`/`observability`: `control` is `{name: value}` or a
     `t -> {name: value}` callable; `sensors` restricts the suite; `samples`
     caps how many trajectory points are linearized. `estimator` picks the
-    filter transform carrying the linearized IR — an `EKF`/`UKF` instance
+    filter transform carrying the linearized IR — an `EKF`/`UKF`/`INS` instance
     over this world, or a class/callable applied to it (default `EKF`);
     the analysis itself is linearized either way.
     """
@@ -254,13 +258,16 @@ def observability_trajectory(world, *, dt: float, steps: int,
     for i in range(steps):
         t = i * dt
         u_dict = _controls_at(control, t)
+        x_before = truth_vec()
+        sim.step(dt, u=u_dict)
+        estimator_u = estimator_inputs(
+            ekf_ir, u_dict, reading=sim.reading)
         if i % every == 0:
             blocks.append(_local_O(
-                ekf_ir, truth_vec(),
-                ekf_ir.sys.resolve_u(u_dict or None,
+                ekf_ir, x_before,
+                ekf_ir.sys.resolve_u(estimator_u,
                                      who="observability_trajectory"),
                 dt, t, pairs, n))
-        sim.step(dt, u=u_dict)
     return _report_from_O(np.vstack(blocks), spec, names, rtol)
 
 
@@ -323,9 +330,9 @@ class SigmaHorizonReport:
 
 
 def sigma_horizon(ekf, *, horizon: float, dt: float = 0.02,
-                  state=None, control: "Callable | dict | None" = None,
+                  state=None, control: Callable | dict | None = None,
                   sensors: list[str] | None = None,
-                  P0: "np.ndarray | float | None" = None,
+                  P0: np.ndarray | float | None = None,
                   Q: np.ndarray | None = None,
                   t0: float = 0.0, samples: int = 60,
                   record: int = 200) -> SigmaHorizonReport:
@@ -347,7 +354,9 @@ def sigma_horizon(ekf, *, horizon: float, dt: float = 0.02,
     readable directly.
 
     Args:
-        ekf      — the `EKF` transform (`EKF(world, ...)`).
+        ekf      — an `EKF`, `UKF`, or `INS` transform. For INS, `control`
+                   must also provide its IMU prediction samples because this
+                   open-loop covariance analysis has no truth simulator.
         horizon  — analysis window (s).
         dt       — filter step (s).
         state    — starting operating point (nested or flat), merged over

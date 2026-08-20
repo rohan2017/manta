@@ -1,4 +1,4 @@
-# Transforms — Sim, EKF, UKF, LQR
+# Transforms — Sim, EKF, UKF, INS, LQR
 
 The compile-time siblings. Each takes a `World`, writes its math
 symbolically over the shared linearized system, and emits a typed
@@ -15,6 +15,10 @@ symbolically over the shared linearized system, and emits a typed
 ## UKF
 
 ::: manta.UKF
+
+## INS
+
+::: manta.INS
 
 ## LQR
 

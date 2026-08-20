@@ -9,7 +9,7 @@ organized by the same layers as the [architecture](../explanation/architecture.m
 - **[Fields](fields.md)** — gravity, fluid, magnetic, collision, optical
   fields and their disturbances.
 - **[Planets](planets.md)** — `Planet` / `Earth` world-level entities.
-- **[Transforms](transforms.md)** — `Sim`, `EKF`, `LQR`: the compile-time
+- **[Transforms](transforms.md)** — `Sim`, `EKF`, `UKF`, `INS`, `LQR`: the compile-time
   siblings.
 - **[Estimation](estimation.md)** — attitude filters and observability /
   consistency analysis.

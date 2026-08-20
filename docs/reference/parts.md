@@ -101,6 +101,8 @@ a craft.
 
 ::: manta.parts.IMU
 
+::: manta.parts.ModelForce
+
 ::: manta.parts.VelocitySensor
 
 ::: manta.parts.Magnetometer

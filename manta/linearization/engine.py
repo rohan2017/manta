@@ -275,9 +275,13 @@ class TickLinearizer:
                 sliced.append(
                     x_sym[s.ambient_offset:s.ambient_offset + s.ambient_dim])
             elif name in frozen:
-                val = np.atleast_1d(
-                    np.asarray(frozen[name], dtype=float)).reshape(-1, 1)
-                sliced.append(ca.DM(val))
+                val = frozen[name]
+                if isinstance(val, (ca.MX, ca.SX, ca.DM)):
+                    sliced.append(val)
+                else:
+                    arr = np.atleast_1d(
+                        np.asarray(val, dtype=float)).reshape(-1, 1)
+                    sliced.append(ca.DM(arr))
             elif name in u_index:
                 sliced.append(u_sym[u_index[name]])
             elif name in noise_off:

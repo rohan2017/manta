@@ -13,6 +13,63 @@ EKF's linearized covariance push with a sigma-point sample of the
 default tight sigma spread the two filters agree closely on a near-linear
 model.
 
+[`INS(world, imu=...)`][manta.INS] is the strapdown sibling. It emits the same
+held filter Module and runtime surface, but uses the selected IMU's raw
+accelerometer and gyro as prediction inputs instead of propagating navigation
+state from vehicle dynamics. There is no angular-velocity estimate and no gyro
+or torque-model residual. The state contains navigation, selected IMU bias,
+and structurally relevant disturbance slots.
+
+## INS force disturbance observer
+
+Add a colocated [`ModelForce`][manta.parts.ModelForce] pseudo-part to expose
+the compiled model's specific-force prediction as an ordinary noisy Output:
+
+```python
+imu = IMU("imu", accel_noise_sigma=6.9e-3,
+          gyro_noise_sigma=1e-3, accel_bias_sigma=1e-4,
+          gyro_bias_sigma=1e-5)
+craft.add(imu)
+craft.add(ModelForce("model_force", imu=imu,
+                     model_error_sigma=0.5))
+
+ins_ir = INS(world, imu="imu",
+             sensors=["model_force.specific_force"])
+ins = TargetNumpy(ins_ir)
+
+sample = {"imu.accel": accel, "imu.gyro": gyro}
+ins.update("model_force.specific_force", accel, u=sample)
+ins.predict(dt, u=sample)
+```
+
+This is a disturbance observer, not generic model aiding. For innovation
+`r_f = f_IMU - f_model`, `∂r_f/∂δb_a = -I`, directly constraining the
+accelerometer bias. When IMU and model agree otherwise, the residual is the
+unmodeled external force. Declared random-walk force states such as
+`CraftWindBubble.wind` therefore re-enter the estimate through the ordinary
+sensor dependency graph.
+
+The accelerometer sample drives both propagation and the pseudo-measurement,
+so those noises are formally correlated. In the intended regime the ignored
+term is small: the generated artifact stores
+`rho = accel_noise_sigma / model_error_sigma`, and the NumPy runtime logs it.
+Manta deliberately assigns no universal threshold to it; consumers should
+compare it with bounds validated for their model, sensor bandwidth, operating
+envelope, and application. Convert density units to Manta's effective
+per-sample sigma at the configuration boundary.
+
+Lever-arm compensation is part of the symbolic tick: the measured gyro drives
+the centripetal term, so a sensor 10 cm off-axis at 3 rad/s does not inject the
+roughly 0.9 m/s² (about 90 mg) acceleration into the craft origin. CasADi
+autodiff derives `F` from that same tick. Any analytic Jacobian is only a
+finite-difference test oracle.
+
+Because `ModelForce` is a normal sensor declaration, R assembly, sensor
+selection, gating, `observability`, `observability_trajectory`, NEES, and
+`NoiseFit` reuse the common estimator paths. World-level trajectory tools read
+the selected IMU from their truth simulation; open-loop `sigma_horizon` callers
+must include accel and gyro samples in `control`.
+
 ## Model-derived filters
 
 - **Why error-state** — the rigid-body state lives on a manifold
@@ -139,6 +196,7 @@ development-host timing as a hardware guarantee.
 - Reference: [Transforms](../reference/transforms.md),
   [Estimation](../reference/estimation.md)
 - Code: `manta/estimation/ekf.py`, `manta/estimation/ukf.py`,
+  `manta/estimation/ins.py`,
   `manta/estimation/_kalman.py`, `manta/codegen/numpy/_filter.py`,
   `manta/codegen/numpy/_filter_replay.py`
 - Tutorial: [camera interceptor](../tutorials/interceptor.md)

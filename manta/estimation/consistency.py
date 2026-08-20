@@ -38,13 +38,18 @@ this with an `observability` check, and excite the trajectory via
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from math import sqrt
-from typing import Callable
 
 import numpy as np
 
-from ._assembly import _controls_at, _resolve_estimator, resolve_sensor_set
+from ._assembly import (
+    _controls_at,
+    _resolve_estimator,
+    estimator_inputs,
+    resolve_sensor_set,
+)
 
 # The heavier manta imports are deferred into `nees()` to avoid an import
 # cycle (estimation → consistency → codegen.numpy → estimation);
@@ -164,13 +169,14 @@ def nees(world, *, dt: float, steps: int,
         runs, seed — ensemble size and base RNG seed.
         warmup   — steps to skip before recording (default `steps // 5`).
         alpha    — significance for the band (default 0.05 ⇒ 95%).
-        estimator — the filter under test: an `EKF`/`UKF` instance over
+        estimator — the filter under test: an `EKF`/`UKF`/`INS` instance over
                    this world, or a class/callable applied to it (default
                    `EKF`). Consistency of a UKF's covariance is exactly
                    the case worth auditing — its sigma-point moments are
                    not the EKF's Jacobian push.
     """
     import casadi as ca
+
     from ..codegen.numpy import NoiseDriver, TargetNumpy
     from ..sim import Sim
 
@@ -219,14 +225,18 @@ def nees(world, *, dt: float, steps: int,
             t = i * dt
             u = _controls_at(control, t)
             sim.step(dt, u=u)
+            estimator_u = estimator_inputs(
+                ekf_ir, u, reading=sim.reading)
+            sources = ekf_ir.module().metadata.get("measurement_sources", {})
             for full in names:
                 rate = rates[full]
                 previous = last_fold[full]
                 if (rate is None or previous is None
                         or t - previous >= 1.0 / rate - 1e-9):
-                    ekf.update(full, sim.reading(full), u=u, t=t)
+                    source = sources.get(full, full)
+                    ekf.update(full, sim.reading(source), u=estimator_u, t=t)
                     last_fold[full] = t
-            ekf.predict(dt, u=u, t=t)
+            ekf.predict(dt, u=estimator_u, t=t)
             if i >= warmup:
                 e = np.asarray(boxminus(truth_vec(sim), ekf.x)).reshape(-1)
                 P = ekf.P

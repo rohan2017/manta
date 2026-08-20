@@ -11,9 +11,8 @@ from itertools import count
 import casadi as ca
 import numpy as np
 
-from ..ir.state_spec import flatten_nested
 from ..ir._names import resolve_suffix
-
+from ..ir.state_spec import flatten_nested
 
 _CALLBACK_IDS = count()
 
@@ -204,8 +203,15 @@ class _FitBlock:
     DECISION-space box bounds (±inf when unbounded), fed to IPOPT as
     `lbx`/`ubx`; use `decision_bounds` to build them from a `Prior`."""
 
-    __slots__ = ("offset", "dim", "init", "prior_mean", "sigma",
-                 "lower", "upper")
+    __slots__ = (
+        "dim",
+        "init",
+        "lower",
+        "offset",
+        "prior_mean",
+        "sigma",
+        "upper",
+    )
 
 
 def decision_bounds(prior: Prior | None, dim: int, ambient_init: np.ndarray,
@@ -387,25 +393,43 @@ def pack_x0(world, spec, w: Window) -> np.ndarray:
 
 
 def pack_u_trace(u: dict, input_names: list[str], defaults, K: int, *,
-                 who: str) -> np.ndarray:
+                 who: str, input_fields=None) -> np.ndarray:
     """A window's control trace as `(n_u, K)`: recorded rows (a scalar is
     held for the whole window, else a length-`K` trace), `defaults`
     elsewhere. Any other trace length raises."""
     if not input_names:
         return np.zeros((0, K))
     U = np.tile(np.asarray(defaults, dtype=float).reshape(-1, 1), (1, K))
+    if input_fields is None:
+        fields = [(name, 1) for name in input_names]
+    else:
+        fields = [(field.name, field.dim) for field in input_fields]
+    offsets = {}
+    off = 0
+    for name, dim in fields:
+        offsets[name] = slice(off, off + dim)
+        off += dim
     for key, val in u.items():
         full = resolve_suffix(key, input_names, label="input", who=who)
-        row = input_names.index(full)
-        a = np.asarray(val, dtype=float).ravel()
-        if a.size == 1:
-            U[row, :] = a[0]
-        elif a.size == K:
-            U[row, :] = a
+        sl = offsets[full]
+        dim = sl.stop - sl.start
+        a = np.asarray(val, dtype=float)
+        if dim == 1 and a.size == 1:
+            U[sl, :] = float(a.reshape(-1)[0])
+        elif dim == 1 and a.size == K:
+            U[sl, :] = a.reshape(1, K)
+        elif a.shape == (dim,):
+            U[sl, :] = a.reshape(dim, 1)
+        elif a.shape == (K, dim):
+            U[sl, :] = a.T
         else:
+            if dim == 1:
+                raise ValueError(
+                    f"{who}: Window.u[{key!r}] expected scalar or "
+                    f"length-{K} trace, got {a.shape}.")
             raise ValueError(
-                f"{who}: Window.u[{key!r}] expected scalar or length-{K} "
-                f"trace, got {a.size}.")
+                f"{who}: Window.u[{key!r}] expected a constant ({dim},) "
+                f"or trace ({K}, {dim}), got {a.shape}.")
     return U
 
 

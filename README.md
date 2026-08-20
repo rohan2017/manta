@@ -26,7 +26,8 @@ over it, each owning its math and emitting a typed `Module` IR; a
   <img src="web/pipeline.svg" alt="model (Quadcopter, Airplane, Submarine) → transform (Sim, EKF, LQR; model-free PID, Madgwick/Mahony) → targets (TargetNumpy, TargetJax, TargetCpp, …)" width="880">
 </p>
 
-`Sim(world)`, `EKF(world)`, `UKF(world)`, and `LQR(world, …)` are pure
+`Sim(world)`, `EKF(world)`, `UKF(world)`, `INS(world, imu=…)`, and
+`LQR(world, …)` are pure
 compile-time.
 Each writes its math symbolically over the shared `LinearizedSystem`
 (manifold-aware F / B / H / L over the compiled world tick) and emits a
@@ -228,6 +229,63 @@ the manifold (no Jacobians), tuned by the standard scaled-UT `alpha`/`beta`/
 from manta import UKF, TargetNumpy
 ukf = TargetNumpy(UKF(w))        # identical predict/update surface
 ```
+
+### INS
+
+`INS(world, imu=...)` keeps EKF/UKF's held `x`/`P` Module and
+`update`/`predict` surface, but replaces dynamics-driven navigation
+propagation with strapdown integration of one selected IMU. Its state contains
+position, orientation, velocity, the selected IMU biases, and structurally
+relevant disturbance states; it deliberately has no angular-velocity slot and
+does not form a gyro or torque-model residual. Algebraic angular constraints
+(for example NHC or coordinated-turn observations) remain ordinary sensor
+parts.
+
+Dynamics enter through a normal pseudo-sensor rather than special filter code.
+Mount `ModelForce` at the IMU frame: its `specific_force` output predicts the
+compiled model's accelerometer sample, including actuator forces, fluid loads,
+lever-arm acceleration, and estimable disturbances. Feed the same raw
+accelerometer sample to that update and to strapdown prediction:
+
+```python
+from manta import INS, TargetNumpy
+from manta.parts import IMU, ModelForce
+
+imu = IMU("imu", accel_noise_sigma=6.9e-3,
+          gyro_noise_sigma=1e-3, accel_bias_sigma=1e-4,
+          gyro_bias_sigma=1e-5)
+craft.add(imu)
+craft.add(ModelForce("model_force", imu=imu,
+                     model_error_sigma=0.5))
+
+ins = TargetNumpy(INS(
+    world, imu="imu", sensors=["model_force.specific_force"],
+))
+sample = {"imu.accel": accel, "imu.gyro": gyro}
+ins.update("model_force.specific_force", accel, u=sample)
+ins.predict(dt, u=sample)
+```
+
+The innovation `r_f = f_IMU - f_model` has
+`∂r_f/∂δb_a = -I`: it is an accelerometer-bias and external-force
+disturbance observer, not generic model aiding. A `CraftWindBubble.wind`
+random-walk slot, for example, is retained when the compiled force prediction
+depends on it and can be estimated through this output.
+
+The IMU sample appears in both propagation and the force residual, so their
+noise is formally correlated. Manta follows the intended separated-noise
+regime and records/logs `rho = accel_noise_sigma / model_error_sigma` for each
+`ModelForce`. Manta does not impose a threshold: the acceptable range depends
+on the identified model error, spectra, operating envelope, and vehicle risk
+policy. Noise declarations are per sample. Convert an accelerometer noise
+density to the effective sample sigma at the logging interval before declaring
+it (for example `100 µg/√Hz / sqrt(20 ms) ≈ 6.9e-3 m/s²`).
+
+`observability`, `observability_trajectory(..., estimator=ins)`,
+`nees(..., estimator=ins)`, and `NoiseFit(..., estimator=ins)` consume the same
+estimator IR and sensor declarations. CasADi differentiates the complete INS
+tick to obtain `F`; finite differences are a test oracle, not a second
+hand-maintained Jacobian.
 
 ### System identification (Fit)
 

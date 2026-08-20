@@ -1,4 +1,4 @@
-"""manta — Python-first, CasADi-backed rigid-body sim + EKF.
+"""manta — Python-first, CasADi-backed vehicle modeling and estimation.
 
 Three layers:
 
@@ -8,8 +8,9 @@ Three layers:
      `Noise` channels at class scope.
 
   2. **Transform** — compile to symbolic + emit the typed Module IR.
-     `Sim(world)` linearizes the world tick; `EKF(world)` writes the
-     Kalman recursion over it; `LQR(world, …)` solves Riccati. Each
+     `Sim(world)` compiles the world tick; `EKF(world)` / `UKF(world)`
+     propagate it as dynamics-driven filters; `INS(world, imu=…)` uses
+     IMU strapdown propagation; `LQR(world, …)` solves Riccati. Each
      exposes `.module()` — a typed `Module` (state + kernels + entry
      points). None is directly callable.
 
@@ -91,6 +92,7 @@ from .couplings import Coupling
 from .craft import Craft
 from .estimation.ekf import EKF
 from .estimation.imu_integrator import IMUIntegrator
+from .estimation.ins import INS
 from .estimation.madgwick import Madgwick
 from .estimation.mahony import Mahony
 from .estimation.ukf import UKF
@@ -106,8 +108,8 @@ from .fit import (
     Window,
 )
 from .ir.state_spec import ALL, POSE, TWIST, SlotSet
-from .model_layout import state_spec_from_craft, state_spec_from_world
 from .model import ModelArtifact, ModelValidationReport
+from .model_layout import state_spec_from_craft, state_spec_from_world
 from .planets import Planet
 from .recurrence import RecurrenceBlock
 from .sim import Sim
@@ -116,10 +118,9 @@ from .world import World
 __all__ = [
     "ALL",
     "EKF",
+    "INS",
     "LQR",
     "MPC",
-    "ModelArtifact",
-    "ModelValidationReport",
     "PID",
     "POSE",
     "TWIST",
@@ -142,6 +143,8 @@ __all__ = [
     "MPCTimings",
     "Madgwick",
     "Mahony",
+    "ModelArtifact",
+    "ModelValidationReport",
     "NativeFilterReplay",
     "NoiseCheckpoint",
     "NoiseDriver",
@@ -155,8 +158,8 @@ __all__ = [
     "ReplayOperation",
     "ReplayPredict",
     "ReplayUpdate",
-    "SimCheckpoint",
     "Sim",
+    "SimCheckpoint",
     "SlotSet",
     "TargetCpp",
     "TargetFilterReplay",

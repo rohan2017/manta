@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -14,6 +15,8 @@ from ...estimation._kalman import joseph_update_np
 from ...ir._names import resolve_suffix
 from ...ir.module import entry_ident
 from ._runtime import NumpyRuntime
+
+_LOG = logging.getLogger(__name__)
 
 
 def _psd_roundoff_tolerance(matrix: np.ndarray) -> float:
@@ -95,6 +98,13 @@ class NumpyFilter(NumpyRuntime):
         super().__init__(module)
         self._Q: np.ndarray | None = None        # default process noise
         self._custom_h_cache: dict = {}          # h_sym -> (h_fn, H_fn)
+        for sensor, rho in module.metadata.get("rho_by_sensor", {}).items():
+            # rho is a useful dimensionless diagnostic, not a universal
+            # estimator-selection threshold. Its acceptable range depends on
+            # the identified model error, spectra, operating envelope, and
+            # application policy, none of which this generic runtime owns.
+            _LOG.info("%s disturbance-observer noise ratio rho[%s]=%.6g",
+                      module.name, sensor, rho)
 
     # ---- estimate access -------------------------------------------------
 
@@ -114,6 +124,11 @@ class NumpyFilter(NumpyRuntime):
     def time(self) -> float:
         """Current logical filter time (advanced only by ``predict``)."""
         return self._t
+
+    @property
+    def rho_by_sensor(self) -> dict[str, float]:
+        """INS IMU/model noise ratio diagnostics; empty for EKF/UKF."""
+        return dict(self.module.metadata.get("rho_by_sensor", {}))
 
     def state_dict(self) -> dict[str, dict[str, Any]]:
         """Current estimate nested by owner."""

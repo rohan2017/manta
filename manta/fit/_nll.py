@@ -45,18 +45,33 @@ import copy
 import casadi as ca
 import numpy as np
 
+from ..estimation._assembly import _resolve_estimator
 from ..estimation._kalman import (
-    joseph_update, lin_cov, require_active_R, symmetrize,
+    joseph_update,
+    lin_cov,
+    require_active_R,
+    symmetrize,
 )
 from ..ir._linalg import spd_logdet, spd_solve
-from ..ir.state_spec import flatten_nested
 from ..ir._names import resolve_suffix
+from ..ir.state_spec import flatten_nested
 from ..linearization import LinearizedSystem
 from ..model import ModelArtifact
 from ._common import (
-    Prior, Window, _FitBlock, convergence_line, decision_bounds,
-    expand_or_none, format_table, laplace_sigma, pack_u_trace, pack_x0,
-    prior_penalty, resolve_traces, solve_blocks_nlp, solver_converged,
+    Prior,
+    Window,
+    _FitBlock,
+    convergence_line,
+    decision_bounds,
+    expand_or_none,
+    format_table,
+    laplace_sigma,
+    pack_u_trace,
+    pack_x0,
+    prior_penalty,
+    resolve_traces,
+    solve_blocks_nlp,
+    solver_converged,
 )
 from ._report import derivation_report
 
@@ -66,7 +81,7 @@ class _Channel(_FitBlock):
     log-σ decision slot, and its prior. Always scalar (`dim == 1`), always
     log-space."""
 
-    __slots__ = ("spec", "decl_name", "alias")
+    __slots__ = ("alias", "decl_name", "spec")
 
     def __init__(self, spec, offset: int, prior: Prior | None) -> None:
         self.spec = spec
@@ -83,8 +98,7 @@ class _Channel(_FitBlock):
                 f"Noise declaration on {type(spec.owner).__name__}"
                 f"('{getattr(spec.owner, 'name', '?')}') — declarations: "
                 f"{sorted(spec.owner.noise_declarations())}.")
-        self.alias = (spec.full[:-len("_driver")]
-                      if spec.full.endswith("_driver") else spec.full)
+        self.alias = (spec.full.removesuffix("_driver"))
 
         mean = None if prior is None else prior.mean
         if mean is None:
@@ -235,22 +249,40 @@ class NoiseFit:
                   (log-space), `None` = flat.
         sensors — measurement outputs the filter consumes (default: all
                   with traces required in every window).
+        estimator — optional model-derived estimator transform. Supplying an
+                  INS reuses its strapdown transition, selected sensor set,
+                  IMU prediction inputs, and measurement-source mapping.
     """
 
     def __init__(self, world, noise: dict, *,
-                 sensors: list[str] | None = None) -> None:
+                 sensors: list[str] | None = None,
+                 estimator=None) -> None:
         source = world
         self.world = (world.world_copy()
                       if isinstance(world, ModelArtifact) else world)
-        self.sys = LinearizedSystem(source, sensors=sensors)
+        if estimator is None:
+            self.estimator = None
+            self.sys = LinearizedSystem(source, sensors=sensors)
+        else:
+            self.estimator = _resolve_estimator(source, estimator)
+            self.sys = self.estimator.sys
+            if sensors is not None:
+                chosen = {
+                    resolve_suffix(name, list(self.sys.sensors),
+                                   label="sensor", who="NoiseFit")
+                    for name in sensors
+                }
+                if chosen != set(self.sys.sensors):
+                    raise ValueError(
+                        "NoiseFit: when estimator= is supplied, select its "
+                        "sensor set on the estimator transform")
         self.model_world = self.sys.world
         sys = self.sys
 
         # Resolve requested channels against the tick's noise vector.
         aliases = []
         for spec in sys.noise_specs:
-            aliases.append(spec.full[:-len("_driver")]
-                           if spec.full.endswith("_driver") else spec.full)
+            aliases.append(spec.full.removesuffix("_driver"))
         chosen: dict[int, Prior | None] = {}
         for key, prior in noise.items():
             alias = resolve_suffix(key, aliases, label="noise channel",
@@ -294,7 +326,11 @@ class NoiseFit:
         sys = self.sys
         spec = sys.spec
         tan = spec.tangent_dim
-        n_u = len(sys.input_names)
+        # Most systems currently expose scalar controls, but estimator
+        # transforms may add vector-valued prediction inputs (INS adds the
+        # selected IMU's accel and gyro samples).  The symbolic width is the
+        # authoritative packed-u dimension; ``input_names`` counts fields.
+        n_u = int(sys.u_sym.numel())
         zdim = sum(s_.dim for s_ in sys.sensors.values())
 
         x_in = ca.MX.sym("x", spec.ambient_dim, 1)
@@ -436,16 +472,35 @@ class NoiseFit:
         """Pack one window: x0 (ambient), U (n_u,K), Z (Σdims,K)."""
         sys = self.sys
         sensor_fulls = list(sys.sensors)
-        dims = {full: sm.dim for full, sm in sys.sensors.items()}
-        traces, K = resolve_traces(w.z, sensor_fulls, dims, who="NoiseFit")
-        missing = set(sensor_fulls) - set(traces)
+        sources = ({} if self.estimator is None else
+                   dict(self.estimator.module().metadata.get(
+                       "measurement_sources", {})))
+        prediction = (() if self.estimator is None else
+                      tuple(self.estimator.module().metadata.get(
+                          "prediction_inputs", ())))
+        required = list(dict.fromkeys(
+            [sources.get(full, full) for full in sensor_fulls] + list(prediction)))
+        field_dims = {field.name: field.dim
+                      for field in getattr(sys, "input_fields", ())}
+        dims = {}
+        for name in required:
+            if name in field_dims:
+                dims[name] = field_dims[name]
+            else:
+                dims[name] = sys.sensors[name].dim
+        traces, K = resolve_traces(w.z, required, dims, who="NoiseFit")
+        missing = set(required) - set(traces)
         if missing:
             raise ValueError(
                 f"NoiseFit: window is missing trace(s) for "
-                f"{sorted(missing)} — every chosen sensor needs a trace "
+                f"{sorted(missing)} — every measurement source and "
+                f"prediction input needs a trace "
                 f"(restrict with sensors=[...]).")
-        Z = np.vstack([traces[f].T for f in sensor_fulls])
+        Z = np.vstack([traces[sources.get(f, f)].T for f in sensor_fulls])
         x0 = pack_x0(self.model_world, sys.spec, w)
-        U = pack_u_trace(w.u, sys.input_names, sys.u_defaults, K,
-                         who="NoiseFit")
+        recorded_inputs = dict(w.u)
+        recorded_inputs.update({name: traces[name] for name in prediction})
+        U = pack_u_trace(
+            recorded_inputs, sys.input_names, sys.u_defaults, K,
+            who="NoiseFit", input_fields=getattr(sys, "input_fields", None))
         return x0, U, Z, K
