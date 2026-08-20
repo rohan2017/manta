@@ -67,6 +67,7 @@ from .aero.drag_surface import DragSurface
 from .aero.fossen_damping import FossenDamping
 from .aero.rotational_drag import RotationalDrag
 from .disturbance.process_noise import ProcessNoise
+from .disturbance.wrench_process_noise import WrenchProcessNoise
 from .aero.aerofoil import Aerofoil, naca
 from .aero.control_surface import ControlSurface
 from .attachment.tether_endpoint import TetherEndpoint
@@ -147,6 +148,7 @@ __all__ = [
     "naca",
     "ControlSurface",
     "ProcessNoise",
+    "WrenchProcessNoise",
     "TetherEndpoint",
     "TrajectoryEndpoint",
     "TrajectorySample",

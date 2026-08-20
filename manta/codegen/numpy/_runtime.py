@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Iterable
+from typing import Any, Literal
 
 import numpy as np
 
 from ...ir.module import Hosting, Module, Role, StateRef
 from ...ir._names import resolve_suffix
 from ..target import resolve_args
-from ._compile import _compiled_functions
+from ._compile import _compiled_functions, compile_functions
 
 
 def _split(full: str) -> tuple[str, str]:
@@ -118,6 +119,30 @@ class NumpyRuntime:
     def _enable_compile(self) -> "NumpyRuntime":
         """Require `cc`-compiled externals (bit-identical, ~8x per call)."""
         self._functions = _compiled_functions(dict(self.module.functions))
+        return self
+
+    def compile_functions(
+        self,
+        function_names: Iterable[str],
+        *,
+        optimization: Literal["startup", "balanced", "runtime"] = "balanced",
+    ) -> "NumpyRuntime":
+        """Compile a selected hot subset of this runtime's kernels.
+
+        Large transforms need not make native execution all-or-nothing. A
+        rate loop can compile its dominant kernel while retaining interpreted
+        entry points that execute rarely. Selection is by stable Module
+        function identity, and a failure leaves the runtime unchanged.
+        """
+        names = tuple(dict.fromkeys(function_names))
+        if not names:
+            raise ValueError("compile_functions requires at least one function name")
+        unknown = sorted(set(names) - set(self.module.functions))
+        if unknown:
+            raise KeyError(f"unknown Module function(s) {unknown}")
+        selected = {name: self.module.functions[name] for name in names}
+        compiled = compile_functions(selected, optimization=optimization)
+        self._functions = {**self._functions, **compiled}
         return self
 
     # ---- kernel engine (typed-arg gather → call → scatter) -----------

@@ -62,6 +62,34 @@ def test_restore_rejects_bad_checkpoint_without_partial_mutation():
     assert filt.time == before.time
 
 
+def test_restore_accepts_psd_eigensolver_roundoff_at_covariance_scale():
+    filt = TargetNumpy(EKF(_world()))
+    before = filt.checkpoint()
+    covariance = np.eye(before.P.shape[0])
+    covariance[0, 0] = 1.0e6
+    covariance[-1, -1] = -1.0e-10
+    checkpoint = FilterCheckpoint(
+        before.x, covariance, before.time, before.artifact_id
+    )
+
+    filt.restore(checkpoint)
+    np.testing.assert_array_equal(filt.P, covariance)
+
+
+def test_restore_still_rejects_materially_indefinite_scaled_covariance():
+    filt = TargetNumpy(EKF(_world()))
+    before = filt.checkpoint()
+    covariance = np.eye(before.P.shape[0])
+    covariance[0, 0] = 1.0e6
+    covariance[-1, -1] = -1.0e-3
+    checkpoint = FilterCheckpoint(
+        before.x, covariance, before.time, before.artifact_id
+    )
+
+    with pytest.raises(ValueError, match="positive semidefinite"):
+        filt.restore(checkpoint)
+
+
 @pytest.mark.parametrize("estimator", [EKF, UKF])
 def test_same_order_replays_bit_for_bit(estimator):
     filt = TargetNumpy(estimator(_world(), gates=20.0))

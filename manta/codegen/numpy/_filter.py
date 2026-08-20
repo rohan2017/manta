@@ -16,6 +16,13 @@ from ...ir.module import entry_ident
 from ._runtime import NumpyRuntime
 
 
+def _psd_roundoff_tolerance(matrix: np.ndarray) -> float:
+    """Legacy absolute floor plus a scale-aware eigensolver error bound."""
+    dimension = matrix.shape[0]
+    scale = max(1.0, float(np.linalg.norm(matrix, ord=np.inf)))
+    return max(1e-12, 64.0 * np.finfo(float).eps * dimension * scale)
+
+
 @dataclass(frozen=True)
 class FilterCheckpoint:
     """Complete restart point for a filter runtime.
@@ -177,7 +184,7 @@ class NumpyFilter(NumpyRuntime):
             raise ValueError("restore: checkpoint contains non-finite values")
         if not np.allclose(P, P.T, rtol=1e-10, atol=1e-12):
             raise ValueError("restore: P must be symmetric")
-        if np.linalg.eigvalsh(P).min() < -1e-12:
+        if np.linalg.eigvalsh(P).min() < -_psd_roundoff_tolerance(P):
             raise ValueError("restore: P must be positive semidefinite")
         new_x, new_P = x.copy(), P.copy()
         self._state["x"], self._state["P"], self._t = new_x, new_P, t
@@ -333,12 +340,17 @@ class NumpyFilter(NumpyRuntime):
         if not np.allclose(matrix, matrix.T, rtol=1e-10, atol=1e-12):
             raise ValueError(f"{who}: must be symmetric")
         eigen_min = float(np.linalg.eigvalsh(matrix).min())
+        psd_tolerance = _psd_roundoff_tolerance(matrix)
         invalid = (eigen_min <= 0.0 if positive_definite
-                   else eigen_min < -1e-12)
+                   else eigen_min < -psd_tolerance)
         if invalid:
             relation = "positive definite" if positive_definite \
                 else "positive semidefinite"
-            raise ValueError(f"{who}: must be {relation}")
+            raise ValueError(
+                f"{who}: must be {relation} "
+                f"(minimum eigenvalue {eigen_min:.17g}, "
+                f"roundoff tolerance {psd_tolerance:.17g})"
+            )
         return matrix.copy()
 
     def _validate_staged_state(self, state: dict[str, np.ndarray]) -> None:

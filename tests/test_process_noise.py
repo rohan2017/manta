@@ -113,6 +113,43 @@ def test_process_noise_part_builds_Q_without_actuators():
     np.testing.assert_allclose(qw, (dt / 0.1) ** 2 * sigma_t ** 2, rtol=1e-6)
 
 
+def test_axis_resolved_wrench_noise_builds_anisotropic_auto_Q():
+    from manta.parts import WrenchProcessNoise
+
+    c = Craft("c")
+    c.add(Mass("body", mass=2.0, moi=(0.1, 0.2, 0.4)))
+    c.add(WrenchProcessNoise(
+        "pn",
+        force_noise_sigma=(0.2, 0.4, 0.6),
+        torque_noise_sigma=(0.01, 0.04, 0.12),
+    ))
+    c.add(PositionSensor("gps", position_noise_sigma=0.05))
+    w = World().add_field(GravityField(g=(0, 0, 0)))
+    w.add_craft(c, position=(0, 0, 0))
+    ekf = EKF(w)
+    runtime = TargetNumpy(ekf)
+    dt = 0.02
+    L = np.asarray(ekf.sys.L_fn(runtime.x, ekf.sys.u_defaults, dt, 0.0))
+    Q = L @ ekf.sys.Sigma @ L.T
+
+    velocity = ekf.spec.slot("c.velocity")
+    velocity_q = np.diag(Q)[
+        velocity.tangent_offset:velocity.tangent_offset + 3
+    ]
+    np.testing.assert_allclose(
+        velocity_q,
+        (dt / 2.0) ** 2 * np.square((0.2, 0.4, 0.6)),
+        rtol=1e-6,
+    )
+    angular = ekf.spec.slot("c.angular_velocity")
+    angular_q = np.diag(Q)[angular.tangent_offset:angular.tangent_offset + 3]
+    np.testing.assert_allclose(
+        angular_q,
+        np.square(dt * np.asarray((0.01, 0.04, 0.12)) / (0.1, 0.2, 0.4)),
+        rtol=1e-6,
+    )
+
+
 def test_process_noise_part_buffets_truth():
     """A NoiseDriver samples the channel: the drifting craft picks up
     motion a clean run doesn't have."""

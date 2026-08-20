@@ -38,7 +38,7 @@ class CompilationError(RuntimeError):
 
 def compile_functions(functions: dict[str, Any], *,
                       max_instructions: int | None = _MAX_INSTR,
-                      optimization: Literal["balanced", "runtime"] =
+                      optimization: Literal["startup", "balanced", "runtime"] =
                       "balanced") -> dict[str, Any]:
     """Compile an owned set of CasADi functions to cached C externals.
 
@@ -54,9 +54,9 @@ def compile_functions(functions: dict[str, Any], *,
     """
     if not functions:
         raise ValueError("compile_functions requires at least one function")
-    if optimization not in ("balanced", "runtime"):
+    if optimization not in ("startup", "balanced", "runtime"):
         raise ValueError(
-            "optimization must be 'balanced' or 'runtime'")
+            "optimization must be 'startup', 'balanced', or 'runtime'")
     return _compiled_functions(
         functions, max_instr=max_instructions, optimization=optimization,
     )
@@ -80,7 +80,9 @@ def _cache_dir() -> str:
 
 def _compiled_functions(functions: dict[str, Any], *,
                         max_instr: int | None = _MAX_INSTR,
-                        optimization: Literal["balanced", "runtime"] =
+                        optimization: Literal[
+                            "startup", "balanced", "runtime"
+                        ] =
                         "balanced") -> dict[str, Any]:
     """Return C externals keyed like ``functions`` or raise loudly.
 
@@ -118,10 +120,11 @@ def _compiled_functions(functions: dict[str, Any], *,
         except (OSError, RuntimeError) as exc:
             raise CompilationError(
                 f"native CasADi code generation failed: {exc}") from exc
-        compiler_flags = (
-            ("-O3", "-march=native")
-            if optimization == "runtime" else ("-O1",)
-        )
+        compiler_flags = {
+            "startup": ("-O0",),
+            "balanced": ("-O1",),
+            "runtime": ("-O3", "-march=native"),
+        }[optimization]
         # Generated libraries are cached and may stay around across software
         # updates.  Optimization and target-architecture flags are therefore
         # part of the identity, not merely build-time details.

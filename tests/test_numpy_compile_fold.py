@@ -122,3 +122,23 @@ def test_public_compile_functions_supports_owned_prototype_kernels(
     renamed = compile_functions({"renamed": fn})
     assert set(renamed) == {"renamed"}
     assert float(renamed["renamed"](4.0)) == pytest.approx(18.0)
+
+
+def test_runtime_can_compile_only_a_selected_hot_function(monkeypatch, tmp_path):
+    if shutil.which("cc") is None:
+        pytest.skip("no C compiler on PATH")
+    monkeypatch.setattr(_compile, "_cache_dir", lambda: str(tmp_path))
+    runtime = TargetNumpy(Sim(_world()))
+    before = dict(runtime._functions)
+
+    returned = runtime.compile_functions(("step",), optimization="startup")
+
+    assert returned is runtime
+    assert runtime._functions["step"].class_name() == "External"
+    assert all(
+        runtime._functions[name] is function
+        for name, function in before.items()
+        if name != "step"
+    )
+    with pytest.raises(KeyError, match="unknown Module function"):
+        runtime.compile_functions(("not_a_kernel",))

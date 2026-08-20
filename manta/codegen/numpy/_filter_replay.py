@@ -33,7 +33,11 @@ from ..._validation import require_positive
 from ...ir.module import Hosting, Role, StateRef, entry_ident
 from ..target import as_module
 from ._compile import CompilationError, _cache_dir
-from ._filter import FilterCheckpoint, UpdateResult
+from ._filter import (
+    FilterCheckpoint,
+    UpdateResult,
+    _psd_roundoff_tolerance,
+)
 from ._runtime import pack_fields
 
 
@@ -203,7 +207,7 @@ def _validate_checkpoint(module, checkpoint: FilterCheckpoint) -> FilterCheckpoi
         raise ValueError("filter replay checkpoint contains non-finite values")
     if not np.allclose(P, P.T, rtol=1e-10, atol=1e-12):
         raise ValueError("filter replay checkpoint covariance must be symmetric")
-    if np.linalg.eigvalsh(P).min() < -1e-12:
+    if np.linalg.eigvalsh(P).min() < -_psd_roundoff_tolerance(P):
         raise ValueError(
             "filter replay checkpoint covariance must be positive semidefinite"
         )
@@ -233,7 +237,7 @@ def _validate_process_covariance(value: Any, dim: int, *, name: str) -> np.ndarr
         raise ValueError(f"{name} contains non-finite values")
     if not np.allclose(array, array.T, rtol=1e-10, atol=1e-12):
         raise ValueError(f"{name} must be symmetric")
-    if np.linalg.eigvalsh(array).min() < -1e-12:
+    if np.linalg.eigvalsh(array).min() < -_psd_roundoff_tolerance(array):
         raise ValueError(f"{name} must be positive semidefinite")
     return array
 
