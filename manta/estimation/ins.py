@@ -640,6 +640,13 @@ class INS(_FilterBase):
             "measurement_sources": MappingProxyType(dict(sys.measurement_sources)),
             "rho_by_sensor": MappingProxyType(dict(sys.rho_by_sensor)),
             "lever_arm_m": tuple(float(v) for v in sys.lever_arm),
+            # The filter deliberately carries no angular-velocity state.
+            # Runtime adapters can still publish the current body rate from
+            # the selected gyro by applying this fixed rigid-mount rotation
+            # and subtracting the estimated bias.
+            "rotation_body_from_imu": tuple(
+                float(v) for v in sys.R_craft_from_sensor.reshape(-1)
+            ),
         }
         self._module = emit_filter_module(
             sys, spec, name=f"{sys.world.name}_ins", x0=x0,
