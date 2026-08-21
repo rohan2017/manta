@@ -358,7 +358,10 @@ class MPC:
         self._objective_map = self._objective.map(self.horizon)
         self._accepted_rollout_kernel = self._build_accepted_rollout_function()
         if compile:
-            from ..codegen.numpy import compile_functions
+            from ..codegen.numpy import (
+                DEFAULT_COMPILATION_TIMEOUT_S,
+                compile_functions,
+            )
             compiled = compile_functions(
                 {"attitude_horizon": self._attitude_map,
                  "objective_horizon": self._objective_map,
@@ -367,6 +370,7 @@ class MPC:
                  "accepted_rollout": self._accepted_rollout_kernel},
                 max_instructions=None,
                 optimization="runtime",
+                timeout_s=DEFAULT_COMPILATION_TIMEOUT_S,
             )
             self._attitude_map = compiled["attitude_horizon"]
             self._objective_map = compiled["objective_horizon"]

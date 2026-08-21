@@ -26,6 +26,7 @@ from .aero.aerofoil import Aerofoil, naca
 from .aero.control_surface import ControlSurface
 from .aero.drag_surface import DragSurface
 from .aero.fossen_damping import FossenDamping
+from .aero.projected_velocity_damping import ProjectedVelocityDamping
 from .aero.rotational_drag import RotationalDrag
 from .articulation.joint import (
     ArticulatedJoint,
@@ -43,6 +44,7 @@ from .attachment.trajectory_endpoint import (
 )
 from .base import CompositePart, Part, PartRole, RootPart
 from .disturbance.process_noise import ProcessNoise
+from .disturbance.constant_wrench import ConstantWrench
 from .disturbance.wrench_process_noise import WrenchProcessNoise
 from .electrical import (
     ConstantCurrentLoad,
@@ -97,6 +99,7 @@ __all__ = [
     "Collider",
     "CompositePart",
     "ConstantCurrentLoad",
+    "ConstantWrench",
     "ConstantPowerElectronicsLoad",
     "ConstantPowerLoad",
     "Contactor",
@@ -140,6 +143,7 @@ __all__ = [
     "PoweredThruster",
     "PrismaticJoint",
     "ProcessNoise",
+    "ProjectedVelocityDamping",
     "ProjectiveCamera",
     "RandomWalkNoise",
     "ResistiveLoad",

@@ -36,7 +36,11 @@ backend never mentions a transform.
 from __future__ import annotations
 
 from ...ir.module import ModuleKind
-from ._compile import CompilationError, compile_functions
+from ._compile import (
+    DEFAULT_COMPILATION_TIMEOUT_S,
+    CompilationError,
+    compile_functions,
+)
 from ._filter import FilterCheckpoint, NumpyFilter, UpdateResult
 from ._filter_replay import (
     FilterReplayProgram,
@@ -57,6 +61,7 @@ from ._sim import NumpySim, SimCheckpoint
 
 __all__ = [
     "CompilationError",
+    "DEFAULT_COMPILATION_TIMEOUT_S",
     "FilterCheckpoint",
     "FilterReplayProgram",
     "FilterReplayResult",
@@ -81,22 +86,54 @@ __all__ = [
 ]
 
 
-def TargetNumpy(x, *, compile: bool = False) -> NumpyRuntime:
+def TargetNumpy(
+    x,
+    *,
+    compile: bool = False,
+    optimization: str | None = None,
+    compile_timeout_s: float | None = DEFAULT_COMPILATION_TIMEOUT_S,
+) -> NumpyRuntime:
     """Lower a typed `Module` — or any transform exposing `.module()`
     (`Sim`, `EKF`, `LQR`, a recurrence block) — to the matching
     native-Python view (sim / filter / recurrence / regulator), or the
     bare kernel engine when no view matches.
 
-    `compile=True` builds the kernel's CasADi functions with `cc` and
-    calls them as externals instead of interpreting the MX graph
-    (bit-identical, ~8x per call; cached on disk). It raises
+    `compile=True` builds the kernel's CasADi functions with optimized native
+    code (O1 by default for full-simulation graphs, `-O3 -march=native` for
+    other runtime models). A caller may explicitly select O0, O1, or O2 for a
+    simulation whose compile/runtime tradeoff and cold-build ceiling are
+    scenario-specific. It
+    calls them as externals instead of interpreting the MX graph. Results are
+    cached on disk; the default cold-build deadline is five minutes, and a
+    simulation caller may replace or disable that deadline. It raises
     `CompilationError` if an external cannot be produced; explicit native
     execution never silently becomes interpretation. Pair with `NumpySim`'s
     `step_n` to fold substeps for a further amortization."""
     from ..target import as_module
     m = as_module(x, "TargetNumpy")
+    if (
+        optimization is not None
+        or compile_timeout_s != DEFAULT_COMPILATION_TIMEOUT_S
+    ):
+        if not compile:
+            raise ValueError(
+                "optimization and compile_timeout_s require compile=True"
+            )
+        if m.kind is not ModuleKind.SIMULATOR:
+            raise ValueError(
+                "explicit TargetNumpy compilation policy is only for simulation"
+            )
+    if optimization is not None:
+        if optimization not in {"O0", "O1", "O2"}:
+            raise ValueError("simulation optimization must be O0, O1, or O2")
     runtime = _select_view(m)(m)
-    return runtime._enable_compile() if compile else runtime
+    return (
+        runtime._enable_compile(
+            optimization=optimization,
+            timeout_s=compile_timeout_s,
+        )
+        if compile else runtime
+    )
 
 
 def _select_view(m):

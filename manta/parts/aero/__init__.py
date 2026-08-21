@@ -3,7 +3,16 @@ from .aerofoil import Aerofoil, naca
 from .control_surface import ControlSurface
 from .drag_surface import DragSurface
 from .fossen_damping import FossenDamping
+from .projected_velocity_damping import ProjectedVelocityDamping
 from .rotational_drag import RotationalDrag
 
-__all__ = ["AddedMass", "Aerofoil", "naca", "ControlSurface",
-           "DragSurface", "FossenDamping", "RotationalDrag"]
+__all__ = [
+    "AddedMass",
+    "Aerofoil",
+    "ControlSurface",
+    "DragSurface",
+    "FossenDamping",
+    "ProjectedVelocityDamping",
+    "RotationalDrag",
+    "naca",
+]

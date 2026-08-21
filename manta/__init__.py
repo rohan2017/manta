@@ -57,6 +57,7 @@ __version__ = _distribution_version("mantapilot")
 
 from . import ir, smoothing
 from .codegen import (
+    DEFAULT_COMPILATION_TIMEOUT_S,
     CompilationError,
     FilterCheckpoint,
     FilterReplayProgram,
@@ -127,6 +128,7 @@ __all__ = [
     "TWIST",
     "UKF",
     "CompilationError",
+    "DEFAULT_COMPILATION_TIMEOUT_S",
     "Coupling",
     "Craft",
     "CraftHorizonReference",

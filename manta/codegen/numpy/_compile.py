@@ -10,12 +10,14 @@ budget.
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import platform
 import shutil
 import subprocess
 import tempfile
 import threading
+import time
 from typing import Any, Literal
 
 import casadi as ca
@@ -30,16 +32,80 @@ _EXTERNAL_CACHE_LOCK = threading.Lock()
 # world tick is ~7k nodes -> hundreds of thousands of lines of C. Skip those
 # *before* codegen (which is itself slow for them) and stay interpreted.
 _MAX_INSTR = 3000
+# Native code is a deployment/readiness artifact, not work for a real-time
+# tick.  Give optimized CasADi kernels enough room to build, but never let a
+# malformed or pathologically large generated translation unit wait forever.
+DEFAULT_COMPILATION_TIMEOUT_S = 300.0
+Optimization = Literal[
+    "startup", "balanced", "runtime", "O0", "O1", "O2"
+]
 
 
 class CompilationError(RuntimeError):
     """A requested native kernel could not be produced or loaded."""
 
 
+def _toolchain_identity(
+    compiler: str,
+    compiler_flags: tuple[str, ...],
+    *,
+    timeout_s: float | None,
+) -> bytes:
+    """Return the compiler and native-target identity that owns a cache entry."""
+    probe_timeout = 5.0 if timeout_s is None else max(0.001, min(5.0, timeout_s))
+    try:
+        compiler_version = subprocess.run(
+            [compiler, "--version"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=probe_timeout,
+        ).stdout
+        compiler_target = subprocess.run(
+            [compiler, "-dumpmachine"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=probe_timeout,
+        ).stdout
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise CompilationError(
+            f"cannot identify native compiler {compiler!r}: {exc}"
+        ) from exc
+    identity = [
+        os.path.realpath(compiler),
+        compiler_version.strip(),
+        compiler_target.strip(),
+        platform.platform(),
+        platform.machine(),
+    ]
+    if "-march=native" in compiler_flags:
+        try:
+            with open("/proc/cpuinfo", encoding="utf-8") as stream:
+                stable_cpu_fields = {
+                    "vendor_id", "cpu family", "model", "model name",
+                    "stepping", "flags", "features", "isa", "uarch",
+                }
+                cpu_identity = "\n".join(sorted({
+                    line.strip()
+                    for line in stream
+                    if ":" in line
+                    and line.split(":", 1)[0].strip().lower()
+                    in stable_cpu_fields
+                }))
+        except OSError:
+            cpu_identity = platform.processor()
+        if not cpu_identity:
+            cpu_identity = platform.processor()
+        identity.append(cpu_identity)
+    return "\0".join(identity).encode()
+
+
 def compile_functions(functions: dict[str, Any], *,
                       max_instructions: int | None = _MAX_INSTR,
-                      optimization: Literal["startup", "balanced", "runtime"] =
-                      "balanced") -> dict[str, Any]:
+                      optimization: Optimization = "balanced",
+                      timeout_s: float | None = DEFAULT_COMPILATION_TIMEOUT_S,
+                      ) -> dict[str, Any]:
     """Compile an owned set of CasADi functions to cached C externals.
 
     This is the escape hatch for controller and estimator prototypes whose
@@ -54,11 +120,18 @@ def compile_functions(functions: dict[str, Any], *,
     """
     if not functions:
         raise ValueError("compile_functions requires at least one function")
-    if optimization not in ("startup", "balanced", "runtime"):
+    if optimization not in ("startup", "balanced", "runtime", "O0", "O1", "O2"):
         raise ValueError(
-            "optimization must be 'startup', 'balanced', or 'runtime'")
+            "optimization must be startup/balanced/runtime or O0/O1/O2")
+    if timeout_s is not None and (
+        not isinstance(timeout_s, (int, float))
+        or not math.isfinite(float(timeout_s))
+        or not 0.0 < float(timeout_s)
+    ):
+        raise ValueError("timeout_s must be a positive finite number")
     return _compiled_functions(
         functions, max_instr=max_instructions, optimization=optimization,
+        timeout_s=(None if timeout_s is None else float(timeout_s)),
     )
 
 
@@ -80,10 +153,9 @@ def _cache_dir() -> str:
 
 def _compiled_functions(functions: dict[str, Any], *,
                         max_instr: int | None = _MAX_INSTR,
-                        optimization: Literal[
-                            "startup", "balanced", "runtime"
-                        ] =
-                        "balanced") -> dict[str, Any]:
+                        optimization: Optimization = "balanced",
+                        timeout_s: float | None = DEFAULT_COMPILATION_TIMEOUT_S,
+                        ) -> dict[str, Any]:
     """Return C externals keyed like ``functions`` or raise loudly.
 
     `max_instr` is the cost-benefit gate, counted in MX nodes. The
@@ -92,6 +164,15 @@ def _compiled_functions(functions: dict[str, Any], *,
     interpretation ever saves. A specialized runtime with deliberately
     bounded kernels may override the gate after measuring its compile/runtime
     tradeoff."""
+    if timeout_s is not None and (
+        not isinstance(timeout_s, (int, float))
+        or not math.isfinite(float(timeout_s))
+        or not 0.0 < float(timeout_s)
+    ):
+        raise ValueError("timeout_s must be a positive finite number")
+    deadline = (
+        None if timeout_s is None else time.monotonic() + float(timeout_s)
+    )
     if max_instr is not None:
         instruction_count = sum(
             f.n_instructions() for f in functions.values())
@@ -120,17 +201,31 @@ def _compiled_functions(functions: dict[str, Any], *,
         except (OSError, RuntimeError) as exc:
             raise CompilationError(
                 f"native CasADi code generation failed: {exc}") from exc
+        remaining_s = (
+            None if deadline is None else deadline - time.monotonic()
+        )
+        if remaining_s is not None and remaining_s <= 0.0:
+            raise CompilationError(
+                f"native compilation exceeded the {float(timeout_s):g}-second "
+                "code-generation and compiler deadline"
+            )
         compiler_flags = {
             "startup": ("-O0",),
             "balanced": ("-O1",),
             "runtime": ("-O3", "-march=native"),
+            "O0": ("-O0",),
+            "O1": ("-O1",),
+            "O2": ("-O2",),
         }[optimization]
         # Generated libraries are cached and may stay around across software
         # updates.  Optimization and target-architecture flags are therefore
         # part of the identity, not merely build-time details.
+        toolchain_identity = _toolchain_identity(
+            compiler, compiler_flags, timeout_s=remaining_s
+        )
         source_key = hashlib.sha1(
             src.encode() + b"\0" + "\0".join(compiler_flags).encode()
-            + b"\0" + platform.platform().encode()
+            + b"\0" + toolchain_identity
         ).hexdigest()[:16]
         mapping_key = source_key + ":" + hashlib.sha1(
             "\0".join(
@@ -152,20 +247,27 @@ def _compiled_functions(functions: dict[str, Any], *,
             so_path = os.path.join(cache_dir, f"mod_{source_key}.so")
             try:
                 if not os.path.exists(so_path):
-                    # Generic transforms use -O1 because their huge
-                    # straight-line symbolic Jacobians make -O2/3 compile
-                    # time super-linear for little runtime gain. Deliberately
-                    # bounded, repeatedly evaluated controller kernels may
-                    # request the runtime profile instead.
+                    # Semantic profiles preserve existing callers. Full
+                    # simulations may request O0/O1/O2 explicitly; bounded,
+                    # repeatedly evaluated robot kernels request runtime.
                     # Build to a private temp
                     # path, then atomically publish — a concurrent process
                     # never dlopens a half-written .so.
                     so_tmp = os.path.join(tmp, f"mod_{source_key}.so")
+                    remaining_s = (
+                        None if deadline is None else deadline - time.monotonic()
+                    )
+                    if remaining_s is not None and remaining_s <= 0.0:
+                        raise CompilationError(
+                            "native compilation exceeded the "
+                            f"{float(timeout_s):g}-second code-generation "
+                            "and compiler deadline"
+                        )
                     subprocess.run(
                         [compiler, *compiler_flags, "-fPIC", "-shared",
                          os.path.join(tmp, "mod.c"), "-o", so_tmp],
                         check=True, capture_output=True,
-                        timeout=120 if optimization == "runtime" else 30)
+                        timeout=remaining_s)
                     # `/tmp` and the user cache are commonly different
                     # filesystems in containers and WSL. First copy into a
                     # private file *inside* the cache, then rename there; the
@@ -208,7 +310,7 @@ def _compiled_functions(functions: dict[str, Any], *,
             except subprocess.TimeoutExpired as exc:
                 raise CompilationError(
                     f"native compilation exceeded the {exc.timeout}-second "
-                    "compiler deadline") from exc
+                    "remaining code-generation and compiler deadline") from exc
             except OSError as exc:
                 raise CompilationError(
                     f"native compilation could not execute {compiler!r}: "

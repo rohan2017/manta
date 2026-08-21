@@ -1,7 +1,7 @@
 """TargetNumpy compilation + substep folding — both must be bit-identical
 to the plain interpreted sequential stepping.
 
-`compile=True` swaps the interpreted CasADi functions for `cc -O1`-built
+`compile=True` swaps the interpreted CasADi functions for target-optimized
 externals or raises an actionable compilation error;
 `NumpySim.step_n(dt, n)` folds n substeps through one `mapaccum` call. Neither
 may change the answer.
@@ -106,6 +106,58 @@ def test_explicit_compile_reports_the_cost_gate():
     fn = ca.Function("oversized_compile_probe", [x], [x + 1.0])
     with pytest.raises(CompilationError, match="above the configured limit"):
         _compile._compiled_functions({"probe": fn}, max_instr=0)
+
+
+@pytest.mark.parametrize("timeout_s", [0.0, -1.0, float("nan"), float("inf")])
+def test_explicit_compile_requires_a_positive_deadline(timeout_s):
+    x = ca.MX.sym("invalid_deadline_x")
+    fn = ca.Function("invalid_deadline_probe", [x], [x + 1.0])
+    with pytest.raises(ValueError, match="timeout_s"):
+        compile_functions({"probe": fn}, timeout_s=timeout_s)
+
+
+@pytest.mark.parametrize("optimization", ["O0", "O1", "O2"])
+def test_simulation_accepts_an_explicit_optimization_level(
+    monkeypatch, optimization
+):
+    selected = []
+
+    def record(functions, **options):
+        selected.append(options["optimization"])
+        return functions
+
+    monkeypatch.setattr(
+        "manta.codegen.numpy._runtime._compiled_functions", record
+    )
+    TargetNumpy(Sim(_world()), compile=True, optimization=optimization)
+    assert selected == [optimization]
+
+
+def test_explicit_optimization_requires_a_compiled_simulation():
+    with pytest.raises(ValueError, match="compile=True"):
+        TargetNumpy(Sim(_world()), optimization="O1")
+    with pytest.raises(ValueError, match="O0, O1, or O2"):
+        TargetNumpy(Sim(_world()), compile=True, optimization="O3")
+
+
+@pytest.mark.parametrize("timeout_s", [600.0, None])
+def test_simulation_compile_deadline_is_caller_owned(monkeypatch, timeout_s):
+    selected = []
+
+    def record(functions, **options):
+        selected.append(options["timeout_s"])
+        return functions
+
+    monkeypatch.setattr(
+        "manta.codegen.numpy._runtime._compiled_functions", record
+    )
+    TargetNumpy(
+        Sim(_world()),
+        compile=True,
+        optimization="O1",
+        compile_timeout_s=timeout_s,
+    )
+    assert selected == [timeout_s]
 
 
 def test_public_compile_functions_supports_owned_prototype_kernels(

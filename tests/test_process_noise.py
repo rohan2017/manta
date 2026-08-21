@@ -9,12 +9,18 @@ truth). Same machinery, both covariances model-derived.
 """
 
 import numpy as np
-
-from manta import (
-    Craft, EKF, LQR, NoiseDriver, Sim, TargetNumpy, World,
-)
 from manta.fields import GravityField
 from manta.parts import Mass, PositionSensor, ProcessNoise, Thruster
+
+from manta import (
+    EKF,
+    LQR,
+    Craft,
+    NoiseDriver,
+    Sim,
+    TargetNumpy,
+    World,
+)
 
 
 def _free_flyer(force_sigma):
@@ -148,6 +154,49 @@ def test_axis_resolved_wrench_noise_builds_anisotropic_auto_Q():
         np.square(dt * np.asarray((0.01, 0.04, 0.12)) / (0.1, 0.2, 0.4)),
         rtol=1e-6,
     )
+
+
+def test_correlated_wrench_covariance_survives_auto_q_assembly():
+    from manta.parts import WrenchProcessNoise
+
+    covariance = np.zeros((6, 6))
+    covariance[:2, :2] = ((0.16, 0.06), (0.06, 0.09))
+    c = Craft("c")
+    c.add(Mass("body", mass=2.0, moi=(0.1, 0.2, 0.4)))
+    c.add(WrenchProcessNoise("pn", wrench_noise_covariance=covariance))
+    c.add(PositionSensor("gps", position_noise_sigma=0.05))
+    world = World().add_field(GravityField(g=(0, 0, 0)))
+    world.add_craft(c)
+    ekf = EKF(world)
+    runtime = TargetNumpy(ekf)
+    dt = 0.02
+    L = np.asarray(ekf.sys.L_fn(runtime.x, ekf.sys.u_defaults, dt, 0.0))
+    Q = L @ ekf.sys.Sigma @ L.T
+    velocity = ekf.spec.slot("c.velocity")
+    sl = slice(velocity.tangent_offset, velocity.tangent_offset + 3)
+    np.testing.assert_allclose(
+        Q[sl, sl], (dt / 2.0) ** 2 * covariance[:3, :3], rtol=1e-6,
+        atol=1e-14,
+    )
+
+
+def test_correlated_wrench_covariance_contracts():
+    from manta.parts import WrenchProcessNoise
+
+    covariance = np.eye(6)
+    with np.testing.assert_raises_regex(ValueError, "mutually exclusive"):
+        WrenchProcessNoise(
+            "pn", force_noise_sigma=(1.0, 0.0, 0.0),
+            wrench_noise_covariance=covariance,
+        )
+    asymmetric = covariance.copy()
+    asymmetric[0, 1] = 0.5
+    with np.testing.assert_raises_regex(ValueError, "symmetric"):
+        WrenchProcessNoise("pn", wrench_noise_covariance=asymmetric)
+    indefinite = covariance.copy()
+    indefinite[0, 0] = -1.0
+    with np.testing.assert_raises_regex(ValueError, "positive semidefinite"):
+        WrenchProcessNoise("pn", wrench_noise_covariance=indefinite)
 
 
 def test_process_noise_part_buffets_truth():
