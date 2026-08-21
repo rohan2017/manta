@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import dataclass
+from itertools import pairwise
 from typing import Any, Literal
 
 import numpy as np
@@ -86,6 +88,51 @@ def unpack_fields(fields, vec) -> dict[str, Any]:
     return out
 
 
+@dataclass
+class _DenseEvaluationBuffer:
+    """Reusable native buffers for one dense CasADi function.
+
+    CasADi's ordinary Python call path materializes one ``DM`` object per
+    output and then converts every object back to NumPy. A simulation oracle
+    can expose hundreds of sensor ports from one plant tick, making that
+    language-boundary bookkeeping more expensive than the compiled dynamics.
+    ``FunctionBuffer`` writes those same dense outputs directly into one owned
+    NumPy allocation. The runtime remains the owner of typed validation and
+    scattering; only the transport across the native boundary changes.
+    """
+
+    memory: Any
+    evaluate: Any
+    result: np.ndarray
+    offsets: np.ndarray
+
+
+def _dense_evaluation_buffer(function: Any) -> _DenseEvaluationBuffer | None:
+    """Build a direct buffer when every CasADi input/output is dense.
+
+    Sparse matrices need their sparsity pattern expanded before they match a
+    Module port's dense shape, so the generic ``DM`` path remains authoritative
+    for them. Truth-plant ticks are dense and take this measured hot path.
+    """
+    if any(
+        function.nnz_in(index) != function.numel_in(index)
+        for index in range(function.n_in())
+    ) or any(
+        function.nnz_out(index) != function.numel_out(index)
+        for index in range(function.n_out())
+    ):
+        return None
+    memory, evaluate = function.buffer()
+    sizes = tuple(
+        int(function.numel_out(index)) for index in range(function.n_out())
+    )
+    offsets = np.cumsum((0, *sizes), dtype=np.int64)
+    result = np.empty(int(offsets[-1]), dtype=float)
+    for index, (start, end) in enumerate(pairwise(offsets)):
+        memory.set_res(index, memoryview(result[start:end]))
+    return _DenseEvaluationBuffer(memory, evaluate, result, offsets)
+
+
 class NumpyRuntime:
     """The generic engine over a typed `Module`: state storage + the
     typed-arg gather → kernel call → scatter. Views subclass it."""
@@ -113,6 +160,9 @@ class NumpyRuntime:
         self._x_port = module.sole_port(Role.STATE)
         self._param_port = module.sole_port(Role.PARAMETER)
         self._param_overrides: dict[str, np.ndarray] = {}
+        # Keyed by the actual ca.Function identity because selected functions
+        # may be replaced by compiled externals after construction.
+        self._evaluation_buffers: dict[int, _DenseEvaluationBuffer | None] = {}
 
         self._t = 0.0
 
@@ -177,8 +227,39 @@ class NumpyRuntime:
                 arg, who=f"{m.name}.{ep.method} argument {ref.name!r}",
                 size=expected_size))
         fn = self._functions[ep.fn]
-        res = fn(*checked_args)
-        outs = [res] if fn.n_out() == 1 else list(res)
+        buffer_key = id(fn)
+        if buffer_key not in self._evaluation_buffers:
+            self._evaluation_buffers[buffer_key] = _dense_evaluation_buffer(fn)
+        evaluation = self._evaluation_buffers[buffer_key]
+        buffered = evaluation is not None
+        if evaluation is None:
+            res = fn(*checked_args)
+            outs = [res] if fn.n_out() == 1 else list(res)
+        else:
+            # FunctionBuffer consumes column-major flat storage. Keeping these
+            # owned arrays alive through evaluate() also keeps every registered
+            # native pointer valid for the duration of the call.
+            input_buffers = [
+                np.asarray(arg, dtype=float).reshape(-1, order="F").copy()
+                for arg in checked_args
+            ]
+            for index, arg in enumerate(input_buffers):
+                evaluation.memory.set_arg(index, memoryview(arg))
+            evaluation.evaluate()
+            if evaluation.memory.ret() != 0:
+                raise RuntimeError(
+                    f"{m.name}.{ep.method}: kernel {ep.fn!r} returned "
+                    f"{evaluation.memory.ret()}"
+                )
+            if not np.all(np.isfinite(evaluation.result)):
+                raise ValueError(
+                    f"{m.name}.{ep.method}: kernel {ep.fn!r} produced "
+                    "non-finite values"
+                )
+            outs = [
+                evaluation.result[start:end]
+                for start, end in pairwise(evaluation.offsets)
+            ]
         expected = len(ep.writes) + len(ep.returns)
         if len(outs) != expected:
             raise RuntimeError(
@@ -191,20 +272,28 @@ class NumpyRuntime:
         ret: dict[str, np.ndarray] = {}
         for i, w in enumerate(ep.writes):
             fld = m.state.field(w)
-            arr = finite_array(
-                outs[i], who=f"{m.name}.{ep.method} state result {w!r}",
-                size=int(np.prod(fld.shape)))
-            val = (arr.reshape(fld.shape) if fld.kind == "matrix"
+            arr = (
+                np.asarray(outs[i], dtype=float).copy()
+                if buffered
+                else finite_array(
+                    outs[i], who=f"{m.name}.{ep.method} state result {w!r}",
+                    size=int(np.prod(fld.shape)))
+            )
+            val = (arr.reshape(fld.shape, order="F") if fld.kind == "matrix"
                    else arr.reshape(-1))
             staged_state[w] = val
             if threaded:                  # THREADED: writes go to the caller
                 ret[w] = val
         for name, o in zip(ep.returns, outs[len(ep.writes):]):
             port = m.port(name)
-            a = finite_array(
-                o, who=f"{m.name}.{ep.method} return {name!r}",
-                size=port.size)
-            ret[name] = (a.reshape(port.shape) if len(port.shape) == 2
+            a = (
+                np.asarray(o, dtype=float).copy()
+                if buffered
+                else finite_array(
+                    o, who=f"{m.name}.{ep.method} return {name!r}",
+                    size=port.size)
+            )
+            ret[name] = (a.reshape(port.shape, order="F") if len(port.shape) == 2
                          else a.reshape(-1))
         self._validate_staged_state(staged_state)
         self._state.update(staged_state)

@@ -186,6 +186,23 @@ def test_runtime_matches_direct_kernel():
     np.testing.assert_allclose(rt.P, np.asarray(P2d), atol=1e-14)
 
 
+def test_dense_kernel_buffer_returns_owned_results_across_calls():
+    """The low-overhead native boundary must not leak its reused allocation."""
+    runtime = TargetNumpy(Sim(_gps_world()[0]))
+    runtime.step(0.01)
+    first = runtime.outputs()["c"]["gps.position"]
+    snapshot = first.copy()
+
+    runtime.step(0.01)
+
+    np.testing.assert_array_equal(first, snapshot)
+    assert first is not runtime.outputs()["c"]["gps.position"]
+    assert any(
+        evaluation is not None
+        for evaluation in runtime._evaluation_buffers.values()
+    )
+
+
 def test_explicit_Q_override_matches_kernel():
     w, _ = _gps_world()
     ekf = EKF(w)
