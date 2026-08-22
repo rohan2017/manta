@@ -119,18 +119,20 @@ class DeclarationHost:
 
     def _apply_declarations(self, overrides: dict[str, Any]) -> None:
         decls = self._declarations()
-        # Noise declarations expose a per-instance `<name>_sigma`
-        # attribute. Recognize override keys of that form and route
-        # them to the matching declaration without reporting "unknown".
-        noise_sigma_keys = {
-            f"{n}_sigma" for n, d in decls.items() if isinstance(d, Noise)
+        # Noise declarations expose per-instance runtime attributes
+        # (`<name>_sigma`, and `<name>_tau` for Gauss–Markov channels).
+        # Recognize override keys of those forms and route them to the
+        # matching declaration without reporting "unknown".
+        noise_runtime_keys = {
+            attr for n, d in decls.items() if isinstance(d, Noise)
+            for attr in d.runtime_attributes(n)
         }
-        unknown = set(overrides) - set(decls) - noise_sigma_keys
+        unknown = set(overrides) - set(decls) - noise_runtime_keys
         if unknown:
             raise TypeError(
                 f"{type(self).__name__}({self.name!r}): unknown parameter(s) "
                 f"{sorted(unknown)}. Declared: "
-                f"{sorted(set(decls) | noise_sigma_keys)}")
+                f"{sorted(set(decls) | noise_runtime_keys)}")
         for attr_name, decl in decls.items():
             value = overrides.get(attr_name, decl.default)
             if isinstance(decl.default, str):
@@ -163,14 +165,13 @@ class DeclarationHost:
             # rebinds it to the symbolic input node.
             setattr(self, attr_name, value)
             if isinstance(decl, Noise):
-                sigma_key = f"{attr_name}_sigma"
-                sigma = require_positive(
-                    overrides.get(sigma_key, decl.sigma),
-                    name=(f"{type(self).__name__}({self.name!r})."
-                          f"{sigma_key}"),
-                    allow_zero=True,
-                )
-                setattr(self, sigma_key, sigma)
+                for key, (default, allow_zero) in \
+                        decl.runtime_attributes(attr_name).items():
+                    setattr(self, key, require_positive(
+                        overrides.get(key, default),
+                        name=f"{type(self).__name__}({self.name!r}).{key}",
+                        allow_zero=allow_zero,
+                    ))
 
     # The declaration accessors are INSTANCE methods: the default set is
     # class-scoped, but a host whose I/O is decided per instance (e.g. a

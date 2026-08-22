@@ -118,6 +118,12 @@ def test_one_rti_tick_obeys_bounds_and_shifts_a_finite_plan():
     assert result.nominal_states.shape == (9, mpc.nx)
     assert np.all(np.isfinite(result.nominal_states))
     assert result.timings.total_ms > 0.0
+    # Solver-side adjustments are declared, not hidden: the Tikhonov term
+    # the QP was solved under and how many bound projections moved values.
+    from manta.control.rti import HESSIAN_REGULARIZATION
+    assert result.hessian_regularization == HESSIAN_REGULARIZATION > 0.0
+    assert isinstance(result.clipped_controls, int)
+    assert result.clipped_controls == 0
     mpc.reset()
     assert mpc.last_result is None
     np.testing.assert_array_equal(mpc._U, 0.0)

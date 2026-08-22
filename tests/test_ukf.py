@@ -274,6 +274,33 @@ def test_ukf_degenerate_weights_raise():
         UKF(w, alpha=1e-3, kappa=-100.0)
 
 
+def test_ukf_auto_default_publishes_weights_and_declares_its_jitter_dependency():
+    """The auto spread's central covariance weight turns negative past
+    n ≈ 11. That regime is documented, published in the artifact, and
+    explicitly tied to the jitter backstop — never relied on silently."""
+    c = Craft("d")
+    c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
+    c.add(PositionSensor("gps", position_noise_sigma=0.05))
+    w = World(name="weights").add_field(GravityField(g=(0, 0, -9.81)))
+    w.add_craft(c)
+    ukf = UKF(w)                                  # n = 12 tangent
+    weights = ukf.sigma_weights
+    n = weights["tangent_dim"]
+    assert n == 12
+    assert weights["auto_alpha"]
+    assert weights["w_c0"] == pytest.approx((3 - n) / 3 + 3 - 3 / n)
+    assert weights["w_c0"] < 0.0
+    assert ukf.module().metadata["unscented"]["w_c0"] == weights["w_c0"]
+    with pytest.raises(ValueError, match="jitter must be > 0"):
+        UKF(w, jitter=0.0)
+    # With the backstop the iterated covariance stays SPD.
+    rt = TargetNumpy(ukf)
+    for _ in range(5):
+        rt.predict(0.01)
+        rt.update("gps.position", np.zeros(3))
+    assert np.linalg.eigvalsh(rt.P).min() > 0.0
+
+
 def test_ukf_explicit_negative_weight_tuning_warns():
     """An explicit small-alpha tuning (the old degenerate default) still
     builds, but warns that the covariance sums lose their PSD guarantee."""

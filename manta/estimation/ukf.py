@@ -63,6 +63,7 @@ from __future__ import annotations
 
 import math
 import warnings
+from types import MappingProxyType
 
 import casadi as ca
 
@@ -134,10 +135,16 @@ class UKF(_FilterBase):
 
         An *explicit* tuning that produces a negative central covariance
         weight (`w_c[0] < 0`) is accepted but warns: the covariance sums
-        lose their PSD guarantee and rely on the jitter backstop. (The
-        auto default accepts a mildly negative `w_c[0]` at large `n` —
-        the price of the bounded spread — which the sigma-point Joseph
-        update form and the jitter absorb.)
+        lose their PSD guarantee and rely on the jitter backstop. The auto
+        default produces a mildly negative `w_c[0]` once the tangent
+        dimension exceeds `n ≈ 11` (`w_c[0] = 3−n)/3 + 3 − 3/n`; the price
+        of the bounded √3·σ spread), which the sigma-point Joseph update
+        form and the jitter absorb. Either way the dependency is explicit:
+        a negative `w_c[0]` REQUIRES `jitter > 0` (construction refuses
+        `jitter=0` in that regime) and the resolved weights are published
+        as `UKF.sigma_weights` and in the Module metadata under
+        ``"unscented"`` so the tuning the artifact was built with is
+        inspectable.
 
         Unlike the EKF there is no `discretization` knob: the UKF pushes
         sigma points through the exact nonlinear discrete tick `f`, so the
@@ -165,6 +172,20 @@ class UKF(_FilterBase):
         Q = ca.MX.sym("Q", n_tan, n_tan)
 
         w_m, w_c, gamma = unscented_weights(n_tan, alpha, beta, kappa)
+        self.sigma_weights = MappingProxyType({
+            "alpha": float(alpha), "beta": float(beta), "kappa": float(kappa),
+            "gamma": float(gamma), "tangent_dim": int(n_tan),
+            "w_m0": float(w_m[0]), "w_c0": float(w_c[0]),
+            "w_i": float(w_m[1]), "jitter": float(jitter),
+            "auto_alpha": not explicit_alpha,
+        })
+        if w_c[0] < 0.0 and not jitter > 0.0:
+            raise ValueError(
+                f"UKF: alpha={alpha}, beta={beta}, kappa={kappa} give a "
+                f"negative central covariance weight (w_c[0] = {w_c[0]:.3g} "
+                f"at tangent dim {n_tan}); the covariance sums then rely on "
+                "the jitter backstop, so jitter must be > 0 (or choose a "
+                "tuning with w_c[0] >= 0)")
         if explicit_alpha and w_c[0] < 0.0:
             warnings.warn(
                 f"UKF: alpha={alpha}, beta={beta}, kappa={kappa} give a "
@@ -257,7 +278,8 @@ class UKF(_FilterBase):
             sys, spec, name=f"{world.name}_ukf", x0=x0,
             predict_fn=predict_fn, predict_q_fn=predict_q_fn,
             updates=updates, diagnostic_updates=diagnostic_updates,
-            override_updates=override_updates, gates=resolved_gates)
+            override_updates=override_updates, gates=resolved_gates,
+            metadata_extra={"unscented": self.sigma_weights})
 
     # module() / n_blocks / observability() / sigma_horizon() / __repr__
     # are the shared `_FilterBase` analysis tail (estimation/_assembly.py).

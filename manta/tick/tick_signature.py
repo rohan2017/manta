@@ -31,7 +31,8 @@ class InputChannel:
 
 @dataclass(frozen=True)
 class NoiseChannel:
-    """A stochastic Noise driver feeding the tick (white or RW)."""
+    """A stochastic Noise driver feeding the tick (white, random-walk, or
+    Gauss–Markov driver)."""
     full:  str        # tick input name
     owner: Any        # owning Part or Disturbance
     name:  str        # the driver-input sub-name

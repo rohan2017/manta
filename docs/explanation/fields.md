@@ -14,6 +14,11 @@ instance.
 - **One field per physical kind** — why `GravityField` is a single class
   and a planet's pull, a uniform background, and a body-pull are all
   *disturbances* on it.
+- **Gravity is declared, never inferred** — a World refuses to resolve
+  without a `GravityField` (a planet registers one). Zero-g is a modelling
+  decision, so a free-floating rigid body or an orbital test declares it
+  with `GravityField.none()`; an absent field is a configuration error, not
+  a weightless default.
 - **Combining** — most fields are a plain linear superposition (sum) of
   their disturbances (gravity, B-field). `FluidField` is richer: each
   disturbance has a `combining` role and a smooth spatial `membership`,

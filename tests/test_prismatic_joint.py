@@ -20,12 +20,13 @@ from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField
 from manta.parts import IMU, Mass, PrismaticJoint, RevoluteJoint
 
-
 G = 9.81
 
 
 def _sim(craft, fields=(), **overrides):
     w = World()
+    if not any(isinstance(f, GravityField) for f in fields):
+        w.add_field(GravityField.none())
     for f in fields:
         w.add_field(f)
     w.add_craft(craft, **overrides)

@@ -9,7 +9,11 @@ from manta.fields import GravityField
 from manta.ir.frames import PartFrame, WorldFrame
 from manta.ir.types import Quat, Vec3
 from manta.parts import (
-    LinearTrajectory, Mass, TrajectoryEndpoint, TrajectorySample, hover,
+    LinearTrajectory,
+    Mass,
+    TrajectoryEndpoint,
+    TrajectorySample,
+    hover,
 )
 
 
@@ -141,7 +145,7 @@ def test_endpoint_spring_acceleration_uses_true_mass():
     c.add(TrajectoryEndpoint("slew", trajectory=hover((0.0, 0.0, 0.0)),
                              mass=M, kp_pos=kp, kd_pos=0.0,
                              kp_att=0.0, kd_att=0.0))
-    w = World()
+    w = World().add_field(GravityField.none())
     w.add_craft(c, position=(1.0, 0.0, 0.0))
     sim = TargetNumpy(Sim(w))
     sim.step(dt)
@@ -158,7 +162,7 @@ def test_nested_endpoint_rejected_at_compile():
     j.add(Mass("rotor", mass=0.1, moi=(0.01, 0.01, 0.01),
                mount_offset=(0.1, 0.0, 0.0)))
     j.add(TrajectoryEndpoint("slew", trajectory=hover((0.0, 0.0, 0.0))))
-    w = World()
+    w = World().add_field(GravityField.none())
     w.add_craft(c)
     with pytest.raises(ValueError, match="craft root"):
         TargetNumpy(Sim(w))

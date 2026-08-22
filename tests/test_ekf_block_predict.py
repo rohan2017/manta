@@ -6,12 +6,12 @@ result is exactly the dense `F P Fᵀ + Q` when the partition is honored.
 
 import numpy as np
 
-from manta import World, TargetNumpy
+from manta import TargetNumpy, World
 from manta.craft import Craft
-from manta.fields import GravityField
 from manta.estimation import EKF
-from manta.parts.structure.mass import Mass
+from manta.fields import GravityField
 from manta.parts.sensor.position_sensor import PositionSensor
+from manta.parts.structure.mass import Mass
 
 
 def _gps_craft(name):
@@ -62,7 +62,7 @@ def test_tethered_crafts_are_one_block():
         return c
 
     a, b = craft("a"), craft("b")
-    w = World()
+    w = World().add_field(GravityField.none())
     w.add_craft(a, position=(0, 0, 0))
     w.add_craft(b, position=(5, 0, 0))
     w.add_coupling(Tether(a, "hook", b, "hook",

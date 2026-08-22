@@ -100,6 +100,8 @@ def _fields_struct(name, fields, *, with_init: bool) -> list[str]:
     out = [f"    struct {name} {{"]
     for f in fields:
         tp = S.eigen_vec_type(f.dim)
+        for line in getattr(f, "doc", "").splitlines():
+            out.append(f"        // {line}")
         if not with_init:
             out.append(f"        {tp} {_ident(f.name)};")
         elif f.dim == 1:

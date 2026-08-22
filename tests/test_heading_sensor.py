@@ -2,12 +2,13 @@ import math
 
 import numpy as np
 
-from manta import Craft, EKF, Sim, TargetNumpy, World
+from manta import EKF, Craft, Sim, TargetNumpy, World
+from manta.fields import GravityField
 from manta.parts import HeadingSensor, Mass
 
 
 def _world(heading_rad: float, *, noise_sigma: float = 0.0) -> World:
-    world = World()
+    world = World().add_field(GravityField.none())
     craft = Craft("craft")
     craft.add(Mass("body", mass=1.0))
     craft.add(HeadingSensor("phase_heading", heading_vector_noise_sigma=noise_sigma))

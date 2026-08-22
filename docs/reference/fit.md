@@ -10,9 +10,11 @@ for a worked recipe.
 
 ::: manta.FitResult
 
-`FitResult.derive(validation=...)` returns an immutable `ModelArtifact` with
-the source revision, objective, fitted values, and explicit held-out acceptance
-evidence. `apply()` remains the mutable alternative for iterative authoring.
+`FitResult.evidence(held_out, sensor=...)` computes the typed held-out
+evidence (below) on windows the fit never saw; `FitResult.derive(evidence=...)`
+returns an immutable `ModelArtifact` with the source revision, objective,
+fitted values, and that evidence. `apply()` remains the mutable alternative
+for iterative authoring.
 
 ## Noise fit
 
@@ -23,6 +25,33 @@ evidence. `apply()` remains the mutable alternative for iterative authoring.
 Noise fits support the same `derive()` / `apply()` split.
 
 ::: manta.FitDerivationReport
+
+## Held-out evidence
+
+The doctrine's artifact channel: a fitted model's held-out residual bias and
+its time-correlated process covariance are typed evidence that model-aided
+estimators consume explicitly — never an implicit zero. `hold_out` splits the
+log, `held_out_evidence` (or `FitResult.evidence` / `NoiseFitResult.evidence`)
+computes the artifact, `FitAcceptanceCriteria` declares the thresholds that
+decide `FitEvidence.accepted`, and `ModelForce(evidence=...)` consumes it.
+
+::: manta.fit.hold_out
+
+::: manta.fit.held_out_evidence
+
+::: manta.FitEvidence
+
+::: manta.AxisFitEvidence
+
+::: manta.ProcessNoiseModel
+
+::: manta.HeldOutWindow
+
+::: manta.FitAcceptanceCriteria
+
+::: manta.fit.AcceptanceCheck
+
+::: manta.fit.window_digest
 
 ## Inputs
 

@@ -8,11 +8,16 @@ disturbances onto the world fields so other craft feel or see them.
 import numpy as np
 import pytest
 
-from manta import Craft, EKF, Sim, TargetNumpy, World
+from manta import EKF, Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField, MagField, OpticalField
 from manta.parts import (
-    BBoxCamera, GravitySource, MagneticSource, Mass, Magnetometer,
-    OpticalSource, PositionSensor,
+    BBoxCamera,
+    GravitySource,
+    MagneticSource,
+    Magnetometer,
+    Mass,
+    OpticalSource,
+    PositionSensor,
 )
 
 
@@ -30,7 +35,7 @@ def _probe_with_camera(**cam_kw):
 def test_static_ellipsoid_box_centered_and_aspect():
     """An on-axis ellipsoid projects to a box centered in the image with
     an aspect ratio matching its semi-axes."""
-    w = World().add_field(
+    w = World().add_field(GravityField.none()).add_field(
         OpticalField().add_ellipsoid((0, 0, 10), (2.0, 1.0, 1.0), label=3))
     w.add_craft(_probe_with_camera(width=640, height=480, hfov_deg=70),
                 position=(0, 0, 0))
@@ -50,7 +55,7 @@ def test_static_ellipsoid_box_centered_and_aspect():
 def test_box_shrinks_with_distance():
     """Doubling the range halves the projected box size."""
     def box_w(dist):
-        w = World().add_field(
+        w = World().add_field(GravityField.none()).add_field(
             OpticalField().add_ellipsoid((0, 0, dist), (1.0, 1.0, 1.0)))
         w.add_craft(_probe_with_camera(), position=(0, 0, 0))
         sim = TargetNumpy(Sim(w)); sim.step(0.01)
@@ -62,7 +67,7 @@ def test_box_shrinks_with_distance():
 
 
 def test_behind_camera_not_visible():
-    w = World().add_field(
+    w = World().add_field(GravityField.none()).add_field(
         OpticalField().add_ellipsoid((0, 0, -10), (2.0, 1.0, 1.0)))
     w.add_craft(_probe_with_camera(), position=(0, 0, 0))
     sim = TargetNumpy(Sim(w)); sim.step(0.01)
@@ -74,7 +79,7 @@ def test_behind_camera_not_visible():
 def test_offscreen_not_visible():
     """An object in front of the camera but projecting outside the image
     rectangle reports vis = 0."""
-    w = World().add_field(
+    w = World().add_field(GravityField.none()).add_field(
         OpticalField().add_ellipsoid((100.0, 0, 5), (0.5, 0.5, 0.5)))
     w.add_craft(_probe_with_camera(width=640, height=480, hfov_deg=70),
                 position=(0, 0, 0))
@@ -88,7 +93,7 @@ def test_optical_source_tracks_moving_target():
     """A target carrying an OpticalSource is seen by another craft's
     camera, and its box shifts as the target moves laterally."""
     def box_center_x(tx):
-        w = World().add_field(OpticalField())
+        w = World().add_field(GravityField.none()).add_field(OpticalField())
         w.add_craft(_probe_with_camera(), position=(0, 0, 0))
         tgt = Craft("target"); tgt.add(Mass("b", mass=1.0))
         tgt.add(OpticalSource("hull", semi_axes=(2, 1, 1), label=7))
@@ -108,7 +113,7 @@ def test_camera_does_not_see_own_craft():
     c.add(Mass("body", mass=1.0))
     c.add(BBoxCamera("cam"))
     c.add(OpticalSource("self", semi_axes=(1, 1, 1)))
-    w = World().add_field(OpticalField())
+    w = World().add_field(GravityField.none()).add_field(OpticalField())
     w.add_craft(c, position=(0, 0, 0))
     sim = TargetNumpy(Sim(w)); sim.step(0.01)
     o = sim.outputs().get("solo", {})
@@ -135,7 +140,7 @@ def test_gravity_source_pulls_other_craft():
 
 def test_magnetic_source_on_axis_dipole():
     """On-axis field of a body dipole: B = 2·μ₀/4π·m/r³."""
-    w = World().add_field(MagField())
+    w = World().add_field(GravityField.none()).add_field(MagField())
     a = Craft("a"); a.add(Mass("b", mass=1.0)); a.add(Magnetometer("mag"))
     b = Craft("bee"); b.add(Mass("b", mass=1.0))
     b.add(MagneticSource("motor", moment=(0, 0, 0.5)))
@@ -151,7 +156,7 @@ def test_magnetic_source_on_axis_dipole():
 def test_magnetic_source_moment_rotates_with_craft():
     """A body-fixed moment turns with its craft, so the reading changes."""
     def reading(orientation):
-        w = World().add_field(MagField())
+        w = World().add_field(GravityField.none()).add_field(MagField())
         a = Craft("a"); a.add(Mass("b", mass=1.0)); a.add(Magnetometer("mag"))
         b = Craft("bee"); b.add(Mass("b", mass=1.0))
         b.add(MagneticSource("motor", moment=(0, 0, 0.5)))
@@ -173,7 +178,7 @@ def test_magnetic_source_moment_rotates_with_craft():
 def test_source_registration_idempotent():
     """Building two transforms over one world must not double-register
     the emitted disturbances."""
-    w = World().add_field(OpticalField())
+    w = World().add_field(GravityField.none()).add_field(OpticalField())
     p = _probe_with_camera(); w.add_craft(p, position=(0, 0, 0))
     tgt = Craft("t"); tgt.add(Mass("b", mass=1.0))
     tgt.add(OpticalSource("hull", semi_axes=(1, 1, 1)))
@@ -191,7 +196,7 @@ def test_source_registration_idempotent():
 def test_field_source_adds_no_wrench():
     """A source is a pure emitter — it must not perturb its carrier's
     dynamics (a free body stays put)."""
-    w = World().add_field(MagField())
+    w = World().add_field(GravityField.none()).add_field(MagField())
     c = Craft("c"); c.add(Mass("b", mass=1.0))
     c.add(MagneticSource("motor", moment=(0, 0, 0.5)))
     w.add_craft(c, position=(0, 0, 0))

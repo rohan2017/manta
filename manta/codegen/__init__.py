@@ -29,6 +29,7 @@ Adding a backend = translate a `ca.Function` + one generic lowering of a
 from .cpp import TargetCpp
 from .numpy import (
     DEFAULT_COMPILATION_TIMEOUT_S,
+    DEFAULT_MAX_INSTRUCTIONS,
     CompilationError,
     FilterCheckpoint,
     FilterReplayProgram,
@@ -66,6 +67,7 @@ def TargetJax(x):
 
 __all__ = [
     "DEFAULT_COMPILATION_TIMEOUT_S",
+    "DEFAULT_MAX_INSTRUCTIONS",
     "CompilationError",
     "FilterCheckpoint",
     "FilterReplayProgram",

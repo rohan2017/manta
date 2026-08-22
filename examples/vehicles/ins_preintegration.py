@@ -20,7 +20,7 @@ import numpy as np
 
 from manta import INS, IMUPreintegrator, TargetCpp, TargetNumpy
 
-from .ins_vs_ekf import build_world
+from .ins_vs_ekf import build_world, calibrate_model_force
 
 
 def _imu_sample(t: float) -> tuple[np.ndarray, np.ndarray]:
@@ -34,9 +34,11 @@ def _imu_sample(t: float) -> tuple[np.ndarray, np.ndarray]:
     return accel, gyro
 
 
-def _ins(*, propagation: str):
+def _ins(*, propagation: str, evidence):
+    # The reduced model's ModelForce carries the identified held-out
+    # evidence for its accelerometer residual; INS refuses it otherwise.
     return INS(
-        build_world(truth=False), imu="auv.imu",
+        build_world(truth=False, evidence=evidence), imu="auv.imu",
         sensors=["auv.model_force.specific_force"],
         propagation=propagation,
     )
@@ -51,8 +53,10 @@ def run(*, duration: float = 2.0, imu_rate: float = 500.0,
     if samples_per_packet < 1 or not np.isclose(ratio, samples_per_packet):
         raise ValueError("imu_rate must be an integer multiple of filter_rate")
 
-    raw = TargetNumpy(_ins(propagation="raw"))
-    packet_ins = TargetNumpy(_ins(propagation="preintegrated"))
+    evidence = calibrate_model_force(seed=7, dt=1.0 / filter_rate)
+    raw = TargetNumpy(_ins(propagation="raw", evidence=evidence))
+    packet_ins = TargetNumpy(_ins(propagation="preintegrated",
+                                  evidence=evidence))
     preintegrator = TargetNumpy(IMUPreintegrator(
         # Set these to the calibrated continuous densities for real data.
         accel_noise_density=0.0,
@@ -100,8 +104,9 @@ def emit_cpp(directory: Path) -> None:
     directory.mkdir(parents=True, exist_ok=True)
     TargetCpp(IMUPreintegrator(), directory / "mcu",
               class_name="ImuPreintegrator")
-    TargetCpp(_ins(propagation="preintegrated"), directory / "main",
-              class_name="PreintegratedIns")
+    evidence = calibrate_model_force(seed=7, dt=0.02)
+    TargetCpp(_ins(propagation="preintegrated", evidence=evidence),
+              directory / "main", class_name="PreintegratedIns")
     print(f"generated MCU recurrence: {directory / 'mcu'}")
     print(f"generated main filter:    {directory / 'main'}")
 

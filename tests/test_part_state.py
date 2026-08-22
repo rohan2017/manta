@@ -8,16 +8,15 @@ unified replacement for the v1 FlywheelMotor + SpinningRotor combo.
 import numpy as np
 import pytest
 
-from manta.craft import Craft
 from manta import Sim, TargetNumpy, World
+from manta.craft import Craft
 from manta.fields import GravityField
 from manta.parts import (
-    RevoluteJoint,
     Mass,
     PartUpdate,
+    RevoluteJoint,
     State,
 )
-
 
 # ---------------------------------------------------------------------------
 # RevoluteJoint(passive) — kinematic spin via initial rate
@@ -168,8 +167,16 @@ def test_joint_accepts_any_part_child():
     """Any Part rides a rotor — the framework expresses each child's ctx in
     its spinning frame and rotates its wrench back to the body, so no part
     needs special handling. There is no longer an allowlist."""
-    from manta.parts import IMU, Thruster, VelocitySensor, Magnetometer, DragSurface
-    from manta.parts import PointBuoy, Collider, PositionSensor
+    from manta.parts import (
+        IMU,
+        Collider,
+        DragSurface,
+        Magnetometer,
+        PointBuoy,
+        PositionSensor,
+        Thruster,
+        VelocitySensor,
+    )
     j = RevoluteJoint("axle", mode="passive")
     for part in (Mass("rotor", mass=0.1), IMU("imu"), Thruster("jet"),
                  VelocitySensor("vel"), Magnetometer("mag"), DragSurface("fin"),
@@ -225,7 +232,7 @@ def test_unknown_state_slot_raises():
     c = Craft("bad")
     c.add(Mass("m", mass=1.0))
     c.add(BadPart("bad"))
-    w = World()
+    w = World().add_field(GravityField.none())
     w.add_craft(c)
     with pytest.raises(KeyError, match="unknown state slot"):
         Sim(w)

@@ -14,9 +14,11 @@ from ...ir._names import resolve_suffix
 from ..target import resolve_args
 from ._compile import (
     DEFAULT_COMPILATION_TIMEOUT_S,
+    DEFAULT_MAX_INSTRUCTIONS,
     Optimization,
     _compiled_functions,
     compile_functions,
+    validate_max_instructions,
 )
 
 
@@ -176,19 +178,22 @@ class NumpyRuntime:
         *,
         optimization: Optimization | None = None,
         timeout_s: float | None = DEFAULT_COMPILATION_TIMEOUT_S,
+        max_instructions: int | None = DEFAULT_MAX_INSTRUCTIONS,
     ) -> "NumpyRuntime":
         """Require optimized ``cc`` externals for every kernel.
 
         Full simulator translation units can contain several vehicles and
         hundreds of output channels. Use O1 by default for those truth graphs,
         while allowing their caller to choose O0/O1/O2; smaller runtime models
-        receive the target-native runtime profile.
+        receive the target-native runtime profile. ``max_instructions`` is
+        the owner-declared size gate (``None`` disables it).
         """
         selected: Optimization = optimization or (
             "O1" if self.module.kind is ModuleKind.SIMULATOR else "runtime"
         )
         self._functions = _compiled_functions(
             dict(self.module.functions),
+            max_instr=validate_max_instructions(max_instructions),
             optimization=selected,
             timeout_s=timeout_s,
         )
@@ -200,6 +205,7 @@ class NumpyRuntime:
         *,
         optimization: Optimization = "balanced",
         timeout_s: float = DEFAULT_COMPILATION_TIMEOUT_S,
+        max_instructions: int | None = DEFAULT_MAX_INSTRUCTIONS,
     ) -> "NumpyRuntime":
         """Compile a selected hot subset of this runtime's kernels.
 
@@ -207,6 +213,7 @@ class NumpyRuntime:
         rate loop can compile its dominant kernel while retaining interpreted
         entry points that execute rarely. Selection is by stable Module
         function identity, and a failure leaves the runtime unchanged.
+        ``max_instructions`` raises or disables (``None``) the size gate.
         """
         names = tuple(dict.fromkeys(function_names))
         if not names:
@@ -216,7 +223,8 @@ class NumpyRuntime:
             raise KeyError(f"unknown Module function(s) {unknown}")
         selected = {name: self.module.functions[name] for name in names}
         compiled = compile_functions(
-            selected, optimization=optimization, timeout_s=timeout_s
+            selected, max_instructions=max_instructions,
+            optimization=optimization, timeout_s=timeout_s,
         )
         self._functions = {**self._functions, **compiled}
         return self

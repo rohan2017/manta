@@ -25,6 +25,41 @@ controls + measurements to recover physical parameters.
   (innovation-NLL σ) — and why σ can't be L2-fit.
 - Pitfalls: whiten sensors before fitting; `OP_OUTPUT` must snapshot.
 
+## Held-out evidence and the derived artifact
+
+Split the log **before** fitting and never let the held-out tail into a
+fit; the evidence is computed there alone:
+
+```python
+from manta import Fit, NoiseFit, hold_out
+from manta.fit import FitAcceptanceCriteria
+
+training, held_out = hold_out(windows, fraction=0.3)
+result = Fit(world, parameters={...}).solve(training)
+physics = result.derive(
+    evidence=result.evidence(held_out, sensor="imu.accel"))
+nresult = NoiseFit(physics, noise={...}).solve(training)
+evidence = nresult.evidence(
+    held_out, sensor="imu.accel",
+    criteria=FitAcceptanceCriteria(max_bias_ratio=0.5,
+                                   max_autocorrelation_rmse=0.15,
+                                   min_samples=200))
+print(evidence.summary())
+model = nresult.derive(evidence=evidence)     # ModelArtifact, hashed with it
+```
+
+[`FitEvidence`][manta.FitEvidence] records, per residual axis, the held-out
+mean residual (bias) with its standard error, the white per-sample floor,
+and the fitted process-noise model: a Gauss–Markov `tau`/`sigma` when the
+residual is time-correlated, otherwise a white model with the fallback and
+its reason written down (`white_fallback_reason`). `accepted` is computed
+from the declared [`FitAcceptanceCriteria`][manta.FitAcceptanceCriteria] —
+it cannot be set by hand, and a window that entered the fit is refused as
+held-out data. `derive()` without evidence still works for exploratory
+loops but yields a visibly unaccepted revision; a model-aided
+[`INS`][manta.INS] refuses a [`ModelForce`][manta.parts.ModelForce] built
+without accepted evidence.
+
 ## Known limitation: every `Window` needs a trusted `x0`
 
 The fit's decision vector contains **only the promoted parameters** —

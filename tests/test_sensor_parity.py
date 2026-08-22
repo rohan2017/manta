@@ -10,11 +10,10 @@ import casadi as ca
 import numpy as np
 
 from manta import Craft, Sim, TargetNumpy, World
-from manta.fields import DipoleMag, MagField, UniformMag, GravityField
+from manta.fields import DipoleMag, GravityField, MagField, UniformMag
 from manta.ir.frames import WorldFrame
 from manta.ir.types import Vec3
-from manta.parts import VelocitySensor, Magnetometer, Mass
-
+from manta.parts import Magnetometer, Mass, VelocitySensor
 
 # ---------------------------------------------------------------------------
 # VelocitySensor
@@ -129,7 +128,7 @@ def test_magnetometer_reads_uniform_field_when_unrotated():
     c = Craft("mag_craft")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(Magnetometer("m"))
-    w = World().add_field(MagField().add_uniform((1.0, 2.0, 3.0)))
+    w = World().add_field(GravityField.none()).add_field(MagField().add_uniform((1.0, 2.0, 3.0)))
     w.add_craft(c)
     cw = TargetNumpy(Sim(w))
     cw.step(0.001)
@@ -144,7 +143,7 @@ def test_magnetometer_reads_rotated_field_under_craft_rotation():
     c = Craft("mag_rot")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(Magnetometer("m"))
-    w = World().add_field(MagField().add_uniform((1.0, 0.0, 0.0)))
+    w = World().add_field(GravityField.none()).add_field(MagField().add_uniform((1.0, 0.0, 0.0)))
     w.add_craft(c, orientation=(np.cos(np.pi/4), 0, 0, np.sin(np.pi/4)))
     cw = TargetNumpy(Sim(w))
     cw.step(0.001)
@@ -175,7 +174,7 @@ def test_magnetometer_picks_up_dipole_at_local_position():
     m = 1.0e23
     mf.add(DipoleMag(position=(0, 0, 0), moment=(0.0, 0.0, m), eps=0.0))
 
-    w = World().add_field(mf)
+    w = World().add_field(GravityField.none()).add_field(mf)
     c = Craft("orbiter")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(Magnetometer("m"))
@@ -201,7 +200,7 @@ def test_magnetometer_samples_at_single_mount_offset():
         c = Craft("c")
         c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
         c.add(Magnetometer("mag", mount_offset=(0.0, 0.0, offset)))
-        w = World().add_field(mf)
+        w = World().add_field(GravityField.none()).add_field(mf)
         w.add_craft(c, position=(0, 0, craft_z))
         sim = TargetNumpy(Sim(w))
         sim.step(1e-3)

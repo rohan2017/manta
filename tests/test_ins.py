@@ -1,18 +1,61 @@
 """Strapdown INS transform and model-force disturbance observation."""
 
 import logging
+import warnings
 
 import casadi as ca
 import numpy as np
+import pytest
 
 from manta import INS, Craft, NoiseFit, Prior, TargetNumpy, Window, World
 from manta.estimation import nees, observability_trajectory
+from manta.estimation.ins import (
+    MODEL_FORCE_RHO_CEILING,
+    MODEL_FORCE_RHO_WARNING,
+)
 from manta.fields import CraftWindBubble, FluidField, GravityField
+from manta.fit import (
+    AxisFitEvidence,
+    FitAcceptanceCriteria,
+    FitEvidence,
+    HeldOutWindow,
+    ProcessNoiseModel,
+)
 from manta.parts import IMU, DragSurface, Mass, ModelForce
 
 
+def _evidence(*, white_sigma=0.5, gm=(0.2, 2.0), bias=(0.0, 0.0, 0.0),
+              channel="craft.imu.accel", criteria=None):
+    """Hand-built held-out evidence on the IMU accelerometer channel:
+    a white floor per axis, an optional Gauss–Markov (σ, τ) component, and
+    a per-axis bias. `criteria` lets a test force the acceptance decision
+    either way; the decision itself is always the criteria's."""
+    axes = []
+    for axis, b in zip("xyz", bias):
+        if gm is None:
+            model = ProcessNoiseModel("white", white_sigma)
+            fallback, reason = True, "fitted correlation time below dt"
+        else:
+            model = ProcessNoiseModel("gauss_markov", gm[0], gm[1])
+            fallback, reason = False, None
+        axes.append(AxisFitEvidence(
+            axis=axis, sample_count=600, residual_bias=b,
+            residual_bias_stderr=0.01, residual_rms=white_sigma,
+            lag_one_autocorrelation=0.5, lag_count=20, fitted_tau=2.0,
+            fitted_correlated_fraction=0.5, correlation_chi2=40.0,
+            correlation_chi2_limit=9.21, white_floor_fraction=0.04, noise_model=model,
+            white_sigma=white_sigma, autocorrelation_rmse=0.04,
+            white_fallback=fallback, white_fallback_reason=reason))
+    return FitEvidence.evaluate(
+        channel=channel, held_out=HeldOutWindow(2, 600, 0.02, ("w0", "w1")),
+        axes=axes, criteria=criteria)
+
+
+DEFAULT_EVIDENCE = _evidence()
+
+
 def _world(*, lever=(0.0, 0.0, 0.0), angular_velocity=(0.0, 0.0, 0.0),
-           wind=False):
+           wind=False, evidence=DEFAULT_EVIDENCE):
     craft = Craft("craft")
     craft.add(Mass("body", mass=2.0, moi=(1.0, 1.0, 1.0)))
     imu = IMU(
@@ -22,8 +65,7 @@ def _world(*, lever=(0.0, 0.0, 0.0), angular_velocity=(0.0, 0.0, 0.0),
     )
     craft.add(imu)
     craft.add(ModelForce(
-        "model_force", imu=imu, mount_offset=lever,
-        model_error_sigma=0.5,
+        "model_force", imu=imu, mount_offset=lever, evidence=evidence,
     ))
     world = World("ins_test").add_field(GravityField(g=(0.0, 0.0, -9.81)))
     if wind:
@@ -48,6 +90,10 @@ def test_ins_state_has_navigation_biases_but_no_angular_velocity():
     assert {
         "craft.position", "craft.orientation", "craft.velocity",
         "craft.imu.gyro_bias", "craft.imu.accel_bias",
+        # The evidence's Gauss–Markov model error is filter state.
+        "craft.model_force.model_error_correlated_x",
+        "craft.model_force.model_error_correlated_y",
+        "craft.model_force.model_error_correlated_z",
     } <= names
     assert "craft.angular_velocity" not in names
     assert ins.module().metadata["prediction_inputs"] == (
@@ -134,17 +180,119 @@ def test_rho_is_artifact_metadata_and_runtime_diagnostic():
     assert TargetNumpy(ins).rho_by_sensor == expected
 
 
-def test_rho_has_no_hard_coded_warning_threshold(caplog):
-    world = _world()
-    model_force = next(
-        part for part in world.crafts[0].parts if isinstance(part, ModelForce))
-    model_force.model_error_sigma = 0.01  # rho = 1: intentionally arbitrary
+def _world_with_rho(rho: float):
+    # accel_noise_sigma = 0.01; the white model-error floor is evidence.
+    return _world(evidence=_evidence(white_sigma=0.01 / rho))
+
+
+def test_model_force_error_model_is_built_from_the_evidence():
+    evidence = _evidence(white_sigma=0.4, gm=(0.3, 1.5), bias=(0.1, -0.2, 0.05))
+    world = _world(evidence=evidence)
+    part = next(p for p in world.crafts[0].parts if isinstance(p, ModelForce))
+    assert part.evidence is evidence
+    assert part.white_sigmas == (0.4, 0.4, 0.4)
+    assert part.correlated_sigmas == (0.3, 0.3, 0.3)
+    assert part.correlated_taus == (1.5, 1.5, 1.5)
+    assert part.residual_bias == (0.1, -0.2, 0.05)
+    ins = _ins(world)
+    # The held-out bias is a deterministic correction of h, not a state.
+    # At the initial state the craft is in free fall (specific force 0),
+    # accel_bias = 0 and the correlated slots start at 0, so h(x0) = bias.
+    sys = ins.sys
+    sm = sys.sensors["craft.model_force.specific_force"]
+    h_fn = ca.Function("h", [sys.x_sym, sys.u_sym, sys.dt_sym, sys.t_sym],
+                       [sm.h_sym])
+    x0 = ins.module().state.field("x").init
+    h = np.asarray(h_fn(x0, sys.u_defaults, 0.0, 0.0), dtype=float).ravel()
+    np.testing.assert_allclose(h, (0.1, -0.2, 0.05), atol=1e-12)
+    assert "craft.model_force.residual_bias" not in {
+        slot.name for slot in ins.spec.slots}
+    metadata = ins.module().metadata
+    # The transform snapshots the world, so the artifact carries an equal
+    # (value-identical, hence identically hashed) copy of the evidence.
+    assert metadata["model_force_evidence"][
+        "craft.model_force.specific_force"] == evidence
+    assert ins.evidence_by_sensor["craft.model_force.specific_force"] == evidence
+
+
+def test_ins_refuses_model_force_without_evidence():
+    with pytest.raises(ValueError, match="carries no fit evidence"):
+        _ins(_world(evidence=None))
+
+
+def test_ins_refuses_model_force_whose_evidence_is_not_accepted():
+    rejected = _evidence(criteria=FitAcceptanceCriteria(min_samples=10_000))
+    assert not rejected.accepted
+    with pytest.raises(ValueError, match=r"not accepted; failed: min_samples"):
+        _ins(_world(evidence=rejected))
+
+
+def test_model_force_refuses_a_random_walk_model_error():
+    axes = list(_evidence().axes)
+    axes[1] = AxisFitEvidence(
+        axis="y", sample_count=600, residual_bias=0.0,
+        residual_bias_stderr=0.01, residual_rms=0.5,
+        lag_one_autocorrelation=0.9, lag_count=20, fitted_tau=50.0,
+        fitted_correlated_fraction=0.9, correlation_chi2=40.0,
+        correlation_chi2_limit=9.21, white_floor_fraction=0.04,
+        noise_model=ProcessNoiseModel("random_walk", 0.1), white_sigma=0.5,
+        autocorrelation_rmse=0.04, white_fallback=False,
+        white_fallback_reason=None)
+    evidence = FitEvidence.evaluate(
+        channel="craft.imu.accel",
+        held_out=HeldOutWindow(1, 600, 0.02, ("w",)), axes=axes)
+    with pytest.raises(ValueError, match="random-walk model error"):
+        _world(evidence=evidence)
+
+
+def test_model_force_refuses_hand_set_error_alongside_evidence():
+    craft = Craft("craft")
+    imu = IMU("imu", accel_noise_sigma=0.01)
+    craft.add(imu)
+    with pytest.raises(TypeError, match="cannot be set alongside evidence"):
+        ModelForce("model_force", imu=imu, evidence=_evidence(),
+                   model_error_sigma=0.3)
+    with pytest.raises(ValueError, match="not the colocated IMU"):
+        ModelForce("model_force", imu=imu,
+                   evidence=_evidence(channel="craft.other.accel"))
+
+
+def test_rho_above_the_documented_ceiling_is_refused_at_construction():
+    assert 0.0 < MODEL_FORCE_RHO_WARNING < MODEL_FORCE_RHO_CEILING
+    with pytest.raises(ValueError, match="rho.*MODEL_FORCE_RHO_CEILING"):
+        _ins(_world_with_rho(1.0))
+    with pytest.raises(ValueError, match="rho.*MODEL_FORCE_RHO_CEILING"):
+        _ins(_world_with_rho(MODEL_FORCE_RHO_CEILING * 1.01))
+
+
+def test_rho_between_warning_and_ceiling_warns_by_value(caplog):
+    rho = 0.5 * (MODEL_FORCE_RHO_WARNING + MODEL_FORCE_RHO_CEILING)
+    with pytest.warns(RuntimeWarning, match=f"rho={rho:.4g}"):
+        ins = _ins(_world_with_rho(rho))
+    metadata = ins.module().metadata
+    assert metadata["rho_ceiling"] == MODEL_FORCE_RHO_CEILING
+    assert metadata["rho_warning"] == MODEL_FORCE_RHO_WARNING
+    assert metadata["rho_warned_sensors"] == (
+        "craft.model_force.specific_force",)
+    assert metadata["rho_by_sensor"]["craft.model_force.specific_force"] \
+        == pytest.approx(rho)
     with caplog.at_level(logging.INFO, logger="manta.codegen.numpy._filter"):
-        TargetNumpy(_ins(world))
+        TargetNumpy(ins)
     rho_records = [record for record in caplog.records
                    if "noise ratio rho" in record.message]
-    assert rho_records
-    assert all(record.levelno == logging.INFO for record in rho_records)
+    assert [record.levelno for record in rho_records] == [logging.WARNING]
+
+
+def test_rho_below_the_warning_level_is_an_info_diagnostic(caplog):
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        ins = _ins(_world())            # rho = 0.02
+    assert ins.module().metadata["rho_warned_sensors"] == ()
+    with caplog.at_level(logging.INFO, logger="manta.codegen.numpy._filter"):
+        TargetNumpy(ins)
+    rho_records = [record for record in caplog.records
+                   if "noise ratio rho" in record.message]
+    assert [record.levelno for record in rho_records] == [logging.INFO]
 
 
 def test_noisefit_accepts_ins_prediction_and_measurement_sources():
@@ -152,7 +300,8 @@ def test_noisefit_accepts_ins_prediction_and_measurement_sources():
     ins = _ins(world)
     fit = NoiseFit(
         world,
-        noise={"model_force.model_error": Prior(mean=0.5, sigma=1.0)},
+        noise={"model_force.model_error_x": Prior(mean=0.5, sigma=1.0),
+               "model_force.model_error_correlated_x": Prior(sigma=1.0)},
         estimator=ins,
     )
     K = 4
@@ -168,6 +317,9 @@ def test_noisefit_accepts_ins_prediction_and_measurement_sources():
     assert count == K
     assert U.shape == (6, K)
     assert Z.shape == (3, K)
+    assert [c.alias for c in fit.channels] == [
+        "craft.model_force.model_error_x",
+        "craft.model_force.model_error_correlated_x"]
 
 
 def test_trajectory_observability_and_nees_accept_ins_estimator():

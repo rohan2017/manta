@@ -98,7 +98,15 @@ class NumpyFilter(NumpyRuntime):
         super().__init__(module)
         self._Q: np.ndarray | None = None        # default process noise
         self._custom_h_cache: dict = {}          # h_sym -> (h_fn, H_fn)
+        rho_warning = module.metadata.get("rho_warning")
         for sensor, rho in module.metadata.get("rho_by_sensor", {}).items():
+            if rho_warning is not None and rho > rho_warning:
+                _LOG.warning(
+                    "%s disturbance-observer noise ratio rho[%s]=%.6g exceeds "
+                    "the warning level %.3g (ceiling %.3g)",
+                    module.name, sensor, rho, rho_warning,
+                    module.metadata["rho_ceiling"])
+                continue
             # rho is a useful dimensionless diagnostic, not a universal
             # estimator-selection threshold. Its acceptable range depends on
             # the identified model error, spectra, operating envelope, and
@@ -294,8 +302,34 @@ class NumpyFilter(NumpyRuntime):
         if process_Q is not None:
             process_Q = self._validate_covariance(
                 process_Q, who="predict Q", positive_definite=False)
-        self._predict_kernel(dt, t0, self.build_u(u), process_Q)
+        u_vec = self.build_u(u)
+        self._check_packet_duration(dt, u_vec)
+        self._predict_kernel(dt, t0, u_vec, process_Q)
         self._t = next_t
+
+    def _check_packet_duration(self, dt: float, u_vec: np.ndarray) -> None:
+        """A preintegrated INS must advance by exactly the packet's span.
+
+        The kernel itself poisons the state on a mismatch (so generated C++
+        fails the same way); this names the cause before that happens.
+        """
+        rtol = self.module.metadata.get("preintegration_duration_rtol")
+        if rtol is None:
+            return
+        duration_input = self.module.metadata["preintegration_input_map"][
+            "duration"]
+        offset = 0
+        for field in self._u_fields():
+            if field.name == duration_input:
+                break
+            offset += field.dim
+        duration = float(u_vec[offset])
+        if abs(dt - duration) > rtol * max(abs(dt), abs(duration)):
+            raise ValueError(
+                f"{type(self).__name__}.predict dt={dt!r} differs from the "
+                f"preintegrated packet duration={duration!r} "
+                f"({duration_input}); a packet must be consumed over exactly "
+                "its own span (use predict_preintegrated)")
 
     def update(self, target, z=None, R=None, *, t: float | None = None,
                u: dict[str, Any] | None = None) -> UpdateResult:

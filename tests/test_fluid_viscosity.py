@@ -11,9 +11,12 @@ import casadi as ca
 import numpy as np
 
 from manta import Craft, Sim, World
-from manta.fields import FluidField
+from manta.fields import FluidField, GravityField
 from manta.fields.fluid_props import (
-    MU_REF_AIR, T0_ISA, isa_temperature, sutherland_viscosity,
+    MU_REF_AIR,
+    T0_ISA,
+    isa_temperature,
+    sutherland_viscosity,
 )
 from manta.ir.frames import WorldFrame
 from manta.ir.types import Vec3
@@ -53,7 +56,7 @@ def test_sutherland_monotonic_in_temperature():
 def test_bare_air_fluid_gets_air_viscosity():
     """A bare `add_uniform(density=1.225)` air medium (no temperature)
     fills viscosity from Sutherland at ISA sea level."""
-    w = World().add_field(FluidField().add_uniform(density=1.225))
+    w = World().add_field(GravityField.none()).add_field(FluidField().add_uniform(density=1.225))
     c = Craft("p"); c.add(Mass("body", mass=1.0))
     w.add_craft(c, position=(0, 0, 0)); Sim(w)
     mu = _visc(w, (0.0, 0.0, 0.0))
@@ -64,7 +67,7 @@ def test_bare_air_fluid_gets_air_viscosity():
 def test_uniform_fluid_temperature_sets_viscosity():
     """With a temperature given, the air default-fill uses Sutherland at
     that temperature (a colder column is less viscous)."""
-    w = World().add_field(FluidField().add_uniform(density=1.0, temperature=230.0))
+    w = World().add_field(GravityField.none()).add_field(FluidField().add_uniform(density=1.0, temperature=230.0))
     c = Craft("p"); c.add(Mass("body", mass=1.0))
     w.add_craft(c, position=(0, 0, 0)); Sim(w)
     mu = _visc(w, (0.0, 0.0, 0.0))
@@ -75,7 +78,7 @@ def test_uniform_fluid_temperature_sets_viscosity():
 
 def test_explicit_viscosity_override_for_water():
     """A liquid sets viscosity directly — no Sutherland, ~1e-3 Pa·s."""
-    w = World().add_field(
+    w = World().add_field(GravityField.none()).add_field(
         FluidField().add_uniform(density=1000.0, viscosity=1.0e-3))
     c = Craft("p"); c.add(Mass("body", mass=1.0))
     w.add_craft(c, position=(0, 0, 0)); Sim(w)
@@ -88,7 +91,7 @@ def test_thin_co2_atmosphere_viscosity_via_species_constants():
     # CO₂ Sutherland fit: μ_ref≈1.37e-5 at 273.15 K, S≈222 K.
     mu_co2 = float(ca.evalf(
         sutherland_viscosity(260.0, mu_ref=1.37e-5, T_ref=273.15, S=222.0)))
-    w = World().add_field(
+    w = World().add_field(GravityField.none()).add_field(
         FluidField().add_uniform(density=0.02, temperature=260.0,
                                  viscosity=mu_co2))
     c = Craft("p"); c.add(Mass("body", mass=1.0))

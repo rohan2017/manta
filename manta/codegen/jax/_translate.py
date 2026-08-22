@@ -22,10 +22,12 @@ solves themselves are mapped to `jnp.linalg.solve` — LAPACK's
 partially-pivoted LU, the same class of runtime-pivoting solve CasADi's
 Linsol performs. One honest difference: on a genuinely singular matrix
 (a configuration-degenerate joint-space system) CasADi's Linsol raises,
-while `jnp.linalg.solve` under jit returns inf/NaN and the scan keeps
-going — guard training rollouts with `jnp.isfinite` checks if the craft
-can reach degenerate configurations. The composed function is jitted /
-differentiated as one program (JAX differentiates through
+while `jnp.linalg.solve` under jit would return inf/NaN and let a scan roll
+on. Manta closes that gap: every cut solve is followed by a finiteness
+check that raises (`FloatingPointError`, surfaced as a JAX runtime error
+under jit/scan) — the same outcome as the numpy/C backend, whose runtime
+refuses a kernel that produced non-finite values. The composed function
+is jitted / differentiated as one program (JAX differentiates through
 `linalg.solve` natively).
 """
 
@@ -34,6 +36,7 @@ from __future__ import annotations
 import warnings
 
 import casadi as ca
+import numpy as np
 
 import jax
 import jax.numpy as jnp
@@ -284,6 +287,36 @@ def _inline_calls(outs: list[ca.MX]) -> list[ca.MX]:
         "embeds calls nested deeper than expected.")
 
 
+def _refuse_nonfinite_solve(x, *, kernel: str, index: int) -> None:
+    """Raise on a non-finite linear-solve result, under jit/scan/vmap too.
+
+    `jnp.linalg.solve` has no error path: a singular joint-space system
+    (a configuration-degenerate mechanism) yields inf/NaN silently. CasADi's
+    interpreted Linsol raises on the same input and Manta's numpy runtime
+    refuses any kernel output that is not finite, so the JAX lowering must
+    fail the same way. The check runs on device; only the failing branch
+    calls back into Python to raise, so the healthy path costs one
+    reduction. Under `vmap` both branches may run on batched data — the
+    callback re-examines the flag it receives, so it never raises
+    spuriously.
+    """
+    finite = jnp.all(jnp.isfinite(x))
+
+    def refuse(flag):
+        if not bool(np.all(np.asarray(flag))):
+            raise FloatingPointError(
+                f"TargetJax: kernel {kernel!r} linear solve {index} produced "
+                "non-finite values (singular joint-space system); the "
+                "numpy/C backend refuses this configuration as well")
+
+    jax.lax.cond(
+        finite,
+        lambda flag: None,
+        lambda flag: jax.debug.callback(refuse, flag),
+        finite,
+    )
+
+
 def _translate_around_solves(fn: ca.Function, *, cause: Exception):
     """Lower a kernel whose whole-graph SX expansion failed.
 
@@ -303,9 +336,9 @@ def _translate_around_solves(fn: ca.Function, *, cause: Exception):
     solve nodes the original expansion failure had some other cause —
     re-raise it.
 
-    Singularity semantics differ from CasADi here (see the module
-    docstring): a degenerate A yields inf/NaN under jit, not an
-    exception.
+    Singularity semantics match the numpy/C backend by construction: a
+    degenerate A is caught by a finiteness check on the solve result and
+    raises instead of rolling inf/NaN through the rest of the program.
     """
     ins = [ca.MX.sym(fn.name_in(i), fn.sparsity_in(i))
            for i in range(fn.n_in())]
@@ -364,9 +397,11 @@ def _translate_around_solves(fn: ca.Function, *, cause: Exception):
             raise TypeError(
                 f"{name}: expected {n_in} argument(s), got {len(args)}.")
         xs: list = []
-        for stage in stage_fns:
+        for index, stage in enumerate(stage_fns):
             A, b = stage(*args, *xs)
-            xs.append(jnp.linalg.solve(A, b))
+            x = jnp.linalg.solve(A, b)
+            _refuse_nonfinite_solve(x, kernel=name, index=index)
+            xs.append(x)
         return post_fn(*args, *xs)
 
     wrapper.__name__ = f"jax_{name}"

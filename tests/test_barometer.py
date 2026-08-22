@@ -4,7 +4,8 @@ import casadi as ca
 import numpy as np
 import pytest
 
-from manta import Craft, EKF, Sim, TargetNumpy, World
+from manta import EKF, Craft, Sim, TargetNumpy, World
+from manta.fields import GravityField
 from manta.fields.fluid_props import R_AIR, isa_pressure
 from manta.parts import Barometer, Mass
 from manta.planets import Earth
@@ -61,7 +62,7 @@ def test_barometer_requires_fluid_field():
     """A Barometer with no FluidField registered is a configuration
     error, caught at transform build — not a zero reading."""
     import pytest
-    w = World()
+    w = World().add_field(GravityField.none())
     c = Craft("probe")
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(Barometer("baro"))

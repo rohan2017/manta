@@ -7,7 +7,8 @@ import math
 import numpy as np
 import pytest
 
-from manta import Craft, EKF, Sim, TargetNumpy, UKF, World
+from manta import EKF, UKF, Craft, Sim, TargetNumpy, World
+from manta.fields import GravityField
 from manta.parts import (
     ConstantCurrentLoad,
     ConstantPowerLoad,
@@ -27,7 +28,7 @@ def _world(*parts):
     craft.add(Mass("body", mass=1.0, moi=(1.0, 1.0, 1.0)))
     for part in parts:
         craft.add(part)
-    world = World(name="electrical")
+    world = World(name="electrical").add_field(GravityField.none())
     world.add_craft(craft)
     return world
 
@@ -90,7 +91,7 @@ def test_rejects_disconnected_and_cross_craft_nodes_at_compile():
     source = one.add(DCSource("source"))
     load = two.add(ResistiveLoad("load"))
     source.connect(load)
-    world = World()
+    world = World().add_field(GravityField.none())
     world.add_craft(one)
     world.add_craft(two)
     with pytest.raises(ValueError, match="crosses crafts"):

@@ -9,6 +9,7 @@ Public surface re-exports the part classes for ergonomic imports::
 
 from ..ir.wrench import Wrench
 from ._declarations import (
+    GaussMarkovNoise,
     Input,
     Noise,
     Output,
@@ -117,6 +118,7 @@ __all__ = [
     "FieldSource",
     "FossenDamping",
     "Fuse",
+    "GaussMarkovNoise",
     "GravitySource",
     "HeadingSensor",
     "HullSample",

@@ -144,10 +144,14 @@ class TickContext:
       at transform build, so `ctx.field` cannot fail); a part for which
       the field is genuinely optional branches explicitly::
 
-          if ctx.has_field(GravityField):
-              g = ctx.field(GravityField).value_at_sym(p, ctx.t)
+          if ctx.has_field(MagField):
+              B = ctx.field(MagField).value_at_sym(p, ctx.t)
           else:
-              g = Vec3[WorldFrame].constant((0.0, 0.0, 0.0))
+              B = Vec3[WorldFrame].constant((0.0, 0.0, 0.0))
+
+      (Gravity is not optional at this level: every World must declare
+      a GravityField — `GravityField.none()` for deliberate zero-g — so
+      `gravity_at(ctx, p)` always has a registered field to read.)
 
       Both work for user-authored Field subclasses — lookup is by
       isinstance against the world's registered fields, never against a

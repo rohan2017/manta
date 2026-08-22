@@ -13,18 +13,55 @@ Two complementary fitters, one data format (`Window`):
 
 Typical workflow::
 
-    result = Fit(world, parameters={...}).solve(windows)   # dynamics
-    physics = result.derive(validation={"accepted": True, ...})
-    nresult = NoiseFit(physics, noise={...}).solve(windows)  # then σ
-    model = nresult.derive(validation={"accepted": True, ...})
-    # model is an immutable, replayable ModelArtifact. For an exploratory
-    # authoring loop, result.apply() still writes back to the editable World.
+    training, held_out = hold_out(windows, fraction=0.3)      # untouched set
+    result = Fit(world, parameters={...}).solve(training)      # dynamics
+    physics = result.derive(
+        evidence=result.evidence(held_out, sensor="imu.accel"))
+    nresult = NoiseFit(physics, noise={...}).solve(training)   # then σ
+    evidence = nresult.evidence(held_out, sensor="imu.accel")
+    model = nresult.derive(evidence=evidence)
+    # model is an immutable, replayable ModelArtifact carrying the typed
+    # held-out evidence (bias, τ/σ², acceptance). `ModelForce(evidence=...)`
+    # consumes it; a model-aided INS refuses a model without it. For an
+    # exploratory authoring loop, result.apply() still writes back to the
+    # editable World.
 """
 
 from ._common import Free, Prior, Tied, Window
+from ._evidence import (
+    NOISE_KINDS,
+    AcceptanceCheck,
+    AxisFitEvidence,
+    FitAcceptanceCriteria,
+    FitEvidence,
+    HeldOutWindow,
+    ProcessNoiseModel,
+    held_out_evidence,
+    hold_out,
+    window_digest,
+)
 from ._map import Fit, FitResult
 from ._nll import NoiseFit, NoiseFitResult
 from ._report import FitDerivationReport
 
-__all__ = ["Fit", "FitResult", "FitDerivationReport", "Free", "NoiseFit", "NoiseFitResult",
-           "Prior", "Tied", "Window"]
+__all__ = [
+    "NOISE_KINDS",
+    "AcceptanceCheck",
+    "AxisFitEvidence",
+    "Fit",
+    "FitAcceptanceCriteria",
+    "FitDerivationReport",
+    "FitEvidence",
+    "FitResult",
+    "Free",
+    "HeldOutWindow",
+    "NoiseFit",
+    "NoiseFitResult",
+    "Prior",
+    "ProcessNoiseModel",
+    "Tied",
+    "Window",
+    "held_out_evidence",
+    "hold_out",
+    "window_digest",
+]

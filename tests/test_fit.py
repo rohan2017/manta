@@ -11,9 +11,10 @@ import copy
 import numpy as np
 import pytest
 
-from manta import Craft, Fit, Free, ModelArtifact, Prior, Sim, TargetNumpy, \
-    Tied, Window, World
+from manta import Craft, Fit, Free, ModelArtifact, NoiseDriver, Prior, Sim, \
+    TargetNumpy, Tied, Window, World
 from manta.fields import GravityField
+from manta.fit import FitEvidence
 from manta.ir.frames import CraftFrame, PartFrame
 from manta.ir.types import Vec3
 from manta.parts import IMU, Mass, Thruster
@@ -156,6 +157,32 @@ def _record_windows(world, n_win=3, K=50, seed=0):
     return windows
 
 
+def _held_out_windows(world, n_win=1, K=300, seed=11, accel_sigma=0.05):
+    """Noisy truth rollouts from a *different* seed: the untouched
+    acceptance set the derived artifact's evidence is computed on."""
+    world = copy.deepcopy(world)
+    imu = next(p for p in world.crafts[0].parts if p.name == "imu")
+    imu.accel_noise_sigma = accel_sigma
+    rng = np.random.default_rng(seed)
+    truth = TargetNumpy(Sim(world))
+    truth.attach_driver(NoiseDriver(seed=seed))
+    windows = []
+    for _ in range(n_win):
+        x0 = copy.deepcopy(truth.state)
+        thr = {f"t{i}": np.clip(0.4 + 0.1 * rng.standard_normal(K),
+                                0.05, 1.0) for i in range(1, 5)}
+        Za = []
+        for k in range(K):
+            for nm, tr in thr.items():
+                truth.state["drone"][f"{nm}.throttle"] = tr[k]
+            truth.step(DT)
+            Za.append(truth.outputs()["drone"]["imu.accel"].copy())
+        windows.append(Window(
+            x0=x0, u={f"{nm}.throttle": tr for nm, tr in thr.items()},
+            z={"imu.accel": np.array(Za)}, dt=DT))
+    return windows
+
+
 def test_fit_recovers_thrust_and_mass():
     windows = _record_windows(_drone(mass=1.32, kf=11.0))
     model = _drone(mass=1.5, kf=9.0)          # wrong starting guesses
@@ -239,14 +266,36 @@ def test_fit_apply_bakes_fitted_values():
     assert "drone.t1.force_quad" in base_model.parameter_names
     res = fit.solve(windows, weights={"imu.gyro": 1e6, "imu.accel": 1e4})
 
-    # Derivation produces a new executable revision and records held-out
-    # acceptance evidence without mutating the editable authoring World.
-    derived = res.derive(validation={"accepted": True,
-                                     "holdout_rmse": 0.01})
+    # Derivation produces a new executable revision and records the typed
+    # held-out evidence without mutating the editable authoring World.
+    held_out = _held_out_windows(_drone(kf=11.0))
+    evidence = res.evidence(held_out, sensor="imu.accel")
+    assert isinstance(evidence, FitEvidence)
+    assert evidence.channel == "drone.imu.accel"
+    assert evidence.held_out.sample_count == 300
+    assert evidence.accepted, evidence.summary()
+    # White accelerometer noise on a well-fitted model: every axis falls
+    # back to the white model, and says why.
+    assert all(ax.white_fallback and ax.white_fallback_reason
+               for ax in evidence.axes)
+    assert all(abs(ax.white_sigma - 0.05) < 0.015 for ax in evidence.axes)
+    # A training window can never pose as held-out evidence.
+    with pytest.raises(ValueError, match="training window"):
+        res.evidence(windows[:1], sensor="imu.accel")
+    # Evidence is typed — there is no dict form.
+    with pytest.raises(TypeError, match="FitEvidence"):
+        res.derive(evidence={"accepted": True})
+    # Without evidence the revision is visibly unaccepted.
+    assert not res.derive().derivation["fit"].accepted
+    assert res.derive().derivation["fit"].evidence is None
+
+    derived = res.derive(evidence=evidence)
     assert isinstance(derived, ModelArtifact)
     assert derived.derivation["fit"].accepted
+    assert derived.derivation["fit"].evidence is evidence
     assert derived.derivation["fit"].source_artifact_id == fit.sim.model.artifact_id
     assert derived.artifact_id != derived.model_id
+    assert derived.artifact_id != res.derive().artifact_id
     derived_t1 = next(p for p in derived.world_copy().crafts[0].parts
                       if p.name == "t1")
     original_t1 = next(p for p in model.crafts[0].parts if p.name == "t1")

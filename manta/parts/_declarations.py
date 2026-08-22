@@ -8,8 +8,9 @@ A part (or disturbance) declares its interface as class attributes:
   * `State(init=, manifold=)`   — per-tick state slot.
   * `Input(default)`            — per-tick external command.
   * `Output()`                  — per-tick emitted observable.
-  * `WhiteNoise` / `RandomWalkNoise` — stochastic channels, including
-                                  their CasADi `synthesize()` plumbing.
+  * `WhiteNoise` / `RandomWalkNoise` / `GaussMarkovNoise`
+                                — stochastic channels, including their
+                                  CasADi `synthesize()` plumbing.
 
 `DeclarationHost` (`manta.parts.base`) resolves these onto each instance
 at construction. This module also hosts `PartUpdate` — the bundle
@@ -19,6 +20,7 @@ construction-time validators (`unit_axis`).
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 
@@ -173,6 +175,16 @@ class Noise(_Declaration):
         (the slowly-drifting current value). σ has continuous σ/√Hz
         semantics; per-tick bias variance is dt·σ². `kind = "random_walk"`.
 
+      * `GaussMarkovNoise` — first-order Gauss–Markov (exponentially
+        correlated) error with correlation time τ and stationary
+        variance σ². Same state-slot / driver plumbing as the random
+        walk, with the exact discrete transition
+                φ = exp(-dt/τ),
+                e_next = φ · e + sqrt(1 − φ²) · driver,   driver ~ N(0, σ²),
+        so the slot's variance stays at σ² in steady state and the
+        auto-assembled process noise is `(1 − φ²)·σ²` per tick — no
+        Euler approximation anywhere. `kind = "gauss_markov"`.
+
     Args:
         signal_manifold — `Manifold` instance OR shortcut string. The
                           manifold of the symbol user code reads as
@@ -228,6 +240,17 @@ class Noise(_Declaration):
         if not self.contributes_state:
             return None
         return self.resolved_signal_manifold(default_frame=default_frame)
+
+    # ---- Per-instance runtime attributes ------------------------------
+
+    def runtime_attributes(self, name: str) -> dict[str, tuple[float, bool]]:
+        """The per-instance attributes this channel exposes on its owner,
+        `attr -> (default, allow_zero)`. `DeclarationHost` seeds them from
+        the declaration and accepts constructor overrides of the same
+        names; `is_active` / `synthesize` read them back at compile time.
+        Every channel has `<name>_sigma`; subclasses add their own
+        (`GaussMarkovNoise` adds `<name>_tau`)."""
+        return {f"{name}_sigma": (self.sigma, True)}
 
     # ---- Activity gate ------------------------------------------------
 
@@ -321,6 +344,75 @@ class RandomWalkNoise(Noise):
         )
 
 
+class GaussMarkovNoise(Noise):
+    """First-order Gauss–Markov error channel: correlation time `tau`
+    (seconds, > 0) and stationary 1-σ `sigma` (signal units).
+
+    The synthesized state slot holds the correlated error itself; the
+    exact discrete transition `φ = exp(-dt/τ)` keeps the slot's variance
+    at σ² for any tick length. With `sigma == 0` the channel is inert
+    (no slot, no driver), exactly like `RandomWalkNoise`.
+    """
+
+    kind              = "gauss_markov"
+    contributes_state = True
+
+    __slots__ = ("tau",)
+
+    def __init__(self, signal_manifold="R3", *, frame=None,
+                 sigma: float = 0.0, tau: float) -> None:
+        super().__init__(signal_manifold, frame=frame, sigma=sigma)
+        self.tau = _finite_positive_tau(tau, who=type(self).__name__)
+
+    def runtime_attributes(self, name):
+        return {**super().runtime_attributes(name),
+                f"{name}_tau": (self.tau, False)}
+
+    def driver_input_name(self, name: str) -> str:
+        return f"{name}_driver"
+
+    def initial_state_entries(self, name, owner):
+        if not self.is_active(owner, name):
+            return {}
+        zero = self._zero_value()
+        return {name: zero, f"{name}_driver": zero}
+
+    def synthesize(self, *, base_name, name, dt, default_frame, owner):
+        import casadi as ca
+        mfd = self.resolved_signal_manifold(default_frame=default_frame)
+        if not self.is_active(owner, name):
+            return SynthesizedNoise(signal_sym=mfd.ir_zero())
+        tau = _finite_positive_tau(getattr(owner, f"{name}_tau"),
+                                   who=f"{type(owner).__name__}"
+                                       f"({getattr(owner, 'name', '?')!r})."
+                                       f"{name}_tau")
+        phi = ca.exp(-dt._mx / tau)
+        gain = ca.sqrt(1.0 - phi * phi)
+        driver_name = f"{base_name}_driver"
+        error_sym  = mfd.ir_input(base_name)
+        driver_sym = mfd.ir_input(driver_name)
+        # φ·e + sqrt(1-φ²)·w  ==  e ⊕ ((φ-1)·e + sqrt(1-φ²)·w): the
+        # manifold's own `ir_add` keeps the typed value, as for RW.
+        error_next = mfd.ir_add(
+            error_sym, (phi - 1.0) * error_sym._mx + gain * driver_sym._mx)
+        return SynthesizedNoise(
+            signal_sym=error_sym,
+            state_update=(base_name, error_next),
+        )
+
+
+def _finite_positive_tau(value, *, who: str) -> float:
+    try:
+        tau = float(value)
+    except (TypeError, ValueError):
+        raise TypeError(f"{who}: tau must be a positive finite number of "
+                        f"seconds, got {value!r}") from None
+    if not (math.isfinite(tau) and tau > 0.0):
+        raise ValueError(f"{who}: tau must be a positive finite number of "
+                         f"seconds, got {value!r}")
+    return tau
+
+
 class State(_Declaration):
     """Per-tick state slot.
 
@@ -357,7 +449,10 @@ class State(_Declaration):
 
     def __init__(self, init, manifold="R1", frame=None) -> None:
         from ..ir.manifold import (
-            Manifold, R3Manifold, SO3Manifold, manifold_from_shortcut,
+            Manifold,
+            R3Manifold,
+            SO3Manifold,
+            manifold_from_shortcut,
         )
         if isinstance(manifold, Manifold):
             mfd = manifold

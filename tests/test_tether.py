@@ -5,6 +5,7 @@ import pytest
 
 from manta import Craft, Sim, TargetNumpy, World
 from manta.couplings import Tether
+from manta.fields import GravityField
 from manta.parts import Mass, TetherEndpoint
 
 
@@ -21,7 +22,7 @@ def test_at_rest_length_zero_force():
     L = 5.0
     a = _make_craft("a")
     b = _make_craft("b")
-    w = World()    # no gravity
+    w = World().add_field(GravityField.none())    # no gravity
     w.add_craft(a, position=(0, 0, 0))
     w.add_craft(b, position=(L, 0, 0))
     w.add_coupling(Tether(a, "hook", b, "hook",
@@ -45,7 +46,7 @@ def test_stretched_spring_pulls_crafts_together():
     L_init = 7.0
     a = _make_craft("a")
     b = _make_craft("b")
-    w = World()
+    w = World().add_field(GravityField.none())
     w.add_craft(a, position=(0, 0, 0))
     w.add_craft(b, position=(L_init, 0, 0))
     w.add_coupling(Tether(a, "hook", b, "hook",
@@ -70,7 +71,7 @@ def test_slack_tether_exerts_no_force():
     L_init = 3.0
     a = _make_craft("a")
     b = _make_craft("b")
-    w = World()
+    w = World().add_field(GravityField.none())
     w.add_craft(a, position=(0, 0, 0))
     w.add_craft(b, position=(L_init, 0, 0))
     w.add_coupling(Tether(a, "hook", b, "hook",
@@ -92,7 +93,7 @@ def test_damper_cannot_push_while_taut():
     holds the force at ~zero instead of shoving A away from B."""
     a = _make_craft("a")
     b = _make_craft("b")
-    w = World()
+    w = World().add_field(GravityField.none())
     w.add_craft(a, position=(0, 0, 0))
     # Stretch = 0.1 m (spring +1 N), closing at 10 m/s (damper −50 N).
     w.add_craft(b, position=(5.1, 0, 0), velocity=(-10.0, 0, 0))
@@ -114,7 +115,7 @@ def test_momentum_conservation_no_external_forces():
     momentum stays at its initial value forever."""
     a = _make_craft("a", mass=1.0)
     b = _make_craft("b", mass=2.0)
-    w = World()
+    w = World().add_field(GravityField.none())
     w.add_craft(a, position=(0, 0, 0), velocity=(1.0, 0, 0))
     w.add_craft(b, position=(7.0, 0, 0))
     w.add_coupling(Tether(a, "hook", b, "hook",
@@ -139,7 +140,7 @@ def test_damping_dissipates_relative_motion():
     """With damping, oscillation amplitude shrinks over time."""
     a = _make_craft("a")
     b = _make_craft("b")
-    w = World()
+    w = World().add_field(GravityField.none())
     w.add_craft(a, position=(0, 0, 0))
     w.add_craft(b, position=(8.0, 0, 0))
     w.add_coupling(Tether(a, "hook", b, "hook",
@@ -178,7 +179,7 @@ def test_offset_endpoint_produces_torque():
     b.add(Mass("body", mass=100.0, moi=(1.0, 1.0, 1.0)))   # heavy → stays put
     b.add(TetherEndpoint("hook"))
 
-    w = World()
+    w = World().add_field(GravityField.none())
     w.add_craft(a, position=(0, 0, 0))
     w.add_craft(b, position=(5.0, 0, 0))
     w.add_coupling(Tether(a, "hook", b, "hook",

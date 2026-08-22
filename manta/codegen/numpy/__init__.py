@@ -38,8 +38,10 @@ from __future__ import annotations
 from ...ir.module import ModuleKind
 from ._compile import (
     DEFAULT_COMPILATION_TIMEOUT_S,
+    DEFAULT_MAX_INSTRUCTIONS,
     CompilationError,
     compile_functions,
+    validate_max_instructions,
 )
 from ._filter import FilterCheckpoint, NumpyFilter, UpdateResult
 from ._filter_replay import (
@@ -62,6 +64,7 @@ from ._sim import NumpySim, SimCheckpoint
 __all__ = [
     "CompilationError",
     "DEFAULT_COMPILATION_TIMEOUT_S",
+    "DEFAULT_MAX_INSTRUCTIONS",
     "FilterCheckpoint",
     "FilterReplayProgram",
     "FilterReplayResult",
@@ -92,6 +95,7 @@ def TargetNumpy(
     compile: bool = False,
     optimization: str | None = None,
     compile_timeout_s: float | None = DEFAULT_COMPILATION_TIMEOUT_S,
+    max_instructions: int | None = DEFAULT_MAX_INSTRUCTIONS,
 ) -> NumpyRuntime:
     """Lower a typed `Module` — or any transform exposing `.module()`
     (`Sim`, `EKF`, `LQR`, a recurrence block) — to the matching
@@ -108,7 +112,14 @@ def TargetNumpy(
     simulation caller may replace or disable that deadline. It raises
     `CompilationError` if an external cannot be produced; explicit native
     execution never silently becomes interpretation. Pair with `NumpySim`'s
-    `step_n` to fold substeps for a further amortization."""
+    `step_n` to fold substeps for a further amortization.
+
+    `max_instructions` is the cost-benefit size gate, counted in CasADi
+    instructions over every kernel (default `DEFAULT_MAX_INSTRUCTIONS`).
+    Above it compilation is refused with an error naming this parameter. A
+    deliberately large full-truth simulation whose owner has declared a
+    finite cold-build ceiling raises it, or passes `None` to disable the
+    gate entirely."""
     from ..target import as_module
     m = as_module(x, "TargetNumpy")
     if (
@@ -123,6 +134,9 @@ def TargetNumpy(
             raise ValueError(
                 "explicit TargetNumpy compilation policy is only for simulation"
             )
+    if max_instructions != DEFAULT_MAX_INSTRUCTIONS and not compile:
+        raise ValueError("max_instructions requires compile=True")
+    validate_max_instructions(max_instructions)
     if optimization is not None:
         if optimization not in {"O0", "O1", "O2"}:
             raise ValueError("simulation optimization must be O0, O1, or O2")
@@ -131,6 +145,7 @@ def TargetNumpy(
         runtime._enable_compile(
             optimization=optimization,
             timeout_s=compile_timeout_s,
+            max_instructions=max_instructions,
         )
         if compile else runtime
     )

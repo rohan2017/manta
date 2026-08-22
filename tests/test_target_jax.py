@@ -221,3 +221,42 @@ def test_initial_state_on_stateless_module_raises():
                functions={}, entry_points=(), kind=ModuleKind.KERNEL)
     with pytest.raises(ValueError, match="manifold state"):
         JaxModule(m).initial_state()
+
+
+def test_singular_linsol_solve_raises_like_the_numpy_backend():
+    """`jnp.linalg.solve` would return inf/NaN for a singular system and let
+    a scan roll on; the solve-cut lowering must refuse it loudly — in eager
+    mode, under `jit`, and inside `lax.scan` — exactly as CasADi's Linsol
+    (interpreted) and the numpy runtime's finite check (compiled) do."""
+    A = ca.MX.sym("A", 2, 2)
+    b = ca.MX.sym("b", 2, 1)
+    kernel = ca.Function("singular_probe", [A, b], [ca.solve(A, b)])
+    fn = translate(kernel)
+
+    regular = jnp.array([[2.0, 0.0], [0.0, 4.0]])
+    rhs = jnp.array([1.0, 2.0])
+    np.testing.assert_allclose(np.asarray(fn(regular, rhs)[0]).ravel(),
+                               [0.5, 0.5])
+    np.testing.assert_allclose(
+        np.asarray(jax.jit(fn)(regular, rhs)[0]).ravel(), [0.5, 0.5])
+    grad = jax.grad(lambda m: jnp.sum(fn(m, rhs)[0]))(regular)
+    assert np.all(np.isfinite(np.asarray(grad)))
+
+    singular = jnp.array([[1.0, 2.0], [2.0, 4.0]])
+    with pytest.raises(Exception, match="non-finite"):
+        fn(singular, rhs)
+    with pytest.raises(Exception, match="non-finite"):
+        jax.jit(fn)(singular, rhs)
+
+    def scan_body(carry, _):
+        return carry, fn(carry, rhs)
+
+    with pytest.raises(Exception, match="non-finite"):
+        jax.lax.scan(scan_body, singular, None, length=3)
+    # A batched call refuses only when some lane is actually singular.
+    batched = jax.vmap(fn, in_axes=(0, None))
+    np.testing.assert_allclose(
+        np.asarray(batched(jnp.stack([regular, regular]), rhs)[0])[:, :, 0],
+        [[0.5, 0.5], [0.5, 0.5]])
+    with pytest.raises(Exception, match="non-finite"):
+        batched(jnp.stack([regular, singular]), rhs)

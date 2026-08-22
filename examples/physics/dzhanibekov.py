@@ -34,6 +34,7 @@ import argparse
 import numpy as np
 
 from manta import Craft, Sim, TargetNumpy, World
+from manta.fields import GravityField
 from manta.parts import Mass
 
 from .._control import Pacer
@@ -66,7 +67,7 @@ def build_world():
     tee = Craft("tee")
     for name, pos in MASSES.items():
         tee.add(Mass(name, mass=1.0, moi=(1e-3, 1e-3, 1e-3), mount_offset=pos))
-    w = World()                      # no fields: free-floating, torque-free
+    w = World().add_field(GravityField.none())                      # no fields: free-floating, torque-free
     # Spin about the stem (body y) + a tiny wobble about the crossbar.
     w.add_craft(tee, position=(0.0, 0.0, 1.2),
                 angular_velocity=(WOBBLE, SPIN, 0.0))

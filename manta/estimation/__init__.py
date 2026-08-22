@@ -17,7 +17,7 @@ The state-layout types (`StateSpec`, `StateSlot`, `SlotSet`, …) live in
 `manta.ir.state_spec` — they are IR, not estimation.
 """
 
-from .consistency import NEESReport, nees
+from .consistency import NEESReport, chi2_gate, chi2_quantile, nees
 from .ekf import EKF, measurement_component, measurement_slot
 from .imu_integrator import IMUIntegrator
 from .imu_preintegrator import IMUPreintegrator
@@ -43,6 +43,8 @@ __all__ = [
     "NEESReport",
     "ObservabilityReport",
     "SigmaHorizonReport",
+    "chi2_gate",
+    "chi2_quantile",
     "measurement_component",
     "measurement_slot",
     "nees",

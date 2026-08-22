@@ -268,6 +268,10 @@ class PortField:
     default: Any = 0.0
     sigma: float | None = None     # NOISE channels: the declared σ
     rate: float | None = None      # CONTROL inputs: declared intake rate (Hz)
+    # Contract note emitted next to the field in generated headers (an
+    # invariant a direct caller must honour). Documentation only: it is not
+    # part of the Module fingerprint.
+    doc: str = ""
 
     def __post_init__(self) -> None:
         _check_qualified_name(self.name, who="PortField")

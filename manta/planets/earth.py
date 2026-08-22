@@ -14,7 +14,9 @@ shared GravityField, FluidField, CollisionField, and MagField:
 
   * GravityField : point-mass at planet origin (μ = gravity_mu) plus the
                    J2 oblateness perturbation (on by default; see
-                   `include_j2`). Skipped entirely when `gravity_mu == 0`.
+                   `include_j2`). With `gravity_mu == 0` the field is still
+                   registered, empty: the planet declares zero gravity
+                   explicitly rather than leaving the world undeclared.
   * FluidField   : an ocean co-rotating with the planet (density =
                    water_density, active below the sea surface) and an
                    atmosphere co-rotating with the planet (density =
@@ -256,9 +258,12 @@ class Earth(Planet):
     # ------------------------------------------------------------------
 
     def register_disturbances(self, world) -> None:
-        # Gravity: point-mass + optional J2.
+        # Gravity: point-mass + optional J2. The planet is the world's
+        # gravity declaration, so the field is registered even when
+        # `gravity_mu == 0` deliberately disables the force (an explicit
+        # zero-g field, not an absent one).
+        gf = world.get_or_create_field(GravityField)
         if self.gravity_mu > 0.0:
-            gf = world.get_or_create_field(GravityField)
             gf.add(PointMassGravity(
                 position=tuple(self.center.tolist()),
                 GM=self.gravity_mu))

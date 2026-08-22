@@ -121,7 +121,7 @@ def test_free_craft_conserves_angular_momentum():
     m = c.add(Motor("wheel", axis=(0.0, 0.0, 1.0),
                     torque_constant=K_T, resistance=RES))
     m.add(Mass("rotor", mass=0.1, moi=(0.001, 0.001, J_Z)))
-    w = World()          # no gravity, free floating
+    w = World().add_field(GravityField.none())          # no gravity, free floating
     w.add_craft(c)
     sim = TargetNumpy(Sim(w))
     sim.state["sat"]["wheel.voltage"] = 1.0

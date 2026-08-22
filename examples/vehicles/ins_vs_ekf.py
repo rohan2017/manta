@@ -18,15 +18,25 @@ inertia, thrust, buoyancy, and drag remain within a few percent, so its nominal
 dynamics are reasonably accurate without duplicating the simulation topology.
 
 Truth is also subjected to a seeded, band-limited random force/torque process
-representing wave buffet. Those six disturbance inputs exist only on the truth
-model, so neither filter is handed the answer. A ``CraftWindBubble`` supplies a
+representing wave buffet, plus white sub-resolution forcing (thruster ripple,
+flow noise). Those disturbances exist only on the truth model, so neither
+filter is handed the answer. A ``CraftWindBubble`` supplies a
 drifting current state that both filters are allowed to estimate through the
 model.
 
+The INS's ``ModelForce`` does not guess its model error. A calibration log
+(truth seed distinct from the A/B run) is split into training and held-out
+windows, and ``held_out_evidence`` identifies the reduced model's
+specific-force residual on the held-out set: per-axis bias, a white floor,
+and the time-correlated (Gauss–Markov) component the wave buffet leaves
+behind. ``ModelForce(evidence=...)`` consumes that typed artifact — the bias
+as a deterministic correction, the correlated part as filter state — and
+``INS`` refuses a part without accepted evidence.
+
 This is an architectural comparison, not a universal claim that one transform
-wins. Change the reduction fidelity, sensor rates, model-error sigma, and
+wins. Change the reduction fidelity, sensor rates, acceptance criteria, and
 disturbance spectrum to match a real vehicle; ``rho`` is reported as a
-diagnostic and no generic threshold is applied.
+diagnostic and the rho ceiling is the only generic threshold applied.
 
 Run::
 
@@ -41,8 +51,9 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from manta import EKF, INS, Craft, NoiseDriver, Sim, TargetNumpy, World
+from manta import EKF, INS, Craft, NoiseDriver, Sim, TargetNumpy, Window, World
 from manta.fields import CraftWindBubble, FluidField, GravityField
+from manta.fit import FitAcceptanceCriteria, FitEvidence, held_out_evidence, hold_out
 from manta.parts import (
     IMU,
     DragSurface,
@@ -51,6 +62,7 @@ from manta.parts import (
     ModelForce,
     PointBuoy,
     PositionSensor,
+    ProcessNoise,
     RotationalDrag,
     Thruster,
     VelocitySensor,
@@ -80,6 +92,7 @@ class Comparison:
 
     ekf: Metrics
     ins: Metrics
+    evidence: FitEvidence
     rho_by_sensor: dict[str, float]
     wave_force_rms_n: float
     wave_torque_rms_nm: float
@@ -118,8 +131,13 @@ class WaveBuffet:
         return self.force + swell_force, self.torque + swell_torque
 
 
-def build_world(*, truth: bool) -> World:
-    """Build detailed truth or its reasonably accurate lumped reduction."""
+def build_world(*, truth: bool, evidence: FitEvidence | None = None) -> World:
+    """Build detailed truth or its reasonably accurate lumped reduction.
+
+    The reduced model mounts a ``ModelForce`` only once ``evidence`` (its
+    identified specific-force error) exists; the evidence-less reduction is
+    the calibration model the evidence is computed against.
+    """
     auv = Craft("auv")
     if truth:
         # Detailed mass layout. The symmetric equipment offsets keep the
@@ -149,6 +167,12 @@ def build_world(*, truth: bool) -> World:
             auv.add(DragSurface(
                 name, force=tuple(total_drag * fraction),
                 mount_offset=offset))
+        # Sub-resolution forcing (thruster ripple, flow noise): a white
+        # wrench the reduction does not carry. It is what gives the model
+        # error a genuine white floor — the regime the INS's separated-noise
+        # pseudo-measurement is valid in (`rho` well below its ceiling).
+        auv.add(ProcessNoise("turbulence", force_noise_sigma=11.0,
+                             torque_noise_sigma=0.03))
         thrust = 80.0
         yaw_torque = 12.0
     else:
@@ -190,11 +214,12 @@ def build_world(*, truth: bool) -> World:
         auv.add(Thruster("wave_tx", torque=(1.0, 0.0, 0.0)))
         auv.add(Thruster("wave_ty", torque=(0.0, 1.0, 0.0)))
         auv.add(Thruster("wave_tz", torque=(0.0, 0.0, 1.0)))
-    else:
+    elif evidence is not None:
         # Ordinary part declaration: INS does not contain special force-aid
-        # equations. The selected accelerometer sample is supplied as z.
-        auv.add(ModelForce("model_force", imu=imu,
-                           model_error_sigma=1.25))
+        # equations. The selected accelerometer sample is supplied as z; the
+        # error model (bias, white floor, Gauss–Markov state) is the
+        # identified held-out evidence, never a hand-picked sigma.
+        auv.add(ModelForce("model_force", imu=imu, evidence=evidence))
 
     fluid = FluidField().add_uniform(
         density=RHO_WATER, viscosity=1.35e-3)
@@ -205,6 +230,48 @@ def build_world(*, truth: bool) -> World:
              .add_field(fluid))
     world.add_craft(auv, position=(0.0, 0.0, -5.0))
     return world
+
+
+def calibrate_model_force(*, seed: int, dt: float, windows: int = 24,
+                          window_s: float = 2.0,
+                          criteria: FitAcceptanceCriteria | None = None
+                          ) -> FitEvidence:
+    """Identify the reduced model's specific-force error on held-out data.
+
+    A calibration log is recorded from the truth vehicle under the known
+    maneuver commands and its own wave buffet (seeded apart from the A/B
+    run). Windows are split training / held-out; the evidence is computed
+    on the held-out tail only, against the reduced model's mean prediction
+    from each window's true initial state over the recorded commands.
+    """
+    truth = TargetNumpy(Sim(build_world(truth=True)))
+    truth.attach_driver(NoiseDriver(seed=seed + 2000))
+    reduced = build_world(truth=False)
+    template = TargetNumpy(Sim(reduced)).state
+    wave = WaveBuffet(seed + 1)
+    K = round(window_s / dt)
+    log: list[Window] = []
+    t = 0.0
+    for _ in range(windows):
+        x0 = {owner: {key: np.array(truth.state[owner][key], copy=True)
+                      for key in slots if key in truth.state[owner]}
+              for owner, slots in template.items()}
+        commands: dict[str, list[float]] = {}
+        accel: list[np.ndarray] = []
+        for _ in range(K):
+            command = _command(t)
+            force, torque = wave.sample(t, dt)
+            truth.step(dt, u={**command, **_wave_controls(force, torque)}, t=t)
+            for name, value in command.items():
+                commands.setdefault(name, []).append(value)
+            accel.append(np.array(truth.reading("auv.imu.accel"), copy=True))
+            t += dt
+        log.append(Window(
+            x0=x0, u={k: np.array(v) for k, v in commands.items()},
+            z={"imu.accel": np.array(accel)}, dt=dt, t0=t - K * dt))
+    _training, held_out = hold_out(log, fraction=0.5)
+    return held_out_evidence(reduced, held_out, sensor="auv.imu.accel",
+                             criteria=criteria)
 
 
 def _command(t: float) -> dict[str, float]:
@@ -266,8 +333,11 @@ def run(*, duration: float = 40.0, dt: float = 0.02, seed: int = 7,
     if not 0.0 <= warmup < duration:
         raise ValueError("warmup must satisfy 0 <= warmup < duration")
 
+    evidence = calibrate_model_force(seed=seed, dt=dt)
+    if progress:
+        print(evidence.summary())
     truth_world = build_world(truth=True)
-    estimator_world = build_world(truth=False)
+    estimator_world = build_world(truth=False, evidence=evidence)
     sim = TargetNumpy(Sim(truth_world))
     sim.attach_driver(NoiseDriver(seed=seed + 1000))
 
@@ -354,6 +424,7 @@ def run(*, duration: float = 40.0, dt: float = 0.02, seed: int = 7,
     result = Comparison(
         ekf=_metrics(ekf_samples),
         ins=_metrics(ins_samples),
+        evidence=evidence,
         rho_by_sensor=dict(ins.rho_by_sensor),
         wave_force_rms_n=float(np.sqrt(np.mean(np.sum(force_samples ** 2,
                                                        axis=1)))),

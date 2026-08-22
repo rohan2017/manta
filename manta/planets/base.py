@@ -415,14 +415,21 @@ class Planet:
 
     def register_disturbances(self, world: "World") -> None:
         """Called by `Sim(world)` to attach this planet's standing
-        contributions to the world's shared fields. Subclasses (Earth,
+        contributions to the world's shared fields. A planet is the
+        world's gravity declaration: an override must register the
+        GravityField (`world.get_or_create_field(GravityField)`) even when
+        it adds no gravity source, or the world refuses to resolve.
+        Subclasses (Earth,
         Moon, ...) override to install gravity / ocean / atmosphere /
-        magnetic-dipole disturbances. Base default: no-op.
+        magnetic-dipole disturbances. Base default: register the (empty)
+        GravityField and nothing else — a bare `Planet` is a deliberate
+        zero-gravity frame, not an undeclared one.
 
         Subclasses should use `world.get_or_create_field(FieldClass)` to
         get the shared instance, then `.add(disturbance)`.
         """
-        return None
+        from ..fields import GravityField
+        world.get_or_create_field(GravityField)
 
     # ------------------------------------------------------------------
 

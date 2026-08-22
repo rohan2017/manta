@@ -34,6 +34,7 @@ import numpy as np
 
 from manta import (
     Craft, Fit, NoiseDriver, NoiseFit, Prior, Sim, TargetNumpy, Window,
+    hold_out,
     World,
 )
 from manta.fields import GravityField
@@ -108,7 +109,11 @@ def record_flight(world: World, *, seed=11) -> list[Window]:
 
 
 def main() -> None:
-    windows = record_flight(build(**TRUTH))
+    # The acceptance set is split off before anything is fitted and never
+    # enters either fit: the derived artifact's evidence (held-out residual
+    # bias, white/Gauss–Markov model error, acceptance decision) is computed
+    # on it alone.
+    windows, held_out = hold_out(record_flight(build(**TRUTH)), fraction=0.3)
     model = build(**GUESS)
 
     fit = Fit(model, parameters={
@@ -186,6 +191,20 @@ def main() -> None:
     nresult.apply()
     print("noise σ applied — `EKF(model)` now auto-builds Q/R from the "
           "identified noise model.")
+
+    # ---- stage 3: held-out evidence and the derived artifact ----------
+    # `derive()` freezes the fitted model as an immutable ModelArtifact.
+    # Its provenance carries typed evidence computed on the untouched
+    # held-out windows: per-axis residual bias, the fitted process-noise
+    # model (white, or Gauss–Markov tau/sigma when the residual is time
+    # correlated — the fallback is recorded, never silent), and the
+    # acceptance decision with the thresholds that produced it. A
+    # `ModelForce(evidence=...)` consumes exactly this artifact.
+    evidence = nresult.evidence(held_out, sensor="imu.accel")
+    print("\n" + evidence.summary())
+    artifact = nresult.derive(evidence=evidence)
+    print(f"derived {artifact!r}: accepted="
+          f"{artifact.derivation['noise_fit'].accepted}")
 
 
 if __name__ == "__main__":

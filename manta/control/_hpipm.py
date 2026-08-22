@@ -10,13 +10,7 @@ stage-local, and the shared bank slack is appended to each stage input.
 from __future__ import annotations
 
 import ctypes
-import hashlib
 import math
-import os
-import platform
-import shutil
-import subprocess
-import tempfile
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,7 +20,7 @@ import casadi as ca
 import numpy as np
 import numpy.typing as npt
 
-from ..codegen.numpy._compile import CompilationError, _cache_dir
+from ..codegen.numpy._compile import CompilationError, build_native_library
 
 FloatArray = npt.NDArray[np.float64]
 
@@ -458,10 +452,6 @@ def _library() -> ctypes.CDLL:
     with _LIBRARY_LOCK:
         if _LIBRARY is not None:
             return _LIBRARY
-        compiler = shutil.which("cc")
-        if compiler is None:
-            raise CompilationError(
-                "native HPIPM requested but no 'cc' compiler is on PATH")
         casadi_dir = Path(ca.__file__).resolve().parent
         include_dir = casadi_dir / "include"
         hpipm_library = casadi_dir / "libhpipm.so"
@@ -470,34 +460,13 @@ def _library() -> ctypes.CDLL:
                 or not blasfeo_library.is_file()):
             raise CompilationError(
                 "CasADi installation does not contain HPIPM and BLASFEO")
-        cache_material = (
-            _SOURCE.encode() + ca.__version__.encode()
-            + platform.platform().encode())
-        key = hashlib.sha1(cache_material).hexdigest()[:16]
-        cache = Path(_cache_dir())
-        cache.mkdir(mode=0o700, parents=True, exist_ok=True)
-        path = cache / f"manta_hpipm_{key}.so"
-        if not path.exists():
-            directory = Path(tempfile.mkdtemp())
-            try:
-                source = directory / "manta_hpipm.c"
-                source.write_text(_SOURCE)
-                output = directory / path.name
-                subprocess.run([
-                    compiler, "-O3", "-march=native", "-fPIC", "-shared",
-                    str(source), f"-I{include_dir}", f"-L{casadi_dir}",
-                    "-lhpipm", "-lblasfeo", f"-Wl,-rpath,{casadi_dir}",
-                    "-o", str(output),
-                ], check=True, capture_output=True, timeout=60)
-                temporary = cache / f".{path.name}.{os.getpid()}"
-                shutil.copyfile(output, temporary)
-                os.replace(temporary, path)
-            except subprocess.CalledProcessError as exc:
-                stderr = exc.stderr.decode(errors="replace")
-                raise CompilationError(
-                    f"native HPIPM bridge compilation failed: {stderr}") from exc
-            finally:
-                shutil.rmtree(directory, ignore_errors=True)
+        path = build_native_library(
+            _SOURCE, stem="manta_hpipm", what="native HPIPM",
+            compiler_flags=("-O3", "-march=native"),
+            link_args=(f"-I{include_dir}", f"-L{casadi_dir}", "-lhpipm",
+                       "-lblasfeo", f"-Wl,-rpath,{casadi_dir}"),
+            timeout_s=60.0,
+        ).path
         library = ctypes.CDLL(str(path))
         fp = np.ctypeslib.ndpointer(
             dtype=np.float64, ndim=1, flags="C_CONTIGUOUS")

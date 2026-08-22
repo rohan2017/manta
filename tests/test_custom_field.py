@@ -12,12 +12,11 @@ import numpy as np
 import pytest
 
 from manta import Craft, Sim, TargetNumpy, World
-from manta.fields import Disturbance, SuperposedField
+from manta.fields import Disturbance, GravityField, SuperposedField
 from manta.ir.frames import PartFrame
 from manta.ir.types import Scalar, Vec3
 from manta.ir.wrench import Wrench
-from manta.parts import Mass, Part, PartUpdate, Output, RandomWalkNoise
-
+from manta.parts import Mass, Output, Part, PartUpdate, RandomWalkNoise
 
 # --- the user's field, authored without touching manta -------------------
 
@@ -96,7 +95,7 @@ def _craft(det_cls):
 # --- tests ---------------------------------------------------------------
 
 def test_custom_field_queried_by_part():
-    w = World()
+    w = World().add_field(GravityField.none())
     w.add_field(RadarField().add(RadarEmitter((10.0, 0.0, 0.0), 100.0)))
     w.add_craft(_craft(RadarDetector), position=(0.0, 0.0, 0.0))
     sim = TargetNumpy(Sim(w))
@@ -108,7 +107,7 @@ def test_custom_field_queried_by_part():
 
 def test_missing_custom_field_fails_requires_validation():
     """requires_fields works for user-authored field classes too."""
-    w = World()
+    w = World().add_field(GravityField.none())
     w.add_craft(_craft(RadarDetector))
     with pytest.raises(ValueError, match="RadarField"):
         Sim(w)
@@ -120,7 +119,7 @@ def test_ctx_field_raises_without_registration():
     class UndeclaredDetector(RadarDetector):
         requires_fields = []        # skip validation → hit ctx.field raw
 
-    w = World()
+    w = World().add_field(GravityField.none())
     w.add_craft(_craft(UndeclaredDetector))
     with pytest.raises(ValueError, match="no RadarField is registered"):
         Sim(w)
@@ -128,7 +127,7 @@ def test_ctx_field_raises_without_registration():
 
 def test_has_field_branch_without_registration():
     """The optional part compiles and reads its fallback with no field."""
-    w = World()
+    w = World().add_field(GravityField.none())
     w.add_craft(_craft(OptionalRadarDetector))
     sim = TargetNumpy(Sim(w))
     sim.step(0.001)
@@ -139,7 +138,7 @@ def test_state_bearing_disturbance_on_custom_field_is_plumbed():
     """A RW-noise disturbance on a custom field gets its state slot in
     the sim (and evolves by the documented sqrt(dt)·driver law) — the
     plumbing walks the world's registered fields, not a built-in list."""
-    w = World()
+    w = World().add_field(GravityField.none())
     w.add_field(RadarField().add(
         DriftingEmitter((10.0, 0.0, 0.0), 100.0, name="emitter")))
     w.add_craft(_craft(RadarDetector))

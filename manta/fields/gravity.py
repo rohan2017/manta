@@ -32,6 +32,12 @@ class GravityField(SuperposedField):
     `GravityField().add_uniform((0,0,-9.81))`. As a
     convenience, the constructor accepts `g=(gx,gy,gz)` for the common
     single-uniform case — equivalent to one `add_uniform` call.
+
+    Every World must declare its gravity before a transform resolves it:
+    a planet or `GravityField(g=...)` for a real environment, or
+    `GravityField.none()` for a deliberate zero-g model (a free-floating
+    rigid body, an orbital test). Forgetting the field is a configuration
+    error, not an implicit weightless world.
     """
 
     value_shape = _VEC3_W
@@ -40,6 +46,16 @@ class GravityField(SuperposedField):
         super().__init__()
         if g is not None:
             self.add_uniform(g)
+
+    @classmethod
+    def none(cls) -> GravityField:
+        """An explicit zero-gravity declaration.
+
+        Registers the gravity field with no sources, so `g(point) = 0`
+        everywhere and the World's gravity contract is satisfied on
+        purpose rather than by omission.
+        """
+        return cls()
 
     def _zero_value(self):
         return _VEC3_W.constant((0.0, 0.0, 0.0))
@@ -53,17 +69,19 @@ class GravityField(SuperposedField):
 
 
 def gravity_at(ctx, point):
-    """g(point) if a GravityField is registered, else the zero vector.
+    """g(point) from the World's registered GravityField.
 
-    The explicit optional-gravity branch for parts that are legitimate
-    in free space (Mass, IMU, TrajectoryEndpoint): a world with no
-    GravityField means zero-g on purpose, not a configuration error.
-    Parts whose physics *requires* gravity declare
-    `requires_fields = [GravityField]` and call `ctx.field` directly.
+    The World refuses to resolve without a gravity declaration (see
+    `GravityField.none()` for deliberate zero-g), so a missing field here
+    is an internal contract violation and raises rather than quietly
+    returning a weightless world.
     """
-    if ctx.has_field(GravityField):
-        return ctx.field(GravityField).value_at_sym(point, ctx.t)
-    return _VEC3_W.constant((0.0, 0.0, 0.0))
+    if not ctx.has_field(GravityField):
+        raise RuntimeError(
+            "gravity_at: no GravityField is registered on this World. "
+            "Declare gravity with World.add_field(GravityField(g=...)), a "
+            "planet, or GravityField.none() for deliberate zero-g.")
+    return ctx.field(GravityField).value_at_sym(point, ctx.t)
 
 
 class UniformGravity(Disturbance):

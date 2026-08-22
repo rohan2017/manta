@@ -110,3 +110,28 @@ def test_observable_subspace_isolates_modeling_from_observability():
     assert full.verdict == "overconfident"
     assert sub.dof == basis.shape[1] < 12
     assert sub.consistent
+
+
+def test_chi2_gate_matches_tabulated_quantiles_without_scipy():
+    """The exported gate helper is exact (not Wilson–Hilferty) at the small
+    dofs real sensors have, and validates its inputs."""
+    from manta.estimation import chi2_gate, chi2_quantile
+    from manta.estimation.consistency import chi2_cdf
+
+    tabulated = {
+        (1, 0.95): 3.841459, (2, 0.95): 5.991465, (3, 0.95): 7.814728,
+        (3, 0.99): 11.344867, (3, 0.999): 16.266236, (6, 0.99): 16.811894,
+        (10, 0.95): 18.307038, (100, 0.975): 129.561197,
+        (1, 0.5): 0.454936, (2, 0.05): 0.102587,
+    }
+    for (dof, confidence), expected in tabulated.items():
+        assert chi2_gate(dof, confidence) == pytest.approx(expected, abs=2e-6)
+        assert chi2_cdf(chi2_gate(dof, confidence), dof) == pytest.approx(
+            confidence, abs=1e-12)
+    assert chi2_quantile(260.0, 0.975) == pytest.approx(306.6, abs=0.2)
+    for bad in ((0, 0.95), (-1, 0.95), (2.0, 0.95), (True, 0.95)):
+        with pytest.raises(ValueError, match="dof"):
+            chi2_gate(*bad)
+    for bad in ((3, 0.0), (3, 1.0), (3, 1.5), (3, "0.9")):
+        with pytest.raises(ValueError, match="confidence"):
+            chi2_gate(*bad)

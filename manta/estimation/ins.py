@@ -16,6 +16,7 @@ separate pseudo-parts.
 
 from __future__ import annotations
 
+import warnings
 from types import MappingProxyType
 from typing import Any
 
@@ -54,6 +55,36 @@ from ._assembly import (
 from ._kalman import joseph_update, symmetrize
 
 _RIGID = ("position", "orientation", "velocity", "angular_velocity")
+
+# A preintegrated packet spans `duration` seconds; the INS predict that
+# consumes it must advance by exactly that interval, because the gravity and
+# lever-arm terms are scaled by the predict `dt` while the packet deltas were
+# integrated over `duration`. The kernel compares the two at this relative
+# tolerance (float accumulation of sample intervals) and poisons the
+# navigation state with NaN on a mismatch, so every backend fails instead of
+# silently mis-scaling.
+PREINTEGRATION_DURATION_RTOL = 1e-9
+
+# The selected accelerometer sample drives both strapdown propagation and the
+# `ModelForce.specific_force` pseudo-measurement, so their noises are
+# correlated. INS drops that cross term, which is sound only while
+# `rho = accel_noise_sigma / model_error_sigma` is small: the neglected
+# contribution to the innovation covariance and gain scales like rho².
+# Above the ceiling (25 % of R) the dropped term is no longer a second-order
+# correction and construction is refused; above the warning level (1 % of R)
+# the value is surfaced as a warning and in the artifact metadata. Neither
+# is a silent drop. `model_error_sigma` here is the white per-axis floor of
+# the `ModelForce` error model (its quietest axis); the Gauss–Markov
+# component is filter state, not R. Both come from the part's fit evidence,
+# which the INS requires (`ModelForce(evidence=...)`): a model-aided INS
+# never runs on an implicit zero held-out bias or a white-only error model.
+MODEL_FORCE_RHO_CEILING = 0.5
+MODEL_FORCE_RHO_WARNING = 0.1
+PREINTEGRATION_DURATION_DOC = (
+    "Packet span in seconds. predict(u, dt) requires dt == duration "
+    f"(relative tolerance {PREINTEGRATION_DURATION_RTOL:g}); a mismatch "
+    "yields a NaN navigation state instead of mis-scaled gravity/lever terms."
+)
 
 
 def _qualified_parts(world, cls) -> dict[str, Any]:
@@ -138,15 +169,18 @@ class _INSSystem:
                 "gyro_bias_reference": 3,
                 "accel_bias_reference": 3,
                 "start_gyro": 3,
+                "duration": 1,
             }
             packet_defaults = {
                 "delta_orientation": (1.0, 0.0, 0.0, 0.0),
             }
+            packet_docs = {"duration": PREINTEGRATION_DURATION_DOC}
             for short, dim in packet_dims.items():
                 full = f"{prefix}.{short}"
                 self.preintegration_input_map[short] = full
                 preintegration_fields.append(PortField(
-                    full, dim, packet_defaults.get(short, np.zeros(dim))))
+                    full, dim, packet_defaults.get(short, np.zeros(dim)),
+                    doc=packet_docs.get(short, "")))
 
         self.input_names = [*self.model_input_names,
                             self.accel_input, self.gyro_input,
@@ -240,6 +274,7 @@ class _INSSystem:
 
         self.measurement_sources: dict[str, str] = {}
         self.rho_by_sensor: dict[str, float] = {}
+        self.evidence_by_sensor: dict[str, Any] = {}
         for full in self.sensors:
             owner_name, output_name = full.rsplit(".", 1)
             part = _qualified_parts(self.world, ModelForce).get(owner_name)
@@ -252,10 +287,50 @@ class _INSSystem:
                     f"INS: ModelForce {owner_name!r} must be colocated and "
                     f"co-oriented with selected IMU {self.imu_name!r}")
             self.measurement_sources[full] = self.accel_input
-            sigma_model = float(part.model_error_sigma)
-            self.rho_by_sensor[full] = (
-                float(self.imu.accel_noise_sigma) / sigma_model
-                if sigma_model > 0.0 else float("inf"))
+            evidence = part.evidence
+            if evidence is None:
+                raise ValueError(
+                    f"INS: ModelForce {owner_name!r} carries no fit evidence. "
+                    "A model-aided INS consumes the held-out residual bias "
+                    "and the time-correlated model-error covariance "
+                    "explicitly; it refuses the implicit zero. Construct the "
+                    "part with evidence=FitEvidence (FitResult.evidence(...) "
+                    "/ NoiseFitResult.evidence(...) / held_out_evidence(...))"
+                    f" on the {self.imu_name!r} accelerometer channel")
+            if not evidence.accepted:
+                failed = ", ".join(
+                    f"{c.criterion}[{c.axis}]={c.value:.4g} (limit {c.limit:.4g})"
+                    for c in evidence.failed_checks)
+                raise ValueError(
+                    f"INS: ModelForce {owner_name!r} fit evidence on "
+                    f"{evidence.channel!r} is not accepted; failed: {failed}. "
+                    "Refit or revise the acceptance criteria — the decision "
+                    "is recorded in the artifact, not overridden here")
+            self.evidence_by_sensor[full] = evidence
+            # The dropped cross term involves the white accelerometer noise
+            # against the white part of R only; the correlated component is
+            # filter state. Use the quietest axis (largest rho).
+            sigma_model = min(part.white_sigmas)
+            rho = (float(self.imu.accel_noise_sigma) / sigma_model
+                   if sigma_model > 0.0 else float("inf"))
+            if not rho <= MODEL_FORCE_RHO_CEILING:
+                raise ValueError(
+                    f"INS: ModelForce {owner_name!r} noise ratio rho = "
+                    f"accel_noise_sigma/min(white model_error sigma) = "
+                    f"{rho:.4g} exceeds "
+                    f"MODEL_FORCE_RHO_CEILING={MODEL_FORCE_RHO_CEILING}; the "
+                    "dropped process/measurement noise correlation is no "
+                    "longer a second-order term. The white model-error floor "
+                    "comes from the fit evidence — select a quieter "
+                    "accelerometer or refit")
+            if rho > MODEL_FORCE_RHO_WARNING:
+                warnings.warn(
+                    f"INS: ModelForce {owner_name!r} noise ratio rho={rho:.4g} "
+                    f"exceeds MODEL_FORCE_RHO_WARNING={MODEL_FORCE_RHO_WARNING}"
+                    " (the dropped noise correlation is ~rho² of R); the "
+                    "value is recorded in the artifact metadata",
+                    RuntimeWarning, stacklevel=4)
+            self.rho_by_sensor[full] = rho
 
     def _gravity(self, position, t):
         field = next((f for f in self.world.fields
@@ -412,11 +487,22 @@ class _INSSystem:
                 q_next = q_next / ca.sqrt(
                     ca.dot(q_next, q_next) + 1e-30)
                 R_wb_next = quat_to_rotmat(q_next)
+                # Residual consistency check: the packet was integrated over
+                # `duration`, the gravity/lever terms above over `dt`. They
+                # must agree; otherwise poison the navigation state so no
+                # backend can continue on a mis-scaled prediction.
+                duration = packet_chunk("duration", 1)
+                consistent = (ca.fabs(dt - duration)
+                              <= PREINTEGRATION_DURATION_RTOL
+                              * ca.fmax(ca.fabs(dt), ca.fabs(duration)))
+                poison = ca.if_else(consistent, ca.MX.zeros(1, 1),
+                                    ca.MX.nan(1, 1))
                 replacements = {
-                    p_name: sensor_p_next - R_wb_next @ lever,
-                    q_name: q_next,
+                    p_name: sensor_p_next - R_wb_next @ lever + poison,
+                    q_name: q_next + poison,
                     v_name: (sensor_v_next
-                             - R_wb_next @ ca.cross(omega_body, lever)),
+                             - R_wb_next @ ca.cross(omega_body, lever)
+                             + poison),
                 }
             chunks = []
             for slot in spec.slots:
@@ -534,7 +620,10 @@ class INS(_FilterBase):
     physical IMU whose accelerometer and gyro become required prediction
     inputs in ``u``. Its own outputs are removed from the ordinary update set.
     A selected, colocated ``ModelForce.specific_force`` is automatically
-    sourced from that IMU's accelerometer by analysis tools.
+    sourced from that IMU's accelerometer by analysis tools. Such a part
+    must carry accepted fit evidence (``ModelForce(evidence=...)``):
+    construction refuses one without evidence, or whose evidence failed
+    its acceptance criteria, naming what is missing.
 
     ``propagation="raw"`` consumes one accelerometer/gyro pair per predict.
     ``propagation="preintegrated"`` consumes packets emitted by
@@ -571,6 +660,7 @@ class INS(_FilterBase):
         })
         self.measurement_sources = MappingProxyType(dict(sys.measurement_sources))
         self.rho_by_sensor = MappingProxyType(dict(sys.rho_by_sensor))
+        self.evidence_by_sensor = MappingProxyType(dict(sys.evidence_by_sensor))
         resolved_gates = resolve_gates(sys, gates, who="INS")
 
         spec, n_tan = sys.spec, sys.spec.tangent_dim
@@ -637,8 +727,21 @@ class INS(_FilterBase):
                 else (*sys.preintegration_input_map.values(),
                       sys.accel_input, sys.gyro_input)),
             "preintegration_input_map": self.preintegration_input_map,
+            "preintegration_duration_rtol": (
+                PREINTEGRATION_DURATION_RTOL
+                if propagation == "preintegrated" else None),
             "measurement_sources": MappingProxyType(dict(sys.measurement_sources)),
             "rho_by_sensor": MappingProxyType(dict(sys.rho_by_sensor)),
+            # The consumed fit evidence travels with the estimator artifact:
+            # which held-out set, which bias, which tau/sigma, and the
+            # acceptance checks that admitted it.
+            "model_force_evidence": MappingProxyType(
+                dict(sys.evidence_by_sensor)),
+            "rho_ceiling": MODEL_FORCE_RHO_CEILING,
+            "rho_warning": MODEL_FORCE_RHO_WARNING,
+            "rho_warned_sensors": tuple(sorted(
+                name for name, rho in sys.rho_by_sensor.items()
+                if rho > MODEL_FORCE_RHO_WARNING)),
             "lever_arm_m": tuple(float(v) for v in sys.lever_arm),
             # The filter deliberately carries no angular-velocity state.
             # Runtime adapters can still publish the current body rate from

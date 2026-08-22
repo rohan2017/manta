@@ -17,6 +17,7 @@ from manta import (
     Window,
 )
 from manta.estimation import nees, observability_trajectory
+from manta.estimation.ins import PREINTEGRATION_DURATION_DOC
 from manta.ir._rotation import quat_mul_np, so3_exp_np
 from tests.test_ins import _ins, _world
 
@@ -193,7 +194,7 @@ def test_noisefit_accepts_recorded_preintegration_packet_traces():
     ins = _preintegrated_ins(world)
     fit = NoiseFit(
         world,
-        noise={"model_force.model_error": Prior(mean=0.5, sigma=1.0)},
+        noise={"model_force.model_error_x": Prior(mean=0.5, sigma=1.0)},
         estimator=ins,
     )
     preintegrator = TargetNumpy(IMUPreintegrator())
@@ -279,6 +280,42 @@ def test_preintegrated_ins_emits_cpp(tmp_path: Path):
     header = result.wrapper_hpp.read_text()
     assert "craft_imu_preintegrated_delta_orientation" in header
     assert "craft_imu_preintegrated_covariance" in header
+    # The packet span is a kernel input and its invariant is documented on
+    # the generated Inputs field a direct C++ caller fills.
+    assert "craft_imu_preintegrated_duration" in header
+    assert f"// {PREINTEGRATION_DURATION_DOC}" in header
+
+
+def test_packet_duration_is_a_kernel_input_checked_against_dt():
+    ins = _preintegrated_ins()
+    assert ins.preintegration_input_map["duration"] == \
+        "craft.imu.preintegrated.duration"
+    assert "craft.imu.preintegrated.duration" in ins.module().metadata[
+        "prediction_inputs"]
+    pre = TargetNumpy(IMUPreintegrator())
+    for k in range(4):
+        accel, gyro = _sample(k, .005)
+        packet = pre.step(.005, accel=accel, gyro=gyro,
+                          accel_bias=(0, 0, 0), gyro_bias=(0, 0, 0))
+    runtime = TargetNumpy(ins)
+    u = ins.sys.resolve_u(runtime.preintegrated_inputs(packet))
+    predict = ins.module().functions["predict"]
+    x0, P0 = runtime.x.copy(), runtime.P.copy()
+    consistent, _ = predict(x0, P0, u, packet["duration"], 0.0)
+    assert np.all(np.isfinite(np.asarray(consistent)))
+    # The kernel itself (hence every generated backend) refuses a dt that is
+    # not the packet span: the navigation state is poisoned, not mis-scaled.
+    poisoned, _ = predict(x0, P0, u, 0.5 * packet["duration"], 0.0)
+    assert not np.any(np.isfinite(np.asarray(poisoned)[:10]))
+    # The NumPy runtime names the mismatch before running the kernel.
+    with pytest.raises(ValueError, match="differs from the preintegrated "
+                                         "packet duration"):
+        runtime.predict(0.5 * packet["duration"],
+                        u=runtime.preintegrated_inputs(packet))
+    np.testing.assert_array_equal(runtime.x, x0)
+    runtime.predict_preintegrated(packet)
+    assert np.all(np.isfinite(runtime.x))
+    assert runtime.time == pytest.approx(packet["duration"])
 
 
 def test_split_rate_desktop_example():

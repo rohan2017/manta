@@ -10,11 +10,10 @@ in test_rigid_body.py.
 import numpy as np
 import pytest
 
-from manta import Sim, TargetNumpy, World, ir
-from manta.fields import GravityField
+from manta import Sim, TargetNumpy, World
 from manta.craft import Craft
+from manta.fields import GravityField
 from manta.parts import Mass
-
 
 # ---------------------------------------------------------------------------
 # Free-fall (linear dynamics; no orientation change expected)
@@ -99,7 +98,7 @@ def test_unknown_parameter_raises():
 
 def test_empty_craft_compile_raises():
     c = Craft("empty")
-    w = World()
+    w = World().add_field(GravityField.none())
     w.add_craft(c)
     # An empty craft has zero total mass; the World compile path surfaces
     # the mass-positivity guard ("total mass") rather than a separate
@@ -111,7 +110,7 @@ def test_empty_craft_compile_raises():
 def test_zero_mass_craft_raises():
     c = Craft("massless")
     c.add(Mass("body", mass=0.0))
-    w = World()
+    w = World().add_field(GravityField.none())
     w.add_craft(c)
     with pytest.raises(ValueError, match="total mass"):
         Sim(w)

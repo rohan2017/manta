@@ -19,12 +19,14 @@ import pytest
 
 from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import (
-    Disturbance, Field, GravityField, PointMassGravity, UniformGravity,
+    Disturbance,
+    GravityField,
+    PointMassGravity,
+    UniformGravity,
 )
 from manta.ir.frames import WorldFrame
 from manta.ir.types import Vec3
 from manta.parts import Mass
-
 
 # ---------------------------------------------------------------------------
 # Field plumbing
@@ -153,7 +155,7 @@ def test_world_no_field_is_in_vacuum():
     """A World with no GravityField → craft is in free space (no
     acceleration). Useful for orbital dynamics where gravity is provided
     by per-craft Disturbances elsewhere."""
-    w = World()      # no add_uniform_gravity
+    w = World().add_field(GravityField.none())      # no add_uniform_gravity
     c = Craft("floater")
     c.add(Mass("body", mass=1.0))
     w.add_craft(c, position=(0, 0, 100), velocity=(1.0, 0, 0))

@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from manta import Craft, Sim, TargetCpp, TargetNumpy, World
+from manta.fields import GravityField
 from manta.parts import Contactor, DCSource, Mass, ResistiveLoad
 
 
@@ -23,7 +24,7 @@ def _electrical_world():
         series_resistance=0.2, input_current_limit=10.0, closed=0.0))
     load = craft.add(ResistiveLoad("load", resistance=5.0))
     source.connect(rail).connect(load)
-    world = World(name="electrical_codegen")
+    world = World(name="electrical_codegen").add_field(GravityField.none())
     world.add_craft(craft)
     return world
 

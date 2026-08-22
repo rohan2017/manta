@@ -12,7 +12,7 @@ against closed-form lumped-capacitance solutions:
 import numpy as np
 import pytest
 
-from manta import Craft, EKF, Sim, TargetNumpy, World
+from manta import EKF, Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField
 from manta.parts import Mass, Motor, ThermalMass
 
@@ -24,7 +24,7 @@ def _rig(*nodes):
     c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
     for n in nodes:
         c.add(n)
-    w = World()
+    w = World().add_field(GravityField.none())
     w.add_craft(c)
     return w, c
 
@@ -156,7 +156,7 @@ def test_motor_heats_its_winding_node():
     m = c.add(Motor("m", torque_constant=0.05, resistance=R))
     m.add(Mass("rotor", mass=0.5, moi=(0.01, 0.01, 0.2)))
     c.add(ThermalMass("winding", heat_capacity=C, source=m))
-    w = World()
+    w = World().add_field(GravityField.none())
     w.add_craft(c)
     sim = TargetNumpy(Sim(w))
     sim.state["rig"]["m.voltage"] = V
@@ -268,7 +268,7 @@ def test_fluid_ambient_follows_regime_at_position():
         c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
         c.add(ThermalMass("n", heat_capacity=10.0,
                           ambient_conductance=50.0, ambient="fluid"))
-        w = World()
+        w = World().add_field(GravityField.none())
         air = UniformFluid(density=1.225, temperature=300.0)
         sea = UniformFluid(
             density=1025.0, temperature=278.0, viscosity=1.35e-3,
@@ -326,7 +326,7 @@ def test_cross_craft_link_raises():
     c2 = Craft("two")
     c2.add(Mass("m", mass=1.0))
     c2.add(b)
-    w = World()
+    w = World().add_field(GravityField.none())
     w.add_craft(c1)
     w.add_craft(c2)
     with pytest.raises(ValueError, match="same craft"):
@@ -368,7 +368,7 @@ def test_temperature_is_ekf_state_with_heat_noise_q():
     as a process-noise channel for auto-Q."""
     n = ThermalMass("n", heat_capacity=100.0, heat_noise_sigma=0.5)
     w, _ = _rig(n)
-    w.add_field(GravityField(g=(0.0, 0.0, -9.81)))
+    w.get_field(GravityField).add_uniform((0.0, 0.0, -9.81))
     ekf = EKF(w)
     names = [s.name for s in ekf.spec.slots]
     assert "rig.n.temperature" in names

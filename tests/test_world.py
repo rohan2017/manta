@@ -3,14 +3,33 @@
 import numpy as np
 import pytest
 
-from manta import World, Coupling, Craft, Sim, TargetNumpy
+from manta import Coupling, Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField
-from manta.parts import RevoluteJoint, Mass
-
+from manta.parts import Mass, RevoluteJoint
 
 # ---------------------------------------------------------------------------
 # Part-tree name uniqueness
 # ---------------------------------------------------------------------------
+
+def test_world_requires_an_explicit_gravity_declaration():
+    """Forgetting GravityField used to resolve as silent zero-g. Gravity is
+    now declared — a real field, a planet, or GravityField.none()."""
+    def world():
+        craft = Craft("c")
+        craft.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
+        w = World("gravity_contract")
+        w.add_craft(craft)
+        return w
+
+    with pytest.raises(ValueError, match="declares no gravity"):
+        Sim(world())
+    weightless = world().add_field(GravityField.none())
+    assert GravityField in {type(f) for f in weightless.fields}
+    sim = TargetNumpy(Sim(weightless))
+    for _ in range(5):
+        sim.step(0.1)
+    np.testing.assert_allclose(sim.state["c"]["velocity"], 0.0)
+
 
 def test_duplicate_part_name_raises():
     """Duplicate names anywhere in one craft's tree are refused at add():
@@ -87,7 +106,7 @@ def test_two_crafts_fall_independently():
 def test_transform_resolves_private_snapshot_and_authoring_world_stays_editable():
     c = Craft("c")
     c.add(Mass("body", mass=1.0))
-    w = World()
+    w = World().add_field(GravityField.none())
     w.add_craft(c)
     first = Sim(w)
 
@@ -166,7 +185,7 @@ def test_world_carries_part_state_through_step():
 # ---------------------------------------------------------------------------
 
 def test_add_craft_duplicate_name_raises():
-    w = World()
+    w = World().add_field(GravityField.none())
     a = Craft("dup")
     a.add(Mass("body", mass=1.0))
     b = Craft("dup")
@@ -177,7 +196,7 @@ def test_add_craft_duplicate_name_raises():
 
 
 def test_add_craft_same_instance_twice_raises():
-    w = World()
+    w = World().add_field(GravityField.none())
     c = Craft("once")
     c.add(Mass("body", mass=1.0))
     w.add_craft(c)
@@ -187,7 +206,7 @@ def test_add_craft_same_instance_twice_raises():
 
 def test_add_coupling_rejects_unregistered_craft():
     """add_coupling requires both endpoint crafts to be registered."""
-    w = World()
+    w = World().add_field(GravityField.none())
     a = Craft("a"); a.add(Mass("body", mass=1.0))
     b = Craft("b"); b.add(Mass("body", mass=1.0))
     w.add_craft(a)   # only `a` registered
@@ -218,7 +237,7 @@ def test_coupling_identity_and_ownership_are_unique():
         return craft
 
     a, b = tether_craft("a"), tether_craft("b")
-    first = World("first")
+    first = World("first").add_field(GravityField.none())
     first.add_craft(a)
     first.add_craft(b)
     coupling = Tether(a, "hook", b, "hook", name="tow", stiffness=1.0)
@@ -231,7 +250,7 @@ def test_coupling_identity_and_ownership_are_unique():
             Tether(a, "hook", b, "hook", name="tow", stiffness=2.0))
 
     a2, b2 = tether_craft("a2"), tether_craft("b2")
-    second = World("second")
+    second = World("second").add_field(GravityField.none())
     second.add_craft(a2)
     second.add_craft(b2)
     foreign = Tether(a2, "hook", b2, "hook", stiffness=1.0)
@@ -248,7 +267,7 @@ def test_coupling_rejects_same_craft_endpoints():
     craft.add(Mass("body", mass=1.0))
     craft.add(TetherEndpoint("left"))
     craft.add(TetherEndpoint("right"))
-    world = World()
+    world = World().add_field(GravityField.none())
     world.add_craft(craft)
     with pytest.raises(ValueError, match="distinct crafts"):
         world.add_coupling(
@@ -258,7 +277,7 @@ def test_coupling_rejects_same_craft_endpoints():
 def test_compile_handles_multiple_independent_crafts():
     """A world with multiple crafts and no couplings compiles to a
     single tick spanning all of them."""
-    w = World()
+    w = World().add_field(GravityField.none())
     w.add_craft(_make_craft("a"))
     w.add_craft(_make_craft("b"))
     w.add_craft(_make_craft("c"))
@@ -280,7 +299,7 @@ def _make_craft(name: str) -> Craft:
 def test_compiled_world_exposes_world_tick():
     """`cw.tick` returns the single CompiledGraph driving the world.
     Direct invocation uses flat-prefixed casadi inputs (`<craft>.slot`)."""
-    w = World()
+    w = World().add_field(GravityField.none())
     c = Craft("solo"); c.add(Mass("body", mass=1.0))
     w.add_craft(c)
     sim = Sim(w)
@@ -295,7 +314,7 @@ def test_compiled_world_exposes_world_tick():
 
 
 def test_compiled_world_repr_lists_crafts():
-    w = World()
+    w = World().add_field(GravityField.none())
     w.add_craft(_make_craft("a"))
     w.add_craft(_make_craft("b"))
     r = repr(Sim(w))

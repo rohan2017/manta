@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from manta import Craft, Sim, TargetNumpy, World
+from manta.fields import GravityField
 from manta.parts import Antenna, Mass, RevoluteJoint
 
 
@@ -34,7 +35,7 @@ def test_antenna_reports_kinematic_world_position():
     craft = Craft("boat")
     craft.add(Mass("hull", mass=1.0))
     craft.add(Antenna("wifi", mount_offset=(1.0, 0.0, 0.5)))
-    world = World()
+    world = World().add_field(GravityField.none())
     world.add_craft(craft, position=(4.0, 2.0, 1.0))
     sim = TargetNumpy(Sim(world))
     sim.step(0.01)
@@ -48,7 +49,7 @@ def test_antenna_reports_static_mount_world_orientation():
     craft = Craft("boat")
     craft.add(Mass("hull", mass=1.0))
     craft.add(Antenna("wifi", mount_orientation=mount_q))
-    world = World()
+    world = World().add_field(GravityField.none())
     world.add_craft(craft, orientation=craft_q)
 
     sim = TargetNumpy(Sim(world))
@@ -68,7 +69,7 @@ def test_antenna_reports_rotating_craft_rate_in_world_frame():
     craft = Craft("boat")
     craft.add(Mass("hull", mass=1.0, moi=(1.0, 1.0, 1.0)))
     craft.add(Antenna("wifi", mount_orientation=_quat_x(np.pi / 3)))
-    world = World()
+    world = World().add_field(GravityField.none())
     # +x body rate points along +y in world after the craft yaw.
     world.add_craft(craft, orientation=craft_q, angular_velocity=(2.0, 0.0, 0.0))
 
@@ -93,7 +94,7 @@ def _articulated_world():
         )
     )
     craft.add(mast)
-    world = World()
+    world = World().add_field(GravityField.none())
     world.add_craft(
         craft,
         **{

@@ -23,15 +23,19 @@ and structurally relevant disturbance slots.
 ## INS force disturbance observer
 
 Add a colocated [`ModelForce`][manta.parts.ModelForce] pseudo-part to expose
-the compiled model's specific-force prediction as an ordinary noisy Output:
+the compiled model's specific-force prediction as an ordinary noisy Output.
+Its error model is not a hand-picked sigma: it is built from the fit
+pipeline's typed held-out evidence for that IMU's accelerometer channel
+(see [System identification](../reference/fit.md)), and a model-aided INS
+refuses a part without accepted evidence:
 
 ```python
 imu = IMU("imu", accel_noise_sigma=6.9e-3,
           gyro_noise_sigma=1e-3, accel_bias_sigma=1e-4,
           gyro_bias_sigma=1e-5)
 craft.add(imu)
-craft.add(ModelForce("model_force", imu=imu,
-                     model_error_sigma=0.5))
+evidence = nresult.evidence(held_out_windows, sensor="imu.accel")
+craft.add(ModelForce("model_force", imu=imu, evidence=evidence))
 
 ins_ir = INS(world, imu="imu",
              sensors=["model_force.specific_force"])
@@ -42,6 +46,36 @@ ins.update("model_force.specific_force", accel, u=sample)
 ins.predict(dt, u=sample)
 ```
 
+The doctrine's two evidence terms — held-out residual bias and
+time-correlated process covariance — each enter where they are
+statistically right, and the part's docstring is the contract:
+
+- **Held-out residual bias → deterministic correction.** The per-axis mean
+  residual is added to the predicted sample. It is not a filter state: the
+  innovation already observes the accelerometer bias with
+  `∂r_f/∂δb_a = -I`, and a second constant offset in the same residual
+  would be unobservable against it. The measured value is applied; what
+  remains of its uncertainty (`residual_bias_stderr`) is a constant the
+  `accel_bias` state absorbs.
+- **White per-axis floor → measurement noise.** `model_error_<axis>`
+  (`WhiteNoise`, R1) carries `white_sigma` — the pseudo-measurement's `R`.
+- **Time-correlated component → Gauss–Markov filter state.**
+  `model_error_correlated_<axis>` ([`GaussMarkovNoise`][manta.parts.GaussMarkovNoise],
+  R1) carries the fitted `tau`/`sigma`; the framework synthesizes its state
+  slot with the exact `exp(-dt/tau)` transition and `(1 - exp(-2dt/tau))·σ²`
+  process noise in the IR, so every backend sees the correlation instead of
+  a white approximation. An axis whose evidence fell back to the white model
+  (the fallback and its reason are recorded in the artifact) leaves the
+  channel inert.
+- A `random_walk` evidence model is refused — a random-walk model error is
+  indistinguishable from the accelerometer bias random walk.
+
+`INS` construction refuses a `ModelForce` with no evidence, or whose
+`FitEvidence.accepted` is false, naming the missing artifact or the failed
+acceptance checks; the consumed evidence is stored in the Module metadata
+(`model_force_evidence`) so the estimator artifact records exactly which
+held-out set admitted it.
+
 This is a disturbance observer, not generic model aiding. For innovation
 `r_f = f_IMU - f_model`, `∂r_f/∂δb_a = -I`, directly constraining the
 accelerometer bias. When IMU and model agree otherwise, the residual is the
@@ -50,12 +84,21 @@ unmodeled external force. Declared random-walk force states such as
 sensor dependency graph.
 
 The accelerometer sample drives both propagation and the pseudo-measurement,
-so those noises are formally correlated. In the intended regime the ignored
-term is small: the generated artifact stores
-`rho = accel_noise_sigma / model_error_sigma`, and the NumPy runtime logs it.
-Manta deliberately assigns no universal threshold to it; consumers should
-compare it with bounds validated for their model, sensor bandwidth, operating
-envelope, and application. Convert density units to Manta's effective
+so those noises are formally correlated. INS drops that cross term, which is
+sound only while `rho = accel_noise_sigma / white model-error sigma` (the
+quietest axis of the evidence's white floor; the Gauss–Markov component is
+state, not `R`) is small: the neglected contribution to the innovation
+covariance and gain scales like `rho²`. Construction therefore enforces a
+documented ceiling rather than dropping the term silently:
+`rho > MODEL_FORCE_RHO_CEILING` (0.5, a 25 % correction) raises
+`ValueError`; `rho > MODEL_FORCE_RHO_WARNING` (0.1, a 1 % correction) builds
+but emits a `RuntimeWarning` carrying the value. The artifact metadata stores
+`rho_by_sensor`, both thresholds, and `rho_warned_sensors`; the NumPy runtime
+logs the ratio (at warning level above the warning threshold). A model whose
+white error is below the accelerometer's own noise is outside the regime
+this pseudo-measurement is valid in, and the refusal says so. Consumers
+should still validate the ratio against their own model, sensor bandwidth,
+and operating envelope. Convert density units to Manta's effective
 per-sample sigma at the configuration boundary.
 
 Lever-arm compensation is part of the symbolic tick: the measured gyro drives
@@ -110,7 +153,17 @@ only the separate model/bias process covariance.
 
 The packet spans an interval, so predict it first and then fold endpoint
 measurements. This differs from the raw sample loop's update-at-interval-start
-convention; packet `t0`/`t1` timestamps make the boundary explicit.
+convention. The packet carries no absolute timestamps — transport framing owns
+`t0`/`t1` — but it does carry its own span, `duration`, and that span is part
+of the kernel contract: the packet-consuming `predict` must advance by exactly
+`duration` (relative tolerance `1e-9`), because the gravity and lever-arm
+terms are scaled by the predict `dt` while the deltas were integrated over the
+packet. `predict_preintegrated` takes `dt` from the packet. A direct caller
+(the NumPy `predict`, or generated C++ `predict(u, dt)`) that passes a
+different `dt` gets a NaN navigation state from the kernel rather than a
+mis-scaled one; the NumPy runtime names the mismatch before the kernel runs,
+and the generated `Inputs` header documents the invariant on the `duration`
+field.
 
 `IMUPreintegrator` and the packet-consuming INS are independent Modules. Lower
 the recurrence to an MCU with `TargetCpp`, and lower or run the main filter on
@@ -125,7 +178,10 @@ sequence numbers, health/saturation flags, calibration identity, and CRC.
   the covariance is over the tangent dimension, not the ambient one.
 - **Auto-assembled Q** — process-noise contributions are picked up from
   declared `Noise` channels by autodiff (`L·Σ·Lᵀ`); RW biases get
-  `dt·σ²` on their slot diagonal automatically.
+  `dt·σ²` on their slot diagonal automatically, and Gauss–Markov channels
+  (`GaussMarkovNoise(tau=, sigma=)`) get the exact discrete
+  `(1 - exp(-2dt/tau))·σ²` alongside their `exp(-dt/tau)` transition in
+  `F` — the correlated error is filter state in EKF, UKF, and INS alike.
 - **Auto-assembled R** — per-sensor measurement covariance from the noise
   channels feeding each `Output`.
 - **Auto-built state spec** — walking every craft + disturbance to lay out
@@ -144,13 +200,19 @@ sequence numbers, health/saturation flags, calibration identity, and CRC.
 
 Every sensor update returns an `UpdateResult` containing the innovation,
 innovation covariance, normalized innovation squared (NIS), and whether the
-sample was accepted. Configure a generated NIS gate when constructing either
-filter:
+sample was accepted. Configure a generated NIS gate when constructing any
+filter. A consistent filter's NIS is χ²-distributed with the measurement
+dimension as its degrees of freedom, so derive gates from a chosen
+false-rejection rate with [`chi2_gate`][manta.estimation.chi2_gate]
+(scipy-free) rather than remembering quantiles:
 
 ```python
+from manta.estimation import chi2_gate
+
 runtime = TargetNumpy(EKF(
     world,
-    gates={"imu.gyro": 16.3, "gps.position": 11.34},
+    gates={"imu.gyro": chi2_gate(3, 0.999),      # 16.27
+           "gps.position": chi2_gate(3, 0.99)},  # 11.34
 ))
 result = runtime.update("gps.position", position)
 if not result.accepted:

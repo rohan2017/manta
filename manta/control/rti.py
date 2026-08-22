@@ -180,6 +180,20 @@ class MPCReference:
         object.__setattr__(self, "crafts", MappingProxyType(copied))
 
 
+# Tikhonov term added to the QP Hessian diagonal every tick. The reduced
+# Hessian of a direct-multiple-shooting RTI step can be exactly singular in
+# directions the cost does not see (an unweighted stage, a slack at its
+# bound), and both OSQP and HPIPM need a strictly convex objective to
+# factor. The value is far below any weight the cost contributes and is
+# reported on every `MPCResult`, so it is a declared solver setting rather
+# than an invisible nudge.
+HESSIAN_REGULARIZATION = 1e-9
+# Native QP bridges take finite bounds only; an unbounded row is passed at
+# this magnitude (the solvers treat it as "inactive"). It is a representation
+# detail of the bound, not a change to the problem.
+QP_BOUND_INFINITY = 1e30
+
+
 @dataclass(frozen=True)
 class MPCTimings:
     rollout_linearize_ms: float
@@ -211,6 +225,16 @@ class MPCResult:
     qp_dual_residual: float = math.nan
     qp_rho_updates: int = 0
     qp_rho_estimate: float = math.nan
+    # Tikhonov term added to the QP Hessian diagonal for this solve
+    # (`HESSIAN_REGULARIZATION`): declared here so the regularization the
+    # solution was computed under is visible alongside its residuals.
+    hessian_regularization: float = HESSIAN_REGULARIZATION
+    # Number of accepted control entries (over the whole horizon) that the
+    # post-QP actuator-bound projection moved. The QP already bounds the
+    # normalized step, so a nonzero count means the solver returned a step
+    # outside its own bounds by more than roundoff and the projection, not
+    # the QP, decided those values.
+    clipped_controls: int = 0
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "controls", MappingProxyType(dict(self.controls)))
@@ -1236,7 +1260,7 @@ class MPC:
             self.trust_region)
         H[self._h_slack] = 2.0 * self.bank_slack_weight
         lower[self._slack_offset:] = 0.0
-        H[self._h_diagonal] += 1e-9
+        H[self._h_diagonal] += HESSIAN_REGULARIZATION
         return (H, g, A_values, constraint_lo, constraint_hi,
                 lower, upper, slack_scales)
 
@@ -1380,10 +1404,10 @@ class MPC:
             self._last_u, self._authority,
             out=self._hp_previous_control)
         np.clip(
-            general_lower, -1e30, 1e30,
+            general_lower, -QP_BOUND_INFINITY, QP_BOUND_INFINITY,
             out=self._hp_general_lower_clipped)
         np.clip(
-            general_upper, -1e30, 1e30,
+            general_upper, -QP_BOUND_INFINITY, QP_BOUND_INFINITY,
             out=self._hp_general_upper_clipped)
         return self._qp.solve(
             dynamics_A,
@@ -1433,10 +1457,10 @@ class MPC:
                 self._native_upper[:self._ncon] = chi
                 self._native_upper[self._ncon:] = upper
                 np.clip(
-                    self._native_lower, -1e30, 1e30,
+                    self._native_lower, -QP_BOUND_INFINITY, QP_BOUND_INFINITY,
                     out=self._native_lower)
                 np.clip(
-                    self._native_upper, -1e30, 1e30,
+                    self._native_upper, -QP_BOUND_INFINITY, QP_BOUND_INFINITY,
                     out=self._native_upper)
                 self._native_dual[:self._ncon] = self._qp_lam_a
                 self._native_dual[self._ncon:] = self._qp_lam_x
@@ -1520,9 +1544,15 @@ class MPC:
             normalized_delta_u, self._authority,
             out=accepted_controls)
         accepted_controls += self._U
+        # The QP bounds the normalized step to the actuator limits; this
+        # projection removes solver-tolerance overshoot. Anything beyond
+        # roundoff is reported as `clipped_controls` rather than absorbed.
+        unclipped = accepted_controls.copy()
         np.clip(
             accepted_controls, self.u_lo, self.u_hi,
             out=accepted_controls)
+        clipped_controls = int(np.count_nonzero(
+            np.abs(unclipped - accepted_controls) > 1e-12))
         accepted_states, accepted_body_left = self._rollout_accepted(
             x0, accepted_controls)
         if (not np.all(np.isfinite(accepted_controls))
@@ -1581,7 +1611,9 @@ class MPC:
             qp_primal_residual=qp_primal_residual,
             qp_dual_residual=qp_dual_residual,
             qp_rho_updates=qp_rho_updates,
-            qp_rho_estimate=qp_rho_estimate)
+            qp_rho_estimate=qp_rho_estimate,
+            hessian_regularization=HESSIAN_REGULARIZATION,
+            clipped_controls=clipped_controls)
         self.last_result = final
         return final
 

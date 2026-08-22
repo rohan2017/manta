@@ -78,11 +78,17 @@ def test_noise_fit_apply_writes_sigma_attrs(fitted):
 
 def test_noise_fit_derives_accepted_model_revision(fitted):
     _, res = fitted
-    derived = res.derive(validation={"accepted": True, "nis_pvalue": 0.4})
+    held_out = _record(_noisy_drone(), n_win=1, K=300, seed=17)
+    evidence = res.evidence(held_out, sensor="imu.accel")
+    assert evidence.accepted, evidence.summary()
+    assert all(ax.white_fallback for ax in evidence.axes)
+    derived = res.derive(evidence=evidence)
     assert isinstance(derived, ModelArtifact)
     report = derived.derivation["noise_fit"]
     assert report.accepted
+    assert report.evidence is evidence
     assert report.source_artifact_id
+    assert not res.derive().derivation["noise_fit"].accepted
     imu = next(p for p in derived.world_copy().crafts[0].parts
                if p.name == "imu")
     assert imu.gyro_noise_sigma == res.values["drone.imu.gyro_noise"]

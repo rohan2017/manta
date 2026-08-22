@@ -11,9 +11,15 @@ The tests prove, at every layer the toolchain on PATH allows:
   3. the JS runtime module is valid ES (skips without `node`);
   4. the full Emscripten `.wasm` + JS `Sim` matches numpy end-to-end (skips
      without `emcc` + `node`).
+
+The toolchain skips are explicit, not silent: with
+``MANTA_REQUIRE_WASM_TOOLCHAIN=1`` (set by the CI ``wasm`` job, which installs
+emsdk + node) a missing ``emcc``/``node`` FAILS the test instead of skipping
+it, so the roundtrip cannot quietly drop out of the compiled-parity net.
 """
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -24,6 +30,26 @@ import pytest
 from manta import EKF, LQR, Craft, Sim, TargetNumpy, TargetWasm, World
 from manta.fields import GravityField
 from manta.parts import IMU, Mass, PositionSensor, Thruster
+
+WASM_TOOLCHAIN_ENV = "MANTA_REQUIRE_WASM_TOOLCHAIN"
+
+
+def _require_wasm_toolchain(*tools: str) -> None:
+    """Skip without the named tools — or fail when CI declared them present.
+
+    ``MANTA_REQUIRE_WASM_TOOLCHAIN=1`` turns the skip into a failure: a CI job
+    that installed emsdk/node must not be able to pass by silently skipping
+    the roundtrip it exists to run.
+    """
+    missing = [tool for tool in tools if shutil.which(tool) is None]
+    if not missing:
+        return
+    reason = (f"{' + '.join(tools)} required for the WASM roundtrip; "
+              f"missing on PATH: {', '.join(missing)}")
+    if os.environ.get(WASM_TOOLCHAIN_ENV):
+        pytest.fail(f"{reason} ({WASM_TOOLCHAIN_ENV} is set, so the toolchain "
+                    "was expected to be installed)")
+    pytest.skip(reason)
 
 
 def _hover_world():
@@ -181,8 +207,7 @@ def test_wasm_abi_native_roundtrip(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 def test_wasm_js_is_valid_esm(tmp_path: Path):
-    if shutil.which("node") is None:
-        pytest.skip("node not on PATH")
+    _require_wasm_toolchain("node")
     res = TargetWasm(Sim(_hover_world()), tmp_path, class_name="Drone")
     mjs = tmp_path / "drone_check.mjs"
     mjs.write_text(res.js.read_text())
@@ -256,8 +281,7 @@ console.log(JSON.stringify({ pos: Array.from(sim.slot("position")),
 
 
 def test_wasm_js_runtime_plumbing(tmp_path: Path):
-    if shutil.which("node") is None:
-        pytest.skip("node not on PATH")
+    _require_wasm_toolchain("node")
     res = TargetWasm(Sim(_hover_world()), tmp_path, class_name="Drone")
     # `.mjs` copies so node loads them as ES modules; the runtime's internal
     # `./drone.mjs` factory import resolves to our stub in the same dir.
@@ -329,8 +353,7 @@ def test_wasm_js_params_reach_kernel(tmp_path: Path):
     parameterized browser sim silently ran with p = 0), `setParameters`
     must override them, and the strict-marshalling contract must hold:
     typo'd names, unknown arg keys, and size mismatches all throw."""
-    if shutil.which("node") is None:
-        pytest.skip("node not on PATH")
+    _require_wasm_toolchain("node")
     res = TargetWasm(Sim(_hover_world(), parameters=["body.mass"]),
                      tmp_path, class_name="Drone")
     assert [f["name"] for f in res.descriptor_obj["params"]] \
@@ -352,8 +375,7 @@ def test_wasm_js_params_reach_kernel(tmp_path: Path):
 
 
 def test_wasm_full_emscripten_roundtrip(tmp_path: Path):
-    if shutil.which("emcc") is None or shutil.which("node") is None:
-        pytest.skip("emcc + node required for the full WASM roundtrip")
+    _require_wasm_toolchain("emcc", "node")
 
     res = TargetWasm(Sim(_hover_world()), tmp_path, class_name="Drone")
     p = subprocess.run(["sh", str(res.build_sh)], cwd=tmp_path,
@@ -422,8 +444,7 @@ def _build_lqr():
 def _emcc_node(tmp_path, res, base, harness):
     """Build the bundle with Emscripten and run `harness` under node, returning
     its last stdout line parsed as JSON. Skips without the toolchain."""
-    if shutil.which("emcc") is None or shutil.which("node") is None:
-        pytest.skip("emcc + node required for the full WASM roundtrip")
+    _require_wasm_toolchain("emcc", "node")
     p = subprocess.run(["sh", str(res.build_sh)], cwd=tmp_path,
                        capture_output=True, text=True)
     assert p.returncode == 0, p.stderr

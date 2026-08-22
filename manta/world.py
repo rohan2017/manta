@@ -91,6 +91,7 @@ class World:
         """Resolve deferred compile-time behavior on a private snapshot."""
         for p in self._planets:
             p.register_disturbances(self)
+        self._require_gravity_declaration()
         self._register_field_sources()
         # Per-part resolution hooks, after the fields are fully assembled
         # (planets + field sources registered) so a hook can read them.
@@ -100,6 +101,20 @@ class World:
             for part in craft.parts:
                 part.on_world_resolve(self, craft)
         self._resolve_planet_state_overrides()
+
+    def _require_gravity_declaration(self) -> None:
+        """Gravity is never inferred. A World without a GravityField used
+        to resolve as silently weightless — forgetting the field produced a
+        plausible zero-g model instead of an error. Declare it: a planet,
+        `GravityField(g=...)`, or `GravityField.none()` for deliberate
+        zero-g."""
+        from .fields import GravityField
+        if self.get_field(GravityField) is None:
+            raise ValueError(
+                f"World '{self.name}' declares no gravity. Add "
+                "GravityField(g=(0, 0, -9.81)) (or a planet) for a real "
+                "environment, or GravityField.none() to model zero-g on "
+                "purpose; an absent field is not an implicit weightless world.")
 
     # ---- Fields ----------------------------------------------------------
 

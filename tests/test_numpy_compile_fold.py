@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 
 from manta import (
+    DEFAULT_MAX_INSTRUCTIONS,
     CompilationError,
     Craft,
     Sim,
@@ -194,3 +195,33 @@ def test_runtime_can_compile_only_a_selected_hot_function(monkeypatch, tmp_path)
     )
     with pytest.raises(KeyError, match="unknown Module function"):
         runtime.compile_functions(("not_a_kernel",))
+
+
+def test_instruction_gate_is_owner_configurable_and_names_itself(monkeypatch):
+    if shutil.which("cc") is None:
+        pytest.skip("no C compiler on PATH")
+    with pytest.raises(CompilationError, match="max_instructions"):
+        TargetNumpy(Sim(_world()), compile=True, max_instructions=1)
+    with pytest.raises(ValueError, match="max_instructions requires compile=True"):
+        TargetNumpy(Sim(_world()), max_instructions=10)
+    for invalid in (0, -3, 2.5, True):
+        with pytest.raises(ValueError, match="max_instructions"):
+            TargetNumpy(Sim(_world()), compile=True, max_instructions=invalid)
+
+    selected = []
+
+    def record(functions, **options):
+        selected.append(options["max_instr"])
+        return functions
+
+    monkeypatch.setattr(
+        "manta.codegen.numpy._runtime._compiled_functions", record
+    )
+    TargetNumpy(Sim(_world()), compile=True, max_instructions=None)
+    TargetNumpy(Sim(_world()), compile=True, max_instructions=50_000)
+    TargetNumpy(Sim(_world()), compile=True)
+    assert selected == [None, 50_000, DEFAULT_MAX_INSTRUCTIONS]
+
+    runtime = TargetNumpy(Sim(_world()))
+    with pytest.raises(CompilationError, match="max_instructions"):
+        runtime.compile_functions(("step",), max_instructions=1)

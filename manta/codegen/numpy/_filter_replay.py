@@ -13,12 +13,9 @@ filter runtime.  It never combines measurements or shortcuts covariance.
 from __future__ import annotations
 
 import ctypes
-import hashlib
 import math
 import os
-import platform
 import shutil
-import subprocess
 import tempfile
 import threading
 from collections.abc import Mapping, Sequence
@@ -32,7 +29,7 @@ from numpy.typing import NDArray
 from ..._validation import require_positive
 from ...ir.module import Hosting, Role, StateRef, entry_ident
 from ..target import as_module
-from ._compile import CompilationError, _cache_dir
+from ._compile import CompilationError, build_native_library, native_compiler
 from ._filter import (
     FilterCheckpoint,
     UpdateResult,
@@ -1271,11 +1268,7 @@ def _compile_native_runner(
     max_execution_bytes: int,
     optimization: str,
 ) -> _NativeLibrary:
-    compiler = shutil.which("cc")
-    if compiler is None:
-        raise CompilationError(
-            "native filter replay requested but no 'cc' compiler is on PATH"
-        )
+    compiler = native_compiler(what="native filter replay")
     functions: dict[str, ca.Function] = {}
     function_abis: dict[str, _FunctionABI] = {}
 
@@ -1343,79 +1336,17 @@ def _compile_native_runner(
             max_execution_bytes=max_execution_bytes,
         )
         flags = ("-O3", "-march=native") if optimization == "runtime" else ("-O1",)
-        identity = hashlib.sha256(
-            source.encode()
-            + b"\0"
-            + "\0".join(flags).encode()
-            + b"\0"
-            + platform.platform().encode()
-            + b"\0native-filter-replay-v1"
-        ).hexdigest()
         with _NATIVE_CACHE_LOCK:
+            library = build_native_library(
+                source, stem="replay", what="native filter replay",
+                compiler_flags=flags, cache_subdir="filter_replay",
+                timeout_s=180.0, compiler=compiler,
+            )
+            identity = library.key
+            library_path = library.path
             cached = _NATIVE_CACHE.get(identity)
             if cached is not None:
                 return cached
-            cache_dir = os.path.join(_cache_dir(), "filter_replay")
-            try:
-                os.makedirs(cache_dir, mode=0o700, exist_ok=True)
-            except OSError as exc:
-                raise CompilationError(
-                    f"cannot create native replay cache {cache_dir!r}: {exc}. "
-                    "Set XDG_CACHE_HOME to a writable directory"
-                ) from exc
-            library_path = os.path.join(cache_dir, f"replay_{identity[:20]}.so")
-            if not os.path.exists(library_path):
-                with open(source_path, "w", encoding="utf-8") as source_file:
-                    source_file.write(source)
-                private_path = os.path.join(build_dir, "filter_replay.so")
-                try:
-                    subprocess.run(
-                        [
-                            compiler,
-                            *flags,
-                            "-fPIC",
-                            "-shared",
-                            source_path,
-                            "-o",
-                            private_path,
-                        ],
-                        check=True,
-                        capture_output=True,
-                        timeout=180,
-                    )
-                except subprocess.CalledProcessError as exc:
-                    stderr = (
-                        exc.stderr.decode(errors="replace")
-                        if isinstance(exc.stderr, bytes)
-                        else (exc.stderr or "")
-                    )
-                    raise CompilationError(
-                        f"native replay compilation failed: "
-                        f"{stderr.strip() or 'no compiler output'}"
-                    ) from exc
-                except subprocess.TimeoutExpired as exc:
-                    raise CompilationError(
-                        f"native replay compilation exceeded {exc.timeout} seconds"
-                    ) from exc
-                publish_fd = -1
-                publish_path = ""
-                try:
-                    publish_fd, publish_path = tempfile.mkstemp(
-                        prefix=f".{identity[:20]}-", suffix=".so", dir=cache_dir
-                    )
-                    os.close(publish_fd)
-                    publish_fd = -1
-                    shutil.copyfile(private_path, publish_path)
-                    os.replace(publish_path, library_path)
-                    publish_path = ""
-                finally:
-                    if publish_fd >= 0:
-                        os.close(publish_fd)
-                    if publish_path:
-                        try:
-                            os.unlink(publish_path)
-                        except OSError:
-                            pass
             try:
                 library = ctypes.CDLL(library_path)
                 run = library.manta_filter_replay_run

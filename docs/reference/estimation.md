@@ -22,3 +22,7 @@ and the observability / consistency analysis tools.
 ::: manta.estimation.sigma_horizon
 
 ::: manta.estimation.nees
+
+::: manta.estimation.chi2_gate
+
+::: manta.estimation.chi2_quantile

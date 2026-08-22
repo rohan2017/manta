@@ -21,6 +21,12 @@ a craft.
 
 ::: manta.parts.Noise
 
+::: manta.parts.WhiteNoise
+
+::: manta.parts.RandomWalkNoise
+
+::: manta.parts.GaussMarkovNoise
+
 ::: manta.parts.PartUpdate
 
 ## Structure

@@ -18,7 +18,7 @@ import numpy as np
 
 from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField
-from manta.parts import RevoluteJoint, Mass
+from manta.parts import Mass, RevoluteJoint
 
 
 def _R(q):
@@ -104,7 +104,7 @@ def test_angular_velocity_state_is_body_frame():
     BODY z-axis (= world −y): the body x-axis swings toward world +z."""
     c = Craft("b")
     c.add(Mass("m", mass=1.0, moi=(0.2, 0.3, 0.4)))
-    w = World()
+    w = World().add_field(GravityField.none())
     w.add_craft(c, orientation=(np.cos(np.pi/4), np.sin(np.pi/4), 0, 0),
                 angular_velocity=(0.0, 0.0, 1.0))
     sim = TargetNumpy(Sim(w))

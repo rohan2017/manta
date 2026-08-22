@@ -38,6 +38,7 @@ this with an `observability` check, and excite the trajectory via
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from math import sqrt
@@ -57,8 +58,53 @@ from ._assembly import (
 
 
 # --------------------------------------------------------------------------
-# χ² quantiles without scipy (Acklam inverse-normal + Wilson–Hilferty)
+# χ² quantiles without scipy: regularized incomplete gamma (series /
+# continued fraction) inverted by safeguarded Newton. Exact to ~1e-12 at
+# every dof, unlike the Wilson–Hilferty cube used previously, which is only
+# asymptotic and visibly off for the 1-3 dof gates real sensors need.
 # --------------------------------------------------------------------------
+
+def _regularized_gamma_p(a: float, x: float) -> float:
+    """P(a, x) = γ(a, x) / Γ(a) for a > 0, x >= 0 (Numerical Recipes 6.2)."""
+    if x <= 0.0:
+        return 0.0
+    if x < a + 1.0:
+        term = total = 1.0 / a
+        ap = a
+        for _ in range(10_000):
+            ap += 1.0
+            term *= x / ap
+            total += term
+            if abs(term) < abs(total) * 1e-16:
+                break
+        return total * math.exp(-x + a * math.log(x) - math.lgamma(a))
+    # Lentz continued fraction for Q(a, x).
+    tiny = 1e-300
+    b = x + 1.0 - a
+    c = 1.0 / tiny
+    d = 1.0 / b
+    h = d
+    for i in range(1, 10_000):
+        an = -i * (i - a)
+        b += 2.0
+        d = an * d + b
+        if abs(d) < tiny:
+            d = tiny
+        c = b + an / c
+        if abs(c) < tiny:
+            c = tiny
+        d = 1.0 / d
+        delta = d * c
+        h *= delta
+        if abs(delta - 1.0) < 1e-16:
+            break
+    return 1.0 - math.exp(-x + a * math.log(x) - math.lgamma(a)) * h
+
+
+def chi2_cdf(x: float, dof: float) -> float:
+    """CDF of the χ² distribution with `dof` degrees of freedom."""
+    return _regularized_gamma_p(0.5 * dof, 0.5 * x)
+
 
 def _norm_ppf(p: float) -> float:
     """Inverse standard-normal CDF (Acklam's rational approximation)."""
@@ -85,11 +131,61 @@ def _norm_ppf(p: float) -> float:
            (((((b[0]*r+b[1])*r+b[2])*r+b[3])*r+b[4])*r+1)
 
 
-def _chi2_quantile(k: float, p: float) -> float:
-    """χ²ₖ quantile via the Wilson–Hilferty cube approximation (accurate for
-    the moderate-to-large k this tool produces)."""
+def chi2_quantile(dof: float, p: float) -> float:
+    """The χ² quantile `x` with `P(χ²_dof <= x) = p`, to ~1e-12.
+
+    Safeguarded Newton on the regularized incomplete gamma CDF, seeded by
+    the Wilson–Hilferty approximation and bracketed by bisection so it
+    converges for every dof >= 1 and 0 < p < 1.
+    """
+    dof = float(dof)
+    if not math.isfinite(dof) or dof <= 0.0:
+        raise ValueError(f"chi2_quantile: dof must be > 0, got {dof!r}")
+    if not (0.0 < p < 1.0):
+        raise ValueError(f"chi2_quantile: p must lie in (0, 1), got {p!r}")
     z = _norm_ppf(p)
-    return k * (1 - 2 / (9 * k) + z * sqrt(2 / (9 * k))) ** 3
+    x = max(1e-12, dof * (1 - 2 / (9 * dof) + z * sqrt(2 / (9 * dof))) ** 3)
+    lo, hi = 0.0, max(2.0 * x, dof + 40.0 * sqrt(dof) + 100.0)
+    while chi2_cdf(hi, dof) < p:
+        hi *= 2.0
+    half = 0.5 * dof
+    log_norm = -math.lgamma(half) - half * math.log(2.0)
+    for _ in range(200):
+        f = chi2_cdf(x, dof) - p
+        if f > 0.0:
+            hi = x
+        else:
+            lo = x
+        if abs(f) < 1e-14:
+            break
+        density = math.exp(log_norm + (half - 1.0) * math.log(x) - 0.5 * x) \
+            if x > 0.0 else 0.0
+        step = x - f / density if density > 0.0 else 0.5 * (lo + hi)
+        x = step if lo < step < hi else 0.5 * (lo + hi)
+        if hi - lo < 1e-15 * max(1.0, hi):
+            break
+    return x
+
+
+def chi2_gate(dof: int, confidence: float) -> float:
+    """The NIS gate that accepts a fraction `confidence` of consistent
+    innovations for a `dof`-dimensional sensor.
+
+    The normalized innovation squared of a consistent filter is
+    χ²-distributed with the measurement dimension as its degrees of
+    freedom; `gates={"gps.position": chi2_gate(3, 0.99)}` therefore rejects
+    a correct 3-vector fix one time in a hundred. Pure numpy-free Python —
+    no scipy dependency — so the same number reaches generated code.
+    """
+    if isinstance(dof, bool) or not isinstance(dof, int) or dof < 1:
+        raise ValueError(
+            f"chi2_gate: dof must be a positive int (the measurement "
+            f"dimension), got {dof!r}")
+    if not isinstance(confidence, (int, float)) or not (
+            0.0 < float(confidence) < 1.0):
+        raise ValueError(
+            f"chi2_gate: confidence must lie in (0, 1), got {confidence!r}")
+    return chi2_quantile(dof, float(confidence))
 
 
 @dataclass
@@ -253,7 +349,7 @@ def nees(world, *, dt: float, steps: int,
     # Band sized by the number of independent trajectories (runs), which
     # accounts for within-run time correlation: runs·ANEES ~ χ²_{runs·dof}.
     k = runs * dof
-    lower = _chi2_quantile(k, alpha / 2) / runs
-    upper = _chi2_quantile(k, 1 - alpha / 2) / runs
+    lower = chi2_quantile(k, alpha / 2) / runs
+    upper = chi2_quantile(k, 1 - alpha / 2) / runs
     return NEESReport(dof=dof, anees=anees, lower=lower, upper=upper,
                       runs=runs, samples=len(nees_samples))

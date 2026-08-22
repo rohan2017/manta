@@ -30,7 +30,8 @@ Usage::
     })
     result = nf.solve(windows)      # the same Window type as Fit
     print(result.summary())
-    artifact = result.derive(validation={"accepted": True, ...})
+    evidence = result.evidence(held_out_windows, sensor="imu.accel")
+    artifact = result.derive(evidence=evidence)
     # Or result.apply() to write <name>_sigma onto an editable World.
 
 Typical workflow: fit dynamics/geometry first (`Fit`), derive a validated
@@ -72,6 +73,12 @@ from ._common import (
     resolve_traces,
     solve_blocks_nlp,
     solver_converged,
+)
+from ._evidence import (
+    FitAcceptanceCriteria,
+    FitEvidence,
+    held_out_evidence,
+    window_digest,
 )
 from ._report import derivation_report
 
@@ -201,20 +208,37 @@ class NoiseFitResult:
             staged.append((owner, attr, value))
         return staged
 
-    def derive(self, *, validation=None):
-        """Return a structurally validated model revision with fit evidence."""
+    def fitted_world(self):
+        """An editable copy of the authoring world with the fitted σ values
+        written in — what `derive()` freezes and `evidence()` predicts
+        with. Refuses an unconverged solve."""
         if not self.converged:
-            raise RuntimeError("NoiseFitResult.derive refuses an unconverged solve")
+            raise RuntimeError(
+                "NoiseFitResult.fitted_world refuses an unconverged solve")
         derived = copy.deepcopy(self._world)
         for owner, attr, value in self._staged_updates(derived):
             setattr(owner, attr, value)
+        return derived
+
+    def evidence(self, held_out: list[Window], *, sensor: str,
+                 criteria: FitAcceptanceCriteria | None = None,
+                 lag_count: int = 20) -> FitEvidence:
+        """Held-out evidence for the fitted model (see `held_out_evidence`);
+        windows that entered the fit are refused."""
+        return held_out_evidence(
+            self.fitted_world(), held_out, sensor=sensor, criteria=criteria,
+            lag_count=lag_count, training=self._training_digests)
+
+    def derive(self, *, evidence: FitEvidence | None = None):
+        """Return a structurally validated model revision carrying the
+        typed held-out evidence (or none — visibly unaccepted)."""
         from ..sim import Sim
-        artifact = Sim(derived).model
+        artifact = Sim(self.fitted_world()).model
         if self._source_derivation:
             artifact = artifact.with_derivations(self._source_derivation)
         report = derivation_report(
             "noise_fit", self._source_artifact_id, self.objective,
-            self.values, validation)
+            self.values, evidence)
         return artifact.with_derivation("noise_fit", report)
 
     def summary(self) -> str:
@@ -464,6 +488,7 @@ class NoiseFit:
                              stats, self.world, self.sys.model.artifact_id,
                              self.sys.model.derivation)
         res.expanded = expanded
+        res._training_digests = tuple(window_digest(w) for w in windows)
         return res
 
     # ------------------------------------------------------------------

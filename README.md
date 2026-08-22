@@ -129,7 +129,10 @@ scope:
   from what the part writes into `PartUpdate.outputs`.
 - `WhiteNoise(signal_manifold="R3", *, frame=None, sigma=...)` — per-tick
   i.i.d. Gaussian noise. `RandomWalkNoise(...)` — RW bias state
-  (synthesizes its own state slot + driver input). Both subclass `Noise`.
+  (synthesizes its own state slot + driver input).
+  `GaussMarkovNoise(..., sigma=, tau=)` — first-order Gauss–Markov error
+  state with the exact `exp(-dt/tau)` transition and stationary variance
+  σ². All subclass `Noise`.
 
 Stock parts: `Mass`, `PointBuoy`, `DisplacementHull` (a distributed,
 surface-piercing buoyancy/drag composite), `Collider`, `Thruster` (polynomial
@@ -159,6 +162,9 @@ model), `VelocitySensor`, `Magnetometer`, `PositionSensor`, `Barometer`,
 
 Each `Field` (one of `GravityField`, `FluidField`, `MagField`,
 `CollisionField`) is a typed superposition of `Disturbance` objects.
+A World must declare its gravity before any transform resolves it —
+`GravityField(g=...)`, a planet, or `GravityField.none()` for deliberate
+zero-g; an absent field is refused rather than treated as weightless.
 Disturbances combine via per-disturbance flags:
 
 - `"additive"` (default) — linear sum (gravity, B-field, a current or
@@ -244,7 +250,11 @@ parts.
 Dynamics enter through a normal pseudo-sensor rather than special filter code.
 Mount `ModelForce` at the IMU frame: its `specific_force` output predicts the
 compiled model's accelerometer sample, including actuator forces, fluid loads,
-lever-arm acceleration, and estimable disturbances. Feed the same raw
+lever-arm acceleration, and estimable disturbances. Its error model is the
+fit pipeline's typed held-out evidence for that accelerometer (per-axis
+residual bias as a deterministic correction, a white floor as `R`, a
+Gauss–Markov component as filter state) — `INS` refuses a `ModelForce` that
+carries none or whose evidence was not accepted. Feed the same raw
 accelerometer sample to that update and to strapdown prediction:
 
 ```python
@@ -255,8 +265,8 @@ imu = IMU("imu", accel_noise_sigma=6.9e-3,
           gyro_noise_sigma=1e-3, accel_bias_sigma=1e-4,
           gyro_bias_sigma=1e-5)
 craft.add(imu)
-craft.add(ModelForce("model_force", imu=imu,
-                     model_error_sigma=0.5))
+evidence = nresult.evidence(held_out, sensor="imu.accel")   # see Fit below
+craft.add(ModelForce("model_force", imu=imu, evidence=evidence))
 
 ins = TargetNumpy(INS(
     world, imu="imu", sensors=["model_force.specific_force"],
@@ -308,12 +318,13 @@ depends on it and can be estimated through this output.
 
 The IMU sample appears in both propagation and the force residual, so their
 noise is formally correlated. Manta follows the intended separated-noise
-regime and records/logs `rho = accel_noise_sigma / model_error_sigma` for each
-`ModelForce`. Manta does not impose a threshold: the acceptable range depends
-on the identified model error, spectra, operating envelope, and vehicle risk
-policy. Noise declarations are per sample. Convert an accelerometer noise
-density to the effective sample sigma at the logging interval before declaring
-it (for example `100 µg/√Hz / sqrt(20 ms) ≈ 6.9e-3 m/s²`).
+regime and records/logs `rho = accel_noise_sigma / white model-error sigma`
+(the evidence's quietest white floor) for each `ModelForce`; construction
+refuses `rho` above `MODEL_FORCE_RHO_CEILING` (0.5) and warns above
+`MODEL_FORCE_RHO_WARNING` (0.1). Noise declarations are per sample. Convert
+an accelerometer noise density to the effective sample sigma at the logging
+interval before declaring it (for example
+`100 µg/√Hz / sqrt(20 ms) ≈ 6.9e-3 m/s²`).
 
 `observability`, `observability_trajectory(..., estimator=ins)`,
 `nees(..., estimator=ins)`, and `NoiseFit(..., estimator=ins)` consume the same
@@ -346,11 +357,12 @@ fit = Fit(world, parameters={
     "t4.transform":  Tied("arm", scale=[[1], [-1], [0]]),
     "imu.transform": Prior(sigma=0.10),             # lever arm: ±10 cm
 })
-result = fit.solve(windows, weights={"imu.gyro": 1/σg**2,
-                                     "imu.accel": 1/σa**2})
+training, held_out = hold_out(windows, fraction=0.3)    # untouched set
+result = fit.solve(training, weights={"imu.gyro": 1/σg**2,
+                                      "imu.accel": 1/σa**2})
 print(result.summary())     # fitted values + prior σ vs posterior σ
-artifact = result.derive(validation={"accepted": True,
-                                     "holdout_rmse": heldout_rmse})
+evidence = result.evidence(held_out, sensor="imu.accel")  # typed, hashed
+artifact = result.derive(evidence=evidence)
 # Or, for an exploratory authoring loop, mutate the editable World:
 result.apply()
 ```
@@ -377,13 +389,23 @@ negative-log-likelihood (σ enters through the filter's `Q = LΣLᵀ` and
 `R = L_hΣL_hᵀ`), fitting log-σ with relative priors:
 
 ```python
+training, held_out = hold_out(windows, fraction=0.3)    # untouched set
 nres = NoiseFit(world, noise={"imu.gyro_noise": Prior(sigma=2.0),
                               "imu.accel_noise": Prior(sigma=2.0)})\
-    .solve(windows)
-nartifact = nres.derive(validation={"accepted": True,
-                                    "heldout_nis": heldout_nis})
+    .solve(training)
+evidence = nres.evidence(held_out, sensor="imu.accel")
+nartifact = nres.derive(evidence=evidence)
 # nres.apply() remains available for an editable authoring workflow.
 ```
+
+`evidence` is a typed `FitEvidence`: per-axis held-out residual bias (with
+the held-out window definition and sample count), the fitted process-noise
+model per axis — white σ, or Gauss–Markov τ/σ² when the residual is time
+correlated, with the white fallback and its reason recorded — and the
+acceptance decision computed from declared `FitAcceptanceCriteria` (never
+caller-set). It hashes into the artifact identity and is what
+`ModelForce(evidence=...)` consumes; a training window is refused as
+held-out data.
 
 ### Sparse RTI MPC
 

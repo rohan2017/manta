@@ -70,18 +70,36 @@ import copy
 import casadi as ca
 import numpy as np
 
-from ..ir.module import PortRef, Role
 from ..ir._names import resolve_suffix
-from ..sim import Sim
+from ..ir.module import PortRef, Role
 from ..model import ModelArtifact
+from ..sim import Sim
 from ._common import (
-    Free, Prior, Tied, Window, _FitBlock, convergence_line, decision_bounds,
-    expand_or_none, format_table, laplace_sigma, pack_u_trace, pack_x0,
-    prior_penalty, resolve_state_traces, resolve_traces, solve_blocks_nlp,
+    Free,
+    Prior,
+    Tied,
+    Window,
+    _FitBlock,
+    convergence_line,
+    decision_bounds,
+    expand_or_none,
+    format_table,
+    laplace_sigma,
+    pack_u_trace,
+    pack_x0,
+    prior_penalty,
+    resolve_state_traces,
+    resolve_traces,
+    solve_blocks_nlp,
     solver_converged,
 )
+from ._evidence import (
+    FitAcceptanceCriteria,
+    FitEvidence,
+    held_out_evidence,
+    window_digest,
+)
 from ._report import derivation_report
-
 
 # ---------------------------------------------------------------------------
 # Internal: one decision-space block per promoted parameter
@@ -352,26 +370,47 @@ class FitResult:
                            float(theta[0]) if dim == 1 else tuple(theta)))
         return staged
 
-    def derive(self, *, validation=None):
-        """Return a new validated model revision carrying fit provenance.
-
-        ``validation`` records caller-computed held-out evidence. Set its
-        explicit ``accepted`` flag true only after the deployment acceptance
-        criteria pass. Omitting it preserves exploratory fitting while making
-        the resulting artifact visibly unaccepted.
-        """
+    def fitted_world(self):
+        """An editable copy of the authoring world with the fitted values
+        (tied parameters derived) written in — what `derive()` freezes and
+        `evidence()` predicts with. Refuses an unconverged solve."""
         if not self.converged:
-            raise RuntimeError("FitResult.derive refuses an unconverged solve")
+            raise RuntimeError(
+                "FitResult.fitted_world refuses an unconverged solve")
         derived = copy.deepcopy(self._world)
         for part, name, value in self._staged_updates(derived):
             setattr(part, name, value)
+        return derived
+
+    def evidence(self, held_out: list[Window], *, sensor: str,
+                 criteria: FitAcceptanceCriteria | None = None,
+                 lag_count: int = 20) -> FitEvidence:
+        """Held-out evidence for the fitted model (see `held_out_evidence`).
+
+        ``held_out`` must be untouched by the fit: any window whose content
+        matches a training window is refused. The result is what
+        `derive(evidence=...)` attaches and what a `ModelForce` consumes.
+        """
+        return held_out_evidence(
+            self.fitted_world(), held_out, sensor=sensor, criteria=criteria,
+            lag_count=lag_count, training=self._training_digests)
+
+    def derive(self, *, evidence: FitEvidence | None = None):
+        """Return a new validated model revision carrying fit provenance.
+
+        ``evidence`` is the typed held-out artifact from `evidence()`; its
+        criteria-derived ``accepted`` decision travels with the revision.
+        Omitting it preserves exploratory fitting while making the
+        resulting artifact visibly unaccepted — a model-aided estimator
+        refuses it.
+        """
         from ..sim import Sim
-        artifact = Sim(derived).model
+        artifact = Sim(self.fitted_world()).model
         if self._source_derivation:
             artifact = artifact.with_derivations(self._source_derivation)
         report = derivation_report(
             "parameter_fit", self._source_artifact_id, self.objective,
-            self.values, validation)
+            self.values, evidence)
         return artifact.with_derivation("fit", report)
 
     def summary(self) -> str:
@@ -658,6 +697,9 @@ class Fit:
                         posterior_computed=compute_posterior,
                         initial_objective=initial_objective)
         res.expanded = expanded
+        # Identity of the training set: `evidence()` refuses any of these
+        # as a held-out window (the acceptance set must be untouched).
+        res._training_digests = tuple(window_digest(w) for w in windows)
         return res
 
     # ------------------------------------------------------------------

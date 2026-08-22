@@ -10,12 +10,6 @@ workspace are created once; subsequent calls update numeric values in place.
 from __future__ import annotations
 
 import ctypes
-import hashlib
-import os
-import platform
-import shutil
-import subprocess
-import tempfile
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,7 +19,7 @@ import casadi as ca
 import numpy as np
 import numpy.typing as npt
 
-from ..codegen.numpy._compile import CompilationError, _cache_dir
+from ..codegen.numpy._compile import CompilationError, build_native_library
 
 FloatArray = npt.NDArray[np.float64]
 IntArray = npt.NDArray[np.int64]
@@ -192,10 +186,6 @@ def _library() -> ctypes.CDLL:
     with _LIBRARY_LOCK:
         if _LIBRARY is not None:
             return _LIBRARY
-        compiler = shutil.which("cc")
-        if compiler is None:
-            raise CompilationError(
-                "native OSQP requested but no 'cc' compiler is on PATH")
         casadi_dir = Path(ca.__file__).resolve().parent
         include_dir = casadi_dir / "include" / "osqp"
         osqp_library = casadi_dir / "libosqp.so"
@@ -203,34 +193,17 @@ def _library() -> ctypes.CDLL:
             raise CompilationError(
                 "CasADi installation does not contain native OSQP headers "
                 "and libosqp.so")
+        # The bridge is compiled against CasADi's bundled OSQP build
+        # configuration; a different `osqp_configure.h` is a different ABI.
         configure = (include_dir / "osqp_configure.h").read_bytes()
-        cache_material = (
-            _SOURCE.encode() + configure + ca.__version__.encode()
-            + platform.platform().encode())
-        key = hashlib.sha1(cache_material).hexdigest()[:16]
-        cache = Path(_cache_dir())
-        cache.mkdir(mode=0o700, parents=True, exist_ok=True)
-        path = cache / f"manta_osqp_{key}.so"
-        if not path.exists():
-            directory = Path(tempfile.mkdtemp())
-            try:
-                source = directory / "manta_osqp.c"
-                source.write_text(_SOURCE)
-                output = directory / path.name
-                subprocess.run([
-                    compiler, "-O3", "-fPIC", "-shared", str(source),
-                    f"-I{include_dir}", f"-L{casadi_dir}", "-losqp",
-                    f"-Wl,-rpath,{casadi_dir}", "-o", str(output),
-                ], check=True, capture_output=True, timeout=30)
-                temporary = cache / f".{path.name}.{os.getpid()}"
-                shutil.copyfile(output, temporary)
-                os.replace(temporary, path)
-            except subprocess.CalledProcessError as exc:
-                stderr = exc.stderr.decode(errors="replace")
-                raise CompilationError(
-                    f"native OSQP bridge compilation failed: {stderr}") from exc
-            finally:
-                shutil.rmtree(directory, ignore_errors=True)
+        path = build_native_library(
+            _SOURCE, stem="manta_osqp", what="native OSQP",
+            compiler_flags=("-O3",),
+            link_args=(f"-I{include_dir}", f"-L{casadi_dir}", "-losqp",
+                       f"-Wl,-rpath,{casadi_dir}"),
+            identity_salt=configure,
+            timeout_s=30.0,
+        ).path
         library = ctypes.CDLL(str(path))
         index_pointer = np.ctypeslib.ndpointer(
             dtype=np.int64, ndim=1, flags="C_CONTIGUOUS")

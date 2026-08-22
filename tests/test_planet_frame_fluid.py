@@ -15,9 +15,12 @@ import numpy as np
 import pytest
 
 from manta import Craft, Planet, Sim, TargetNumpy, World
-from manta.fields import FluidField, FluidState
+from manta.fields import FluidField, FluidState, GravityField
 from manta.fields.fluid_props import (
-    R_AIR, ideal_gas_density, isa_pressure, isa_temperature,
+    R_AIR,
+    ideal_gas_density,
+    isa_pressure,
+    isa_temperature,
 )
 from manta.ir.frames import WorldFrame
 from manta.ir.types import Vec3
@@ -143,14 +146,14 @@ def test_planet_state_arguments_enforce_their_declared_kind():
     craft = Craft("craft")
     craft.add(Mass("body", mass=1.0))
     with pytest.raises(ValueError, match="planet.position"):
-        World().add_craft(craft, position=planet.velocity(0.0, 0.0, 0.0))
+        World().add_field(GravityField.none()).add_craft(craft, position=planet.velocity(0.0, 0.0, 0.0))
 
 
 def test_planet_state_requires_a_registered_planet():
     planet = Planet(name="unregistered")
     craft = Craft("craft")
     craft.add(Mass("body", mass=1.0))
-    world = World()
+    world = World().add_field(GravityField.none())
     world.add_craft(
         craft,
         position=planet.position(1.0, 0.0, 0.0),
