@@ -17,10 +17,12 @@ and rollback boundary. No wall clock or hidden global state is consulted.
 from __future__ import annotations
 
 import copy
+import itertools
 import math
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from numbers import Real
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 import numpy as np
 
@@ -74,7 +76,7 @@ class OCVCurve:
             raise ValueError("OCV curve needs matching arrays of >= 2 points")
         if xs[0] != 0.0 or xs[-1] != 1.0:
             raise ValueError("OCV SOC points must span exactly [0, 1]")
-        if any(right <= left for left, right in zip(xs, xs[1:])):
+        if any(right <= left for left, right in itertools.pairwise(xs)):
             raise ValueError("OCV SOC points must be strictly increasing")
         if any(voltage <= 0.0 for voltage in ys):
             raise ValueError("OCV voltage points must all be > 0")

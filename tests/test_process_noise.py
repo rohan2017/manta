@@ -9,8 +9,6 @@ truth). Same machinery, both covariances model-derived.
 """
 
 import numpy as np
-from manta.fields import GravityField
-from manta.parts import Mass, PositionSensor, ProcessNoise, Thruster
 
 from manta import (
     EKF,
@@ -21,6 +19,8 @@ from manta import (
     TargetNumpy,
     World,
 )
+from manta.fields import GravityField
+from manta.parts import Mass, PositionSensor, ProcessNoise, Thruster
 
 
 def _free_flyer(force_sigma):

@@ -18,7 +18,7 @@ Downstream, the IR transforms (`Sim`, `EKF`, `LQR`) consume the compiled
 tick; they live a layer up, not here.
 """
 
-from .world_tick import compile_world_tick
 from .tick_signature import walk_tick_signature
+from .world_tick import compile_world_tick
 
 __all__ = ["compile_world_tick", "walk_tick_signature"]

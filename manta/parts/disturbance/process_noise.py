@@ -35,9 +35,9 @@ from __future__ import annotations
 
 from ...ir.frames import PartFrame
 from ...ir.types import Vec3
+from ...ir.wrench import Wrench
 from .._declarations import WhiteNoise
 from ..base import Part
-from ...ir.wrench import Wrench
 
 
 class ProcessNoise(Part):

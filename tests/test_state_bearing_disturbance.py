@@ -17,9 +17,12 @@ import casadi as ca
 import numpy as np
 import pytest
 
-from manta import Craft, EKF, Sim, TargetNumpy, World
+from manta import EKF, Craft, Sim, TargetNumpy, World
 from manta.fields import (
-    Disturbance, FluidField, FluidState, GravityField,
+    Disturbance,
+    FluidField,
+    FluidState,
+    GravityField,
 )
 from manta.ir.frames import WorldFrame
 from manta.ir.types import Vec3

@@ -64,7 +64,7 @@ class ProjectiveCamera(Part):
 
     role = PartRole.SENSOR
 
-    requires_fields = [OpticalField]
+    requires_fields: ClassVar[list[type]] = [OpticalField]
 
     #: Per-target scalar measurement names (excludes the ``vis`` flag).
     _COMPONENTS: ClassVar[tuple[str, ...]] = ()

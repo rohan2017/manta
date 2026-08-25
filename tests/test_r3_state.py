@@ -10,13 +10,12 @@ local to one Part, etc.).
 import numpy as np
 import pytest
 
-from manta import Craft, EKF, Sim, TargetNumpy, World
+from manta import EKF, Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField
 from manta.ir.frames import PartFrame, WorldFrame
 from manta.ir.types import Vec3
 from manta.ir.wrench import Wrench
-from manta.parts import Mass
-from manta.parts import Output, Part, PartUpdate, State
+from manta.parts import Mass, Output, Part, PartUpdate, State
 
 
 class _R3StatePart(Part):

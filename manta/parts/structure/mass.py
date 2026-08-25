@@ -8,9 +8,9 @@ from __future__ import annotations
 from ...fields import gravity_at
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Scalar, Vec3
+from ...ir.wrench import Wrench
 from .._declarations import Parameter
 from ..base import Part
-from ...ir.wrench import Wrench
 
 
 class Mass(Part):
@@ -42,7 +42,7 @@ class Mass(Part):
     contributes_inertia = True
 
     mass: float                              = Parameter(1.0, manifold="R1")
-    moi:  "tuple[float, float, float]"       = Parameter(
+    moi:  tuple[float, float, float]       = Parameter(
         (0.0, 0.0, 0.0), manifold="R3", frame=PartFrame)
 
     def __init__(self, name: str, **overrides) -> None:

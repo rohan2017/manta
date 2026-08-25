@@ -13,7 +13,6 @@ from manta.craft import Craft
 from manta.fields import GravityField
 from manta.parts import Mass, RevoluteJoint, Thruster
 
-
 # ---------------------------------------------------------------------------
 # Flat craft: an offset force produces the expected body torque (the cascade
 # lift reduces to r × F when there are no joints).

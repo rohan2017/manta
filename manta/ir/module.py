@@ -22,7 +22,8 @@ any backend or transform. Each transform's `.module()` produces it.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field as dataclass_field
+from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from enum import Enum
 from hashlib import sha256
 from math import prod

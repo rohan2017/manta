@@ -3,11 +3,9 @@
 import math
 
 import numpy as np
-import pytest
 
 from manta import ir
 from manta.ir.frames import CraftFrame, PartFrame, WorldFrame
-
 
 # ---------------------------------------------------------------------------
 # Scalar

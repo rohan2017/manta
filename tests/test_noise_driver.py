@@ -30,7 +30,7 @@ def test_no_driver_is_noiseless_oracle():
     w, _ = _gps_world(0.05)
     sim = TargetNumpy(Sim(w))
     assert sim.driver is None
-    out = sim.step(dt=0.02)
+    sim.step(dt=0.02)
     np.testing.assert_allclose(
         np.asarray(sim.outputs()["c"]["gps.position"]).ravel(),
         [0.0, 0.0, 10.0], atol=1e-12)
@@ -42,7 +42,7 @@ def test_driver_with_zero_sigma_stays_oracle():
     w, _ = _gps_world(0.0)
     sim = TargetNumpy(Sim(w))
     sim.attach_driver(NoiseDriver(seed=1))
-    out = sim.step(dt=0.02)
+    sim.step(dt=0.02)
     np.testing.assert_allclose(
         np.asarray(sim.outputs()["c"]["gps.position"]).ravel(),
         [0.0, 0.0, 10.0], atol=1e-12)

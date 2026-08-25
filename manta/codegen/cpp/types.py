@@ -10,8 +10,8 @@ Rust / JAX / TF backends maintain their own analogous registry.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from ...ir.manifold import Manifold
 

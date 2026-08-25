@@ -339,7 +339,7 @@ def test_weather_patch_callable_curve():
         return 0.01 * (point._mx[0] - R_EQ)      # +0.01 K per metre of altitude
 
     earth, w = _patch_world(WeatherPatch(temperature=warm))
-    P0, T0, L, g0, R = _earth_isa_constants(earth)
+    _P0, T0, L, _g0, _R = _earth_isa_constants(earth)
     for alt in (100.0, 500.0):
         pt = (earth.R_EQ + alt, 0.0, 0.0)
         T_base = float(ca.evalf(isa_temperature(alt, T0, L)))

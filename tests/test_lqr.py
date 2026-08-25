@@ -6,16 +6,15 @@ uncontrolled, so it's frozen via `regulate=`). Underactuated full-state LQR
 is expected to fail (not stabilizable) — that's tested too.
 """
 
+import casadi as ca
 import numpy as np
 import pytest
-import casadi as ca
 
-from manta import World, Craft, Sim, LQR, TargetNumpy
+from manta import LQR, Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField
-from manta.parts import Mass, Thruster
 from manta.ir.module import Role
-from manta.ir.state_spec import StateSpec
 from manta.linearization import LinearizedSystem
+from manta.parts import Mass, Thruster
 
 M, G = 2.0, 9.81
 
@@ -34,11 +33,11 @@ def _flyer():
 
 def _lqr(**kw):
     w, _ = _flyer()
-    defaults = dict(
-        x_ref={"c": {"position": (0, 0, 10), "velocity": (0, 0, 0)}},
-        u_ref={"tz.throttle": M * G},
-        regulate=["c.position", "c.velocity"],
-        Q=np.diag([10, 10, 10, 1, 1, 1]), R=np.eye(3) * 0.1, dt=0.02)
+    defaults = {
+        "x_ref": {"c": {"position": (0, 0, 10), "velocity": (0, 0, 0)}},
+        "u_ref": {"tz.throttle": M * G},
+        "regulate": ["c.position", "c.velocity"],
+        "Q": np.diag([10, 10, 10, 1, 1, 1]), "R": np.eye(3) * 0.1, "dt": 0.02}
     defaults.update(kw)
     return LQR(w, **defaults), w
 

@@ -4,7 +4,7 @@ import casadi as ca
 import numpy as np
 
 from manta import Craft, Sim, TargetNumpy, World
-from manta.fields import CollisionField, HalfSpace, GravityField
+from manta.fields import CollisionField, GravityField, HalfSpace
 from manta.ir.frames import WorldFrame
 from manta.ir.types import Vec3
 from manta.parts import Collider, Mass

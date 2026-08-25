@@ -22,7 +22,6 @@ from manta.fields import Disturbance, FluidField, FluidState
 from manta.ir.frames import WorldFrame
 from manta.ir.types import Vec3
 
-
 _VEC3 = Vec3[WorldFrame]
 
 

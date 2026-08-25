@@ -29,7 +29,7 @@ def _hover_world():
     return w
 
 
-_KW = dict(dt=0.01, steps=250, control={"t.throttle": M * G}, runs=12, seed=0)
+_KW = {"dt": 0.01, "steps": 250, "control": {"t.throttle": M * G}, "runs": 12, "seed": 0}
 
 
 def test_nees_report_structure():
@@ -100,11 +100,11 @@ def test_observable_subspace_isolates_modeling_from_observability():
     Restricting to the observable subspace shows the filter IS consistent
     there, i.e. the auto-Q is correct; the overconfidence is the EKF
     shrinking covariance on an unobservable direction."""
-    from manta import EKF, TargetNumpy
+    from manta import EKF
     w = _hover_world()
     basis = EKF(w).observability().basis
-    kw = dict(dt=0.01, steps=300, control={"t.throttle": M * G},
-              runs=20, seed=0)
+    kw = {"dt": 0.01, "steps": 300, "control": {"t.throttle": M * G},
+              "runs": 20, "seed": 0}
     full = nees(w, **kw)
     sub = nees(w, observable_basis=basis, **kw)
     assert full.verdict == "overconfident"

@@ -11,11 +11,11 @@ from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField
 from manta.parts import ConstantCurrentLoad, ExternalDCSupply, Mass, ThermalMass
 from manta.simulation import (
-    BMSPlant,
     BatteryCell,
-    BatteryElectricalModel,
     BatteryCellFaults,
+    BatteryElectricalModel,
     BatteryStepInput,
+    BMSPlant,
     OCVCurve,
     PassiveBalancer,
     SeriesBatteryPack,

@@ -44,8 +44,8 @@ from .attachment.trajectory_endpoint import (
     hover,
 )
 from .base import CompositePart, Part, PartRole, RootPart
-from .disturbance.process_noise import ProcessNoise
 from .disturbance.constant_wrench import ConstantWrench
+from .disturbance.process_noise import ProcessNoise
 from .disturbance.wrench_process_noise import WrenchProcessNoise
 from .electrical import (
     ConstantCurrentLoad,
@@ -100,9 +100,9 @@ __all__ = [
     "Collider",
     "CompositePart",
     "ConstantCurrentLoad",
-    "ConstantWrench",
     "ConstantPowerElectronicsLoad",
     "ConstantPowerLoad",
+    "ConstantWrench",
     "Contactor",
     "ControlSurface",
     "DCConverter",

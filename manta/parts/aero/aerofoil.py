@@ -40,6 +40,7 @@ Orientation is fixed by the same `chord_axis` / `normal_axis` pair as
 from __future__ import annotations
 
 import math
+from typing import ClassVar
 
 import casadi as ca
 
@@ -156,7 +157,7 @@ class Aerofoil(Part):
     should not touch them.
     """
 
-    requires_fields = [FluidField]
+    requires_fields: ClassVar[list[type]] = [FluidField]
 
     area:        float = Parameter(0.1)
     chord:       float = Parameter(0.2)
@@ -351,7 +352,7 @@ def naca(designation: str, name: str | None = None, **geom) -> Aerofoil:
     CD_0 = 0.006 * (1.0 + 2.0 * t + 60.0 * t**4)
     CL_max = 1.2 + 1.5 * t
 
-    params = dict(alpha_0=alpha_0, Cm_ac=Cm_ac, CL_alpha=2.0 * math.pi,
-                  CL_max=CL_max, CD_0=CD_0)
+    params = {"alpha_0": alpha_0, "Cm_ac": Cm_ac, "CL_alpha": 2.0 * math.pi,
+                  "CL_max": CL_max, "CD_0": CD_0}
     params.update(geom)            # caller overrides win
     return Aerofoil(name or f"naca{d}", **params)

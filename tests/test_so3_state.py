@@ -16,9 +16,7 @@ from manta.ir.frames import CraftFrame, PartFrame, WorldFrame
 from manta.ir.manifold import SO3Manifold
 from manta.ir.types import Vec3
 from manta.ir.wrench import Wrench
-from manta.parts import Mass
-from manta.parts import Output, Part, PartUpdate, State
-
+from manta.parts import Mass, Output, Part, PartUpdate, State
 
 # ---------------------------------------------------------------------------
 # Test Part: a no-op SO(3) state carrier (passthrough)

@@ -80,5 +80,5 @@ def test_noisy_barometer_is_an_ekf_sensor():
 
     # Noiseless: selecting it as a sensor has no R channel → rejected.
     _, w_clean, _ = _baro_world(1000.0, pressure_noise_sigma=0.0)
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError, match="no active noise channel"):
         TargetNumpy(EKF(w_clean, sensors=["probe.baro.pressure"]))

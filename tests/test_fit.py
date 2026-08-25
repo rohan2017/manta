@@ -11,8 +11,19 @@ import copy
 import numpy as np
 import pytest
 
-from manta import Craft, Fit, Free, ModelArtifact, NoiseDriver, Prior, Sim, \
-    TargetNumpy, Tied, Window, World
+from manta import (
+    Craft,
+    Fit,
+    Free,
+    ModelArtifact,
+    NoiseDriver,
+    Prior,
+    Sim,
+    TargetNumpy,
+    Tied,
+    Window,
+    World,
+)
 from manta.fields import GravityField
 from manta.fit import FitEvidence
 from manta.ir.frames import CraftFrame, PartFrame
@@ -347,8 +358,8 @@ def test_fit_accepts_ground_truth_state_trajectories_without_sensors():
     for value in throttle:
         truth.step(DT, u={f"t{i}.throttle": float(value)
                           for i in range(1, 5)})
-        for name in traces:
-            traces[name].append(copy.deepcopy(truth.state["drone"][name]))
+        for name, trace in traces.items():
+            trace.append(copy.deepcopy(truth.state["drone"][name]))
     window = Window(
         x0=x0,
         u={f"t{i}.throttle": throttle for i in range(1, 5)},

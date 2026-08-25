@@ -376,7 +376,7 @@ class NoiseFit:
         # symbolic in σ — see estimation/_kalman.py); ν and S come back
         # so the NLL increment reuses the update's own innovation stats.
         off = 0
-        for full, sm in sys.sensors.items():
+        for sm in sys.sensors.values():
             zk = z[off:off + sm.dim]
             off += sm.dim
             sub = ca.vertcat(sys.x_sym, sys.u_sym, sys.dt_sym, sys.t_sym)

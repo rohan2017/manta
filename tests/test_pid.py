@@ -18,7 +18,7 @@ from manta import PID, TargetCpp, TargetNumpy
 
 def test_pid_module_shape():
     m = PID(kp=1.0, ki=0.5, kd=0.1).module()
-    from manta.ir.module import Hosting, Role
+    from manta.ir.module import Hosting
     assert m.hosting is Hosting.HELD
     assert [f.name for f in m.port("u").fields] == ["setpoint", "measurement"]
     assert [f.name for f in m.port("y").fields] == ["command"]
@@ -123,7 +123,7 @@ def test_pid_python_cpp_roundtrip(tmp_path: Path):
         [cxx, "-c", "-std=c++17", "-O2", "-fPIC", f"-I{eigen_inc}",
          f"-I{tmp_path}", str(result.wrapper_cpp), "-o", str(w_obj)],
     ):
-        p = subprocess.run(cmd, capture_output=True, text=True)
+        p = subprocess.run(cmd, capture_output=True, text=True, check=False)
         assert p.returncode == 0, p.stderr
 
     h_src = tmp_path / "harness_main.cpp"
@@ -132,9 +132,9 @@ def test_pid_python_cpp_roundtrip(tmp_path: Path):
     p = subprocess.run(
         [cxx, "-std=c++17", "-O2", f"-I{eigen_inc}", f"-I{tmp_path}",
          str(h_src), str(w_obj), str(k_obj), "-o", str(binary)],
-        capture_output=True, text=True)
+        capture_output=True, text=True, check=False)
     assert p.returncode == 0, p.stderr
-    p = subprocess.run([str(binary)], capture_output=True, text=True)
+    p = subprocess.run([str(binary)], capture_output=True, text=True, check=False)
     assert p.returncode == 0, p.stderr
 
     cpp_cmds, cpp_state = [], None

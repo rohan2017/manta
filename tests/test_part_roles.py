@@ -1,8 +1,18 @@
 """Semantic part roles are explicit model-selection metadata."""
 
 from manta.parts import (
-    Antenna, Barometer, ControlSurface, DuctedPropeller, IMU, Magnetometer,
-    Mass, Motor, PartRole, PositionSensor, ProjectiveCamera, Thruster,
+    IMU,
+    Antenna,
+    Barometer,
+    ControlSurface,
+    DuctedPropeller,
+    Magnetometer,
+    Mass,
+    Motor,
+    PartRole,
+    PositionSensor,
+    ProjectiveCamera,
+    Thruster,
     VelocitySensor,
 )
 

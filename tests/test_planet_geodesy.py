@@ -27,7 +27,6 @@ from manta.parts import Mass
 from manta.planets import Earth
 from manta.planets.base import geodetic_from_cylindrical
 
-
 A = Earth.R_EQ
 F = Earth.FLATTENING
 B = A * (1.0 - F)

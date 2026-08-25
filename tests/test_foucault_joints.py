@@ -17,7 +17,6 @@ from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField
 from manta.parts import Mass, RevoluteJoint, Thruster
 
-
 G = 9.81
 
 
@@ -70,7 +69,7 @@ def test_gimbal_pendulum_precesses_at_minus_omega():
     for k in range(n_win):
         sl = slice(k * win, (k + 1) * win)
         cov = np.cov(np.vstack([xs[sl], ys[sl]]))
-        evals, evecs = np.linalg.eigh(cov)
+        _evals, evecs = np.linalg.eigh(cov)
         v = evecs[:, -1]                      # dominant axis
         phi.append(np.arctan2(v[1], v[0]))
         t_mid.append((k + 0.5) * win * 10 * dt)

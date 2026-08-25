@@ -5,7 +5,10 @@ import numpy as np
 
 from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import (
-    CurrentFlow, FluidField, FluidState, GravityField, UniformFluid,
+    CurrentFlow,
+    FluidField,
+    GravityField,
+    UniformFluid,
 )
 from manta.ir.frames import WorldFrame
 from manta.ir.types import Vec3

@@ -16,9 +16,10 @@ from __future__ import annotations
 
 import math
 import time
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 import casadi as ca
 import numpy as np
@@ -1619,5 +1620,9 @@ class MPC:
 
 
 __all__ = [
-    "CraftHorizonReference", "MPC", "MPCReference", "MPCResult", "MPCTimings",
+    "MPC",
+    "CraftHorizonReference",
+    "MPCReference",
+    "MPCResult",
+    "MPCTimings",
 ]

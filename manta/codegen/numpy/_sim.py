@@ -10,9 +10,9 @@ import casadi as ca
 import numpy as np
 
 from ..._validation import require_finite, require_positive
+from ...ir._names import resolve_suffix
 from ...ir.module import Role, StateRef
 from ...ir.state_spec import flatten_nested
-from ...ir._names import resolve_suffix
 from ..target import for_role
 from ._noise import NoiseCheckpoint, NoiseDriver
 from ._runtime import NumpyRuntime, _split, finite_array, pack_fields
@@ -362,7 +362,7 @@ class NumpySim(NumpyRuntime):
         """The flat control vector: the held `sim.state` inputs overlaid with
         this step's `u` (suffix names resolved)."""
         fields = self._u_fields()
-        named = {f.name: (flat[f.name] if f.name in flat else f.default)
+        named = {f.name: (flat.get(f.name, f.default))
                  for f in fields}
         for k, v in (u or {}).items():
             named[resolve_suffix(k, self._input_names(), label="input",

@@ -11,8 +11,8 @@ import numpy as np
 import pytest
 
 from manta import Craft, Sim, TargetNumpy, World
-from manta.fields import GravityField, MagField, FluidField
-from manta.parts import RevoluteJoint, Mass, Thruster, IMU, Magnetometer, DragSurface
+from manta.fields import FluidField, GravityField, MagField
+from manta.parts import IMU, DragSurface, Magnetometer, Mass, RevoluteJoint, Thruster
 
 
 def _free_world(craft, **overrides):
@@ -95,7 +95,7 @@ def test_rotor_imu_reads_centripetal_and_spin():
     c.add(wheel)
 
     sim = _free_world(c, **{"wheel.rate": omega0})
-    state = sim.step(dt=1e-4)
+    sim.step(dt=1e-4)
 
     gyro  = np.asarray(sim.outputs()["fly"]["imu.gyro"]).ravel()
     accel = np.asarray(sim.outputs()["fly"]["imu.accel"]).ravel()
@@ -118,7 +118,7 @@ def test_rotor_imu_centripetal_scales_with_rate_squared():
         wheel.add(IMU("imu", mount_offset=(d, 0.0, 0.0)))
         c.add(wheel)
         sim = _free_world(c, **{"wheel.rate": omega0})
-        state = sim.step(dt=1e-4)
+        sim.step(dt=1e-4)
         return float(np.asarray(sim.outputs()["fly"]["imu.accel"]).ravel()[0])
 
     np.testing.assert_allclose(accel_x(20.0), 4.0 * accel_x(10.0), rtol=3e-3)
@@ -143,7 +143,7 @@ def test_rotor_magnetometer_reads_in_sensor_frame():
     w.add_field(MagField().add_uniform((1.0, 0.0, 0.0)))
     w.add_craft(c, **{"yaw.angle": np.pi / 2})
     sim = TargetNumpy(Sim(w))
-    state = sim.step(dt=1e-3)
+    sim.step(dt=1e-3)
 
     np.testing.assert_allclose(
         np.asarray(sim.outputs()["compass"]["mag.B"]).ravel(),

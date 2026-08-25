@@ -62,9 +62,9 @@ from ._runtime import NumpyRuntime
 from ._sim import NumpySim, SimCheckpoint
 
 __all__ = [
-    "CompilationError",
     "DEFAULT_COMPILATION_TIMEOUT_S",
     "DEFAULT_MAX_INSTRUCTIONS",
+    "CompilationError",
     "FilterCheckpoint",
     "FilterReplayProgram",
     "FilterReplayResult",
@@ -137,9 +137,8 @@ def TargetNumpy(
     if max_instructions != DEFAULT_MAX_INSTRUCTIONS and not compile:
         raise ValueError("max_instructions requires compile=True")
     validate_max_instructions(max_instructions)
-    if optimization is not None:
-        if optimization not in {"O0", "O1", "O2"}:
-            raise ValueError("simulation optimization must be O0, O1, or O2")
+    if optimization is not None and optimization not in {"O0", "O1", "O2"}:
+        raise ValueError("simulation optimization must be O0, O1, or O2")
     runtime = _select_view(m)(m)
     return (
         runtime._enable_compile(

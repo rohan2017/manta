@@ -42,12 +42,10 @@ tensor rotates with the rotor, as it should.
 
 from __future__ import annotations
 
-
 import casadi as ca
 import numpy as np
 
 from ..ir._rotation import R_from_axis_angle, quat_to_rotmat
-
 
 # ---------------------------------------------------------------------------
 # Reading a part's inertials
@@ -126,8 +124,8 @@ def symbolic_inertia_rollup(root_part, *, param_subs=(), who: str = "") -> dict:
 
     Raises ValueError if total (declared) mass is zero.
     """
-    from ..parts.articulation.joint import PrismaticJoint, RevoluteDOF
     from ..parts._trace import is_promoted
+    from ..parts.articulation.joint import PrismaticJoint, RevoluteDOF
     from ..parts.base import CompositePart
 
     # Accumulators (MX). com_sum is summed as m·r vectors; I_about_origin
@@ -270,7 +268,7 @@ def aggregate_inertials_at_rest(root_part) -> dict:
     except ValueError:
         return {"m_total": 0.0, "com": np.zeros(3),
                 "I_origin": np.zeros((3, 3)), "I_com": np.zeros((3, 3))}
-    evaluate = lambda e: _evaluate_at_zero(e, root_part)   # noqa: E731
+    evaluate = lambda e: _evaluate_at_zero(e, root_part)
     m_total = roll["m_total"]
     return {
         "m_total":  (float(evaluate(m_total).reshape(-1)[0])
@@ -290,8 +288,8 @@ def _evaluate_at_zero(expr_mx, root_part, param_subs=()) -> np.ndarray:
     by 0 and every promoted-parameter symbol by its declared value. Used
     for compile-time singularity checks against the at-rest inertia tensor
     without spinning up a full CasADi Function."""
-    from ..parts.articulation.joint import ArticulatedJoint
     from ..parts._trace import is_promoted
+    from ..parts.articulation.joint import ArticulatedJoint
 
     def collect_joint_syms(part, syms):
         if isinstance(part, ArticulatedJoint):

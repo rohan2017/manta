@@ -15,8 +15,8 @@ import numpy as np
 import pytest
 
 from manta import Planet
-from manta.planets import Earth, Scene
 from manta.ir._rotation import quat_to_rotmat_np
+from manta.planets import Earth
 
 
 def _rotmat(q):

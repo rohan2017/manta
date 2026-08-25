@@ -29,7 +29,7 @@ def _square_dim(A: ca.MX, *, op: str) -> int:
 
 
 def chol_lower(A: ca.MX, n: int | None = None, *,
-               floor: float = 0.0) -> "list[list[ca.MX]]":
+               floor: float = 0.0) -> list[list[ca.MX]]:
     """Lower-triangular Cholesky factor of an n×n SPD `A`, as a list-of-
     lists of scalar MX (row-major, j ≤ i). `n` defaults to `A.shape[0]`.
 

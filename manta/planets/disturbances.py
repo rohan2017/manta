@@ -20,19 +20,24 @@ profile.
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 import casadi as ca
 
 from ..fields import Disturbance, FluidState
-from ..ir.frames import WorldFrame
-from ..ir.types import Vec3
 from ..fields.fluid_props import (
-    LAPSE_ISA, P0_ISA, R_AIR, T0_ISA,
-    hydrostatic_pressure, ideal_gas_density, isa_pressure, isa_temperature,
+    LAPSE_ISA,
+    P0_ISA,
+    R_AIR,
+    T0_ISA,
+    hydrostatic_pressure,
+    ideal_gas_density,
+    isa_pressure,
+    isa_temperature,
     sutherland_viscosity,
 )
-
+from ..ir.frames import WorldFrame
+from ..ir.types import Vec3
 
 _VEC3_W = Vec3[WorldFrame]
 

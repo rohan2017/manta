@@ -1,6 +1,5 @@
 """Free-via-CasADi: symbolic Jacobian extraction from a graph."""
 
-import math
 
 import numpy as np
 

@@ -27,6 +27,7 @@ from typing import Any, ClassVar
 import casadi as ca
 import numpy as np
 
+from ._graph_context import current_graph as _current_graph
 from ._rotation import quat_conj, quat_mul, quat_to_rotmat
 from .frames import (
     FrameError,
@@ -35,8 +36,6 @@ from .frames import (
     _is_frame,
     _validate_frame,
 )
-from ._graph_context import current_graph as _current_graph
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -173,14 +172,14 @@ class _VecNConstructor(_ParameterizedConstructor):
     `from_mx` reuse the generic path (they route through
     `_make_constant` / `_from_mx`, which take `dim=`)."""
 
-    def input(self, name: str) -> "VecN":
+    def input(self, name: str) -> VecN:
         g = _current_graph()
         dim = int(self._kwargs["dim"])
         value = self._cls(ca.MX.sym(name, dim, 1), dim)
         g._register_input(name, value)
         return value
 
-    def coerce(self, value) -> "VecN":
+    def coerce(self, value) -> VecN:
         """The promotable-Parameter idiom (see the base class): pass a
         promoted VecN through (dim-checked), build a constant from a
         plain Python value."""
@@ -227,25 +226,25 @@ class Scalar(_IRValue):
     # / coerce / from_mx code path the frame-tagged Vec3/Mat3/Quat use, so the
     # value-type construction API is uniform across every IR type.
     @classmethod
-    def _ctor(cls) -> "_ParameterizedConstructor":
+    def _ctor(cls) -> _ParameterizedConstructor:
         return _ParameterizedConstructor(cls)
 
     @classmethod
-    def input(cls, name: str) -> "Scalar":
+    def input(cls, name: str) -> Scalar:
         return cls._ctor().input(name)
 
     @classmethod
-    def constant(cls, value) -> "Scalar":
+    def constant(cls, value) -> Scalar:
         return cls._ctor().constant(value)
 
     @classmethod
-    def coerce(cls, value) -> "Scalar":
+    def coerce(cls, value) -> Scalar:
         """`value` as-is when already a Scalar, else a constant — the
         promotable-Parameter idiom (see _ParameterizedConstructor.coerce)."""
         return cls._ctor().coerce(value)
 
     @classmethod
-    def from_mx(cls, mx) -> "Scalar":
+    def from_mx(cls, mx) -> Scalar:
         return cls._ctor().from_mx(mx)
 
     # --- Arithmetic -------------------------------------------------------
@@ -395,33 +394,33 @@ class Vec3(_IRValue):
 
     # ---- Arithmetic ------------------------------------------------------
 
-    def __add__(self, other: "Vec3") -> "Vec3":
+    def __add__(self, other: Vec3) -> Vec3:
         _check_vec3_same_frame(self, other, op="Vec3 + Vec3")
         return Vec3(self._mx + other._mx, frame=self._frame)
 
-    def __sub__(self, other: "Vec3") -> "Vec3":
+    def __sub__(self, other: Vec3) -> Vec3:
         _check_vec3_same_frame(self, other, op="Vec3 - Vec3")
         return Vec3(self._mx - other._mx, frame=self._frame)
 
-    def __neg__(self) -> "Vec3":
+    def __neg__(self) -> Vec3:
         return Vec3(-self._mx, frame=self._frame)
 
-    def __mul__(self, scalar) -> "Vec3":
+    def __mul__(self, scalar) -> Vec3:
         return Vec3(self._mx * _as_scalar_mx(scalar, op="Vec3 * scalar"),
                     frame=self._frame)
     __rmul__ = __mul__
 
-    def __truediv__(self, scalar) -> "Vec3":
+    def __truediv__(self, scalar) -> Vec3:
         return Vec3(self._mx / _as_scalar_mx(scalar, op="Vec3 / scalar"),
                     frame=self._frame)
 
     # ---- Vector ops ------------------------------------------------------
 
-    def dot(self, other: "Vec3") -> Scalar:
+    def dot(self, other: Vec3) -> Scalar:
         _check_vec3_same_frame(self, other, op="Vec3.dot")
         return Scalar(ca.dot(self._mx, other._mx))
 
-    def cross(self, other: "Vec3") -> "Vec3":
+    def cross(self, other: Vec3) -> Vec3:
         _check_vec3_same_frame(self, other, op="Vec3.cross")
         return Vec3(ca.cross(self._mx, other._mx), frame=self._frame)
 
@@ -429,13 +428,13 @@ class Vec3(_IRValue):
         # CasADi: norm_2 returns a 1x1.
         return Scalar(ca.norm_2(self._mx))
 
-    def normalize(self) -> "Vec3":
+    def normalize(self) -> Vec3:
         # NB: division by zero produces NaN here. Callers can wrap in a
         # `where(norm > 0, ...)` if they need a safe variant.
         return Vec3(self._mx / ca.norm_2(self._mx), frame=self._frame)
 
 
-def _check_vec3_same_frame(a: "Vec3", b: "Vec3", *, op: str) -> None:
+def _check_vec3_same_frame(a: Vec3, b: Vec3, *, op: str) -> None:
     if not isinstance(b, Vec3):
         raise TypeError(f"{op}: rhs must be a Vec3, got {type(b).__name__}")
     if a._frame is not b._frame:
@@ -647,7 +646,7 @@ class Quat(_IRValue):
 
     # ---- Ops ------------------------------------------------------------
 
-    def __mul__(self, other: "Quat") -> "Quat":
+    def __mul__(self, other: Quat) -> Quat:
         """Compose: Quat[A,B] * Quat[B,C] → Quat[A,C]."""
         if not isinstance(other, Quat):
             raise TypeError(
@@ -664,7 +663,7 @@ class Quat(_IRValue):
         return Quat(quat_mul(self._mx, other._mx),
                     from_frame=self._from_frame, to_frame=other._to_frame)
 
-    def conjugate(self) -> "Quat":
+    def conjugate(self) -> Quat:
         """Quat[A,B] → Quat[B,A]. For unit quaternions this is the inverse."""
         return Quat(
             quat_conj(self._mx),
@@ -695,7 +694,7 @@ class Quat(_IRValue):
         return Mat3(self._rotmat_mx(),
                     from_frame=self._from_frame, to_frame=self._to_frame)
 
-    def normalize(self) -> "Quat":
+    def normalize(self) -> Quat:
         n = ca.norm_2(self._mx)
         return Quat(self._mx / n,
                     from_frame=self._from_frame, to_frame=self._to_frame)

@@ -51,12 +51,15 @@ from typing import Any, ClassVar
 import numpy as np
 
 from .._validation import require_finite, require_positive
-
 from ._declarations import (
-    Input, Noise, Output, Parameter, State, _Declaration,
+    Input,
+    Noise,
+    Output,
+    Parameter,
+    State,
+    _Declaration,
 )
 from ._trace import _trace_local
-
 
 # ---------------------------------------------------------------------------
 # DeclarationHost — class-scope declaration resolution
@@ -106,7 +109,7 @@ class DeclarationHost:
         return object.__getattribute__(self, name)
 
     @classmethod
-    def _declarations(cls) -> dict[str, "_Declaration"]:
+    def _declarations(cls) -> dict[str, _Declaration]:
         """Walk MRO (most-derived overrides parent) returning the union of
         `_Declaration` class attributes by attribute name."""
         decls: dict[str, _Declaration] = {}
@@ -179,27 +182,27 @@ class DeclarationHost:
     # the same instance-call convention. Every framework call site holds
     # an instance.
 
-    def state_declarations(self) -> dict[str, "State"]:
+    def state_declarations(self) -> dict[str, State]:
         """Just the State entries (subset of _declarations)."""
         return {n: d for n, d in type(self)._declarations().items()
                 if isinstance(d, State)}
 
-    def input_declarations(self) -> dict[str, "Input"]:
+    def input_declarations(self) -> dict[str, Input]:
         """Just the Input entries (subset of _declarations)."""
         return {n: d for n, d in type(self)._declarations().items()
                 if isinstance(d, Input)}
 
-    def output_declarations(self) -> dict[str, "Output"]:
+    def output_declarations(self) -> dict[str, Output]:
         """Just the Output entries (subset of _declarations)."""
         return {n: d for n, d in type(self)._declarations().items()
                 if isinstance(d, Output)}
 
-    def noise_declarations(self) -> dict[str, "Noise"]:
+    def noise_declarations(self) -> dict[str, Noise]:
         """Just the Noise entries (subset of _declarations)."""
         return {n: d for n, d in type(self)._declarations().items()
                 if isinstance(d, Noise)}
 
-    def promotable_parameter_declarations(self) -> dict[str, "Parameter"]:
+    def promotable_parameter_declarations(self) -> dict[str, Parameter]:
         """The Parameter entries that declared a manifold — the ones a
         mount pose may promote to live graph inputs for system ID."""
         return {n: d for n, d in type(self)._declarations().items()
@@ -291,7 +294,7 @@ class Part(DeclarationHost):
     # target (thruster torque arms, sensor lever arms). The bound symbol's
     # coords are the parent's OUTPUT frame, exactly like the constant; the
     # kinematic/inertia passes consume it raw.
-    mount_offset: "tuple[float, float, float]" = Parameter((0.0, 0.0, 0.0),
+    mount_offset: tuple[float, float, float] = Parameter((0.0, 0.0, 0.0),
                                                         manifold="R3")
 
     # Static mount rotation, wxyz, part axes → parent output axes.
@@ -301,13 +304,13 @@ class Part(DeclarationHost):
     # valuable things a sysid fit can recover — an IMU a couple of
     # degrees off its nominal frame biases every attitude solution, and
     # is otherwise almost impossible to measure in situ.
-    mount_orientation: "tuple[float, float, float, float]" = Parameter(
+    mount_orientation: tuple[float, float, float, float] = Parameter(
         (1.0, 0.0, 0.0, 0.0), manifold="SO3")
 
     def __init__(self, name: str, **overrides: Any) -> None:
         from ..ir.module import check_name
         self.name = check_name(name, who=type(self).__name__)
-        self.parent: "Part | None" = None
+        self.parent: Part | None = None
         self._apply_declarations(overrides)
         q = np.asarray(self.declared_value("mount_orientation"), dtype=float)
         if q.shape != (4,):
@@ -323,8 +326,7 @@ class Part(DeclarationHost):
             # Normalize once here rather than per tick: a rotation that
             # drifts off the unit sphere silently rescales every vector
             # it touches.
-            setattr(self, "mount_orientation",
-                    tuple(float(v) for v in q / norm))
+            self.mount_orientation = tuple(float(v) for v in q / norm)
 
     @property
     def mounted_upright(self) -> bool:
@@ -492,8 +494,8 @@ class CompositePart(Part):
         PartFrame, like every part's update: the tick rolls each wrench
         up from the part's own frame, so a CraftFrame zero here would
         FrameError the compile for any non-root composite."""
-        from ..ir.wrench import Wrench
         from ..ir.frames import PartFrame
+        from ..ir.wrench import Wrench
         return Wrench.zero(PartFrame)
 
 
@@ -512,8 +514,8 @@ class RootPart(CompositePart):
     # frame. Override the inherited Parameters to lock both halves —
     # a rotated root would silently redefine what "body frame" means
     # for every state, sensor and wrench on the craft.
-    mount_offset: "tuple[float, float, float]" = Parameter((0.0, 0.0, 0.0))
-    mount_orientation: "tuple[float, float, float, float]" = Parameter(
+    mount_offset: tuple[float, float, float] = Parameter((0.0, 0.0, 0.0))
+    mount_orientation: tuple[float, float, float, float] = Parameter(
         (1.0, 0.0, 0.0, 0.0))
 
     def __init__(self, name: str) -> None:

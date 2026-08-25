@@ -129,13 +129,13 @@ def test_superposes_onto_a_point_mass():
 
 
 @pytest.mark.parametrize("kwargs, match", [
-    (dict(GM=-1.0), "GM must be > 0"),
-    (dict(eq_radius=0.0), "eq_radius must be > 0"),
-    (dict(eps=-1.0), "eps must be >= 0"),
-    (dict(polar_axis=(0.0, 0.0, 0.0)), "polar_axis must be nonzero"),
+    ({"GM": -1.0}, "GM must be > 0"),
+    ({"eq_radius": 0.0}, "eq_radius must be > 0"),
+    ({"eps": -1.0}, "eps must be >= 0"),
+    ({"polar_axis": (0.0, 0.0, 0.0)}, "polar_axis must be nonzero"),
 ])
 def test_constructor_validation(kwargs, match):
-    args = dict(position=(0.0, 0.0, 0.0), GM=GM, J2=J2, eq_radius=R_EQ)
+    args = {"position": (0.0, 0.0, 0.0), "GM": GM, "J2": J2, "eq_radius": R_EQ}
     args.update(kwargs)
     with pytest.raises(ValueError, match=match):
         J2Gravity(**args)

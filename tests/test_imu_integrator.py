@@ -134,7 +134,7 @@ def test_imu_python_cpp_roundtrip(tmp_path: Path):
         [cxx, "-c", "-std=c++17", "-O2", "-fPIC", f"-I{eigen_inc}",
          f"-I{tmp_path}", str(result.wrapper_cpp), "-o", str(w_obj)],
     ):
-        p = subprocess.run(cmd, capture_output=True, text=True)
+        p = subprocess.run(cmd, capture_output=True, text=True, check=False)
         assert p.returncode == 0, p.stderr
 
     h_src = tmp_path / "harness_main.cpp"
@@ -143,9 +143,9 @@ def test_imu_python_cpp_roundtrip(tmp_path: Path):
     p = subprocess.run(
         [cxx, "-std=c++17", "-O2", f"-I{eigen_inc}", f"-I{tmp_path}",
          str(h_src), str(w_obj), str(k_obj), "-o", str(binary)],
-        capture_output=True, text=True)
+        capture_output=True, text=True, check=False)
     assert p.returncode == 0, p.stderr
-    p = subprocess.run([str(binary)], capture_output=True, text=True)
+    p = subprocess.run([str(binary)], capture_output=True, text=True, check=False)
     assert p.returncode == 0, p.stderr
     cpp_rows = [[float(x) for x in line.split()[1:]]
                 for line in p.stdout.strip().splitlines()]

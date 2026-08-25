@@ -24,7 +24,6 @@ from ..ir.frames import WorldFrame
 from ..ir.types import Vec3
 from .base import Disturbance, SuperposedField
 
-
 _VEC3_W = Vec3[WorldFrame]
 
 # Vacuum permeability over 4π. In SI units. μ₀/(4π) = 1e-7 H/m.
@@ -50,7 +49,7 @@ class MagField(SuperposedField):
     def _zero_value(self):
         return _VEC3_W.constant((0.0, 0.0, 0.0))
 
-    def add_uniform(self, B_vec: tuple[float, float, float]) -> "MagField":
+    def add_uniform(self, B_vec: tuple[float, float, float]) -> MagField:
         """Attach a position-independent magnetic field. Returns self."""
         return self.add(UniformMag(B_vec))
 
@@ -161,8 +160,8 @@ class BodyDipoleMag(Disturbance):
         self.eps = float(eps)
 
     def contribute_at_sym(self, point, t):
-        from .base import anchored_pose
         from ..ir.frames import CraftFrame
+        from .base import anchored_pose
         center, quat = anchored_pose(self.craft, self.offset_body)
         # Moment is body-fixed → rotate into world with the craft attitude.
         m_world = quat.apply(Vec3[CraftFrame].constant(self.moment_body))

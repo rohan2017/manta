@@ -20,10 +20,12 @@ import pytest
 from manta import ir
 from manta.ir.frames import CraftFrame
 from manta.ir.manifold import (
-    R3Manifold, RnManifold, ScalarManifold, manifold_from_shortcut,
+    R3Manifold,
+    RnManifold,
+    ScalarManifold,
+    manifold_from_shortcut,
 )
 from manta.ir.types import VecN
-
 
 # ---------------------------------------------------------------------------
 # VecN constructors

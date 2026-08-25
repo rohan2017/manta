@@ -14,7 +14,10 @@ import pytest
 from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import FluidField, GravityField
 from manta.parts import (
-    DragSurface, FossenDamping, Mass, RotationalDrag,
+    DragSurface,
+    FossenDamping,
+    Mass,
+    RotationalDrag,
 )
 
 RHO = 1025.0

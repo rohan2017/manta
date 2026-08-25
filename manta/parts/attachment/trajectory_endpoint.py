@@ -38,8 +38,8 @@ anything closed-form.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Optional
 
 from ...fields import gravity_at
 from ...ir.frames import PartFrame, WorldFrame
@@ -69,10 +69,10 @@ class TrajectorySample:
     """
 
     position:         Vec3
-    orientation:      Optional[Quat] = None
-    velocity:         Optional[Vec3] = None
-    angular_velocity: Optional[Vec3] = None
-    acceleration:     Optional[Vec3] = None
+    orientation:      Quat | None = None
+    velocity:         Vec3 | None = None
+    angular_velocity: Vec3 | None = None
+    acceleration:     Vec3 | None = None
 
 
 class TrajectoryEndpoint(Part):
@@ -126,7 +126,7 @@ class TrajectoryEndpoint(Part):
         # the class docstring warns about), a rotation skews the whole
         # wrench. Reject all three during resolution, before any tracing.
         if not isinstance(self.parent, RootPart):
-            raise ValueError(
+            raise ValueError(  # noqa: TRY004  (ValueError is the tested contract here)
                 f"{type(self).__name__}({self.name!r}): must be mounted "
                 f"directly on the craft root (got parent "
                 f"'{self.parent.name if self.parent else None}'). The "

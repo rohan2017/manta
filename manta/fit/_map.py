@@ -108,7 +108,7 @@ from ._report import derivation_report
 class _Block(_FitBlock):
     """One parameter's slice of the decision vector `v` and its prior."""
 
-    __slots__ = ("full", "declared", "log")
+    __slots__ = ("declared", "full", "log")
 
     def __init__(self, full: str, dim: int, offset: int,
                  declared: np.ndarray, prior: Prior | None) -> None:

@@ -36,10 +36,9 @@ from __future__ import annotations
 import warnings
 
 import casadi as ca
-import numpy as np
-
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 
 def _require_x64() -> None:
@@ -202,7 +201,7 @@ def _translate_sx(sx: ca.Function, name: str):
     for j, (rows, cols, _shape) in scatter.items():
         ns[f"_rows{j}"] = jnp.array(rows, dtype=int)
         ns[f"_cols{j}"] = jnp.array(cols, dtype=int)
-    exec("\n".join(src), ns)
+    exec("\n".join(src), ns)  # noqa: S102  (executes our own generated kernel source)
     kernel = ns["_kernel"]
 
     def wrapper(*args):

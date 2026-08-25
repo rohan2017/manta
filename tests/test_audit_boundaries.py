@@ -4,7 +4,15 @@ import numpy as np
 import pytest
 
 from manta import (
-    Craft, EKF, LQR, NoiseDriver, PID, Sim, SimCheckpoint, TargetNumpy, World,
+    EKF,
+    LQR,
+    PID,
+    Craft,
+    NoiseDriver,
+    Sim,
+    SimCheckpoint,
+    TargetNumpy,
+    World,
 )
 from manta.fields import GravityField
 from manta.ir.manifold import ScalarManifold
@@ -103,11 +111,11 @@ def test_runtime_rejects_overflowing_logical_time_before_mutation():
 
 
 def test_regulator_rejects_solution_from_another_artifact_atomically():
-    kwargs = dict(x_ref={"vehicle": {"position": (0.0, 0.0, 5.0),
+    kwargs = {"x_ref": {"vehicle": {"position": (0.0, 0.0, 5.0),
                                       "velocity": (0.0, 0.0, 0.0)}},
-                  u_ref={"thruster.throttle": 9.81},
-                  regulate=["vehicle.position", "vehicle.velocity"],
-                  Q=np.eye(6), R=np.eye(3), dt=0.02)
+                  "u_ref": {"thruster.throttle": 9.81},
+                  "regulate": ["vehicle.position", "vehicle.velocity"],
+                  "Q": np.eye(6), "R": np.eye(3), "dt": 0.02}
     first = LQR(_world("first"), **kwargs)
     second = LQR(_world("second", mass=2.0), **kwargs)
     regulator = TargetNumpy(first)

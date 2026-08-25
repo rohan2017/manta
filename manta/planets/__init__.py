@@ -26,5 +26,13 @@ from .earth import Earth, SeaWaves
 from .scene import Scene
 from .state import PlanetState
 
-__all__ = ["Planet", "Earth", "PlanetState", "Scene", "SeaWaves",
-           "PlanetFrameFluid", "Atmosphere", "Ocean"]
+__all__ = [
+           "Atmosphere",
+           "Earth",
+           "Ocean",
+           "Planet",
+           "PlanetFrameFluid",
+           "PlanetState",
+           "Scene",
+           "SeaWaves",
+]

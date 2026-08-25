@@ -19,14 +19,16 @@ expected −c·(v·n̂)·n̂ contact damping.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import casadi as ca
 
 from ...fields import CollisionField
-from ...ir.frames import WorldFrame, PartFrame
+from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3
+from ...ir.wrench import Wrench
 from .._declarations import Parameter, PartUpdate
 from ..base import Part
-from ...ir.wrench import Wrench
 
 
 class Collider(Part):
@@ -49,7 +51,7 @@ class Collider(Part):
                     0 → frictionless contact (the prior behaviour).
     """
 
-    requires_fields = [CollisionField]
+    requires_fields: ClassVar[list[type]] = [CollisionField]
 
     stiffness: float = Parameter(5e3)
     damping:   float = Parameter(50.0)

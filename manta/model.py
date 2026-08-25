@@ -167,7 +167,7 @@ class ModelArtifact:
         digest.update(canonical_derivation_bytes(derivation))
         return digest.hexdigest()
 
-    def with_derivation(self, name: str, report: Any) -> "ModelArtifact":
+    def with_derivation(self, name: str, report: Any) -> ModelArtifact:
         """Return this physical model with immutable provenance attached."""
         if not isinstance(name, str) or not name:
             raise ValueError("derivation name must be a non-empty string")
@@ -184,7 +184,7 @@ class ModelArtifact:
         )
 
     def with_derivations(
-            self, derivation: Mapping[str, Any]) -> "ModelArtifact":
+            self, derivation: Mapping[str, Any]) -> ModelArtifact:
         """Carry provenance forward onto a newly derived physical model."""
         if self.derivation:
             raise ValueError("with_derivations requires a fresh model artifact")

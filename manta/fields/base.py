@@ -42,8 +42,8 @@ def anchored_pose(craft, offset_body):
     ``center`` a Vec3[WorldFrame], ``quat`` the craft's Quat[WorldFrame,
     CraftFrame] (call ``quat.to_rotmat()`` for the rotation if you need
     it). Only callable inside a world-tick compile."""
-    from ..parts._trace import active_trace
     from ..ir.frames import CraftFrame
+    from ..parts._trace import active_trace
     tr = active_trace()
     if tr is None:
         raise RuntimeError(
@@ -142,14 +142,14 @@ class Disturbance(DeclarationHost, ABC):
     # --- Abstract contract --------------------------------------------
 
     @abstractmethod
-    def contribute_at_sym(self, point: "Vec3", t):
+    def contribute_at_sym(self, point: Vec3, t):
         """Return this disturbance's contribution at the given world-frame
         point at world-clock time `t` (Scalar MX). Output type matches
         the host Field's value type. Static disturbances accept `t` and
         ignore it."""
         raise NotImplementedError
 
-    def membership(self, point: "Vec3", t) -> "ca.MX":
+    def membership(self, point: Vec3, t) -> ca.MX:
         """Spatial support of this disturbance at `point`/`t`, an MX in
         [0, 1]. Defaults to 1 everywhere (global); a `membership=`
         callable passed at construction, or a subclass override, narrows
@@ -195,7 +195,7 @@ class Field:
     def disturbances(self) -> tuple[Disturbance, ...]:
         return tuple(self._disturbances)
 
-    def add(self, disturbance: Disturbance) -> "Field":
+    def add(self, disturbance: Disturbance) -> Field:
         """Register a disturbance with this field. Returns self for chaining.
 
         A disturbance constructed without an explicit `name` is named
@@ -282,7 +282,7 @@ class SuperposedField(Field, ABC):
         GravityField.)"""
         raise NotImplementedError
 
-    def value_at_sym(self, point: "Vec3", t):
+    def value_at_sym(self, point: Vec3, t):
         """Linear superposition: the sum of every registered
         disturbance's contribution at `point` at time `t`.
 

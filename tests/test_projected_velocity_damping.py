@@ -2,10 +2,10 @@
 
 import numpy as np
 import pytest
-from manta.fields import FluidField, GravityField
-from manta.parts import Mass, ProjectedVelocityDamping
 
 from manta import Craft, Sim, TargetNumpy, World
+from manta.fields import FluidField, GravityField
+from manta.parts import Mass, ProjectedVelocityDamping
 
 
 def _sim(part, *, velocity=(0.0, 0.0, 0.0), omega=(0.0, 0.0, 0.0)):

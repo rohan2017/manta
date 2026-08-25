@@ -9,9 +9,8 @@ estimate asynchronously (a subset per tick).
 """
 
 import numpy as np
-import pytest
 
-from manta import ALL, Craft, EKF, Sim, TargetNumpy, World
+from manta import EKF, Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField, OpticalField
 from manta.parts import CentroidCamera, Mass, OpticalSource
 

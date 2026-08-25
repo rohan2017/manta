@@ -16,8 +16,7 @@ numeric/symbolic branch points throughout `tick/` (`is_promoted`,
 from __future__ import annotations
 
 import threading
-from typing import Any
-
+from typing import Any, Self
 
 _trace_local = threading.local()
 
@@ -61,7 +60,7 @@ class TraceBindings:
                 f"TraceBindings: craft '{craft.name}' has no symbolic state "
                 f"bound — it is not part of the world being compiled.")
 
-    def __enter__(self) -> "TraceBindings":
+    def __enter__(self) -> Self:
         if getattr(_trace_local, "active", None) is not None:
             raise RuntimeError(
                 "TraceBindings: a trace is already active on this thread.")
@@ -72,7 +71,7 @@ class TraceBindings:
         _trace_local.active = None
 
 
-def active_trace() -> "TraceBindings | None":
+def active_trace() -> TraceBindings | None:
     """The trace active on this thread, if any. Compile-time hook for code
     that runs inside a trace without a `trace` handle in scope (e.g. a
     disturbance's `contribute_at_sym`)."""

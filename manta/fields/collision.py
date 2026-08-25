@@ -36,7 +36,6 @@ from ..ir.types import Vec3
 from ..smoothing import smooth_max0, soft_norm
 from .base import Disturbance, SuperposedField
 
-
 _VEC3_W = Vec3[WorldFrame]
 
 # Smoothing parameter for the penetration-depth `max(0, x)` regularizer:
@@ -63,14 +62,14 @@ class CollisionField(SuperposedField):
     def add_half_space(self,
                        origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
                        normal: tuple[float, float, float] = (0.0, 0.0, 1.0)
-                       ) -> "CollisionField":
+                       ) -> CollisionField:
         """Attach a half-space obstacle (infinite ground plane / wall).
         Returns self."""
         return self.add(HalfSpace(origin=origin, normal=normal))
 
     def add_sphere(self,
                    center: tuple[float, float, float],
-                   radius: float) -> "CollisionField":
+                   radius: float) -> CollisionField:
         """Attach a solid-sphere obstacle (e.g. a planet surface).
         Returns self."""
         return self.add(Sphere(center=center, radius=radius))
@@ -80,7 +79,7 @@ class CollisionField(SuperposedField):
                       equatorial_radius: float,
                       flattening: float,
                       polar_axis: tuple[float, float, float] = (0.0, 0.0, 1.0),
-                      *, height: float = 0.0) -> "Ellipsoid":
+                      *, height: float = 0.0) -> Ellipsoid:
         """Attach a solid oblate-spheroid obstacle (a WGS-84 Earth).
         Returns the `Ellipsoid` (not self) so the caller can reuse its
         geodetic height for other surface-relative queries."""
@@ -93,7 +92,7 @@ class CollisionField(SuperposedField):
     def add_heightfield(self, heights, *,
                         x0: float = 0.0, y0: float = 0.0,
                         dx: float = 1.0, dy: float = 1.0
-                        ) -> "Heightfield":
+                        ) -> Heightfield:
         """Attach gridded solid terrain `z = h(x, y)` (bathymetry, a
         ground DEM). Returns the `Heightfield` (not self) so the caller
         can keep it for `height_at` queries."""

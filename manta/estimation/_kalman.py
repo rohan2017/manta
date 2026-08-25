@@ -24,7 +24,7 @@ F/H, but bake into the same per-entry `ca.Function`s the EKF does.
 from __future__ import annotations
 
 import math
-from typing import Callable
+from collections.abc import Callable
 
 import casadi as ca
 import numpy as np

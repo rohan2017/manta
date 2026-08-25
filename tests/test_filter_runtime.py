@@ -423,7 +423,7 @@ def test_extended_update_numpy_cpp_parity(estimator, tmp_path: Path):
          str(generated.wrapper_cpp), "-o", str(w_obj)],
     )
     for command in commands:
-        proc = subprocess.run(command, capture_output=True, text=True)
+        proc = subprocess.run(command, capture_output=True, text=True, check=False)
         assert proc.returncode == 0, proc.stderr
     source, binary = tmp_path / "main.cpp", tmp_path / "harness"
     drift = transform.spec.slot("drone.gps.position_drift").tangent_offset
@@ -438,9 +438,9 @@ def test_extended_update_numpy_cpp_parity(estimator, tmp_path: Path):
     proc = subprocess.run(
         [cxx, "-std=c++17", "-O2", f"-I{eigen}", f"-I{tmp_path}",
          str(source), str(w_obj), str(k_obj), "-o", str(binary)],
-        capture_output=True, text=True)
+        capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr
-    proc = subprocess.run([str(binary)], capture_output=True, text=True)
+    proc = subprocess.run([str(binary)], capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr
     cpp = {line.split()[0]: np.asarray([float(v) for v in line.split()[1:]])
            for line in proc.stdout.splitlines()}

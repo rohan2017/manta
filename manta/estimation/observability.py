@@ -102,8 +102,8 @@ class ObservabilityReport:
     def summary(self) -> str:
         head = ("✓ fully observable" if self.observable
                 else "⚠ NOT fully observable")
-        lines = [f"{head}: rank {self.rank}/{self.tangent_dim}  "
-                 f"(sensors: {', '.join(self.sensors) or 'none'})"]
+        lines = [(f"{head}: rank {self.rank}/{self.tangent_dim}  "
+                  f"(sensors: {', '.join(self.sensors) or 'none'})")]
         if not self.observable:
             lines.append("  unobservable state directions:")
             for name, strength in self.unobservable:
@@ -303,8 +303,8 @@ class SigmaHorizonReport:
         return float(self.sigmas[slot][-1])
 
     def summary(self) -> str:
-        lines = [f"σ-horizon {self.horizon:g} s @ dt {self.dt:g}  "
-                 f"(sensors: {', '.join(self.sensors) or 'none'})",
+        lines = [(f"σ-horizon {self.horizon:g} s @ dt {self.dt:g}  "
+                  f"(sensors: {', '.join(self.sensors) or 'none'})"),
                  f"  {'slot':28s} {'σ₀':>9}   {'σ(T)':>9}  {'ratio':>7}"]
         for name, sig in self.sigmas.items():
             s0, sT = float(sig[0]), float(sig[-1])
@@ -384,7 +384,7 @@ def sigma_horizon(ekf, *, horizon: float, dt: float = 0.02,
     sys = ir.sys
     spec = ir.spec
     n = spec.tangent_dim
-    steps = max(1, int(round(horizon / dt)))
+    steps = max(1, round(horizon / dt))
 
     # --- P0: scalar | diag vector | full matrix --------------------------
     if P0 is None:
@@ -410,7 +410,7 @@ def sigma_horizon(ekf, *, horizon: float, dt: float = 0.02,
         R_fn = ca.Function(f"R_{entry_ident(full)}",
                            [x_s, u_s, t_s], [R_expr])
         rate = sys.sample_rates.get(full)
-        period = max(1, int(round(1.0 / (rate * dt)))) if rate else 1
+        period = max(1, round(1.0 / (rate * dt))) if rate else 1
         chosen.append((full, s.dim, H_fn, R_fn, period))
     names = [full for full, *_ in chosen]
 

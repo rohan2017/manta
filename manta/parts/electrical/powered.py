@@ -28,13 +28,19 @@ from ..actuation.ducted_propeller import DuctedPropeller
 from ..actuation.thruster import Thruster
 from ..aero.control_surface import ControlSurface
 from ..articulation.motor import Motor
-from .core import ConstantPowerLoad, ElectricalPort
 from ._invariants import (
     c1_gate as _c1_gate,
+)
+from ._invariants import (
     finite_scalar as _finite_scalar,
+)
+from ._invariants import (
     positive as _positive,
+)
+from ._invariants import (
     unit_interval as _unit_interval,
 )
+from .core import ConstantPowerLoad, ElectricalPort
 
 
 def _merge_update(update, outputs: dict[str, Scalar]) -> PartUpdate:

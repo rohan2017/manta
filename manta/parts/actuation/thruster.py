@@ -32,10 +32,10 @@ import casadi as ca
 
 from ...ir.frames import PartFrame
 from ...ir.types import Scalar, Vec3
+from ...ir.wrench import Wrench
 from .._declarations import Input, Parameter, WhiteNoise
 from .._trace import scalar_mx
 from ..base import Part, PartRole
-from ...ir.wrench import Wrench
 
 
 class Thruster(Part):
@@ -71,13 +71,13 @@ class Thruster(Part):
     # All four coefficients are promotable (system-ID targets): a tunable
     # transform constructed with `parameters=[...]` promotes them to live
     # graph inputs; `coerce` below consumes either form.
-    force:       "tuple[float, float, float]" = Parameter(
+    force:       tuple[float, float, float] = Parameter(
         (0.0, 0.0, 0.0), manifold="R3", frame=PartFrame)
-    force_quad:  "tuple[float, float, float]" = Parameter(
+    force_quad:  tuple[float, float, float] = Parameter(
         (0.0, 0.0, 0.0), manifold="R3", frame=PartFrame)
-    torque:      "tuple[float, float, float]" = Parameter(
+    torque:      tuple[float, float, float] = Parameter(
         (0.0, 0.0, 0.0), manifold="R3", frame=PartFrame)
-    torque_quad: "tuple[float, float, float]" = Parameter(
+    torque_quad: tuple[float, float, float] = Parameter(
         (0.0, 0.0, 0.0), manifold="R3", frame=PartFrame)
     throttle: float = Input(default=0.0)
 

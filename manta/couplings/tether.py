@@ -37,7 +37,7 @@ from __future__ import annotations
 import casadi as ca
 
 from .._validation import require_positive
-from ..ir.frames import WorldFrame, CraftFrame
+from ..ir.frames import CraftFrame, WorldFrame
 from ..ir.types import Vec3
 from ..ir.wrench import Wrench
 from ..smoothing import hermite_blend, soft_norm

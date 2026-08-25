@@ -48,8 +48,8 @@ import numpy as np
 
 from ..ir._names import resolve_suffix
 from ..ir.state_spec import StateSpec, flatten_nested, resolve_slotset
-from ..model_layout import state_spec_from_world
 from ..model import ModelArtifact
+from ..model_layout import state_spec_from_world
 from .engine import SensorModel, TickLinearizer
 from .partition import dependency_closure
 

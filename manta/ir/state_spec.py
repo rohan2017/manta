@@ -191,7 +191,7 @@ class StateSpec:
     # ----- Construction --------------------------------------------------
 
     @classmethod
-    def from_layout(cls, layout) -> "StateSpec":
+    def from_layout(cls, layout) -> StateSpec:
         """Build a spec from an ordered list of `(name, Manifold)` pairs.
 
         The world-agnostic constructor: a `RecurrenceBlock` (PID, Madgwick,
@@ -211,8 +211,8 @@ class StateSpec:
         return cls(slots)
 
     @classmethod
-    def subset(cls, full_spec: "StateSpec",
-               kept_names) -> "StateSpec":
+    def subset(cls, full_spec: StateSpec,
+               kept_names) -> StateSpec:
         """Build a standalone spec over a subset of `full_spec`'s slots.
 
         Slots are kept in their original `full_spec` order; ambient and

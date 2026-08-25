@@ -10,7 +10,7 @@ import numpy as np
 
 from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField
-from manta.parts import RevoluteJoint, Mass
+from manta.parts import Mass, RevoluteJoint
 
 
 def _single_step_rate(moi, omega0, *, dt=0.01) -> float:

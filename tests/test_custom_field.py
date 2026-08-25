@@ -7,6 +7,8 @@ into the tick and the EKF — with no built-in list of field kinds
 anywhere, and no silent empty-field default when it's absent.
 """
 
+from typing import ClassVar
+
 import casadi as ca
 import numpy as np
 import pytest
@@ -57,7 +59,7 @@ class DriftingEmitter(RadarEmitter):
 
 class RadarDetector(Part):
     """Reads the RadarField at its mount point. Requires the field."""
-    requires_fields = [RadarField]
+    requires_fields: ClassVar[list[type]] = [RadarField]
     power = Output()
 
     def update(self, ctx) -> PartUpdate:
@@ -117,7 +119,7 @@ def test_ctx_field_raises_without_registration():
     """A bare ctx.field on an unregistered kind raises at compile — no
     silent empty default."""
     class UndeclaredDetector(RadarDetector):
-        requires_fields = []        # skip validation → hit ctx.field raw
+        requires_fields: ClassVar[list[type]] = []        # skip validation → hit ctx.field raw
 
     w = World().add_field(GravityField.none())
     w.add_craft(_craft(UndeclaredDetector))

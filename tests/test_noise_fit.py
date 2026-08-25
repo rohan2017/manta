@@ -5,8 +5,7 @@ import copy
 import numpy as np
 import pytest
 
-from manta import ModelArtifact, NoiseDriver, NoiseFit, Prior, Sim, \
-    TargetNumpy, Window
+from manta import ModelArtifact, NoiseDriver, NoiseFit, Prior, Sim, TargetNumpy, Window
 
 from .test_fit import DT, _drone
 

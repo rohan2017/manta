@@ -20,10 +20,9 @@ the solve nodes and recomposed around `jnp.linalg.solve` — see
 
 from __future__ import annotations
 
-import numpy as np
-
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from ...ir.module import PortRef, Role, StateRef
 from ..target import as_module, for_role, resolve_args

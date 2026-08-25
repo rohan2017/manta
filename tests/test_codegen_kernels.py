@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 
 from manta import Craft, Sim, World
-from manta.fields import GravityField
 from manta.codegen.cpp.kernels import emit_kernel_list
+from manta.fields import GravityField
 from manta.parts import IMU, Mass, PositionSensor, Thruster
 
 
@@ -70,8 +70,7 @@ def test_kernel_c_compiles_with_cc(tmp_path: Path):
     proc = subprocess.run(
         [cc, "-c", "-O2", "-Wall", "-Wno-unused-parameter",
          str(paths["c"]), "-o", str(obj)],
-        capture_output=True, text=True,
-    )
+        capture_output=True, text=True, check=False)
     assert proc.returncode == 0, (
         f"compile failed:\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}")
     assert obj.exists()

@@ -42,15 +42,12 @@ from typing import Any
 
 import numpy as np
 
-from .craft import Craft
-from .fields import Field
-
-
 # Coupling is referenced below as a type and via isinstance; the ABC
 # itself lives in couplings/base.py. External callers should import it
 # from `manta.couplings` (or `manta`).
 from .couplings.base import Coupling
-
+from .craft import Craft
+from .fields import Field
 
 # ---------------------------------------------------------------------------
 # World
@@ -76,7 +73,7 @@ class World:
 
     # ---- Snapshot resolution ---------------------------------------------
 
-    def snapshot(self) -> "World":
+    def snapshot(self) -> World:
         """Return an independently resolved snapshot of this authoring model.
 
         Deferred registrations and hooks run on a deep copy. If resolution
@@ -118,7 +115,7 @@ class World:
 
     # ---- Fields ----------------------------------------------------------
 
-    def add_field(self, field: Field) -> "World":
+    def add_field(self, field: Field) -> World:
         """Register a Field with this world. One instance per Field
         subclass is allowed — call `field.add(disturbance)` on the
         registered instance to attach more sources.
@@ -168,7 +165,7 @@ class World:
     def planets(self) -> tuple:
         return tuple(self._planets)
 
-    def add_planet(self, planet) -> "World":
+    def add_planet(self, planet) -> World:
         """Register a planet with this world. The planet's
         `register_disturbances(world)` is called at `Sim(world)`
         time, attaching its standing contributions to the world's

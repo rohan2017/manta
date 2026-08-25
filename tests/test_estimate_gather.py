@@ -11,7 +11,13 @@ lives in `control()` / the spec's `pack_any`.
 import numpy as np
 
 from manta import (
-    Craft, EKF, LQR, POSE, TWIST, TargetNumpy, World,
+    EKF,
+    LQR,
+    POSE,
+    TWIST,
+    Craft,
+    TargetNumpy,
+    World,
 )
 from manta.fields import GravityField
 from manta.parts import Mass, PositionSensor, Thruster

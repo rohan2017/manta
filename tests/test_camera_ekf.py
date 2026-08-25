@@ -11,7 +11,7 @@ its apparent size given the known semi-axes).
 import numpy as np
 import pytest
 
-from manta import Craft, EKF, Sim, TargetNumpy, World
+from manta import EKF, Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField, OpticalField
 from manta.parts import BBoxCamera, Mass, OpticalSource, PositionSensor
 

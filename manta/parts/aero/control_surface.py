@@ -41,8 +41,8 @@ from ...ir.types import Scalar
 from ...ir.wrench import Wrench
 from .._declarations import Input, Parameter, PartUpdate, State
 from .._trace import scalar_mx as _as_mx
-from .aerofoil import Aerofoil
 from ..base import PartRole
+from .aerofoil import Aerofoil
 
 
 def _flap_effectiveness(E: float) -> tuple[float, float]:

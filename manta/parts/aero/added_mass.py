@@ -52,14 +52,16 @@ gravity/COM rollup never sees it.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import casadi as ca
 
 from ...fields import FluidField
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3
+from ...ir.wrench import Wrench
 from .._declarations import Parameter, PartUpdate
 from ..base import Part
-from ...ir.wrench import Wrench
 
 
 class AddedMass(Part):
@@ -76,11 +78,11 @@ class AddedMass(Part):
                         axis).
     """
 
-    requires_fields = [FluidField]
+    requires_fields: ClassVar[list[type]] = [FluidField]
 
-    translational: "tuple[float, float, float]" = Parameter(
+    translational: tuple[float, float, float] = Parameter(
         (0.0, 0.0, 0.0), manifold="R3", frame=PartFrame)
-    rotational: "tuple[float, float, float]" = Parameter(
+    rotational: tuple[float, float, float] = Parameter(
         (0.0, 0.0, 0.0), manifold="R3", frame=PartFrame)
 
     def __init__(self, name: str, **overrides) -> None:

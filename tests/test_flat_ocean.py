@@ -166,10 +166,10 @@ def test_surface_z_moves_the_waterline():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("kwargs, match", [
-    (dict(density=0.0), "density must be > 0"),
-    (dict(gravity=-1.0), "gravity must be >= 0"),
-    (dict(surface_blend=0.0), "surface_blend must be > 0"),
-    (dict(velocity=(1.0, 2.0)), "velocity must be length-3"),
+    ({"density": 0.0}, "density must be > 0"),
+    ({"gravity": -1.0}, "gravity must be >= 0"),
+    ({"surface_blend": 0.0}, "surface_blend must be > 0"),
+    ({"velocity": (1.0, 2.0)}, "velocity must be length-3"),
 ])
 def test_constructor_validation(kwargs, match):
     with pytest.raises(ValueError, match=match):

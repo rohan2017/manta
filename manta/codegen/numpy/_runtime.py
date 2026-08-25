@@ -5,12 +5,12 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 from itertools import pairwise
-from typing import Any, Literal
+from typing import Any
 
 import numpy as np
 
-from ...ir.module import Hosting, Module, ModuleKind, Role, StateRef
 from ...ir._names import resolve_suffix
+from ...ir.module import Hosting, Module, ModuleKind, Role, StateRef
 from ..target import resolve_args
 from ._compile import (
     DEFAULT_COMPILATION_TIMEOUT_S,
@@ -179,7 +179,7 @@ class NumpyRuntime:
         optimization: Optimization | None = None,
         timeout_s: float | None = DEFAULT_COMPILATION_TIMEOUT_S,
         max_instructions: int | None = DEFAULT_MAX_INSTRUCTIONS,
-    ) -> "NumpyRuntime":
+    ) -> NumpyRuntime:
         """Require optimized ``cc`` externals for every kernel.
 
         Full simulator translation units can contain several vehicles and
@@ -206,7 +206,7 @@ class NumpyRuntime:
         optimization: Optimization = "balanced",
         timeout_s: float = DEFAULT_COMPILATION_TIMEOUT_S,
         max_instructions: int | None = DEFAULT_MAX_INSTRUCTIONS,
-    ) -> "NumpyRuntime":
+    ) -> NumpyRuntime:
         """Compile a selected hot subset of this runtime's kernels.
 
         Large transforms need not make native execution all-or-nothing. A

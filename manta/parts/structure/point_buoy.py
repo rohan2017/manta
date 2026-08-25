@@ -22,12 +22,14 @@ surface-crossing torques (the "righting moment" of a hull) emerge naturally.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from ...fields import FluidField, GravityField
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3
+from ...ir.wrench import Wrench
 from .._declarations import Parameter, PartUpdate
 from ..base import Part
-from ...ir.wrench import Wrench
 
 
 class PointBuoy(Part):
@@ -42,7 +44,7 @@ class PointBuoy(Part):
     response).
     """
 
-    requires_fields = [FluidField, GravityField]
+    requires_fields: ClassVar[list[type]] = [FluidField, GravityField]
 
     volume: float = Parameter(1e-3)     # m³
 

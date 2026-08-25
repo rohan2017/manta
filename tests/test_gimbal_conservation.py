@@ -19,7 +19,6 @@ from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField
 from manta.parts import Mass, RevoluteJoint
 
-
 I_BODY = np.diag([0.8, 1.1, 0.9])
 I_PAN  = np.diag([0.020, 0.060, 0.045])    # asymmetric plate on the pan
 I_TILT = np.diag([0.010, 0.004, 0.013])    # asymmetric rod on the tilt

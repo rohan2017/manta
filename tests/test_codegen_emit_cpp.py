@@ -71,7 +71,7 @@ def _syntax_check(result, tmp_path: Path) -> None:
     p = subprocess.run(
         [cxx, "-std=c++17", "-fsyntax-only", f"-I{eigen_inc}",
          f"-I{tmp_path}", str(result.wrapper_cpp)],
-        capture_output=True, text=True)
+        capture_output=True, text=True, check=False)
     assert p.returncode == 0, p.stderr
 
 
@@ -98,8 +98,15 @@ def test_size1_noise_port_emits_scalar_ref(tmp_path: Path):
     """Same for a total-noise-dim-1 Module (no stock part declares a lone
     scalar channel, so the typed Module is built by hand)."""
     import casadi as ca
+
     from manta.ir.module import (
-        EntryPoint, Module, ModuleKind, Port, PortField, PortRef, Role,
+        EntryPoint,
+        Module,
+        ModuleKind,
+        Port,
+        PortField,
+        PortRef,
+        Role,
         StateLayout,
     )
     n, p = ca.MX.sym("n"), ca.MX.sym("p")

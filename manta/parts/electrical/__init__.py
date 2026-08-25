@@ -25,6 +25,7 @@ from .powered import (
 
 __all__ = [
     "ConstantCurrentLoad",
+    "ConstantPowerElectronicsLoad",
     "ConstantPowerLoad",
     "Contactor",
     "DCConverter",
@@ -35,11 +36,10 @@ __all__ = [
     "ElectricalPort",
     "ExternalDCSupply",
     "Fuse",
-    "ResistiveLoad",
+    "PoweredControlSurface",
+    "PoweredDuctedPropeller",
     "PoweredLoadMixin",
     "PoweredMotor",
     "PoweredThruster",
-    "PoweredDuctedPropeller",
-    "PoweredControlSurface",
-    "ConstantPowerElectronicsLoad",
+    "ResistiveLoad",
 ]

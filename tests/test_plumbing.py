@@ -11,7 +11,7 @@ closed-loop cases the wired bus used to cover.
 import numpy as np
 import pytest
 
-from manta import Craft, EKF, LQR, NoiseDriver, Sim, TargetNumpy, World
+from manta import EKF, LQR, Craft, NoiseDriver, Sim, TargetNumpy, World
 from manta.fields import GravityField
 from manta.parts import Mass, PositionSensor, Thruster
 

@@ -20,12 +20,14 @@ This is the pressure sibling of `VelocitySensor`/`PositionSensor`; a
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from ...fields import FluidField
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Scalar, Vec3
+from ...ir.wrench import Wrench
 from .._declarations import Output, Parameter, PartUpdate, WhiteNoise
 from ..base import Part, PartRole
-from ...ir.wrench import Wrench
 
 
 class Barometer(Part):
@@ -52,7 +54,7 @@ class Barometer(Part):
 
     role = PartRole.SENSOR
 
-    requires_fields = [FluidField]
+    requires_fields: ClassVar[list[type]] = [FluidField]
 
     rate: float = Parameter(None)
 

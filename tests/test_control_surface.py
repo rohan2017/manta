@@ -34,8 +34,8 @@ def _run(world, cmd_deg, steps=400, dt=0.002, name="surf"):
 
 
 def _surface(name="surf", **kw):
-    base = dict(area=0.4, chord=0.25, flap_chord_fraction=0.3,
-                chord_axis=(1, 0, 0), normal_axis=(0, 0, 1))
+    base = {"area": 0.4, "chord": 0.25, "flap_chord_fraction": 0.3,
+                "chord_axis": (1, 0, 0), "normal_axis": (0, 0, 1)}
     base.update(kw)
     return ControlSurface(name, **base)
 
@@ -79,7 +79,7 @@ def test_deflection_state_is_single_dof_no_joint():
     sim = TargetNumpy(Sim(w))
     slots = set(sim.state["w"].keys())
     assert "surf.deflection" in slots
-    assert not any(k.endswith(".angle") or k.endswith(".rate") for k in slots)
+    assert not any(k.endswith((".angle", ".rate")) for k in slots)
 
 
 # --- combined aero ----------------------------------------------------------
@@ -120,7 +120,7 @@ def test_blowback_loses_authority_at_high_airspeed():
     stall torque at high speed. (servo_gain/hinge_damping are set so the
     surface slews to command well within the run; stall_torque is the
     authority that high-q overpowers.)"""
-    weak = dict(servo_gain=40.0, stall_torque=2.0, hinge_damping=0.2)
+    weak = {"servo_gain": 40.0, "stall_torque": 2.0, "hinge_damping": 0.2}
     slow = _run(_craft(_surface(**weak), velocity=(10.0, 0, 0),
                        mass=10.0, moi=(3.0, 3.0, 3.0)),
                 cmd_deg=20.0, steps=300)
@@ -136,7 +136,7 @@ def test_blowback_loses_authority_at_high_airspeed():
 def test_blowback_stronger_in_denser_fluid():
     """Same surface, same speed: a dense fluid (water) blows the surface
     back harder than thin air, since the hinge moment scales with ½ρV²."""
-    weak = dict(servo_gain=40.0, stall_torque=2.0, hinge_damping=0.2)
+    weak = {"servo_gain": 40.0, "stall_torque": 2.0, "hinge_damping": 0.2}
     air = _run(_craft(_surface(**weak), velocity=(12.0, 0, 0),
                       mass=10.0, moi=(3.0, 3.0, 3.0),
                       fluid=FluidField().add_uniform(density=1.225)),

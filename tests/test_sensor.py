@@ -5,10 +5,18 @@ import pytest
 
 from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField
-from manta.parts import IMU, RevoluteJoint, Mass, Output, Part, PartUpdate, Thruster, Wrench
 from manta.ir.frames import PartFrame
 from manta.ir.types import Vec3
-
+from manta.parts import (
+    IMU,
+    Mass,
+    Output,
+    Part,
+    PartUpdate,
+    RevoluteJoint,
+    Thruster,
+    Wrench,
+)
 
 # ---------------------------------------------------------------------------
 # Output declaration introspection

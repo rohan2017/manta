@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from manta import Craft, LQR, TargetCpp, TargetNumpy, World
+from manta import LQR, Craft, TargetCpp, TargetNumpy, World
 from manta.fields import GravityField
 from manta.parts import Mass, Thruster
 
@@ -109,7 +109,7 @@ def test_lqr_python_cpp_roundtrip(tmp_path: Path):
         [cxx, "-c", "-std=c++17", "-O2", "-fPIC", f"-I{eigen_inc}",
          f"-I{tmp_path}", str(result.wrapper_cpp), "-o", str(w_obj)],
     ):
-        p = subprocess.run(cmd, capture_output=True, text=True)
+        p = subprocess.run(cmd, capture_output=True, text=True, check=False)
         assert p.returncode == 0, p.stderr
 
     sol = lqr.resolve_at(x_ref={"c": {"position": (1.0, -1.0, 12.0)}},
@@ -120,9 +120,9 @@ def test_lqr_python_cpp_roundtrip(tmp_path: Path):
     p = subprocess.run(
         [cxx, "-std=c++17", "-O2", f"-I{eigen_inc}", f"-I{tmp_path}",
          str(h_src), str(w_obj), str(k_obj), "-o", str(binary)],
-        capture_output=True, text=True)
+        capture_output=True, text=True, check=False)
     assert p.returncode == 0, p.stderr
-    p = subprocess.run([str(binary)], capture_output=True, text=True)
+    p = subprocess.run([str(binary)], capture_output=True, text=True, check=False)
     assert p.returncode == 0, p.stderr
     cpp = {l.split()[0]: [float(x) for x in l.split()[1:]]
            for l in p.stdout.strip().splitlines()}

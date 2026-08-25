@@ -1,17 +1,16 @@
 """Frame mismatch errors fire at op-construction time with source location."""
 
-import re
 
 import pytest
 
 from manta import ir
 from manta.ir.frames import (
-    WorldFrame,
     CraftFrame,
     Frame,
     FrameError,
     PartFrame,
     PlanetFrame,
+    WorldFrame,
 )
 
 
@@ -32,7 +31,7 @@ def test_vec3_add_same_frame_ok():
 
 
 def test_vec3_add_different_frames_raises():
-    with ir.Graph() as g:
+    with ir.Graph():
         a = ir.Vec3[CraftFrame].input("a")
         b = ir.Vec3[PartFrame].input("b")
         with pytest.raises(FrameError) as exc:
@@ -43,7 +42,7 @@ def test_vec3_add_different_frames_raises():
 
 
 def test_vec3_cross_different_frames_raises():
-    with ir.Graph() as g:
+    with ir.Graph():
         a = ir.Vec3[WorldFrame].input("a")
         b = ir.Vec3[CraftFrame].input("b")
         with pytest.raises(FrameError):
@@ -51,7 +50,7 @@ def test_vec3_cross_different_frames_raises():
 
 
 def test_vec3_dot_different_frames_raises():
-    with ir.Graph() as g:
+    with ir.Graph():
         a = ir.Vec3[WorldFrame].input("a")
         b = ir.Vec3[CraftFrame].input("b")
         with pytest.raises(FrameError):
@@ -60,7 +59,7 @@ def test_vec3_dot_different_frames_raises():
 
 def test_frame_error_includes_source_location():
     """The FrameError message should include the user .py:line, not manta internals."""
-    with ir.Graph() as g:
+    with ir.Graph():
         a = ir.Vec3[CraftFrame].input("a")
         b = ir.Vec3[PartFrame].input("b")
         try:
@@ -90,7 +89,7 @@ def test_mat3_matmul_compatible_frames_ok():
 
 
 def test_mat3_matmul_incompatible_frames_raises():
-    with ir.Graph() as g:
+    with ir.Graph():
         A = ir.Mat3[WorldFrame, CraftFrame].input("A")
         B = ir.Mat3[PartFrame,  PlanetFrame].input("B")  # middle mismatch
         with pytest.raises(FrameError):
@@ -107,7 +106,7 @@ def test_mat3_apply_vec3_correct_frame_ok():
 
 
 def test_mat3_apply_vec3_wrong_frame_raises():
-    with ir.Graph() as g:
+    with ir.Graph():
         A = ir.Mat3[WorldFrame, CraftFrame].input("A")
         v = ir.Vec3[PartFrame].input("v")
         with pytest.raises(FrameError):
@@ -125,7 +124,7 @@ def test_quat_compose_ok():
 
 
 def test_quat_compose_mismatch_raises():
-    with ir.Graph() as g:
+    with ir.Graph():
         q1 = ir.Quat[WorldFrame, CraftFrame].input("q1")
         q2 = ir.Quat[PartFrame,  PlanetFrame].input("q2")
         with pytest.raises(FrameError):
@@ -142,7 +141,7 @@ def test_quat_apply_correct_frame_ok():
 
 
 def test_quat_apply_wrong_frame_raises():
-    with ir.Graph() as g:
+    with ir.Graph():
         q = ir.Quat[WorldFrame, CraftFrame].input("q")
         v = ir.Vec3[PartFrame].input("v")
         with pytest.raises(FrameError):
@@ -168,7 +167,7 @@ def test_mat3_transpose_swaps_frames():
 
 
 def test_mat3_inv_requires_endomorphism():
-    with ir.Graph() as g:
+    with ir.Graph():
         A = ir.Mat3[WorldFrame, CraftFrame].input("A")  # not endomorphism
         with pytest.raises(FrameError):
             _ = A.inv()

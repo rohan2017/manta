@@ -113,7 +113,7 @@ def test_wasm_emission_shape(tmp_path: Path):
             off += s["size"]
         assert off == step[total]
     # the step writes the manifold state back and returns the sensors.
-    assert [s for s in step["out"] if s.get("writesState")][0]["size"] == 13
+    assert next(s for s in step["out"] if s.get("writesState"))["size"] == 13
     assert {s["name"] for s in step["out"] if s["kind"] == "measurement"} == {
         "drone.g.gyro", "drone.g.accel", "drone.gps.position"}
 
@@ -189,10 +189,10 @@ def test_wasm_abi_native_roundtrip(tmp_path: Path):
         [cc, "-O2", f"-I{tmp_path}", "-Wno-unused-parameter",
          "-Wno-unused-variable", str(res.kernels_c), str(res.abi_c),
          str(harness), "-lm", "-o", str(binary)],
-        capture_output=True, text=True)
+        capture_output=True, text=True, check=False)
     assert p.returncode == 0, p.stderr
 
-    p = subprocess.run([str(binary)], capture_output=True, text=True)
+    p = subprocess.run([str(binary)], capture_output=True, text=True, check=False)
     assert p.returncode == 0, p.stderr
     got = {ln.split()[0]: [float(x) for x in ln.split()[1:]]
            for ln in p.stdout.strip().splitlines()}
@@ -212,7 +212,7 @@ def test_wasm_js_is_valid_esm(tmp_path: Path):
     mjs = tmp_path / "drone_check.mjs"
     mjs.write_text(res.js.read_text())
     p = subprocess.run(["node", "--check", str(mjs)],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, check=False)
     assert p.returncode == 0, p.stderr
 
 
@@ -290,7 +290,7 @@ def test_wasm_js_runtime_plumbing(tmp_path: Path):
     (tmp_path / "harness.mjs").write_text(_STUB_HARNESS)
 
     p = subprocess.run(["node", str(tmp_path / "harness.mjs")], cwd=tmp_path,
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, check=False)
     assert p.returncode == 0, p.stderr
     got = json.loads(p.stdout.strip().splitlines()[-1])
     # vx=0.5 integrated for 200·0.005 s = 1 s ⇒ x advances 0.5; gps mirrors pos.
@@ -363,7 +363,7 @@ def test_wasm_js_params_reach_kernel(tmp_path: Path):
     (tmp_path / "harness.mjs").write_text(_PARAM_STUB_HARNESS)
 
     p = subprocess.run(["node", str(tmp_path / "harness.mjs")], cwd=tmp_path,
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, check=False)
     assert p.returncode == 0, p.stderr
     got = json.loads(p.stdout.strip().splitlines()[-1])
     assert got["baked"] == pytest.approx(1.5), \
@@ -379,7 +379,7 @@ def test_wasm_full_emscripten_roundtrip(tmp_path: Path):
 
     res = TargetWasm(Sim(_hover_world()), tmp_path, class_name="Drone")
     p = subprocess.run(["sh", str(res.build_sh)], cwd=tmp_path,
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, check=False)
     assert p.returncode == 0, p.stderr
     assert (tmp_path / "drone.wasm").exists()
 
@@ -392,7 +392,7 @@ def test_wasm_full_emscripten_roundtrip(tmp_path: Path):
         pos=slots["drone.position"], vel=slots["drone.velocity"]))
 
     p = subprocess.run(["node", str(harness)], cwd=tmp_path,
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, check=False)
     assert p.returncode == 0, p.stderr
     got = json.loads(p.stdout.strip().splitlines()[-1])
 
@@ -446,14 +446,14 @@ def _emcc_node(tmp_path, res, base, harness):
     its last stdout line parsed as JSON. Skips without the toolchain."""
     _require_wasm_toolchain("emcc", "node")
     p = subprocess.run(["sh", str(res.build_sh)], cwd=tmp_path,
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, check=False)
     assert p.returncode == 0, p.stderr
     # node loads `.js` as CommonJS; copy the ESM runtime to `.mjs` (its internal
     # `./<base>.mjs` factory import resolves to the emcc output in the same dir).
     (tmp_path / f"{base}_rt.mjs").write_text(res.js.read_text())
     (tmp_path / "run.mjs").write_text(harness)
     r = subprocess.run(["node", str(tmp_path / "run.mjs")], cwd=tmp_path,
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, check=False)
     assert r.returncode == 0, r.stderr
     return json.loads(r.stdout.strip().splitlines()[-1])
 

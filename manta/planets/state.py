@@ -35,10 +35,10 @@ class PlanetState:
     `planet.planet_to_world(...)`.
     """
 
-    __slots__ = ("planet", "kind", "value")
+    __slots__ = ("kind", "planet", "value")
 
     def __init__(self,
-                 planet: "Planet",
+                 planet: Planet,
                  kind: str,
                  value: tuple[float, float, float]) -> None:
         if kind not in ("position", "velocity"):

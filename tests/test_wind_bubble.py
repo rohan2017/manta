@@ -10,12 +10,13 @@ Capstone test for the field-bus design:
     auto-Q = dt·σ²·I per slot.
 """
 
-import casadi as ca
 import numpy as np
 
-from manta import Craft, EKF, Sim, TargetNumpy, World
+from manta import EKF, Craft, Sim, TargetNumpy, World
 from manta.fields import (
-    CraftWindBubble, FluidField, GravityField,
+    CraftWindBubble,
+    FluidField,
+    GravityField,
 )
 from manta.parts import Mass
 
@@ -62,7 +63,7 @@ def test_wind_state_evolves_via_rw():
 
 
 def test_ekf_picks_up_wind_state_per_craft():
-    w, crafts = _build_world(n_crafts=2, sigma=2e-3)
+    w, _crafts = _build_world(n_crafts=2, sigma=2e-3)
     ekf_t = EKF(w)
     ekf = TargetNumpy(ekf_t)
     # 2 crafts × 13 rigid + 2 wind bubbles × 3 = 32 ambient.
@@ -91,7 +92,7 @@ def test_state_dict_nests_wind_alongside_crafts():
 def test_unique_bubble_names_for_distinct_crafts():
     """Two bubbles with auto-generated names from distinct crafts
     don't collide (the default is `<craft.name>_wind`)."""
-    w, crafts = _build_world(n_crafts=3)
+    w, _crafts = _build_world(n_crafts=3)
     cw = TargetNumpy(Sim(w))
     owners = set(cw.initial_state())
     assert {"c0", "c1", "c2", "c0_wind", "c1_wind", "c2_wind"} <= owners

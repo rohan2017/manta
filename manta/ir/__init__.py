@@ -21,40 +21,87 @@ Public surface:
 """
 
 from .frames import (
-    Frame,
-    WorldFrame,
-    PlanetFrame,
     CraftFrame,
-    PartFrame,
-    ParentFrame,
+    Frame,
     FrameError,
+    ParentFrame,
+    PartFrame,
+    PlanetFrame,
+    WorldFrame,
 )
-from .types import Scalar, Vec3, Mat3, Quat, VecN
+from .graph import Graph
 from .manifold import (
-    Manifold, ScalarManifold, R3Manifold, RnManifold, SO3Manifold,
+    Manifold,
+    R3Manifold,
+    RnManifold,
+    ScalarManifold,
+    SO3Manifold,
     manifold_from_shortcut,
 )
-from .state_spec import (
-    ALL, POSE, TWIST, SlotSet, StateSlot, StateSpec, resolve_slotset,
-)
-from .wrench import Wrench
-from .graph import Graph
 from .module import (
-    EntryPoint, Hosting, Module, ModuleKind, Port, PortField, PortRef, Role,
-    StateField, StateLayout, StateRef, entry_ident,
+    EntryPoint,
+    Hosting,
+    Module,
+    ModuleKind,
+    Port,
+    PortField,
+    PortRef,
+    Role,
+    StateField,
+    StateLayout,
+    StateRef,
+    entry_ident,
 )
+from .state_spec import (
+    ALL,
+    POSE,
+    TWIST,
+    SlotSet,
+    StateSlot,
+    StateSpec,
+    resolve_slotset,
+)
+from .types import Mat3, Quat, Scalar, Vec3, VecN
+from .wrench import Wrench
 
 __all__ = [
+    "ALL",
+    "POSE",
+    "TWIST",
+    "CraftFrame",
+    "EntryPoint",
     "Frame",
-    "WorldFrame", "PlanetFrame", "CraftFrame", "PartFrame", "ParentFrame",
     "FrameError",
-    "Scalar", "Vec3", "Mat3", "Quat", "VecN",
-    "Manifold", "ScalarManifold", "R3Manifold", "RnManifold",
-    "SO3Manifold", "manifold_from_shortcut",
-    "StateSpec", "StateSlot", "SlotSet", "POSE", "TWIST", "ALL",
-    "resolve_slotset",
-    "Wrench",
     "Graph",
-    "Module", "ModuleKind", "StateLayout", "StateField", "Port", "PortField", "Role",
-    "EntryPoint", "StateRef", "PortRef", "Hosting", "entry_ident",
+    "Hosting",
+    "Manifold",
+    "Mat3",
+    "Module",
+    "ModuleKind",
+    "ParentFrame",
+    "PartFrame",
+    "PlanetFrame",
+    "Port",
+    "PortField",
+    "PortRef",
+    "Quat",
+    "R3Manifold",
+    "RnManifold",
+    "Role",
+    "SO3Manifold",
+    "Scalar",
+    "ScalarManifold",
+    "SlotSet",
+    "StateField",
+    "StateLayout",
+    "StateRef",
+    "StateSlot",
+    "StateSpec",
+    "Vec3",
+    "VecN",
+    "WorldFrame",
+    "Wrench",
+    "entry_ident",
+    "manifold_from_shortcut",
+    "resolve_slotset",
 ]

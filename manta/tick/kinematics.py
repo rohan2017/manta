@@ -67,9 +67,8 @@ from ..ir._rotation import (
     quat_to_rotmat,
     rotate_vec_by_quat,
 )
-from ..ir.frames import WorldFrame, CraftFrame, ParentFrame, PartFrame
+from ..ir.frames import CraftFrame, ParentFrame, PartFrame, WorldFrame
 from ..parts._trace import is_promoted
-
 
 _ZERO3 = ca.MX.zeros(3, 1)
 
@@ -224,7 +223,7 @@ def _attr_quat(value) -> ca.MX:
     (mount-misalignment sysid), else the declared wxyz constant."""
     if is_promoted(value):
         return value._mx
-    return ca.MX(list(float(v) for v in value))
+    return ca.MX([float(v) for v in value])
 
 
 # ---------------------------------------------------------------------------

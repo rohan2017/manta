@@ -21,7 +21,7 @@ class Wrench:
         w = Wrench.zero(F)
     """
 
-    __slots__ = ("force", "torque", "_frame")
+    __slots__ = ("_frame", "force", "torque")
 
     def __init__(self, force: Vec3, torque: Vec3) -> None:
         if not isinstance(force, Vec3) or not isinstance(torque, Vec3):
@@ -48,7 +48,7 @@ class Wrench:
     # --- Factories --------------------------------------------------------
 
     @classmethod
-    def zero(cls, frame) -> "Wrench":
+    def zero(cls, frame) -> Wrench:
         _validate_frame("Wrench.zero", frame)
         return cls(
             force=Vec3[frame].constant((0.0, 0.0, 0.0)),
@@ -57,7 +57,7 @@ class Wrench:
 
     # --- Operators --------------------------------------------------------
 
-    def __add__(self, other: "Wrench") -> "Wrench":
+    def __add__(self, other: Wrench) -> Wrench:
         if not isinstance(other, Wrench):
             return NotImplemented
         if self._frame is not other._frame:
@@ -69,7 +69,7 @@ class Wrench:
             )
         return Wrench(self.force + other.force, self.torque + other.torque)
 
-    def __neg__(self) -> "Wrench":
+    def __neg__(self) -> Wrench:
         return Wrench(-self.force, -self.torque)
 
     def __repr__(self) -> str:

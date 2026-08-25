@@ -61,7 +61,6 @@ from .._mounting import rest_pose_from
 from .._trace import declared_attr, scalar_mx
 from ..base import CompositePart
 
-
 _PASSIVE    = "passive"
 _SATURATING = "saturating"
 _MODES      = (_PASSIVE, _SATURATING)

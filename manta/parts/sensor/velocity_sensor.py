@@ -20,9 +20,9 @@ from __future__ import annotations
 
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3
+from ...ir.wrench import Wrench
 from .._declarations import Output, Parameter, PartUpdate, WhiteNoise
 from ..base import Part, PartRole
-from ...ir.wrench import Wrench
 
 
 class VelocitySensor(Part):

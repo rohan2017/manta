@@ -8,15 +8,15 @@ in auxiliary states that a chosen sensor observes (auto-expand).
 
 import numpy as np
 
-from manta import World, TargetNumpy
+from manta import TargetNumpy, World
 from manta.craft import Craft
-from manta.fields import GravityField
 from manta.estimation import EKF
+from manta.fields import GravityField
 from manta.ir.state_spec import ALL, POSE, TWIST, SlotSet, resolve_slotset
-from manta.parts.structure.mass import Mass
-from manta.parts.sensor.position_sensor import PositionSensor
-from manta.parts.sensor.imu import IMU
 from manta.parts.articulation.joint import RevoluteJoint
+from manta.parts.sensor.imu import IMU
+from manta.parts.sensor.position_sensor import PositionSensor
+from manta.parts.structure.mass import Mass
 
 
 def _gps_craft(name, sigma=0.1):
@@ -97,7 +97,7 @@ def test_subset_matches_full_on_kept_block():
     full   = TargetNumpy(EKF(w))                 # estimates a and b
     subset = TargetNumpy(EKF(w, track={"a": ALL}))  # estimates only a
 
-    gps_a = next(p for c in w.crafts if c.name == "a"
+    next(p for c in w.crafts if c.name == "a"
                  for p in c.parts if p.name == "gps")
 
     # Seed both with an identical (perturbed) craft-a estimate.

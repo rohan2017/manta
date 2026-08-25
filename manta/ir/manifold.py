@@ -39,7 +39,6 @@ Adding a new manifold kind:
 from __future__ import annotations
 
 import re
-
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, ClassVar
@@ -50,7 +49,6 @@ import numpy as np
 from ._rotation import quat_conj, quat_mul, quat_mul_np, so3_exp, so3_exp_np, so3_log
 from .frames import FrameError, _capture_user_source
 from .types import Quat, Scalar, Vec3, VecN
-
 
 # ---------------------------------------------------------------------------
 # ABC

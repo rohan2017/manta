@@ -18,7 +18,6 @@ from ..ir.frames import WorldFrame
 from ..ir.types import Vec3
 from .base import Disturbance, SuperposedField
 
-
 _VEC3_W = Vec3[WorldFrame]
 
 
@@ -60,7 +59,7 @@ class GravityField(SuperposedField):
     def _zero_value(self):
         return _VEC3_W.constant((0.0, 0.0, 0.0))
 
-    def add_uniform(self, g_vec: tuple[float, float, float]) -> "GravityField":
+    def add_uniform(self, g_vec: tuple[float, float, float]) -> GravityField:
         """Attach a position-independent gravity vector. Returns self.
 
         Other disturbances (point-mass, J2, …) attach via the generic

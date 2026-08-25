@@ -3,4 +3,4 @@ from .displacement_hull import DisplacementHull, HullSample
 from .mass import Mass
 from .point_buoy import PointBuoy
 
-__all__ = ["Mass", "PointBuoy", "Collider", "DisplacementHull", "HullSample"]
+__all__ = ["Collider", "DisplacementHull", "HullSample", "Mass", "PointBuoy"]

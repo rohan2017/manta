@@ -45,8 +45,15 @@ import casadi as ca
 import numpy as np
 
 from ..fields import (
-    CollisionField, DipoleMag, Ellipsoid, GravityField, FluidField,
-    J2Gravity, MagField, PointMassGravity, below_surface,
+    CollisionField,
+    DipoleMag,
+    Ellipsoid,
+    FluidField,
+    GravityField,
+    J2Gravity,
+    MagField,
+    PointMassGravity,
+    below_surface,
 )
 from ..fields.fluid_props import LAPSE_ISA, R_AIR, T0_ISA
 from .base import Planet

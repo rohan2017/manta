@@ -1,15 +1,15 @@
 """Deterministic simulation-only plants outside Manta's differentiable model."""
 
 from .battery import (
-    BMSPlant,
-    BMSState,
-    BatteryElectricalModel,
     BatteryCell,
     BatteryCellFaults,
     BatteryCellState,
+    BatteryElectricalModel,
     BatteryPackState,
     BatteryStepInput,
     BatteryTelemetry,
+    BMSPlant,
+    BMSState,
     OCVCurve,
     PassiveBalancer,
     SeriesBatteryPack,
@@ -18,10 +18,10 @@ from .battery import (
 __all__ = [
     "BMSPlant",
     "BMSState",
-    "BatteryElectricalModel",
     "BatteryCell",
     "BatteryCellFaults",
     "BatteryCellState",
+    "BatteryElectricalModel",
     "BatteryPackState",
     "BatteryStepInput",
     "BatteryTelemetry",

@@ -11,7 +11,9 @@ from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import FluidField, GravityField
 from manta.parts import Aerofoil, Mass, naca
 from manta.parts.aero.aerofoil import (
-    cd0_reynolds_factor, clmax_reynolds_factor, reynolds_number,
+    cd0_reynolds_factor,
+    clmax_reynolds_factor,
+    reynolds_number,
 )
 
 

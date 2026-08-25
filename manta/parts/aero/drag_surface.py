@@ -64,17 +64,18 @@ with ``flow_noise_sigma=...`` and a ``NoiseDriver``.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import casadi as ca
 import numpy as np
 
 from ...fields import FluidField
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3
-from .._declarations import Parameter, PartUpdate, WhiteNoise
-from ._flow import signed_powers
-from ..base import Part
 from ...ir.wrench import Wrench
-
+from .._declarations import Parameter, PartUpdate, WhiteNoise
+from ..base import Part
+from ._flow import signed_powers
 
 _MAX_ORDER = 4
 
@@ -145,7 +146,7 @@ class DragSurface(Part):
     # declaration machinery sees a well-typed slot at class scope; the
     # actual value is always set by __init__ from `force`/`force_tensors`
     # (resp. moment variants), so this default never reaches update().
-    requires_fields = [FluidField]
+    requires_fields: ClassVar[list[type]] = [FluidField]
 
     force_tensors:  tuple = Parameter((np.zeros((3, 3)),))
     moment_tensors: tuple = Parameter((np.zeros((3, 3)),))
@@ -157,7 +158,7 @@ class DragSurface(Part):
                             *,
                             area: float,
                             drag_coefficient: float,
-                            **kwargs) -> "DragSurface":
+                            **kwargs) -> DragSurface:
         """Single-Cd quadratic hull/sphere drag:
             F = -½·ρ·A·Cd · v_rel^(2)  (element-wise square per body axis)
         Identical to the v1 isotropic model, just expressed in tensor form
@@ -172,7 +173,7 @@ class DragSurface(Part):
                               *,
                               areas: tuple,
                               drag_coefficient: float,
-                              **kwargs) -> "DragSurface":
+                              **kwargs) -> DragSurface:
         """Anisotropic quadratic drag — a per-body-axis reference area:
             F_i = -½·ρ·areas_i·Cd · v_i·|v_i|   (diagonal A_2)
         Use it for a slender body: a cylindrical fuselage along, say, body

@@ -10,12 +10,18 @@ that at setup instead of as a silent estimate drift.
 import numpy as np
 import pytest
 
-from manta import Craft, EKF, World
+from manta import EKF, Craft, World
 from manta.estimation import observability
 from manta.fields import FluidField, GravityField, MagField
 from manta.parts import (
-    DragSurface, IMU, Magnetometer, Mass, PointBuoy, PositionSensor,
-    Thruster, VelocitySensor,
+    IMU,
+    DragSurface,
+    Magnetometer,
+    Mass,
+    PointBuoy,
+    PositionSensor,
+    Thruster,
+    VelocitySensor,
 )
 
 
@@ -147,7 +153,7 @@ def test_sigma_horizon_grades_heading_by_sensor_set():
     compass collapses it."""
     w = _sub_world()
     ekf = EKF(w)
-    kw = dict(horizon=2.0, dt=0.02, P0=0.1)
+    kw = {"horizon": 2.0, "dt": 0.02, "P0": 0.1}
     blind = ekf.sigma_horizon(sensors=["imu.gyro", "dvl.velocity",
                                        "gps.position"], **kw)
     sighted = ekf.sigma_horizon(sensors=["imu.gyro", "dvl.velocity",

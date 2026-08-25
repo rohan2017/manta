@@ -7,9 +7,9 @@ import numpy as np
 import pytest
 
 from manta import (
+    MPC,
     Craft,
     CraftHorizonReference,
-    MPC,
     MPCReference,
     Sim,
     TargetNumpy,
@@ -65,10 +65,10 @@ def test_reference_normalizes_and_owns_vectors():
     ("tangents", [[0, 0, 0], [1, 0, 0]], "tangent"),
 ])
 def test_reference_rejects_invalid_policy(field, value, message):
-    kwargs = dict(
-        positions=np.zeros((2, 3)), tangents=np.tile([1, 0, 0], (2, 1)),
-        forward_speeds=np.ones(2), up=np.tile([0, 0, 1], (2, 1)),
-        bank_limits=np.full(2, .2))
+    kwargs = {
+        "positions": np.zeros((2, 3)), "tangents": np.tile([1, 0, 0], (2, 1)),
+        "forward_speeds": np.ones(2), "up": np.tile([0, 0, 1], (2, 1)),
+        "bank_limits": np.full(2, .2)}
     kwargs[field] = value
     with pytest.raises(ValueError, match=message):
         CraftHorizonReference(**kwargs)

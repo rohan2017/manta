@@ -6,7 +6,6 @@ from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField
 from manta.parts import Mass, Thruster
 
-
 # ---------------------------------------------------------------------------
 # Thrust = (m·|g|) cancels gravity → craft hovers
 # ---------------------------------------------------------------------------

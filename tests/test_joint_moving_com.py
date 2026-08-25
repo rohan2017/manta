@@ -13,7 +13,7 @@ import numpy as np
 
 from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField
-from manta.parts import RevoluteJoint, Mass
+from manta.parts import Mass, RevoluteJoint
 
 
 def _quat_to_R(q) -> np.ndarray:

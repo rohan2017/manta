@@ -35,16 +35,31 @@ from ...ir.frames import PartFrame
 from ...ir.types import Scalar, Vec3
 from ...ir.wrench import Wrench
 from .._declarations import (
-    Input, Output, Parameter, PartUpdate, State, WhiteNoise,
+    Input,
+    Output,
+    Parameter,
+    PartUpdate,
+    State,
+    WhiteNoise,
 )
 from .._trace import scalar_mx as _mx
 from ..base import Part
 from ._invariants import (
     bounded_positive as _bounded_positive,
+)
+from ._invariants import (
     c1_gate as _c1_gate,
+)
+from ._invariants import (
     finite_scalar as _finite_scalar,
+)
+from ._invariants import (
     positive as _positive,
+)
+from ._invariants import (
     positive_or_inf as _positive_or_inf,
+)
+from ._invariants import (
     unit_interval as _unit_interval,
 )
 
@@ -78,14 +93,14 @@ class ElectricalPort:
         self._electrical_children: list[ElectricalPort] = []
 
     @property
-    def upstream(self) -> "ElectricalPort | None":
+    def upstream(self) -> ElectricalPort | None:
         return self._upstream
 
     @property
-    def electrical_children(self) -> tuple["ElectricalPort", ...]:
+    def electrical_children(self) -> tuple[ElectricalPort, ...]:
         return tuple(self._electrical_children)
 
-    def connect(self, child: "ElectricalPort") -> "ElectricalPort":
+    def connect(self, child: ElectricalPort) -> ElectricalPort:
         """Supply ``child`` from this port and return the child."""
         who = f"{type(self).__name__}({self.name!r}).connect"
         if not isinstance(child, ElectricalPort):

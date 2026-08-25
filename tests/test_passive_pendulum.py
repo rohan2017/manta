@@ -19,7 +19,6 @@ from manta.craft import Craft
 from manta.fields import GravityField
 from manta.parts import Mass, RevoluteJoint, Thruster
 
-
 G = 9.81
 ANCHOR_M = 1.0e6
 

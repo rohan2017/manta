@@ -14,7 +14,7 @@ no separate runtime to install).
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Self
 
 import casadi as ca
 import numpy as np
@@ -43,11 +43,11 @@ class Graph:
         self._name = name
         self._inputs: dict[str, Any]  = {}   # name → IR value
         self._outputs: dict[str, Any] = {}   # name → IR value
-        self._saved_active: "Graph | None" = None
+        self._saved_active: Graph | None = None
 
     # ----- Context manager -------------------------------------------------
 
-    def __enter__(self) -> "Graph":
+    def __enter__(self) -> Self:
         self._saved_active = get_active_graph()
         set_active_graph(self)
         return self
@@ -72,7 +72,7 @@ class Graph:
         functions where the input is the current state and the output is
         the new state at the same slot.
         """
-        from .types import _IRValue   # local import to break the cycle
+        from .types import _IRValue  # local import to break the cycle
         if not isinstance(value, _IRValue):
             raise TypeError(
                 f"Graph.output: expected an IR value, got {type(value).__name__}")
@@ -98,7 +98,7 @@ class Graph:
     # ----- Compilation -----------------------------------------------------
 
     def compile(self,
-                defaults: dict[str, Any] | None = None) -> "CompiledGraph":
+                defaults: dict[str, Any] | None = None) -> CompiledGraph:
         """Build a `casadi.Function` from this graph's inputs and outputs.
 
         `defaults` — optional `{input_name: default_value}` map used by
@@ -123,7 +123,7 @@ class Graph:
         return CompiledGraph(fn, dict(self._inputs), dict(self._outputs),
                              defaults=defaults)
 
-    def jacobian(self, of: str, wrt: str) -> "CompiledGraph":
+    def jacobian(self, of: str, wrt: str) -> CompiledGraph:
         """Return a CompiledGraph computing d(output `of`) / d(input `wrt`).
 
         The Jacobian is symbolic — CasADi differentiates the expression tree

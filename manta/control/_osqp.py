@@ -9,6 +9,7 @@ workspace are created once; subsequent calls update numeric values in place.
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import threading
 from dataclasses import dataclass
@@ -297,10 +298,8 @@ class NativeOSQP:
             self._handle = None
 
     def __del__(self) -> None:
-        try:
+        with contextlib.suppress(Exception):  # __del__ must never raise
             self.close()
-        except Exception:
-            pass
 
     @staticmethod
     def _float(value: Any, shape: tuple[int, ...], name: str) -> FloatArray:

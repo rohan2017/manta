@@ -17,12 +17,14 @@ local gradient.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from ...fields import MagField
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3
+from ...ir.wrench import Wrench
 from .._declarations import Output, Parameter, PartUpdate, WhiteNoise
 from ..base import Part, PartRole
-from ...ir.wrench import Wrench
 
 
 class Magnetometer(Part):
@@ -45,7 +47,7 @@ class Magnetometer(Part):
 
     role = PartRole.SENSOR
 
-    requires_fields = [MagField]
+    requires_fields: ClassVar[list[type]] = [MagField]
 
     #: Measurement rate, Hz. `None` ⇒ every tick (family-uniform knob).
     rate: float = Parameter(None)

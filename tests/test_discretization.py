@@ -22,7 +22,12 @@ from manta.estimation import EKF
 from manta.fields import GravityField
 from manta.linearization import LinearizedSystem
 from manta.parts import (
-    IMU, Mass, PositionSensor, PrismaticJoint, RevoluteJoint, Thruster,
+    IMU,
+    Mass,
+    PositionSensor,
+    PrismaticJoint,
+    RevoluteJoint,
+    Thruster,
 )
 
 

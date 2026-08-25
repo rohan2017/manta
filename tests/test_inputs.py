@@ -5,15 +5,18 @@ torque_cmd Input across the integration paths (World.step, EKF.predict).
 """
 
 import numpy as np
-import pytest
 
 from manta import Craft, Sim, TargetNumpy, World
-from manta.fields import GravityField
 from manta.estimation import EKF
-from manta.parts import (
-    Input, RevoluteJoint, Mass, Parameter, Part, PartUpdate, State, Wrench,
-)
+from manta.fields import GravityField
 from manta.ir.frames import PartFrame, WorldFrame
+from manta.parts import (
+    Input,
+    Mass,
+    Part,
+    RevoluteJoint,
+    Wrench,
+)
 
 
 def _flywheel(name: str, I_axial: float, **kw) -> RevoluteJoint:

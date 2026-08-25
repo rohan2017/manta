@@ -63,7 +63,7 @@ class Parameter(_Declaration):
                    configuration whose protocol the owning Part validates.
     """
 
-    __slots__ = ("manifold", "allow_infinite", "numeric")
+    __slots__ = ("allow_infinite", "manifold", "numeric")
 
     def __init__(self, default: Any, *, manifold=None, frame=None,
                  allow_infinite: bool = False,
@@ -203,7 +203,7 @@ class Noise(_Declaration):
     kind:              str  = None    # type: ignore[assignment]
     contributes_state: bool = False
 
-    __slots__ = ("signal_manifold", "sigma")
+    __slots__ = ("sigma", "signal_manifold")
 
     def __init__(self, signal_manifold="R3", *, frame=None,
                  sigma: float = 0.0) -> None:
@@ -445,7 +445,7 @@ class State(_Declaration):
     string form is normalized at construction.
     """
 
-    __slots__ = ("init", "manifold", "frame")
+    __slots__ = ("frame", "init", "manifold")
 
     def __init__(self, init, manifold="R1", frame=None) -> None:
         from ..ir.manifold import (
@@ -540,7 +540,7 @@ class PartUpdate:
     wraps it as `PartUpdate(wrench=w)` automatically.
     """
 
-    __slots__ = ("wrench", "new_state", "outputs", "rates")
+    __slots__ = ("new_state", "outputs", "rates", "wrench")
 
     def __init__(self,
                  wrench=None,

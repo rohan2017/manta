@@ -164,7 +164,7 @@ class ThermalMass(Part):
         # registered on BOTH endpoints so each side's balance sees the
         # exchange, and `initiated` records which side made the
         # `connect` call — the reciprocal-call guard keys on it.
-        self._links: list[tuple["ThermalMass", float, bool]] = []
+        self._links: list[tuple[ThermalMass, float, bool]] = []
 
     # ---- per-instance I/O (camera precedent) --------------------------
 
@@ -181,8 +181,8 @@ class ThermalMass(Part):
 
     # ---- conduction network -------------------------------------------
 
-    def connect(self, other: "ThermalMass", *,
-                conductance: float) -> "ThermalMass":
+    def connect(self, other: ThermalMass, *,
+                conductance: float) -> ThermalMass:
         """Register a symmetric conduction link to `other` (W/K). One
         call wires BOTH directions — do not also call
         `other.connect(self, ...)`; the natural-looking reciprocal call
@@ -214,7 +214,7 @@ class ThermalMass(Part):
         return self
 
     @property
-    def links(self) -> tuple[tuple["ThermalMass", float], ...]:
+    def links(self) -> tuple[tuple[ThermalMass, float], ...]:
         return tuple((o, k) for o, k, _ in self._links)
 
     # ---- compile-time validation --------------------------------------

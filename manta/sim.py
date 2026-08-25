@@ -44,8 +44,18 @@ import casadi as ca
 import numpy as np
 
 from .ir.module import (
-    EntryPoint, Hosting, Module, ModuleKind, Port, PortField, PortRef, Role,
-    StateField, StateLayout, StateRef, entry_ident,
+    EntryPoint,
+    Hosting,
+    Module,
+    ModuleKind,
+    Port,
+    PortField,
+    PortRef,
+    Role,
+    StateField,
+    StateLayout,
+    StateRef,
+    entry_ident,
 )
 from .ir.state_spec import flatten_nested
 from .linearization import LinearizedSystem
@@ -58,7 +68,7 @@ class Sim:
     """Forward-dynamics transform: model validation + the linearized tick,
     emitting oracle/deploy Modules."""
 
-    def __init__(self, world: "World", *,
+    def __init__(self, world: World, *,
                  discretization: str = "exact",
                  parameters: list[str] | None = None) -> None:
         # Model validation (planet prep, requires_fields/requires_planet,

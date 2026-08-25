@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from manta import ir
-from manta.ir.frames import WorldFrame, CraftFrame, WorldFrame
+from manta.ir.frames import CraftFrame, WorldFrame
 
 
 def test_translate_by_velocity():
@@ -67,7 +67,7 @@ def test_extra_input_raises():
 
 
 def test_duplicate_input_name_raises():
-    with ir.Graph() as g:
+    with ir.Graph():
         ir.Scalar.input("dup")
         with pytest.raises(ValueError, match="duplicate input"):
             ir.Scalar.input("dup")

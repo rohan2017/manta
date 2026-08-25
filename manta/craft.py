@@ -59,9 +59,8 @@ import numpy as np
 
 from .ir.frames import PartFrame
 from .ir.types import Mat3, Quat, Scalar, Vec3
-from .parts.base import Part
 from .ir.wrench import Wrench
-
+from .parts.base import Part
 
 # ---------------------------------------------------------------------------
 # Frame-indexed kinematic accessor
@@ -167,11 +166,19 @@ class TickContext:
     solve fixpoints); the compile step validates and raises otherwise.
     """
 
-    __slots__ = ("t", "dt", "orientation",
-                 "position", "velocity", "acceleration",
-                 "angular_velocity", "angular_acceleration",
-                 "R_craft_from_part",
-                 "_world", "_fields")
+    __slots__ = (
+        "R_craft_from_part",
+        "_fields",
+        "_world",
+        "acceleration",
+        "angular_acceleration",
+        "angular_velocity",
+        "dt",
+        "orientation",
+        "position",
+        "t",
+        "velocity",
+    )
 
     def __init__(self,
                  *,

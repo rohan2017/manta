@@ -230,7 +230,7 @@ class Planet:
     # ------------------------------------------------------------------
 
     def position(self,
-                 x: float, y: float, z: float) -> "PlanetState":
+                 x: float, y: float, z: float) -> PlanetState:
         """Return a `PlanetState` wrapping a PlanetFrame position. Pass
         directly to `World.add_craft(..., position=...)` to seed the
         craft's initial WorldFrame position from PlanetFrame coords."""
@@ -238,7 +238,7 @@ class Planet:
         return PlanetState(self, "position", (float(x), float(y), float(z)))
 
     def velocity(self,
-                 vx: float, vy: float, vz: float) -> "PlanetState":
+                 vx: float, vy: float, vz: float) -> PlanetState:
         """Return a `PlanetState` wrapping a PlanetFrame velocity."""
         from .state import PlanetState
         return PlanetState(self, "velocity",
@@ -327,7 +327,7 @@ class Planet:
     def scene_at(self,
                  position: tuple[float, float, float],
                  *,
-                 heading: float = 0.0) -> "Scene":
+                 heading: float = 0.0) -> Scene:
         """A local **`Scene`** anchored at PlanetFrame point `position` — a
         ground patch with a human-friendly East/North/Up frame, used to
         place craft and to translate poses/state for reporting + rendering.
@@ -401,7 +401,7 @@ class Planet:
 
     def scene_at_geodetic(self, lat_deg: float, lon_deg: float,
                           alt_m: float = 0.0, *,
-                          heading: float = 0.0) -> "Scene":
+                          heading: float = 0.0) -> Scene:
         """`scene_at` anchored by geodetic lat/lon/alt — the natural way
         to place a site on a real planet (`Earth`): +z is the geodetic
         normal there, +x north, yawed by `heading` (radians) about up."""
@@ -413,7 +413,7 @@ class Planet:
     # Disturbance registration (subclass override hook)
     # ------------------------------------------------------------------
 
-    def register_disturbances(self, world: "World") -> None:
+    def register_disturbances(self, world: World) -> None:
         """Called by `Sim(world)` to attach this planet's standing
         contributions to the world's shared fields. A planet is the
         world's gravity declaration: an override must register the

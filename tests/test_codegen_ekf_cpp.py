@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from manta import Craft, EKF, TargetCpp, TargetNumpy, World
+from manta import EKF, Craft, TargetCpp, TargetNumpy, World
 from manta.fields import GravityField
 from manta.parts import IMU, Mass, PositionSensor, Thruster
 
@@ -99,7 +99,7 @@ def test_ekf_python_cpp_roundtrip(tmp_path: Path):
         [cxx, "-c", "-std=c++17", "-O2", "-fPIC", f"-I{eigen_inc}",
          f"-I{tmp_path}", str(result.wrapper_cpp), "-o", str(w_obj)],
     ):
-        p = subprocess.run(cmd, capture_output=True, text=True)
+        p = subprocess.run(cmd, capture_output=True, text=True, check=False)
         assert p.returncode == 0, p.stderr
 
     h_src = tmp_path / "harness_main.cpp"
@@ -108,9 +108,9 @@ def test_ekf_python_cpp_roundtrip(tmp_path: Path):
     p = subprocess.run(
         [cxx, "-std=c++17", "-O2", f"-I{eigen_inc}", f"-I{tmp_path}",
          str(h_src), str(w_obj), str(k_obj), "-o", str(binary)],
-        capture_output=True, text=True)
+        capture_output=True, text=True, check=False)
     assert p.returncode == 0, p.stderr
-    p = subprocess.run([str(binary)], capture_output=True, text=True)
+    p = subprocess.run([str(binary)], capture_output=True, text=True, check=False)
     assert p.returncode == 0, p.stderr
     cpp = {l.split()[0]: [float(x) for x in l.split()[1:]]
            for l in p.stdout.strip().splitlines()}
@@ -120,8 +120,8 @@ def test_ekf_python_cpp_roundtrip(tmp_path: Path):
     ekf.reset_from_model_record(
         {"drone": c.initial_state(position=(0.2, -0.1, 5.0))},
         P=np.eye(ekf.spec.tangent_dim) * 0.1)
-    g_part = next(p for p in c.parts if p.name == "g")
-    gps_part = next(p for p in c.parts if p.name == "gps")
+    next(p for p in c.parts if p.name == "g")
+    next(p for p in c.parts if p.name == "gps")
     thr = 1.5 * 9.81
     for i in range(100):
         ekf.predict(0.01, t=0.0, u={"t.throttle": thr})
@@ -220,7 +220,7 @@ def test_ekf_multicraft_roundtrip(tmp_path: Path):
         [cxx, "-c", "-std=c++17", "-O2", "-fPIC", f"-I{eigen_inc}",
          f"-I{tmp_path}", str(result.wrapper_cpp), "-o", str(w_obj)],
     ):
-        p = subprocess.run(cmd, capture_output=True, text=True)
+        p = subprocess.run(cmd, capture_output=True, text=True, check=False)
         assert p.returncode == 0, p.stderr
     h_src = tmp_path / "harness_main.cpp"
     h_src.write_text(TWO_HARNESS)
@@ -228,9 +228,9 @@ def test_ekf_multicraft_roundtrip(tmp_path: Path):
     p = subprocess.run(
         [cxx, "-std=c++17", "-O2", f"-I{eigen_inc}", f"-I{tmp_path}",
          str(h_src), str(w_obj), str(k_obj), "-o", str(binary)],
-        capture_output=True, text=True)
+        capture_output=True, text=True, check=False)
     assert p.returncode == 0, p.stderr
-    p = subprocess.run([str(binary)], capture_output=True, text=True)
+    p = subprocess.run([str(binary)], capture_output=True, text=True, check=False)
     assert p.returncode == 0, p.stderr
     cpp = {l.split()[0]: [float(x) for x in l.split()[1:]]
            for l in p.stdout.strip().splitlines()}
@@ -240,8 +240,8 @@ def test_ekf_multicraft_roundtrip(tmp_path: Path):
         {"a": a.initial_state(position=(0.1, 0, 5)),
          "b": b.initial_state(position=(3, 0, 5))},
         P=np.eye(ekf.spec.tangent_dim) * 0.1)
-    gps_a = next(p for p in a.parts if p.name == "gps")
-    gps_b = next(p for p in b.parts if p.name == "gps")
+    next(p for p in a.parts if p.name == "gps")
+    next(p for p in b.parts if p.name == "gps")
     for i in range(80):
         ekf.predict(0.01, t=0.0,
                     u={"a.t.throttle": 9.81, "b.t.throttle": 9.81})

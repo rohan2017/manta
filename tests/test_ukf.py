@@ -25,7 +25,6 @@ from manta.craft import Craft
 from manta.fields import GravityField, MagField
 from manta.parts import IMU, Magnetometer, Mass, PositionSensor
 
-
 # ---------------------------------------------------------------------------
 # Module shape / view selection
 # ---------------------------------------------------------------------------
@@ -332,7 +331,7 @@ def test_ukf_sensors_subset_restricts_update_kernels():
     ukf = TargetNumpy(ukf_t)
     ukf.predict(0.01)
     ukf.update("gps.position", np.array([0.0, 0.0, 5.0]))
-    with pytest.raises(Exception):
+    with pytest.raises(KeyError, match="unknown sensor name"):
         ukf.update("g.accel", np.zeros(3))   # not in the chosen set
 
 

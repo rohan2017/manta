@@ -49,8 +49,8 @@ import casadi as ca
 
 from .._declarations import Input, Parameter
 from .._trace import scalar_mx as _mx
-from .joint import RevoluteDOF
 from ..base import PartRole
+from .joint import RevoluteDOF
 
 
 class Motor(RevoluteDOF):

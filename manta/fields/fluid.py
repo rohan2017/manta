@@ -45,7 +45,6 @@ from ..smoothing import hermite_blend, smooth_max0, soft_norm
 from .base import Disturbance, SuperposedField
 from .fluid_props import T0_ISA, hydrostatic_pressure, sutherland_viscosity
 
-
 _VEC3_W = Vec3[WorldFrame]
 
 # Rounding half-width² for the averaged-pool coverage saturation at
@@ -86,9 +85,9 @@ class FluidState:
     pressure: ca.MX                 # scalar MX
     temperature: ca.MX              # scalar MX
     viscosity: ca.MX                # scalar MX
-    velocity: "Vec3"                # Vec3[WorldFrame]
+    velocity: Vec3                # Vec3[WorldFrame]
 
-    def __add__(self, other: "FluidState") -> "FluidState":
+    def __add__(self, other: FluidState) -> FluidState:
         return FluidState(
             density     = self.density + other.density,
             pressure    = self.pressure + other.pressure,
@@ -97,7 +96,7 @@ class FluidState:
             velocity    = self.velocity + other.velocity,
         )
 
-    def scaled(self, s) -> "FluidState":
+    def scaled(self, s) -> FluidState:
         """This state with every component multiplied by the MX (or
         float) scalar `s` — the membership weight in the blends."""
         return FluidState(
@@ -156,7 +155,7 @@ class FluidField(SuperposedField):
             velocity    = _VEC3_W.constant((0.0, 0.0, 0.0)),
         )
 
-    def value_at_sym(self, point: "Vec3", t) -> FluidState:
+    def value_at_sym(self, point: Vec3, t) -> FluidState:
         """Combine every registered disturbance at `point`/`t` into one
         `FluidState`, per the baseline / averaged / additive rule set
         (module docstring). Returns the zero value if none are
@@ -234,7 +233,7 @@ class FluidField(SuperposedField):
                        viscosity: float = 1.35e-3,
                        velocity: tuple[float, float, float] = (0.0, 0.0, 0.0),
                        surface_blend: float = 0.05,
-                       ) -> "FluidField":
+                       ) -> FluidField:
         """Attach a flat hydrostatic ocean below `surface_z`. Returns
         self. See `FlatOcean` for what it is and is not."""
         return self.add(FlatOcean(
@@ -250,7 +249,7 @@ class FluidField(SuperposedField):
                     pressure: float = 0.0,
                     temperature: float = 0.0,
                     viscosity: float | None = None,
-                    ) -> "FluidField":
+                    ) -> FluidField:
         """Attach a uniform baseline medium (density + optional pressure,
         temperature, viscosity, flow). Viscosity defaults to Sutherland's
         law for air; pass it explicitly for a liquid. Returns self."""

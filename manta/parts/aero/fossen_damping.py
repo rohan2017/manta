@@ -43,16 +43,18 @@ This part is why the manifold grammar generalized past R3.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import casadi as ca
 import numpy as np
 
 from ...fields import FluidField
 from ...ir.frames import PartFrame, WorldFrame
 from ...ir.types import Vec3, _IRValue
-from .._declarations import Parameter, PartUpdate
-from ._flow import MAX_ORDER, signed_powers
-from ..base import Part
 from ...ir.wrench import Wrench
+from .._declarations import Parameter, PartUpdate
+from ..base import Part
+from ._flow import MAX_ORDER, signed_powers
 
 _MAX_ORDER = MAX_ORDER          # shared cap (see `_flow`)
 _ZERO36 = (0.0,) * 36
@@ -102,7 +104,7 @@ class FossenDamping(Part):
     textbook D in here.
     """
 
-    requires_fields = [FluidField]
+    requires_fields: ClassVar[list[type]] = [FluidField]
 
     #: One promotable R36 per polynomial order, column-major flattened.
     #: Promote with `Sim(world, parameters=["<craft>.<part>.D1"])`.

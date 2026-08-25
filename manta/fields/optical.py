@@ -29,7 +29,6 @@ from ..ir.frames import WorldFrame
 from ..ir.types import Vec3
 from .base import Disturbance, Field, anchored_pose
 
-
 _VEC3_W = Vec3[WorldFrame]
 
 
@@ -142,7 +141,7 @@ class OpticalField(Field):
 
     def add_ellipsoid(self, center, semi_axes, *,
                       orientation=(1.0, 0.0, 0.0, 0.0),
-                      label: int = 0) -> "OpticalField":
+                      label: int = 0) -> OpticalField:
         """Attach a fixed scenery ellipsoid. Returns self for chaining."""
         return self.add(SemanticEllipsoid(
             center, semi_axes, orientation=orientation, label=label))

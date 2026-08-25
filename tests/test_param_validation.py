@@ -15,7 +15,6 @@ from manta.fields import PointMassGravity, UniformFluid, UniformGravity
 from manta.parts import Aerofoil, Mass, PointBuoy, PrismaticJoint, RevoluteJoint
 from manta.planets import Planet
 
-
 # ---------------------------------------------------------------------------
 # Names must be identifiers
 # ---------------------------------------------------------------------------

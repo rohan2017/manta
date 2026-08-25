@@ -25,37 +25,39 @@ not special-cased — a single craft is just a one-element component.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field as dc_field, replace
+from dataclasses import dataclass, replace
+from dataclasses import field as dc_field
 from typing import Any
 
 import casadi as ca
 import numpy as np
 
-from .._validation import require_positive
-
 from .. import ir
-from ..craft import TickContext, _wrench_rotate_to_craft, _shift_wrench
-from .inertia import (
-    added_mass_rollup, inertial_mass, symbolic_inertia_rollup,
-)
-from .joint_space import DEGENERATE_INERTIA_EPS, build_joint_space
-from .kinematics import kinematic_pass
+from .._validation import require_positive
+from ..craft import TickContext, _shift_wrench, _wrench_rotate_to_craft
 from ..ir._linalg import spd_solve
 from ..ir._rotation import quat_to_rotmat, so3_exp
-from ..ir.frames import WorldFrame, CraftFrame, PartFrame
+from ..ir.frames import CraftFrame, PartFrame, WorldFrame
 from ..ir.manifold import SO3Manifold
+from ..ir.types import _IRValue
+from ..ir.wrench import Wrench
 from ..parts._declarations import PartUpdate
 from ..parts._trace import TraceBindings
 from ..parts.base import CompositePart, Part
-from ..ir.types import _IRValue
-from ..ir.wrench import Wrench
+from .inertia import (
+    added_mass_rollup,
+    inertial_mass,
+    symbolic_inertia_rollup,
+)
+from .joint_space import DEGENERATE_INERTIA_EPS, build_joint_space
+from .kinematics import kinematic_pass
 
 
 def compile_world_tick(world,
                        *,
                        crafts=None,
                        tunable_params=None,
-                       ) -> "ir.graph.CompiledGraph":
+                       ) -> ir.graph.CompiledGraph:
     """Compile a CasADi-MX tick over a World's coupled crafts.
 
     The World is the single source of truth: its crafts, couplings, and

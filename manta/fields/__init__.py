@@ -32,31 +32,62 @@ User-facing surface::
 """
 
 from .base import Disturbance, Field, SuperposedField
-from .gravity import (
-    BodyPointMassGravity, GravityField, J2Gravity, PointMassGravity,
-    UniformGravity, gravity_at,
-)
-from .fluid   import (
-    CurrentFlow, FlatOcean, FluidField, FluidState, UniformFluid,
-    WeatherPatch,
-    below_surface, within_sphere,
-)
-from .mag     import BodyDipoleMag, DipoleMag, MagField, UniformMag
 from .collision import CollisionField, Ellipsoid, HalfSpace, Heightfield, Sphere
+from .fluid import (
+    CurrentFlow,
+    FlatOcean,
+    FluidField,
+    FluidState,
+    UniformFluid,
+    WeatherPatch,
+    below_surface,
+    within_sphere,
+)
+from .gravity import (
+    BodyPointMassGravity,
+    GravityField,
+    J2Gravity,
+    PointMassGravity,
+    UniformGravity,
+    gravity_at,
+)
+from .mag import BodyDipoleMag, DipoleMag, MagField, UniformMag
 from .optical import (
-    BodySemanticEllipsoid, OpticalField, SemanticEllipsoid,
+    BodySemanticEllipsoid,
+    OpticalField,
+    SemanticEllipsoid,
 )
 from .wind_bubble import CraftWindBubble
 
 __all__ = [
-    "Disturbance", "Field", "SuperposedField",
-    "GravityField", "UniformGravity", "PointMassGravity", "J2Gravity",
-    "BodyPointMassGravity", "gravity_at",
-    "FluidField", "FluidState", "FlatOcean", "UniformFluid", "CurrentFlow",
-    "WeatherPatch",
-    "below_surface", "within_sphere",
+    "BodyDipoleMag",
+    "BodyPointMassGravity",
+    "BodySemanticEllipsoid",
+    "CollisionField",
     "CraftWindBubble",
-    "MagField", "UniformMag", "DipoleMag", "BodyDipoleMag",
-    "CollisionField", "Ellipsoid", "HalfSpace", "Heightfield", "Sphere",
-    "OpticalField", "SemanticEllipsoid", "BodySemanticEllipsoid",
+    "CurrentFlow",
+    "DipoleMag",
+    "Disturbance",
+    "Ellipsoid",
+    "Field",
+    "FlatOcean",
+    "FluidField",
+    "FluidState",
+    "GravityField",
+    "HalfSpace",
+    "Heightfield",
+    "J2Gravity",
+    "MagField",
+    "OpticalField",
+    "PointMassGravity",
+    "SemanticEllipsoid",
+    "Sphere",
+    "SuperposedField",
+    "UniformFluid",
+    "UniformGravity",
+    "UniformMag",
+    "WeatherPatch",
+    "below_surface",
+    "gravity_at",
+    "within_sphere",
 ]

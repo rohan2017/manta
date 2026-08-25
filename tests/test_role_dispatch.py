@@ -13,11 +13,11 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from manta.ir.module import ARG_ROLES, Port, PortRef, Role
-from manta.ir.manifold import R3Manifold
-from manta.ir.state_spec import StateSpec
 from manta.codegen.cpp import module_emit as cpp_emit
 from manta.codegen.numpy._sim import _stepn_port_arg
+from manta.ir.manifold import R3Manifold
+from manta.ir.module import ARG_ROLES, Port, PortRef, Role
+from manta.ir.state_spec import StateSpec
 
 
 def _port_for(role: Role) -> Port:

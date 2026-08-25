@@ -7,13 +7,11 @@ import math
 
 import numpy as np
 
-from manta import Sim, TargetNumpy, World
+from manta import Sim, TargetNumpy, World, state_spec_from_craft
 from manta.craft import Craft
-from manta.fields import GravityField
 from manta.estimation import EKF, measurement_component, measurement_slot
+from manta.fields import GravityField
 from manta.parts import Mass
-from manta import state_spec_from_craft
-
 
 # ---------------------------------------------------------------------------
 # StateSpec layout sanity
@@ -67,8 +65,8 @@ def test_state_spec_pack_unpack_roundtrip():
     flat = spec.pack(state)
     assert flat.shape == (13,)
     back = spec.unpack(flat)
-    for k in state:
-        assert np.allclose(back[k], state[k])
+    for k, v in state.items():
+        assert np.allclose(back[k], v)
 
 
 # ---------------------------------------------------------------------------

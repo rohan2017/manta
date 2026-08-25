@@ -47,4 +47,4 @@ def TargetCpp(x,
                        basename=basename, namespace=namespace)
 
 
-__all__ = ["TargetCpp", "EmitResult"]
+__all__ = ["EmitResult", "TargetCpp"]

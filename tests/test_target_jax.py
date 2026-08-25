@@ -8,16 +8,15 @@ jax = pytest.importorskip("jax")
 # this, TargetJax enables it at first use with a RuntimeWarning — manta
 # kernels are float64 physics.)
 jax.config.update("jax_enable_x64", True)
-import jax.numpy as jnp                                    # noqa: E402
+import casadi as ca
+import jax.numpy as jnp
 
-import casadi as ca                                        # noqa: E402
-
-from manta import Craft, Sim, TargetJax, TargetNumpy, World   # noqa: E402
-from manta.codegen.jax import TargetJax as JaxModule       # noqa: E402
-from manta.codegen.jax._translate import translate         # noqa: E402
-from manta.fields import GravityField                      # noqa: E402
-from manta.parts import Mass                               # noqa: E402
-from manta.parts.articulation.joint import RevoluteJoint   # noqa: E402
+from manta import Craft, Sim, TargetJax, TargetNumpy, World
+from manta.codegen.jax import TargetJax as JaxModule
+from manta.codegen.jax._translate import translate
+from manta.fields import GravityField
+from manta.parts import Mass
+from manta.parts.articulation.joint import RevoluteJoint
 
 from .test_fit import DT, _drone
 

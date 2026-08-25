@@ -59,11 +59,18 @@ from hashlib import sha256
 import casadi as ca
 import numpy as np
 
+from ..ir._names import resolve_suffix
 from ..ir.module import (
-    EntryPoint, Hosting, Module, ModuleKind, Port, PortField, PortRef, Role,
+    EntryPoint,
+    Hosting,
+    Module,
+    ModuleKind,
+    Port,
+    PortField,
+    PortRef,
+    Role,
     StateLayout,
 )
-from ..ir._names import resolve_suffix
 from ..ir.state_spec import flatten_nested
 from ..linearization import LinearizedSystem
 

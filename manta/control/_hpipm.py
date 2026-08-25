@@ -9,12 +9,13 @@ stage-local, and the shared bank slack is appended to each stage input.
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import math
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import casadi as ca
 import numpy as np
@@ -508,7 +509,7 @@ class HPIPMResult:
 class NativeHPIPM:
     """One fixed-dimension structured optimal-control QP workspace."""
 
-    _STATUSES = {
+    _STATUSES: ClassVar[dict[int, str]] = {
         0: "solved",
         1: "maximum iterations reached",
         2: "minimum step reached",
@@ -558,10 +559,8 @@ class NativeHPIPM:
             self._handle = None
 
     def __del__(self) -> None:
-        try:
+        with contextlib.suppress(Exception):  # __del__ must never raise
             self.close()
-        except Exception:
-            pass
 
     @staticmethod
     def _array(value: Any, shape: tuple[int, ...], name: str) -> FloatArray:

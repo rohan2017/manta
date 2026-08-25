@@ -39,7 +39,6 @@ from ..smoothing import hermite_blend, soft_norm
 from .base import Disturbance
 from .fluid import FluidState
 
-
 _VEC3_W = Vec3[WorldFrame]
 
 
@@ -105,7 +104,7 @@ class CraftWindBubble(Disturbance):
                 "during a world-tick compile.")
         return trace.craft_sym_state(self.craft)["position"]._mx
 
-    def membership(self, point, t) -> "ca.MX":
+    def membership(self, point, t) -> ca.MX:
         d = soft_norm(point._mx - self._craft_pos_mx())
         return 1.0 - hermite_blend(d - self.radius, self.boundary)
 

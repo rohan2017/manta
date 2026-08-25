@@ -36,7 +36,10 @@ from __future__ import annotations
 import numpy as np
 
 from ..ir._rotation import (
-    quat_conj_np, quat_from_rotmat_np, quat_mul_np, quat_to_rotmat_np,
+    quat_conj_np,
+    quat_from_rotmat_np,
+    quat_mul_np,
+    quat_to_rotmat_np,
 )
 
 

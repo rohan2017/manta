@@ -21,13 +21,12 @@ Validates:
 
 import numpy as np
 
-from manta import Craft, EKF, Sim, TargetNumpy, World
+from manta import EKF, Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField
-from manta.parts import Mass
-from manta.parts import Output, Part, PartUpdate, RandomWalkNoise, WhiteNoise
 from manta.ir.frames import PartFrame, WorldFrame
 from manta.ir.types import Vec3
 from manta.ir.wrench import Wrench
+from manta.parts import Mass, Output, Part, PartUpdate, RandomWalkNoise, WhiteNoise
 
 
 class BiasedGyro(Part):
@@ -81,7 +80,7 @@ def test_noise_accepts_direct_signal_manifold_instance():
     directly so any future signal manifold (vec6, quat, custom) is
     proven reachable without needing a new shortcut string."""
     from manta.ir.manifold import R3Manifold
-    from manta.parts import WhiteNoise, RandomWalkNoise
+    from manta.parts import RandomWalkNoise, WhiteNoise
     n = WhiteNoise(R3Manifold(frame=PartFrame), sigma=0.5)
     assert n.signal_manifold.kind         == "vec"
     assert n.signal_manifold.ambient_dim  == 3
@@ -123,7 +122,7 @@ def test_sample_noise_returns_rw_driver_under_underscore_driver_key():
 def test_bias_advances_by_sqrt_dt_times_driver_in_sim():
     """With a deterministic driver, the bias state evolves exactly
     as the documented model `bias_next = bias + sqrt(dt) · driver`."""
-    w, c = _build_world()
+    w, _c = _build_world()
     cw = TargetNumpy(Sim(w))
     dt = 0.01
     # Inject a constant driver each tick.
@@ -148,7 +147,7 @@ def test_ekf_estimates_rw_bias_from_gyro_readings():
     rng = np.random.default_rng(7)
 
     sim_w, sim_c = _build_world()
-    est_w, est_c = _build_world()
+    est_w, _est_c = _build_world()
     cw = TargetNumpy(Sim(sim_w))
     ekf = TargetNumpy(EKF(est_w))
 

@@ -79,12 +79,12 @@ def test_electrical_python_cpp_roundtrip(tmp_path: Path):
     wrapper_object = tmp_path / "wrapper.o"
     command = [cc, "-c", "-O2", "-fPIC", str(generated.kernels_c),
                "-o", str(kernel_object)]
-    result = subprocess.run(command, capture_output=True, text=True)
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
     command = [cxx, "-c", "-std=c++17", "-O2", "-fPIC",
                f"-I{eigen}", f"-I{tmp_path}", str(generated.wrapper_cpp),
                "-o", str(wrapper_object)]
-    result = subprocess.run(command, capture_output=True, text=True)
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
 
     harness_source = tmp_path / "harness.cpp"
@@ -93,9 +93,9 @@ def test_electrical_python_cpp_roundtrip(tmp_path: Path):
     command = [cxx, "-std=c++17", "-O2", f"-I{eigen}", f"-I{tmp_path}",
                str(harness_source), str(wrapper_object), str(kernel_object),
                "-o", str(executable)]
-    result = subprocess.run(command, capture_output=True, text=True)
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
-    result = subprocess.run([str(executable)], capture_output=True, text=True)
+    result = subprocess.run([str(executable)], capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
     cpp = {line.split()[0]: float(line.split()[1])
            for line in result.stdout.splitlines()}

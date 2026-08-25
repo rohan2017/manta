@@ -11,7 +11,7 @@ while preserving cross-axis and force/torque covariance.
 from __future__ import annotations
 
 import math
-from typing import Iterable
+from collections.abc import Iterable
 
 import casadi as ca
 import numpy as np

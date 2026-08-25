@@ -16,20 +16,20 @@ specialized runtime directly.
 from .lqr import LQR, LQRSolution
 from .pid import PID
 from .rti import (
-    CraftHorizonReference,
     MPC,
+    CraftHorizonReference,
     MPCReference,
     MPCResult,
     MPCTimings,
 )
 
 __all__ = [
-    "CraftHorizonReference",
     "LQR",
-    "LQRSolution",
     "MPC",
+    "PID",
+    "CraftHorizonReference",
+    "LQRSolution",
     "MPCReference",
     "MPCResult",
     "MPCTimings",
-    "PID",
 ]

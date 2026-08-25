@@ -9,11 +9,11 @@ deploy Modules agree at noise = 0.
 import numpy as np
 import pytest
 
-from manta import World, Craft, Sim, LQR, PID, TargetNumpy
+from manta import LQR, PID, Craft, Sim, TargetNumpy, World
 from manta.estimation import EKF
 from manta.fields import GravityField
-from manta.parts import Mass, Thruster, PositionSensor
 from manta.ir.module import Hosting, Module, ModuleKind, PortRef, Role, StateRef
+from manta.parts import Mass, PositionSensor, Thruster
 
 M, G = 2.0, 9.81
 
@@ -237,8 +237,8 @@ def test_recurrence_module_runtime():
 # ---------------------------------------------------------------------------
 
 def test_sole_port_unique_missing_and_duplicate():
-    from manta.ir.module import Port, StateLayout
     from manta.ir.manifold import SO3Manifold
+    from manta.ir.module import Port, StateLayout
     from manta.ir.state_spec import StateSpec
     spec = StateSpec.from_layout((("q", SO3Manifold()),))
     u = Port("u", Role.CONTROL, shape=(2,))
