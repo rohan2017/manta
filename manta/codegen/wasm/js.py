@@ -45,9 +45,23 @@ const PARAM_NAMES = descriptor.params.map((f) => f.name);
 const DEFAULT_PARAMS = Object.fromEntries(
   descriptor.params.map((f) => [f.name, f.default]));
 
-/** Measurement field name -> the update entry method that folds it. */
+/** Measurement field name -> the update entry method that folds it under
+ *  ambient `update(name, z)` dispatch. A measurement is legitimately
+ *  consumed by several kernels — the plain fold, its fold-plus-diagnostics
+ *  twin, and the per-sample-R override — so dispatch routes to the PRIMARY
+ *  fold: the entry that needs nothing beyond what `update()` supplies (no
+ *  matrix-role input such as a per-sample R) and returns no diagnostic
+ *  ports. The variants stay reachable explicitly via `rt.call(method, ...)`,
+ *  exactly as the C++ class exposes them as distinct methods and the numpy
+ *  view names them directly. */
+const STATE_FIELD_NAMES = new Set(descriptor.stateFields.map((f) => f.name));
 const MEAS_ENTRY = {};
-for (const e of descriptor.entryPoints)
+for (const e of descriptor.entryPoints) {
+  // A matrix input that is not a held state field (the covariance `P` is
+  // one) is caller data the ambient path cannot supply — a per-sample R.
+  if (e.in.some((s) => s.kind === "matrix" && !STATE_FIELD_NAMES.has(s.name)))
+    continue;
+  if (e.out.some((s) => s.kind === "diagnostic")) continue; // explicit variant
   for (const s of e.in)
     if (s.kind === "measurement") {
       if (MEAS_ENTRY[s.name] !== undefined)
@@ -57,6 +71,7 @@ for (const e of descriptor.entryPoints)
           `dispatch would be ambiguous`);
       MEAS_ENTRY[s.name] = e.method;
     }
+}
 const MEAS_NAMES = Object.keys(MEAS_ENTRY);
 
 /** Resolve a field name given as a full dotted name or a unique suffix. */
@@ -491,19 +506,21 @@ export class Regulator {
 
   /** Install a re-solved operating point: gain, feed-forward and reference
    *  together (a gain is only valid about the point it was solved at). Takes
-   *  a manta `LQRSolution` straight off the wire —
-   *  `{K, u_ff, x_ref, controller_id}`, with
+   *  a manta `LQRSolution` straight off the wire — `{K, u_ff, x_ref}`, with
    *  `K` either an array of rows (what `K.tolist()` serializes to) or a flat
-   *  column-major array. */
+   *  column-major array. A solution that also carries a `controller_id` is
+   *  checked against this artifact's, so a payload meant for a different
+   *  controller build cannot be installed; a payload without one is trusted
+   *  (the id is provenance metadata, not part of the law). */
   reprogram(solution) {
     const K = solution.K;
     const uFf = solution.u_ff;
     const xRef = solution.x_ref;
-    if (K === undefined || uFf === undefined || xRef === undefined ||
-        solution.controller_id === undefined)
-      throw new Error(
-        "reprogram: solution needs K, u_ff, x_ref and controller_id");
-    if (solution.controller_id !== descriptor.controllerId)
+    if (K === undefined || uFf === undefined || xRef === undefined)
+      throw new Error("reprogram: solution needs K, u_ff and x_ref");
+    if (solution.controller_id !== undefined &&
+        solution.controller_id !== null &&
+        solution.controller_id !== descriptor.controllerId)
       throw new Error("reprogram: solution belongs to a different controller artifact");
     const staged = {};
     for (const [name, v] of [["K", K], ["u_ff", uFf]]) {
