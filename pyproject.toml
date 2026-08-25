@@ -15,7 +15,10 @@ license = { file = "LICENSE" }
 authors = [{ name = "Rohan" }]
 dependencies = [
     "numpy>=2.0",
-    "casadi>=3.7",
+    # <3.8: casadi 3.8 bundles OSQP 1.x, whose renamed C API (OSQPInt/
+    # OSQPFloat, no OSQPData) the generated OSQP/HPIPM kernels do not target
+    # yet. Lift the bound when control/_osqp.py and _hpipm.py speak both APIs.
+    "casadi>=3.7,<3.8",
 ]
 
 [project.optional-dependencies]
