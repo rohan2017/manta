@@ -25,6 +25,16 @@ from ..codegen.numpy._compile import CompilationError, build_native_library
 FloatArray = npt.NDArray[np.float64]
 IntArray = npt.NDArray[np.int64]
 
+# The C bridge reserves values at and below -100 for wrapper/update failures.
+# OSQP's own solve statuses include negative values such as -2 for maximum
+# iterations and must reach the normal result path so callers see the actual
+# solver disposition and residuals.
+_BRIDGE_FAILURE_MAX = -100
+
+
+def _is_bridge_failure(status_value: int) -> bool:
+    return int(status_value) <= _BRIDGE_FAILURE_MAX
+
 _SOURCE = r"""
 #include <stdlib.h>
 #include <string.h>
@@ -324,9 +334,9 @@ class NativeOSQP:
         status_value = int(self._library.manta_osqp_solve(
             self._handle, Px, Ax, q, lower, upper, x0, y0,
             ctypes.byref(update_seconds), ctypes.byref(solve_seconds)))
-        if status_value < 0:
+        if _is_bridge_failure(status_value):
             raise RuntimeError(
-                f"native OSQP numeric update failed with {status_value}")
+                f"native OSQP bridge update failed with {status_value}")
         x, y = np.empty(self.n), np.empty(self.m)
         cost, iterations = ctypes.c_double(), ctypes.c_longlong()
         primal_residual, dual_residual = ctypes.c_double(), ctypes.c_double()
