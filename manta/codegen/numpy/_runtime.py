@@ -44,6 +44,21 @@ def finite_array(value, *, who: str, size: int | None = None,
     return arr.copy()
 
 
+def _real_float_vector(value, *, who: str) -> np.ndarray:
+    """`finite_array` minus the finiteness pass: the same dtype rejection,
+    returning a flat float view/copy for callers that check finiteness once
+    over a whole packed vector."""
+    raw = np.asarray(value)
+    if raw.dtype.kind not in "iuf" or raw.dtype.kind == "b":
+        raise TypeError(
+            f"{who}: expected real numeric data, got dtype {raw.dtype}")
+    arr = raw if raw.dtype == _FLOAT else raw.astype(float)
+    return arr.reshape(-1)
+
+
+_FLOAT = np.dtype(float)
+
+
 def pack_fields(fields, source, *, default=0.0, required: bool = False,
                 who: str = "pack") -> np.ndarray:
     """Flat vector over `fields` (in order), each filled from
@@ -60,16 +75,17 @@ def pack_fields(fields, source, *, default=0.0, required: bool = False,
     chunks = []
     for f in fields:
         if f.name in source:
-            v = np.atleast_1d(finite_array(
-                source[f.name], who=f"{who}: {f.name!r}", size=f.dim)).ravel()
+            v = _real_float_vector(source[f.name], who=f"{who}: {f.name!r}")
+            if v.size != f.dim:
+                raise ValueError(
+                    f"{who}: {f.name!r}: expected {f.dim} value(s), got {v.size}")
         elif required:
             raise KeyError(
                 f"{who}: missing {f.name!r}; required: "
                 f"{[g.name for g in fields]}")
         else:
             d = default(f) if callable(default) else default
-            v = np.atleast_1d(finite_array(
-                d, who=f"{who}: default for {f.name!r}")).ravel()
+            v = _real_float_vector(d, who=f"{who}: default for {f.name!r}")
             if v.size == 1 and f.dim > 1:
                 v = np.full(f.dim, v[0])
             elif v.size != f.dim:
@@ -77,7 +93,18 @@ def pack_fields(fields, source, *, default=0.0, required: bool = False,
                     f"{who}: default for {f.name!r} expects dim {f.dim}, "
                     f"got {v.size}.")
         chunks.append(v)
-    return np.concatenate(chunks) if chunks else np.zeros(0)
+    packed = np.concatenate(chunks) if chunks else np.zeros(0)
+    if not np.isfinite(packed).all():
+        # Re-validate per field so the error names the offending field
+        # exactly as before; the fast path only skipped this on success.
+        for f in fields:
+            if f.name in source:
+                finite_array(source[f.name], who=f"{who}: {f.name!r}", size=f.dim)
+            else:
+                d = default(f) if callable(default) else default
+                finite_array(d, who=f"{who}: default for {f.name!r}")
+        raise ValueError(f"{who}: contains non-finite values")
+    return packed
 
 
 def unpack_fields(fields, vec) -> dict[str, Any]:
@@ -140,6 +167,15 @@ def _dense_evaluation_buffer(function: Any) -> _DenseEvaluationBuffer | None:
     return _DenseEvaluationBuffer(memory, evaluate, result, offsets)
 
 
+@dataclass(frozen=True)
+class _EntryPlan:
+    """Argument sizes and output layouts of one entry point, resolved once."""
+
+    args: tuple[tuple[str, int], ...]
+    writes: tuple[tuple[str, int, tuple[int, ...] | None], ...]
+    returns: tuple[tuple[str, int, tuple[int, ...] | None], ...]
+
+
 class NumpyRuntime:
     """The generic engine over a typed `Module`: state storage + the
     typed-arg gather → kernel call → scatter. Views subclass it."""
@@ -167,9 +203,15 @@ class NumpyRuntime:
         self._x_port = module.sole_port(Role.STATE)
         self._param_port = module.sole_port(Role.PARAMETER)
         self._param_overrides: dict[str, np.ndarray] = {}
+        self._param_vector_cache: np.ndarray | None = None
         # Keyed by the actual ca.Function identity because selected functions
         # may be replaced by compiled externals after construction.
         self._evaluation_buffers: dict[int, _DenseEvaluationBuffer | None] = {}
+        # Per entry point: argument sizes and output layouts resolved once.
+        # The Module is immutable, so this never goes stale; resolving it
+        # per call was most of a simulator tick for wide truth plants.
+        self._entry_plans: dict[str, _EntryPlan] = {}
+        self._input_name_list = [f.name for f in self._u_fields()]
 
         self._t = 0.0
 
@@ -246,88 +288,122 @@ class NumpyRuntime:
         vals.update(kw)
         return self._run(self.module.entry(method), vals)
 
+    def _entry_plan(self, ep) -> _EntryPlan:
+        plan = self._entry_plans.get(ep.method)
+        if plan is None:
+            m = self.module
+            args = []
+            for ref in ep.args:
+                if isinstance(ref, StateRef):
+                    size = int(np.prod(m.state.field(ref.name).shape))
+                else:
+                    size = m.port(ref.name).size
+                args.append((ref.name, size))
+            writes = []
+            for w in ep.writes:
+                fld = m.state.field(w)
+                writes.append((w, int(np.prod(fld.shape)),
+                               fld.shape if fld.kind == "matrix" else None))
+            returns = []
+            for name in ep.returns:
+                port = m.port(name)
+                returns.append((name, port.size,
+                                port.shape if len(port.shape) == 2 else None))
+            plan = _EntryPlan(tuple(args), tuple(writes), tuple(returns))
+            self._entry_plans[ep.method] = plan
+        return plan
+
     def _run(self, ep, values: dict[str, Any]) -> dict[str, np.ndarray]:
         m = self.module
+        plan = self._entry_plan(ep)
         args = resolve_args(m, ep, values,
                             state_lookup=lambda n: self._state[n],
                             param_default=self.param_vector)
-        checked_args = []
-        for ref, arg in zip(ep.args, args):
-            if isinstance(ref, StateRef):
-                expected_size = int(np.prod(m.state.field(ref.name).shape))
-            else:
-                expected_size = m.port(ref.name).size
-            checked_args.append(finite_array(
-                arg, who=f"{m.name}.{ep.method} argument {ref.name!r}",
-                size=expected_size))
         fn = self._functions[ep.fn]
         buffer_key = id(fn)
         if buffer_key not in self._evaluation_buffers:
             self._evaluation_buffers[buffer_key] = _dense_evaluation_buffer(fn)
         evaluation = self._evaluation_buffers[buffer_key]
         buffered = evaluation is not None
+        who = f"{m.name}.{ep.method}"
         if evaluation is None:
+            checked_args = [
+                finite_array(arg, who=f"{who} argument {name!r}", size=size)
+                for (name, size), arg in zip(plan.args, args)
+            ]
             res = fn(*checked_args)
             outs = [res] if fn.n_out() == 1 else list(res)
         else:
-            # FunctionBuffer consumes column-major flat storage. Keeping these
-            # owned arrays alive through evaluate() also keeps every registered
-            # native pointer valid for the duration of the call.
-            input_buffers = [
-                np.asarray(arg, dtype=float).reshape(-1, order="F").copy()
-                for arg in checked_args
-            ]
+            # FunctionBuffer consumes column-major flat storage. One owned
+            # float view per argument: validated, flattened column-major,
+            # and kept alive through evaluate() so every registered native
+            # pointer stays valid for the duration of the call.
+            input_buffers = []
+            for (name, size), arg in zip(plan.args, args):
+                raw = np.asarray(arg)
+                if raw.dtype.kind not in "iuf" or raw.dtype.kind == "b":
+                    raise TypeError(
+                        f"{who} argument {name!r}: expected real numeric "
+                        f"data, got dtype {raw.dtype}")
+                col = np.asarray(raw, dtype=float).reshape(-1, order="F")
+                if col.size != size:
+                    raise ValueError(
+                        f"{who} argument {name!r}: expected {size} value(s), "
+                        f"got {col.size}")
+                if not np.isfinite(col).all():
+                    raise ValueError(
+                        f"{who} argument {name!r}: contains non-finite values")
+                if not col.flags.c_contiguous:
+                    col = np.ascontiguousarray(col)
+                input_buffers.append(col)
             for index, arg in enumerate(input_buffers):
                 evaluation.memory.set_arg(index, memoryview(arg))
             evaluation.evaluate()
             if evaluation.memory.ret() != 0:
                 raise RuntimeError(
-                    f"{m.name}.{ep.method}: kernel {ep.fn!r} returned "
+                    f"{who}: kernel {ep.fn!r} returned "
                     f"{evaluation.memory.ret()}"
                 )
-            if not np.all(np.isfinite(evaluation.result)):
+            if not np.isfinite(evaluation.result).all():
                 raise ValueError(
-                    f"{m.name}.{ep.method}: kernel {ep.fn!r} produced "
-                    "non-finite values"
+                    f"{who}: kernel {ep.fn!r} produced non-finite values"
                 )
+            # One owned allocation for this call's outputs; the buffer is
+            # reused by the next evaluate(), so results must not alias it.
+            owned = evaluation.result.copy()
             outs = [
-                evaluation.result[start:end]
+                owned[start:end]
                 for start, end in pairwise(evaluation.offsets)
             ]
         expected = len(ep.writes) + len(ep.returns)
         if len(outs) != expected:
             raise RuntimeError(
-                f"{m.name}.{ep.method}: kernel {ep.fn!r} produced "
+                f"{who}: kernel {ep.fn!r} produced "
                 f"{len(outs)} outputs but the entry point declares "
                 f"{len(ep.writes)} writes + {len(ep.returns)} returns "
                 f"= {expected}.")
         threaded = m.hosting is Hosting.THREADED
         staged_state: dict[str, np.ndarray] = {}
         ret: dict[str, np.ndarray] = {}
-        for i, w in enumerate(ep.writes):
-            fld = m.state.field(w)
+        for i, (w, size, shape) in enumerate(plan.writes):
             arr = (
-                np.asarray(outs[i], dtype=float).copy()
+                outs[i]
                 if buffered
                 else finite_array(
-                    outs[i], who=f"{m.name}.{ep.method} state result {w!r}",
-                    size=int(np.prod(fld.shape)))
+                    outs[i], who=f"{who} state result {w!r}", size=size)
             )
-            val = (arr.reshape(fld.shape, order="F") if fld.kind == "matrix"
+            val = (arr.reshape(shape, order="F") if shape is not None
                    else arr.reshape(-1))
             staged_state[w] = val
             if threaded:                  # THREADED: writes go to the caller
                 ret[w] = val
-        for name, o in zip(ep.returns, outs[len(ep.writes):]):
-            port = m.port(name)
+        for (name, size, shape), o in zip(plan.returns, outs[len(ep.writes):]):
             a = (
-                np.asarray(o, dtype=float).copy()
+                o
                 if buffered
-                else finite_array(
-                    o, who=f"{m.name}.{ep.method} return {name!r}",
-                    size=port.size)
+                else finite_array(o, who=f"{who} return {name!r}", size=size)
             )
-            ret[name] = (a.reshape(port.shape, order="F") if len(port.shape) == 2
+            ret[name] = (a.reshape(shape, order="F") if shape is not None
                          else a.reshape(-1))
         self._validate_staged_state(staged_state)
         self._state.update(staged_state)
@@ -342,7 +418,7 @@ class NumpyRuntime:
         return self._u_port.fields if self._u_port is not None else ()
 
     def _input_names(self) -> list[str]:
-        return [f.name for f in self._u_fields()]
+        return list(self._input_name_list)
 
     def build_u(self, u: dict[str, Any] | None) -> np.ndarray:
         """Resolve a `{name: value}` dict (full or suffix names) to the
@@ -375,6 +451,7 @@ class NumpyRuntime:
                                size=dims[full]).ravel()
             staged[full] = arr
         self._param_overrides = staged
+        self._param_vector_cache = None
 
     def param_vector(self) -> np.ndarray:
         """The flat promoted-parameter vector: declared defaults merged
@@ -382,8 +459,14 @@ class NumpyRuntime:
         port = self._param_port
         if port is None:
             return np.zeros(0)
-        return pack_fields(port.fields, self._param_overrides,
-                           default=lambda f: f.default, who="param_vector")
+        cached = self._param_vector_cache
+        if cached is None:
+            cached = pack_fields(port.fields, self._param_overrides,
+                                 default=lambda f: f.default,
+                                 who="param_vector")
+            self._param_vector_cache = cached
+        # Callers may mutate the vector they receive; the cache stays pristine.
+        return cached.copy()
 
     @property
     def spec(self):

@@ -25,6 +25,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from enum import Enum
+from functools import cached_property
 from hashlib import sha256
 from math import prod
 from types import MappingProxyType
@@ -559,11 +560,17 @@ class Module:
                     f"Module {self.name!r}.{ep.method}: output {name!r} has "
                     f"{fn.numel_out(index)} values, expected {expected}")
 
+    @cached_property
+    def _port_index(self) -> dict[str, Port]:
+        # Modules are immutable, and runtimes resolve hundreds of ports per
+        # simulator tick; a one-time index keeps that lookup O(1).
+        return {p.name: p for p in self.ports}
+
     def port(self, name: str) -> Port:
-        for p in self.ports:
-            if p.name == name:
-                return p
-        raise KeyError(f"Module {self.name!r}: no port {name!r}.")
+        try:
+            return self._port_index[name]
+        except KeyError:
+            raise KeyError(f"Module {self.name!r}: no port {name!r}.") from None
 
     def ports_by_role(self, role: Role) -> tuple[Port, ...]:
         return tuple(p for p in self.ports if p.role is role)

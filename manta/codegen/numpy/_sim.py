@@ -364,9 +364,11 @@ class NumpySim(NumpyRuntime):
         fields = self._u_fields()
         named = {f.name: (flat.get(f.name, f.default))
                  for f in fields}
-        for k, v in (u or {}).items():
-            named[resolve_suffix(k, self._input_names(), label="input",
-                                 who=type(self).__name__)] = v
+        if u:
+            names = self._input_names()
+            for k, v in u.items():
+                named[resolve_suffix(k, names, label="input",
+                                     who=type(self).__name__)] = v
         return pack_fields(fields, named, default=lambda f: f.default,
                            who="step")
 
@@ -495,11 +497,14 @@ class NumpySim(NumpyRuntime):
         port = self._noise_port
         if port is None:
             return np.zeros(0)
-        source = dict(flat) if flat is not None else {}
-        if self._driver is not None:
-            source.update(self._driver.sample())   # a draw wins over the dict
-        selected = {f.name: source[f.name]
-                    for f in port.fields if f.name in source}
+        draw = self._driver.sample() if self._driver is not None else {}
+        held = flat if flat is not None else {}
+        selected = {}
+        for f in port.fields:
+            if f.name in draw:                     # a draw wins over the dict
+                selected[f.name] = draw[f.name]
+            elif f.name in held:
+                selected[f.name] = held[f.name]
         return pack_fields(port.fields, selected, default=0.0, who="noise")
 
     def outputs(self) -> dict[str, dict[str, Any]]:
