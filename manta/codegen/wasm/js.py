@@ -93,6 +93,82 @@ function requireFiniteVector(value, size, label) {
   return vec;
 }
 
+function requireFiniteNumber(value, label) {
+  if (typeof value !== "number" || !Number.isFinite(value))
+    throw new Error(`${label} must be finite`);
+  return value;
+}
+
+function requirePositiveNumber(value, label) {
+  const number = requireFiniteNumber(value, label);
+  if (!(number > 0)) throw new Error(`${label} must be finite and > 0`);
+  return number;
+}
+
+function covarianceRoundoffTolerance(matrix, dimension) {
+  let normInf = 0;
+  for (let row = 0; row < dimension; row++) {
+    let sum = 0;
+    for (let col = 0; col < dimension; col++)
+      sum += Math.abs(matrix[col * dimension + row]);
+    normInf = Math.max(normInf, sum);
+  }
+  return Math.max(1e-12,
+    64 * Number.EPSILON * dimension * Math.max(1, normInf));
+}
+
+/** Minimum eigenvalue of a small real-symmetric column-major matrix.
+ *  Cyclic Jacobi is sufficient here: restore is an offline boundary, not a
+ *  hot filter operation, and this mirrors NumPy's eigvalsh-based PSD gate. */
+function minimumSymmetricEigenvalue(matrix, dimension) {
+  const a = Float64Array.from(matrix);
+  const at = (row, col) => col * dimension + row;
+  const sweeps = Math.max(8, 8 * dimension * dimension);
+  for (let sweep = 0; sweep < sweeps; sweep++) {
+    let p = 0, q = 0, largest = 0;
+    for (let col = 1; col < dimension; col++)
+      for (let row = 0; row < col; row++) {
+        const value = Math.abs(a[at(row, col)]);
+        if (value > largest) { largest = value; p = row; q = col; }
+      }
+    if (largest <= Number.EPSILON) break;
+    const app = a[at(p, p)], aqq = a[at(q, q)], apq = a[at(p, q)];
+    const angle = 0.5 * Math.atan2(2 * apq, aqq - app);
+    const c = Math.cos(angle), s = Math.sin(angle);
+    for (let k = 0; k < dimension; k++) {
+      if (k === p || k === q) continue;
+      const akp = a[at(k, p)], akq = a[at(k, q)];
+      const nextP = c * akp - s * akq;
+      const nextQ = s * akp + c * akq;
+      a[at(k, p)] = a[at(p, k)] = nextP;
+      a[at(k, q)] = a[at(q, k)] = nextQ;
+    }
+    a[at(p, p)] = c*c*app - 2*s*c*apq + s*s*aqq;
+    a[at(q, q)] = s*s*app + 2*s*c*apq + c*c*aqq;
+    a[at(p, q)] = a[at(q, p)] = 0;
+  }
+  let minimum = Infinity;
+  for (let index = 0; index < dimension; index++)
+    minimum = Math.min(minimum, a[at(index, index)]);
+  return minimum;
+}
+
+function requireCovariance(value, dimension, label) {
+  const matrix = requireFiniteVector(value, dimension * dimension, label);
+  for (let col = 0; col < dimension; col++)
+    for (let row = 0; row < dimension; row++) {
+      const left = matrix[col * dimension + row];
+      const right = matrix[row * dimension + col];
+      if (Math.abs(left - right) > 1e-12 + 1e-10 * Math.abs(right))
+        throw new Error(`${label} must be symmetric`);
+    }
+  const tolerance = covarianceRoundoffTolerance(matrix, dimension);
+  const minimum = minimumSymmetricEigenvalue(matrix, dimension);
+  if (minimum < -tolerance)
+    throw new Error(`${label} must be positive semidefinite`);
+  return matrix;
+}
+
 /** Pack `{name: value}` (full or unique-suffix names), overlaid on the
  *  `base` defaults, into a flat vector over `fields` in descriptor order. */
 function packFields(overrides, base, fields, names, label) {
@@ -363,7 +439,11 @@ export class Filter {
     this.P = Float64Array.from(field("P").init);
     this._x0 = this.x.slice();
     this._P0 = this.P.slice();
+    this.t = 0;
   }
+
+  /** Current logical model time, advanced only by successful prediction. */
+  get time() { return this.t; }
 
   // `x`/`P`/`Q` are threaded by name (as in numpy); everything else by kind.
   _run(entry, { u = {}, dt = 0, t = 0, z = null, Q = null } = {}) {
@@ -394,20 +474,27 @@ export class Filter {
 
   /** Advance the estimate by `dt` under commands `u`. Pass a flat (column-
    *  major) `Q` Float64Array to override the model's baked `L Σ Lᵀ`. */
-  predict(dt, { u = {}, t = 0, Q = null } = {}) {
+  predict(dt, { u = {}, t = null, Q = null } = {}) {
+    const step = requirePositiveNumber(dt, "Filter.predict dt");
+    const t0 = t === null ? this.t : requireFiniteNumber(t, "Filter.predict t");
+    const nextTime = requireFiniteNumber(t0 + step,
+      "Filter.predict resulting time");
     const method = Q ? "predict_with_Q" : "predict";
     if (!byMethod[method])
       throw new Error(`Module exposes no \`${method}\` entry point`);
-    this._run(byMethod[method], { u, dt, t, Q });
+    this._run(byMethod[method], { u, dt: step, t: t0, Q });
+    this.t = nextTime;
   }
 
   /** Fold one measurement at the current state through its baked Joseph
    *  kernel. `name` is a sensor name (full or unique-suffix). */
-  update(name, z, { u = {}, t = 0 } = {}) {
+  update(name, z, { u = {}, t = null } = {}) {
+    const sampleTime = t === null ? this.t
+      : requireFiniteNumber(t, "Filter.update t");
     const full = resolveName(name, MEAS_NAMES, "sensor");
     const za = z instanceof Float64Array
       ? z : Float64Array.from(typeof z === "number" ? [z] : z);
-    this._run(byMethod[MEAS_ENTRY[full]], { u, t, z: za });
+    this._run(byMethod[MEAS_ENTRY[full]], { u, t: sampleTime, z: za });
   }
 
   /** The held estimate slot `name` (full or unique-suffix) as a Float64Array. */
@@ -422,14 +509,36 @@ export class Filter {
    *  over the model's init; `P` is a flat covariance. Resets both to the
    *  model's init when called with no arguments. */
   reset({ x = null, P = null } = {}) {
-    if (x === null && P === null) {
-      this.x = this._x0.slice();
-      this.P = this._P0.slice();
-      return;
-    }
-    if (x !== null) this.x = packState(x, this._x0);
-    if (P !== null)
-      this.P = P instanceof Float64Array ? P.slice() : Float64Array.from(P);
+    const nextX = x === null ? this._x0.slice() : packState(x, this._x0);
+    const nextP = P === null ? this._P0.slice()
+      : requireCovariance(P, descriptor.tangentDim, "Filter.reset P");
+    this.x = nextX;
+    this.P = nextP;
+    this.t = 0;
+  }
+
+  /** Capture an owned restart point: state, covariance, time, and artifact. */
+  checkpoint() {
+    return { x: this.x.slice(), P: this.P.slice(), time: this.t,
+             artifactId: descriptor.artifactId };
+  }
+
+  /** Atomically restore a checkpoint after NumPy-equivalent validation. */
+  restore(checkpoint) {
+    if (checkpoint === null || typeof checkpoint !== "object")
+      throw new Error("Filter.restore expected a checkpoint object");
+    if (checkpoint.artifactId !== descriptor.artifactId)
+      throw new Error("Filter.restore checkpoint belongs to a different " +
+                      "Module artifact");
+    const nextX = requireFiniteVector(
+      checkpoint.x, descriptor.ambientDim, "Filter.restore x");
+    const nextP = requireCovariance(
+      checkpoint.P, descriptor.tangentDim, "Filter.restore P");
+    const nextTime = requireFiniteNumber(
+      checkpoint.time, "Filter.restore time");
+    this.x = nextX;
+    this.P = nextP;
+    this.t = nextTime;
   }
 }
 

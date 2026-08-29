@@ -27,13 +27,21 @@ Typical workflow::
     # editable World.
 """
 
-from ._common import Free, Prior, Tied, Window
+from ._common import (
+    DEFAULT_FILL_POLICY_ID,
+    FitDefaultFill,
+    Free,
+    Prior,
+    Tied,
+    Window,
+)
 from ._evidence import (
     NOISE_KINDS,
     AcceptanceCheck,
     AxisFitEvidence,
     FitAcceptanceCriteria,
     FitEvidence,
+    FitEvidenceBinding,
     HeldOutWindow,
     ProcessNoiseModel,
     held_out_evidence,
@@ -43,15 +51,19 @@ from ._evidence import (
 from ._map import Fit, FitResult
 from ._nll import NoiseFit, NoiseFitResult
 from ._report import FitDerivationReport
+from ._residuals import ResidualStatistics, bartlett_hac_residual_statistics
 
 __all__ = [
+    "DEFAULT_FILL_POLICY_ID",
     "NOISE_KINDS",
     "AcceptanceCheck",
     "AxisFitEvidence",
     "Fit",
     "FitAcceptanceCriteria",
+    "FitDefaultFill",
     "FitDerivationReport",
     "FitEvidence",
+    "FitEvidenceBinding",
     "FitResult",
     "Free",
     "HeldOutWindow",
@@ -59,8 +71,10 @@ __all__ = [
     "NoiseFitResult",
     "Prior",
     "ProcessNoiseModel",
+    "ResidualStatistics",
     "Tied",
     "Window",
+    "bartlett_hac_residual_statistics",
     "held_out_evidence",
     "hold_out",
     "window_digest",

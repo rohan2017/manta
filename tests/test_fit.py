@@ -7,6 +7,7 @@ unobservable direction, and the posterior diagnostics.
 """
 
 import copy
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -25,9 +26,10 @@ from manta import (
     World,
 )
 from manta.fields import GravityField
-from manta.fit import FitEvidence
+from manta.fit import FitEvidence, window_digest
 from manta.ir.frames import CraftFrame, PartFrame
 from manta.ir.types import Vec3
+from manta.model import canonical_derivation_bytes
 from manta.parts import IMU, Mass, Thruster
 
 DT = 0.005
@@ -285,6 +287,13 @@ def test_fit_apply_bakes_fitted_values():
     assert evidence.channel == "drone.imu.accel"
     assert evidence.held_out.sample_count == 300
     assert evidence.accepted, evidence.summary()
+    assert evidence.binding is not None
+    assert evidence.binding.fitted_artifact_id == res._candidate_artifact().artifact_id
+    transferred = replace(
+        evidence,
+        binding=replace(evidence.binding, source_artifact_id="another-source"))
+    with pytest.raises(ValueError, match="different fit/model scope"):
+        res.derive(evidence=transferred)
     # White accelerometer noise on a well-fitted model: every axis falls
     # back to the white model, and says why.
     assert all(ax.white_fallback and ax.white_fallback_reason
@@ -323,6 +332,70 @@ def test_fit_apply_bakes_fitted_values():
     fitted = _run(TargetNumpy(Sim(model)), {"t2": 0.6}, 25)
     assert np.allclose(truth.state["drone"]["velocity"],
                        fitted.state["drone"]["velocity"], atol=1e-6)
+
+
+def test_partial_window_defaults_are_provenance_across_dataset_roles():
+    def partial_window(seed: int, t0: float) -> Window:
+        truth = TargetNumpy(Sim(_drone()))
+        rng = np.random.default_rng(seed)
+        accel = []
+        for _ in range(120):
+            truth.step(DT)
+            mean = np.asarray(truth.outputs()["drone"]["imu.accel"])
+            accel.append(mean + rng.normal(0.0, 0.02, 3))
+        return Window(
+            x0={},
+            u={},
+            z={"imu.accel": np.asarray(accel)},
+            dt=DT,
+            t0=t0,
+        )
+
+    training = partial_window(21, 0.0)
+    selection = partial_window(22, 1.0)
+    acceptance = partial_window(23, 2.0)
+    result = Fit(
+        _drone(), parameters={"body.mass": Prior(sigma=0.1)}
+    ).solve([training], compute_posterior=False)
+
+    exploratory = result.derive().derivation["fit"]
+    assert exploratory.evidence is None
+    assert exploratory.default_fills
+    assert {fill.dataset_role for fill in exploratory.default_fills} == {
+        "training"
+    }
+
+    evidence = result.evidence(
+        [acceptance], sensor="imu.accel", lag_count=10,
+        selection=[selection],
+    )
+    assert {fill.dataset_role for fill in evidence.default_fills} == {
+        "training", "selection", "acceptance"
+    }
+    for role, window in (
+        ("training", training),
+        ("selection", selection),
+        ("acceptance", acceptance),
+    ):
+        role_fills = tuple(
+            fill for fill in evidence.default_fills
+            if fill.dataset_role == role
+        )
+        assert role_fills
+        assert {fill.window_digest for fill in role_fills} == {
+            window_digest(window)
+        }
+        assert "drone.t1.throttle" in {fill.name for fill in role_fills}
+        assert "drone.position" in {fill.name for fill in role_fills}
+
+    repeated = result.evidence(
+        [acceptance], sensor="imu.accel", lag_count=10,
+        selection=[selection],
+    )
+    assert canonical_derivation_bytes({"fit": evidence}) == \
+        canonical_derivation_bytes({"fit": repeated})
+    accepted_report = result.derive(evidence=evidence).derivation["fit"]
+    assert accepted_report.default_fills == evidence.default_fills
 
 
 def test_fit_summary_and_weak_directions():

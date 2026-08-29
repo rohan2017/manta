@@ -157,6 +157,9 @@ class Aerofoil(Part):
     should not touch them.
     """
 
+    # Parameter descriptors expose this resolved edge spelling at runtime.
+    flow_noise_sigma: float
+
     requires_fields: ClassVar[list[type]] = [FluidField]
 
     area:        float = Parameter(0.1)

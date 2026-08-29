@@ -142,6 +142,18 @@ class ModelForce(Part):
                 f"{who}: evidence channel {channel!r} is not the colocated "
                 f"IMU's accelerometer ({expected!r}); the model error is the "
                 "held-out residual of that sensor")
+        if evidence.binding is not None:
+            contract = evidence.binding
+            if contract.channel_shape != (3,):
+                raise ValueError(
+                    f"{who}: evidence channel contract has shape "
+                    f"{contract.channel_shape}, expected the accelerometer's "
+                    "(3,)")
+            if (contract.channel_rate_hz is not None and imu.rate is not None
+                    and contract.channel_rate_hz != imu.rate):
+                raise ValueError(
+                    f"{who}: evidence cadence {contract.channel_rate_hz:g} Hz "
+                    f"does not match IMU cadence {imu.rate:g} Hz")
         if tuple(a.axis for a in evidence.axes) != _AXES:
             raise ValueError(
                 f"{who}: evidence must carry axes {_AXES}, got "

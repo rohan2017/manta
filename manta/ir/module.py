@@ -33,6 +33,8 @@ from typing import Any
 
 import numpy as np
 
+from ..model import canonical_derivation_bytes
+
 
 def entry_ident(name: str) -> str:
     """A dotted manta name (`craft.part.out`) → the flat identifier used in
@@ -414,6 +416,7 @@ class Module:
     kind: ModuleKind
     hosting: Hosting = Hosting.THREADED
     metadata: Mapping[str, Any] | None = None
+    annotations: Mapping[str, Any] | None = None
     artifact_id: str = dataclass_field(init=False)
 
     def __post_init__(self) -> None:
@@ -427,6 +430,8 @@ class Module:
         object.__setattr__(self, "functions",
                            MappingProxyType(dict(self.functions)))
         object.__setattr__(self, "metadata", _freeze(dict(self.metadata or {})))
+        object.__setattr__(self, "annotations",
+                           _freeze(dict(self.annotations or {})))
         port_names = [p.name for p in self.ports]
         duplicate_ports = sorted({n for n in port_names if port_names.count(n) > 1})
         if duplicate_ports:
@@ -489,6 +494,12 @@ class Module:
             digest.update(fn.serialize().encode())
         for ep in self.entry_points:
             digest.update(repr(ep).encode())
+        # Metadata is operational contract: generated runtimes read gates,
+        # propagation modes, source identities, and controller identities
+        # from it. Descriptive labels belong in `annotations`, the explicit
+        # non-hashed map.
+        digest.update(b"manta-module-metadata-v1\0")
+        digest.update(canonical_derivation_bytes(self.metadata))
         object.__setattr__(self, "artifact_id", digest.hexdigest())
 
     def _validate_entry(self, ep: EntryPoint) -> None:

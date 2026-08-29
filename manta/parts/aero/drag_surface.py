@@ -142,6 +142,9 @@ class DragSurface(Part):
         moment=(x,y,z)  — sets B_1 = diag(x, y, z) (per-axis, linear in flow).
     """
 
+    # Parameter descriptors expose this resolved edge spelling at runtime.
+    flow_noise_sigma: float
+
     # `force_tensors` / `moment_tensors` carry a zero-3×3 default so the
     # declaration machinery sees a well-typed slot at class scope; the
     # actual value is always set by __init__ from `force`/`force_tensors`

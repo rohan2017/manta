@@ -119,10 +119,11 @@ class ModelArtifact:
     @classmethod
     def from_compiled(cls, world, state_spec, compiled_function, signature,
                       *, parameter_names=(),
+                      sample_rates: Mapping[str, float] | None = None,
                       authoring_world=None,
                       derivation: Mapping[str, Any] | None = None):
         digest = sha256()
-        digest.update(b"manta-model-v1\0")
+        digest.update(b"manta-model-v2\0")
         digest.update(world.name.encode())
         digest.update(compiled_function.serialize().encode())
         for slot in state_spec.slots:
@@ -136,6 +137,30 @@ class ModelArtifact:
         coupling_names = tuple(coupling.name for coupling in world.couplings)
         for name in coupling_names:
             digest.update(name.encode())
+        # The CasADi function describes the numerical law, but scheduling
+        # cadence, declared input defaults, and stochastic scale are tick
+        # contract too.  They are consumed by runtimes without necessarily
+        # appearing in the serialized graph, so identity must bind them
+        # explicitly.
+        sample_rates = dict(sample_rates or {})
+        tick_contract = {
+            "inputs": tuple(
+                (channel.full, float(channel.default),
+                 sample_rates.get(channel.full))
+                for channel in signature.inputs),
+            "noise": tuple(
+                (channel.full, int(channel.dim), float(channel.sigma))
+                for channel in signature.noise),
+            "sensors": tuple(
+                (channel.full, sample_rates.get(channel.full))
+                for channel in signature.sensors),
+            "parameters": tuple(
+                (channel.full, int(channel.dim),
+                 np.asarray(channel.value, dtype=float))
+                for channel in signature.params),
+        }
+        digest.update(canonical_derivation_bytes(
+            {"tick_contract": tick_contract}))
         report = ModelValidationReport(
             checks=("resolved", "ownership", "requirements", "state_layout",
                     "tick_signature"),
@@ -182,6 +207,23 @@ class ModelArtifact:
             artifact_id=self._artifact_identity(self.model_id, derivation),
             derivation=derivation,
         )
+
+    @property
+    def validation_id(self) -> str:
+        """Identity of the structural validation receipt for this model."""
+        digest = sha256()
+        digest.update(b"manta-model-validation-v1\0")
+        digest.update(canonical_derivation_bytes({"validation": self.validation}))
+        return digest.hexdigest()
+
+    def transform_metadata(self, profile: Mapping[str, Any]) -> dict[str, Any]:
+        """Canonical provenance every model-derived Module must carry."""
+        return {
+            "source_model_id": self.model_id,
+            "source_artifact_id": self.artifact_id,
+            "validation_id": self.validation_id,
+            "transform_profile": dict(profile),
+        }
 
     def with_derivations(
             self, derivation: Mapping[str, Any]) -> ModelArtifact:

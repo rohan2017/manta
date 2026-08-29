@@ -16,6 +16,18 @@ The math path is identical to [`TargetCpp`][manta.TargetCpp] — `densify` +
 the shared kernel emitter — so the numbers match every other backend exactly.
 WASM adds only the marshalling glue.
 
+The generated `Filter` view owns logical model time just like
+`TargetNumpy` and generated C++ filters. `predict(dt)` uses the held time and
+advances it only after a successful kernel call; `predict(dt, {t})` explicitly
+resynchronizes the clock to `t + dt`. `update(..., {t})` may override sample
+time but never advances the clock. Both `dt` and explicit time are validated.
+
+Use `filter.checkpoint()` and `filter.restore(checkpoint)` to move an owned
+`{x, P, time, artifactId}` restart point. Restore validates artifact identity,
+shape, finite values, covariance symmetry/positive-semidefiniteness, and time
+before changing live state. `filter.reset()` restores model defaults and time
+zero.
+
 ## Build
 
 `build.sh` invokes [Emscripten](https://emscripten.org) (`emcc`) to compile

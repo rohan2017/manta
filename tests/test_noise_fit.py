@@ -1,6 +1,7 @@
 """NoiseFit — EKF-innovation NLL fitting of noise σ values."""
 
 import copy
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -81,6 +82,11 @@ def test_noise_fit_derives_accepted_model_revision(fitted):
     evidence = res.evidence(held_out, sensor="imu.accel")
     assert evidence.accepted, evidence.summary()
     assert all(ax.white_fallback for ax in evidence.axes)
+    transferred = replace(
+        evidence,
+        binding=replace(evidence.binding, fitted_model_id="another-model"))
+    with pytest.raises(ValueError, match="different fit/model scope"):
+        res.derive(evidence=transferred)
     derived = res.derive(evidence=evidence)
     assert isinstance(derived, ModelArtifact)
     report = derived.derivation["noise_fit"]

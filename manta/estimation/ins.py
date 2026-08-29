@@ -297,6 +297,13 @@ class _INSSystem:
                     "part with evidence=FitEvidence (FitResult.evidence(...) "
                     "/ NoiseFitResult.evidence(...) / held_out_evidence(...))"
                     f" on the {self.imu_name!r} accelerometer channel")
+            if evidence.binding is None:
+                raise ValueError(
+                    f"INS: ModelForce {owner_name!r} carries unbound fit "
+                    "evidence. Model-aided deployment requires evidence "
+                    "issued by held_out_evidence(...) or a fit result so "
+                    "the fitted/source artifact, profile, datasets, and "
+                    "channel contract are exact")
             if not evidence.accepted:
                 failed = ", ".join(
                     f"{c.criterion}[{c.axis}]={c.value:.4g} (limit {c.limit:.4g})"

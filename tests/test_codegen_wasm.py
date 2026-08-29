@@ -29,7 +29,10 @@ import pytest
 
 from manta import EKF, LQR, Craft, Sim, TargetNumpy, TargetWasm, World
 from manta.fields import GravityField
-from manta.parts import IMU, Mass, PositionSensor, Thruster
+from manta.ir.frames import PartFrame
+from manta.ir.types import Vec3
+from manta.ir.wrench import Wrench
+from manta.parts import IMU, Mass, Part, PositionSensor, Thruster
 
 WASM_TOOLCHAIN_ENV = "MANTA_REQUIRE_WASM_TOOLCHAIN"
 
@@ -420,6 +423,27 @@ def _ekf_world():
     return w
 
 
+class _ClockForce(Part):
+    """Force proportional to world time: exposes a backend pinned at t=0."""
+
+    def update(self, ctx):
+        zero = Vec3[PartFrame].constant((0.0, 0.0, 0.0))
+        return Wrench(
+            force=Vec3[PartFrame].constant((1.0, 0.0, 0.0)) * ctx.t,
+            torque=zero,
+        )
+
+
+def _time_dependent_filter():
+    craft = Craft("clocked")
+    craft.add(Mass("body", mass=1.0, moi=(1.0, 1.0, 1.0)))
+    craft.add(_ClockForce("clock_force"))
+    world = World(name="time_filter")
+    world.add_field(GravityField(g=(0.0, 0.0, 0.0)))
+    world.add_craft(craft)
+    return EKF(world, sensors=[])
+
+
 def _lqr_world():
     """A 3-thruster body: position + velocity controllable, attitude frozen."""
     c = Craft("drone")
@@ -511,6 +535,152 @@ console.log(JSON.stringify({ x: Array.from(flt.x), P: Array.from(flt.P) }));
     np.testing.assert_allclose(got["x"], ekf.x, atol=1e-9)
     # JS P is the kernel's flat (column-major) covariance.
     np.testing.assert_allclose(got["P"], ekf.P.ravel(order="F"), atol=1e-9)
+
+
+_FILTER_TIME_STUB_FACTORY = r"""
+export default async function () {
+  const buf = new ArrayBuffer(1 << 20);
+  const HEAPF64 = new Float64Array(buf);
+  let top = 16;
+  return {
+    HEAPF64,
+    _malloc(n) { const p = top; top += n; return p; },
+    _free() {},
+    ccall(shim, _ret, _types, [inPtr, outPtr]) {
+      if (globalThis.__FAIL_CALL) throw new Error("injected kernel failure");
+      const e = globalThis.__ENTRIES[shim];
+      const input = inPtr / 8, output = outPtr / 8;
+      const source = (name) => e.in.find((slot) => slot.name === name);
+      const target = (name) => e.out.find((slot) => slot.name === name);
+      for (const name of ["x", "P"]) {
+        const from = source(name), to = target(name);
+        if (from && to)
+          for (let k = 0; k < from.size; k++)
+            HEAPF64[output + to.off + k] = HEAPF64[input + from.off + k];
+      }
+      const dt = e.in.find((slot) => slot.kind === "timestep");
+      const time = e.in.find((slot) => slot.kind === "time");
+      const x = target("x");
+      if (dt && time && x)
+        HEAPF64[output + x.off] +=
+          HEAPF64[input + dt.off] * HEAPF64[input + time.off];
+      return 0;
+    },
+  };
+}
+"""
+
+
+_FILTER_TIME_STUB_HARNESS = r"""
+import { load, descriptor } from "./filter_rt.mjs";
+globalThis.__ENTRIES = Object.fromEntries(
+  descriptor.entryPoints.map((entry) => [entry.shim, entry]));
+globalThis.__FAIL_CALL = false;
+const filter = (await load()).filter();
+filter.predict(0.5);                    // default t = 0
+filter.predict(0.25, { t: 4.0 });       // explicit resync -> 4.25
+const checkpoint = filter.checkpoint();
+const ownedX = checkpoint.x.slice();
+checkpoint.x[0] += 100;                 // checkpoint cannot alias runtime
+const checkpoint2 = filter.checkpoint();
+filter.predict(0.5);                    // default t = 4.25
+const advanced = { x0: filter.x[0], time: filter.time };
+filter.restore(checkpoint2);
+checkpoint2.x[0] += 100;                // restore must own the input
+const restored = { x0: filter.x[0], time: filter.time };
+
+const beforeFailure = filter.checkpoint();
+globalThis.__FAIL_CALL = true;
+let kernelFailure = false;
+try { filter.predict(0.1); } catch (error) { kernelFailure = true; }
+globalThis.__FAIL_CALL = false;
+
+let invalidCount = 0;
+for (const operation of [
+  () => filter.predict(0),
+  () => filter.predict(Number.NaN),
+  () => filter.predict(0.1, { t: Number.POSITIVE_INFINITY }),
+  () => filter.predict(Number.MAX_VALUE, { t: Number.MAX_VALUE }),
+  () => filter.update("gps.position", [0, 0, 0],
+                      { t: Number.POSITIVE_INFINITY }),
+  () => filter.restore({ ...beforeFailure, artifactId: "wrong" }),
+  () => filter.restore({ ...beforeFailure, time: Number.NaN }),
+  () => filter.restore({ ...beforeFailure, x: [0] }),
+  () => {
+    const negative = beforeFailure.P.slice(); negative[0] = -1;
+    filter.restore({ ...beforeFailure, P: negative });
+  },
+]) {
+  try { operation(); } catch (error) { invalidCount++; }
+}
+const atomic = filter.time === beforeFailure.time
+  && filter.x[0] === beforeFailure.x[0]
+  && filter.P[0] === beforeFailure.P[0];
+filter.reset();
+console.log(JSON.stringify({
+  owned: ownedX[0] !== checkpoint.x[0] && restored.x0 !== checkpoint2.x[0],
+  checkpointTime: checkpoint.time,
+  advanced, restored, kernelFailure, invalidCount, atomic,
+  failureTime: beforeFailure.time, resetTime: filter.time,
+}));
+"""
+
+
+def test_wasm_filter_held_time_checkpoint_and_validation(tmp_path: Path):
+    """The JS view owns logical time and fails atomically at its boundary."""
+    _require_wasm_toolchain("node")
+    result = TargetWasm(EKF(_ekf_world()), tmp_path, class_name="Filter")
+    (tmp_path / "filter.mjs").write_text(_FILTER_TIME_STUB_FACTORY)
+    (tmp_path / "filter_rt.mjs").write_text(result.js.read_text())
+    (tmp_path / "run.mjs").write_text(_FILTER_TIME_STUB_HARNESS)
+    process = subprocess.run(
+        ["node", str(tmp_path / "run.mjs")], cwd=tmp_path,
+        capture_output=True, text=True, check=False)
+    assert process.returncode == 0, process.stderr
+    got = json.loads(process.stdout.strip().splitlines()[-1])
+    assert got["checkpointTime"] == pytest.approx(4.25)
+    assert got["advanced"] == pytest.approx({"x0": 3.125, "time": 4.75})
+    assert got["restored"] == pytest.approx({"x0": 1.0, "time": 4.25})
+    assert got["owned"]
+    assert got["kernelFailure"]
+    assert got["invalidCount"] == 9
+    assert got["atomic"]
+    assert got["failureTime"] == pytest.approx(4.25)
+    assert got["resetTime"] == 0.0
+
+
+def test_wasm_time_dependent_filter_matches_numpy(tmp_path: Path):
+    """A time-dependent world catches any backend that silently sends t=0."""
+    numpy_filter = TargetNumpy(_time_dependent_filter())
+    numpy_filter.predict(0.1)
+    numpy_filter.predict(0.2, t=2.0)
+    checkpoint = numpy_filter.checkpoint()
+    numpy_filter.predict(0.1)
+    advanced = numpy_filter.checkpoint()
+    numpy_filter.restore(checkpoint)
+    numpy_filter.predict(0.1)
+
+    result = TargetWasm(
+        _time_dependent_filter(), tmp_path, class_name="TimeFilter")
+    harness = """
+import { load } from "./timefilter_rt.mjs";
+const filter = (await load()).filter();
+filter.predict(0.1);
+filter.predict(0.2, { t: 2.0 });
+const checkpoint = filter.checkpoint();
+filter.predict(0.1);
+const advancedTime = filter.time;
+filter.restore(checkpoint);
+filter.predict(0.1);
+console.log(JSON.stringify({ x: Array.from(filter.x), P: Array.from(filter.P),
+                             time: filter.time, advancedTime }));
+"""
+    got = _emcc_node(tmp_path, result, "timefilter", harness)
+    np.testing.assert_allclose(got["x"], numpy_filter.x, atol=1e-9)
+    np.testing.assert_allclose(
+        got["P"], numpy_filter.P.ravel(order="F"), atol=1e-9)
+    assert got["time"] == pytest.approx(numpy_filter.time)
+    assert got["advancedTime"] == pytest.approx(advanced.time)
 
 
 def test_wasm_regulator_roundtrip(tmp_path: Path):

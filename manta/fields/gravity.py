@@ -12,6 +12,8 @@ Shipped disturbances:
 
 from __future__ import annotations
 
+from typing import Any
+
 import casadi as ca
 
 from ..ir.frames import WorldFrame
@@ -67,7 +69,7 @@ class GravityField(SuperposedField):
         return self.add(UniformGravity(g_vec))
 
 
-def gravity_at(ctx, point):
+def gravity_at(ctx: Any, point: Any) -> Vec3[WorldFrame]:
     """g(point) from the World's registered GravityField.
 
     The World refuses to resolve without a gravity declaration (see

@@ -102,7 +102,7 @@ def is_promoted(value) -> bool:
     return hasattr(value, "_mx")
 
 
-def scalar_mx(value):
+def scalar_mx(value: Any) -> Any:
     """A possibly-promoted scalar attribute (or `ctx.dt`) as a raw MX
     node: the bound symbol when promoted, else a constant. The single
     home of the promoted-scalar read idiom — every part's compile-time

@@ -140,11 +140,6 @@ class NumpySim(NumpyRuntime):
             self._sim_state = self.initial_state()
         return self._sim_state
 
-    @property
-    def time(self) -> float:
-        """Current logical time shared by the spatial and coupled models."""
-        return self._t
-
     @state.setter
     def state(self, value: dict) -> None:
         if not isinstance(value, dict):
@@ -162,6 +157,11 @@ class NumpySim(NumpyRuntime):
                 f"individual slots.")
         self._check_state_keys(flat)
         self._sim_state = value
+
+    @property
+    def time(self) -> float:
+        """Current logical time shared by the spatial and coupled models."""
+        return self._t
 
     def model_state(self) -> dict[str, dict[str, Any]]:
         """Only manifold state slots, excluding commands/noise placeholders."""

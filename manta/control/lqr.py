@@ -319,7 +319,16 @@ class LQR:
                                      returns=("u",)),),
             kind=ModuleKind.REGULATOR,
             hosting=Hosting.THREADED,
-            metadata={"controller_id": self.controller_id})
+            metadata={
+                **sys.model.transform_metadata({
+                    "transform": "lqr",
+                    "discretization": sys.discretization,
+                    "tracked": tuple(sys.tracked),
+                    "inputs": tuple(sys.input_names),
+                    "dt": self.dt,
+                }),
+                "controller_id": self.controller_id,
+            })
 
     def module(self) -> Module:
         """The typed `Module` IR a backend lowers."""

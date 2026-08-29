@@ -169,7 +169,12 @@ class Sim:
                 "step", "step", tuple(eargs),
                 writes=("x",), returns=tuple(sensor_fulls)),),
             kind=ModuleKind.SIMULATOR,
-            hosting=Hosting.THREADED)
+            hosting=Hosting.THREADED,
+            metadata=self.model.transform_metadata({
+                "transform": "simulator",
+                "discretization": sys.discretization,
+                "parameters": tuple(p.full for p in sys.param_specs),
+            }))
 
     def deploy_module(self) -> Module:
         """The **deploy** Module (runs on a robot against real sensors):
@@ -221,7 +226,12 @@ class Sim:
             name=self.world.name, state=StateLayout((x_field,)),
             ports=tuple(ports), functions=functions,
             entry_points=tuple(entries), kind=ModuleKind.KERNEL,
-            hosting=Hosting.THREADED)
+            hosting=Hosting.THREADED,
+            metadata=self.model.transform_metadata({
+                "transform": "deploy_model",
+                "discretization": sys.discretization,
+                "parameters": tuple(p.full for p in sys.param_specs),
+            }))
 
     def __repr__(self) -> str:
         names = ", ".join(c.name for c in self.crafts)

@@ -35,7 +35,15 @@ import numpy as np
 
 from ..ir._names import resolve_suffix
 from ..ir.module import PortRef, Role
-from ._common import Window, pack_u_trace, pack_x0, resolve_traces
+from ._common import (
+    DEFAULT_FILL_POLICY_ID,
+    FitDefaultFill,
+    Window,
+    default_fills_for_window,
+    pack_u_trace,
+    pack_x0,
+    resolve_traces,
+)
 
 # The process-noise vocabulary: the `Noise.kind` strings of `WhiteNoise`,
 # `GaussMarkovNoise`, and `RandomWalkNoise` (manta.parts._declarations).
@@ -307,6 +315,76 @@ class AcceptanceCheck:
     passed: bool
 
 
+@dataclass(frozen=True)
+class FitEvidenceBinding:
+    """Exact identity scope in which held-out evidence is valid.
+
+    The opaque configuration/profile identifiers are deliberately generic:
+    Manta binds them but does not interpret vehicle or release policy.
+    Dataset identities are content digests, and the channel contract is the
+    qualified Manta port name, shape, cadence, and caller's optional external
+    schema digest.
+    """
+
+    fitted_model_id: str
+    fitted_artifact_id: str
+    source_model_id: str
+    source_artifact_id: str
+    configuration_id: str
+    profile_id: str
+    training_window_digests: tuple[str, ...]
+    selection_window_digests: tuple[str, ...]
+    acceptance_window_digests: tuple[str, ...]
+    channel_shape: tuple[int, ...]
+    channel_rate_hz: float | None
+    channel_contract_id: str
+
+    def __post_init__(self) -> None:
+        for name in (
+            "fitted_model_id", "fitted_artifact_id", "source_model_id",
+            "source_artifact_id", "configuration_id", "profile_id",
+            "channel_contract_id",
+        ):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value:
+                raise TypeError(f"FitEvidenceBinding.{name} must be a "
+                                "non-empty string")
+        for name in (
+            "training_window_digests", "selection_window_digests",
+            "acceptance_window_digests",
+        ):
+            values = tuple(str(v) for v in getattr(self, name))
+            if any(not value for value in values):
+                raise ValueError(f"FitEvidenceBinding.{name} contains an "
+                                 "empty digest")
+            if len(values) != len(set(values)):
+                raise ValueError(f"FitEvidenceBinding.{name} has duplicates")
+            object.__setattr__(self, name, values)
+        roles = {
+            "training": set(self.training_window_digests),
+            "selection": set(self.selection_window_digests),
+            "acceptance": set(self.acceptance_window_digests),
+        }
+        for first, second in (("training", "selection"),
+                              ("training", "acceptance"),
+                              ("selection", "acceptance")):
+            overlap = roles[first] & roles[second]
+            if overlap:
+                raise ValueError(
+                    f"FitEvidenceBinding datasets overlap between {first} "
+                    f"and {second}: {sorted(overlap)}")
+        shape = tuple(int(v) for v in self.channel_shape)
+        if not shape or any(v <= 0 for v in shape):
+            raise ValueError("FitEvidenceBinding.channel_shape must be "
+                             "non-empty and positive")
+        object.__setattr__(self, "channel_shape", shape)
+        if self.channel_rate_hz is not None:
+            object.__setattr__(self, "channel_rate_hz", _finite(
+                self.channel_rate_hz,
+                name="FitEvidenceBinding.channel_rate_hz", minimum=0.0,
+                strict=True))
+
+
 def _evaluate_checks(axes: Sequence[AxisFitEvidence],
                      criteria: FitAcceptanceCriteria
                      ) -> tuple[AcceptanceCheck, ...]:
@@ -340,7 +418,8 @@ class FitEvidence:
     pure function of ``axes`` and ``criteria`` and construction refuses any
     other value. The artifact is a frozen dataclass of scalars, strings and
     tuples, so `ModelArtifact`'s canonical derivation hashing covers it
-    field by field.
+    field by field. Missing-window substitutions are carried separately as
+    ``default_fills`` and never participate in acceptance checks.
     """
 
     channel: str
@@ -349,6 +428,9 @@ class FitEvidence:
     criteria: FitAcceptanceCriteria
     checks: tuple[AcceptanceCheck, ...]
     accepted: bool
+    binding: FitEvidenceBinding | None = None
+    default_fill_policy_id: str = DEFAULT_FILL_POLICY_ID
+    default_fills: tuple[FitDefaultFill, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.channel, str) or not self.channel:
@@ -377,11 +459,66 @@ class FitEvidence:
             raise ValueError(
                 "FitEvidence.accepted is derived from the acceptance criteria "
                 f"({derived}); it cannot be set by the caller")
+        if self.binding is not None:
+            if not isinstance(self.binding, FitEvidenceBinding):
+                raise TypeError("FitEvidence.binding must be a "
+                                "FitEvidenceBinding or None")
+            if (self.binding.acceptance_window_digests
+                    != self.held_out.window_digests):
+                raise ValueError("FitEvidence binding does not name its exact "
+                                 "held-out acceptance windows")
+        if self.default_fill_policy_id != DEFAULT_FILL_POLICY_ID:
+            raise ValueError(
+                "FitEvidence.default_fill_policy_id is unsupported"
+            )
+        fills = tuple(self.default_fills)
+        if not all(isinstance(fill, FitDefaultFill) for fill in fills):
+            raise TypeError(
+                "FitEvidence.default_fills must contain FitDefaultFill records"
+            )
+        fills = tuple(sorted(
+            fills,
+            key=lambda fill: (
+                fill.dataset_role, fill.window_digest, fill.source, fill.name
+            ),
+        ))
+        identities = tuple(
+            (fill.dataset_role, fill.window_digest, fill.source, fill.name)
+            for fill in fills
+        )
+        if len(set(identities)) != len(identities):
+            raise ValueError("FitEvidence.default_fills contains duplicates")
+        if self.binding is not None:
+            digests = {
+                "training": set(self.binding.training_window_digests),
+                "selection": set(self.binding.selection_window_digests),
+                "acceptance": set(self.binding.acceptance_window_digests),
+            }
+            if any(
+                fill.window_digest not in digests[fill.dataset_role]
+                for fill in fills
+            ):
+                raise ValueError(
+                    "FitEvidence.default_fills names a window outside its "
+                    "bound dataset role"
+                )
+        elif any(
+            fill.dataset_role != "acceptance"
+            or fill.window_digest not in self.held_out.window_digests
+            for fill in fills
+        ):
+            raise ValueError(
+                "unbound FitEvidence.default_fills may name only its "
+                "held-out acceptance windows"
+            )
+        object.__setattr__(self, "default_fills", fills)
 
     @classmethod
     def evaluate(cls, *, channel: str, held_out: HeldOutWindow,
                  axes: Sequence[AxisFitEvidence],
-                 criteria: FitAcceptanceCriteria | None = None
+                 criteria: FitAcceptanceCriteria | None = None,
+                 binding: FitEvidenceBinding | None = None,
+                 default_fills: Sequence[FitDefaultFill] = (),
                  ) -> FitEvidence:
         """Build the artifact, deciding ``accepted`` from ``criteria``
         (default :class:`FitAcceptanceCriteria`)."""
@@ -390,7 +527,8 @@ class FitEvidence:
         checks = _evaluate_checks(axes, criteria)
         return cls(channel=channel, held_out=held_out, axes=axes,
                    criteria=criteria, checks=checks,
-                   accepted=all(c.passed for c in checks))
+                   accepted=all(c.passed for c in checks), binding=binding,
+                   default_fills=tuple(default_fills))
 
     @property
     def failed_checks(self) -> tuple[AcceptanceCheck, ...]:
@@ -599,7 +737,16 @@ def held_out_evidence(model, windows: Sequence[Window], *, sensor: str,
                       criteria: FitAcceptanceCriteria | None = None,
                       lag_count: int = 20,
                       correlation_confidence: float = 0.99,
-                      training: Sequence[str] = ()) -> FitEvidence:
+                      training: Sequence[str] = (),
+                      selection: Sequence[str] = (),
+                      source_model_id: str | None = None,
+                      source_artifact_id: str | None = None,
+                      configuration_id: str | None = None,
+                      profile_id: str = "manta.held_out_replay.v1",
+                      channel_contract_id: str | None = None,
+                      training_default_fills: Sequence[FitDefaultFill] = (),
+                      selection_default_fills: Sequence[FitDefaultFill] = (),
+                      ) -> FitEvidence:
     """Compute :class:`FitEvidence` for ``sensor`` on untouched held-out
     windows.
 
@@ -624,6 +771,16 @@ def held_out_evidence(model, windows: Sequence[Window], *, sensor: str,
         training — content digests (`window_digest`) of the windows the
                    fit was solved on; a held-out window among them is
                    refused (the acceptance set must be untouched).
+        selection — content digests used to choose the model/profile. They
+                   must be disjoint from both training and acceptance.
+        source_model_id/source_artifact_id — identity of the pre-fit source;
+                   defaults to the evaluated model for direct replay.
+        configuration_id/profile_id — opaque identities supplied by the
+                   integration layer. Manta binds but does not interpret
+                   their policy.
+        channel_contract_id — optional external schema/frame/unit digest.
+                   The Manta channel name, shape, and cadence are always
+                   bound separately.
     """
     from ..estimation.consistency import chi2_quantile
     from ..sim import Sim
@@ -640,7 +797,13 @@ def held_out_evidence(model, windows: Sequence[Window], *, sensor: str,
             "held_out_evidence correlation_confidence must lie in (0, 1), "
             f"got {correlation_confidence!r}")
     chi2_limit = float(chi2_quantile(2, confidence))
+    training = tuple(str(value) for value in training)
+    selection = tuple(str(value) for value in selection)
     training_set = set(training)
+    selection_set = set(selection)
+    if training_set & selection_set:
+        raise ValueError("held_out_evidence: training and selection datasets "
+                         "must be distinct")
     digests = []
     for index, w in enumerate(windows):
         if not isinstance(w, Window):
@@ -652,6 +815,11 @@ def held_out_evidence(model, windows: Sequence[Window], *, sensor: str,
                 f"held_out_evidence: windows[{index}] is a training window "
                 "(same content) — the acceptance set must be untouched by "
                 "the fit")
+        if digest in selection_set:
+            raise ValueError(
+                f"held_out_evidence: windows[{index}] is a selection window "
+                "(same content) — the acceptance set must be untouched by "
+                "model/profile selection")
         digests.append(digest)
     dts = {float(w.dt) for w in windows}
     if len(dts) != 1:
@@ -667,7 +835,8 @@ def held_out_evidence(model, windows: Sequence[Window], *, sensor: str,
     meas_names = [pt.name for pt in module.ports_by_role(Role.MEASUREMENT)]
     full = resolve_suffix(sensor, meas_names, label="sensor",
                           who="held_out_evidence")
-    dim = module.port(full).size
+    channel_port = module.port(full)
+    dim = channel_port.size
     dims = {n: module.port(n).size for n in meas_names}
     u_fields = module.port("u").fields
     n_noise = module.port("noise").size
@@ -677,6 +846,7 @@ def held_out_evidence(model, windows: Sequence[Window], *, sensor: str,
 
     axis_names = _AXES3 if dim == 3 else tuple(str(i) for i in range(dim))
     segments: list[list[np.ndarray]] = [[] for _ in range(dim)]
+    default_fills = [*training_default_fills, *selection_default_fills]
     total = 0
     for index, w in enumerate(windows):
         traces, K = resolve_traces(w.z, meas_names, dims,
@@ -691,6 +861,16 @@ def held_out_evidence(model, windows: Sequence[Window], *, sensor: str,
                 f"autocorrelation fit over {lag_count} lags needs more than "
                 f"{lag_count}")
         x0 = pack_x0(sim.world, spec, w)
+        default_fills.extend(default_fills_for_window(
+            sim.world,
+            spec,
+            w,
+            dataset_role="acceptance",
+            window_digest=digests[index],
+            input_names=[field.name for field in u_fields],
+            input_defaults=[field.default for field in u_fields],
+            input_fields=u_fields,
+        ))
         U = pack_u_trace(
             w.u, [f.name for f in u_fields],
             [float(np.asarray(f.default).ravel()[0]) for f in u_fields],
@@ -730,8 +910,35 @@ def held_out_evidence(model, windows: Sequence[Window], *, sensor: str,
             for i in range(dim)]
     held = HeldOutWindow(window_count=len(windows), sample_count=total,
                          dt=dt, window_digests=tuple(digests))
+    evaluated = sim.model
+    source_model_id = evaluated.model_id if source_model_id is None \
+        else source_model_id
+    source_artifact_id = evaluated.artifact_id \
+        if source_artifact_id is None else source_artifact_id
+    configuration_id = evaluated.model_id if configuration_id is None \
+        else configuration_id
+    if channel_contract_id is None:
+        contract = repr((full, channel_port.role.value, channel_port.shape,
+                         channel_port.rate)).encode()
+        channel_contract_id = hashlib.sha256(
+            b"manta-channel-contract-v1\0" + contract).hexdigest()
+    binding = FitEvidenceBinding(
+        fitted_model_id=evaluated.model_id,
+        fitted_artifact_id=evaluated.artifact_id,
+        source_model_id=source_model_id,
+        source_artifact_id=source_artifact_id,
+        configuration_id=configuration_id,
+        profile_id=profile_id,
+        training_window_digests=training,
+        selection_window_digests=selection,
+        acceptance_window_digests=tuple(digests),
+        channel_shape=channel_port.shape,
+        channel_rate_hz=channel_port.rate,
+        channel_contract_id=channel_contract_id,
+    )
     return FitEvidence.evaluate(channel=full, held_out=held, axes=axes,
-                                criteria=criteria)
+                                criteria=criteria, binding=binding,
+                                default_fills=default_fills)
 
 
 __all__ = [
@@ -739,7 +946,9 @@ __all__ = [
     "AcceptanceCheck",
     "AxisFitEvidence",
     "FitAcceptanceCriteria",
+    "FitDefaultFill",
     "FitEvidence",
+    "FitEvidenceBinding",
     "HeldOutWindow",
     "ProcessNoiseModel",
     "held_out_evidence",

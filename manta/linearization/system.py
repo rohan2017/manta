@@ -141,11 +141,12 @@ class LinearizedSystem:
         # --- compile the tick + classify its I/O ------------------------
         promoted_parameters = self._resolve_parameters(parameters)
         self._compile_tick(world, promoted_parameters)
-        model_function, model_signature = self._canonical_model_tick(
+        model_function, model_signature, model_rates = self._canonical_model_tick(
             world, promoted_parameters)
         self.model = ModelArtifact.from_compiled(
             world, full_spec, model_function, model_signature,
             parameter_names=self._available_parameter_names(),
+            sample_rates=model_rates,
             authoring_world=authoring_world,
             derivation=(MappingProxyType(dict(source_artifact.derivation))
                         if source_artifact is not None else None))
@@ -244,12 +245,12 @@ class LinearizedSystem:
         same physical World a different model-revision identity.
         """
         if not promoted_parameters:
-            return self._cf, self._sig
+            return self._cf, self._sig, self.sample_rates
         from ..tick import compile_world_tick, walk_tick_signature
         compiled = compile_world_tick(world, tunable_params=set())
         function = compiled.casadi_function
         signature = walk_tick_signature(function, world, self.full_spec)
-        return function, signature
+        return function, signature, getattr(compiled, "sample_rates", {})
 
     def _compile_tick(self, world, tunable_params: set[str]) -> None:
         """Compile the shared world tick and walk its signature."""

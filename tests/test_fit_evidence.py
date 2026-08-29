@@ -19,8 +19,10 @@ from manta.fit import (
     AcceptanceCheck,
     AxisFitEvidence,
     FitAcceptanceCriteria,
+    FitDefaultFill,
     FitDerivationReport,
     FitEvidence,
+    FitEvidenceBinding,
     HeldOutWindow,
     ProcessNoiseModel,
     held_out_evidence,
@@ -28,7 +30,7 @@ from manta.fit import (
     window_digest,
 )
 from manta.model import canonical_derivation_bytes
-from manta.parts import IMU, Mass
+from manta.parts import IMU, Mass, Thruster
 
 DT = 0.01
 
@@ -87,6 +89,21 @@ def test_held_out_window_names_every_window():
     with pytest.raises(ValueError, match="dt"):
         HeldOutWindow(1, 100, 0.0, ("a",))
     assert _held().duration_s == pytest.approx(20.0)
+
+
+def test_binding_refuses_dataset_role_overlap():
+    with pytest.raises(ValueError, match="overlap between training and acceptance"):
+        FitEvidenceBinding(
+            fitted_model_id="fitted-model",
+            fitted_artifact_id="fitted-artifact",
+            source_model_id="source-model",
+            source_artifact_id="source-artifact",
+            configuration_id="configuration", profile_id="profile",
+            training_window_digests=("same",),
+            selection_window_digests=(),
+            acceptance_window_digests=("same",),
+            channel_shape=(3,), channel_rate_hz=100.0,
+            channel_contract_id="channel-contract")
 
 
 def test_axis_evidence_fallback_is_never_silent():
@@ -174,6 +191,45 @@ def test_criteria_are_validated():
         FitAcceptanceCriteria(max_residual_rms=0.0)
 
 
+def test_default_fills_are_identity_provenance_not_acceptance_checks():
+    fill = FitDefaultFill(
+        dataset_role="acceptance",
+        window_digest="w0",
+        source="model_control_default",
+        name="c.thruster.throttle",
+        shape=(),
+        values=(0.0,),
+    )
+    held = HeldOutWindow(1, 2000, DT, ("w0",))
+    plain = FitEvidence.evaluate(
+        channel="c.imu.accel", held_out=held,
+        axes=(_axis("x"), _axis("y"), _axis("z")),
+    )
+    filled = FitEvidence.evaluate(
+        channel="c.imu.accel", held_out=held, axes=plain.axes,
+        default_fills=(fill,),
+    )
+    assert plain.accepted and filled.accepted
+    assert all(check.criterion != "default_fill" for check in filled.checks)
+    assert canonical_derivation_bytes({"evidence": plain}) != \
+        canonical_derivation_bytes({"evidence": filled})
+    report = FitDerivationReport(
+        "parameter_fit", "src", 1.0, (), filled, default_fills=(fill,)
+    )
+    assert report.default_fills == (fill,)
+    with pytest.raises(ValueError, match="must match its evidence"):
+        FitDerivationReport("parameter_fit", "src", 1.0, (), filled)
+    with pytest.raises(ValueError, match="must be finite"):
+        FitDefaultFill(
+            dataset_role="training",
+            window_digest="w1",
+            source="model_initial_state",
+            name="c.position",
+            shape=(1,),
+            values=(float("nan"),),
+        )
+
+
 # ---------------------------------------------------------------------------
 # Canonical hashing through ModelArtifact
 # ---------------------------------------------------------------------------
@@ -238,6 +294,12 @@ def _imu_world():
     craft.add(IMU("imu", accel_noise_sigma=0.05))
     world = World("synthetic").add_field(GravityField(g=(0.0, 0.0, -9.81)))
     world.add_craft(craft, position=(0.0, 0.0, 20.0))
+    return world
+
+
+def _controlled_imu_world():
+    world = _imu_world()
+    world.crafts[0].add(Thruster("thruster", force_quad=(0.0, 0.0, 1.0)))
     return world
 
 
@@ -310,6 +372,51 @@ def test_pipeline_records_the_white_fallback_with_its_reason():
         assert ax.fitted_tau is not None        # the fit itself is recorded
         assert abs(ax.white_sigma - 0.05) / 0.05 < 0.15
         assert ax.autocorrelation_rmse < 0.08
+
+
+def test_pipeline_records_every_missing_state_and_control_model_default():
+    world = _controlled_imu_world()
+    complete = _windows(
+        world, n_win=1, K=100, rng=np.random.default_rng(19),
+        bias=np.zeros(3), white=0.05, gm_sigma=0.0, tau=None,
+    )[0]
+    partial = Window(x0={}, u={}, z=complete.z, dt=complete.dt)
+    evidence = held_out_evidence(
+        world, [partial], sensor="imu.accel", lag_count=10
+    )
+    explicit = held_out_evidence(
+        world,
+        [Window(
+            x0=complete.x0,
+            u={"thruster.throttle": 0.0},
+            z=complete.z,
+            dt=complete.dt,
+        )],
+        sensor="imu.accel",
+        lag_count=10,
+    )
+
+    assert evidence.accepted == explicit.accepted
+    assert evidence.checks == explicit.checks
+    fills = evidence.default_fills
+    assert {fill.dataset_role for fill in fills} == {"acceptance"}
+    assert {fill.window_digest for fill in fills} == {window_digest(partial)}
+    controls = [
+        fill for fill in fills if fill.source == "model_control_default"
+    ]
+    states = [fill for fill in fills if fill.source == "model_initial_state"]
+    assert [(fill.name, fill.shape, fill.values) for fill in controls] == [
+        ("c.thruster.throttle", (), (0.0,))
+    ]
+    assert {fill.name for fill in states} == {
+        "c.angular_velocity", "c.orientation", "c.position", "c.velocity"
+    }
+    assert tuple(fills) == tuple(sorted(
+        fills,
+        key=lambda fill: (
+            fill.dataset_role, fill.window_digest, fill.source, fill.name
+        ),
+    ))
 
 
 def test_pipeline_rejects_a_biased_model_by_the_declared_criteria():

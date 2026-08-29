@@ -42,6 +42,7 @@ meaningful once the mean model is right.
 from __future__ import annotations
 
 import copy
+import hashlib
 
 import casadi as ca
 import numpy as np
@@ -57,13 +58,14 @@ from ..ir._linalg import spd_logdet, spd_solve
 from ..ir._names import resolve_suffix
 from ..ir.state_spec import flatten_nested
 from ..linearization import LinearizedSystem
-from ..model import ModelArtifact
+from ..model import ModelArtifact, canonical_derivation_bytes
 from ._common import (
     Prior,
     Window,
     _FitBlock,
     convergence_line,
     decision_bounds,
+    default_fills_for_window,
     expand_or_none,
     format_table,
     laplace_sigma,
@@ -147,9 +149,11 @@ class NoiseFitResult:
     expanded: bool = True
 
     def __init__(self, channels, s_opt, hessian, objective, stats,
-                 world, source_artifact_id, source_derivation) -> None:
+                 world, source_model_id, source_artifact_id,
+                 source_derivation) -> None:
         self._channels = channels
         self._world = world
+        self._source_model_id = source_model_id
         self._source_artifact_id = source_artifact_id
         self._source_derivation = dict(source_derivation)
         self.s = np.asarray(s_opt, dtype=float).ravel()
@@ -163,6 +167,13 @@ class NoiseFitResult:
         # eigh-based: a non-PD direction (indefinite/near-singular Laplace
         # Hessian) reports inf — never a fake "perfectly identified" 0.
         self.posterior_sigma = laplace_sigma(hessian)
+        self._profile_id = hashlib.sha256(
+            b"manta-noise-fit-profile-v1\0" + canonical_derivation_bytes({
+                "source_model_id": self._source_model_id,
+                "source_artifact_id": self._source_artifact_id,
+                "objective": self.objective,
+                "values": self.values,
+            })).hexdigest()
 
     def apply(self) -> None:
         """Write the fitted σ back onto the owning parts
@@ -220,25 +231,95 @@ class NoiseFitResult:
             setattr(owner, attr, value)
         return derived
 
-    def evidence(self, held_out: list[Window], *, sensor: str,
-                 criteria: FitAcceptanceCriteria | None = None,
-                 lag_count: int = 20) -> FitEvidence:
-        """Held-out evidence for the fitted model (see `held_out_evidence`);
-        windows that entered the fit are refused."""
-        return held_out_evidence(
-            self.fitted_world(), held_out, sensor=sensor, criteria=criteria,
-            lag_count=lag_count, training=self._training_digests)
-
-    def derive(self, *, evidence: FitEvidence | None = None):
-        """Return a structurally validated model revision carrying the
-        typed held-out evidence (or none — visibly unaccepted)."""
+    def _candidate_artifact(self):
         from ..sim import Sim
         artifact = Sim(self.fitted_world()).model
         if self._source_derivation:
             artifact = artifact.with_derivations(self._source_derivation)
+        return artifact
+
+    def evidence(self, held_out: list[Window], *, sensor: str,
+                 criteria: FitAcceptanceCriteria | None = None,
+                 lag_count: int = 20,
+                 selection: list[Window] = (),
+                 configuration_id: str | None = None,
+                 channel_contract_id: str | None = None) -> FitEvidence:
+        """Held-out evidence for the fitted model (see `held_out_evidence`);
+        windows that entered the fit are refused."""
+        from ..sim import Sim
+
+        candidate = self._candidate_artifact()
+        candidate_sim = Sim(candidate)
+        candidate_module = candidate_sim.module()
+        candidate_u_fields = candidate_module.port("u").fields
+        selection_digests = tuple(window_digest(w) for w in selection)
+        selection_default_fills = tuple(
+            fill
+            for window, digest in zip(selection, selection_digests, strict=True)
+            for fill in default_fills_for_window(
+                candidate_sim.world,
+                candidate_module.spec,
+                window,
+                dataset_role="selection",
+                window_digest=digest,
+                input_names=[field.name for field in candidate_u_fields],
+                input_defaults=[field.default for field in candidate_u_fields],
+                input_fields=candidate_u_fields,
+            )
+        )
+        return held_out_evidence(
+            candidate, held_out, sensor=sensor,
+            criteria=criteria, lag_count=lag_count,
+            training=self._training_digests,
+            selection=selection_digests,
+            source_model_id=self._source_model_id,
+            source_artifact_id=self._source_artifact_id,
+            configuration_id=(self._source_model_id
+                              if configuration_id is None
+                              else configuration_id),
+            profile_id=self._profile_id,
+            channel_contract_id=channel_contract_id,
+            training_default_fills=self._training_default_fills,
+            selection_default_fills=selection_default_fills)
+
+    def derive(self, *, evidence: FitEvidence | None = None):
+        """Return a structurally validated model revision carrying the
+        typed held-out evidence (or none — visibly unaccepted)."""
+        artifact = self._candidate_artifact()
+        if evidence is not None:
+            if not isinstance(evidence, FitEvidence):
+                raise TypeError("NoiseFitResult.derive evidence must be a "
+                                "FitEvidence")
+            binding = evidence.binding
+            if binding is None:
+                raise ValueError("NoiseFitResult.derive refuses unbound "
+                                 "evidence; use this result's evidence(...) "
+                                 "method")
+            expected = {
+                "fitted_model_id": artifact.model_id,
+                "fitted_artifact_id": artifact.artifact_id,
+                "source_model_id": self._source_model_id,
+                "source_artifact_id": self._source_artifact_id,
+                "profile_id": self._profile_id,
+                "training_window_digests": self._training_digests,
+            }
+            mismatch = [name for name, value in expected.items()
+                        if getattr(binding, name) != value]
+            evidence_training_fills = tuple(
+                fill for fill in evidence.default_fills
+                if fill.dataset_role == "training"
+            )
+            if evidence_training_fills != self._training_default_fills:
+                mismatch.append("training_default_fills")
+            if mismatch:
+                raise ValueError("NoiseFitResult.derive evidence was issued "
+                                 "for a different fit/model scope: "
+                                 f"{', '.join(mismatch)}")
         report = derivation_report(
             "noise_fit", self._source_artifact_id, self.objective,
-            self.values, evidence)
+            self.values, evidence,
+            (self._training_default_fills if evidence is None
+             else evidence.default_fills))
         return artifact.with_derivation("noise_fit", report)
 
     def summary(self) -> str:
@@ -485,10 +566,37 @@ class NoiseFit:
         hessian = np.asarray(ca.DM(H_fn(s_opt)))
 
         res = NoiseFitResult(self.channels, s_opt, hessian, objective,
-                             stats, self.world, self.sys.model.artifact_id,
+                             stats, self.world, self.sys.model.model_id,
+                             self.sys.model.artifact_id,
                              self.sys.model.derivation)
         res.expanded = expanded
         res._training_digests = tuple(window_digest(w) for w in windows)
+        prediction = (() if self.estimator is None else tuple(
+            self.estimator.module().metadata.get("prediction_inputs", ())
+        ))
+        input_fields = getattr(sys, "input_fields", None)
+        res._training_default_fills = tuple(sorted((
+            fill
+            for window, digest in zip(
+                windows, res._training_digests, strict=True
+            )
+            for fill in default_fills_for_window(
+                self.model_world,
+                spec,
+                window,
+                dataset_role="training",
+                window_digest=digest,
+                input_names=sys.input_names,
+                input_defaults=sys.u_defaults,
+                input_fields=input_fields,
+                recorded_inputs={
+                    **window.u,
+                    **{name: 0.0 for name in prediction},
+                },
+            )
+        ), key=lambda fill: (
+            fill.dataset_role, fill.window_digest, fill.source, fill.name
+        )))
         return res
 
     # ------------------------------------------------------------------

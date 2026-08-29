@@ -35,6 +35,8 @@ backend never mentions a transform.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any, overload
+
 from ...ir.module import ModuleKind
 from ._compile import (
     DEFAULT_COMPILATION_TIMEOUT_S,
@@ -60,6 +62,9 @@ from ._recurrence import NumpyRecurrence
 from ._regulator import NumpyRegulator
 from ._runtime import NumpyRuntime
 from ._sim import NumpySim, SimCheckpoint
+
+if TYPE_CHECKING:
+    from ...sim import Sim
 
 __all__ = [
     "DEFAULT_COMPILATION_TIMEOUT_S",
@@ -89,8 +94,30 @@ __all__ = [
 ]
 
 
+@overload
 def TargetNumpy(
-    x,
+    x: Sim,
+    *,
+    compile: bool = False,
+    optimization: str | None = None,
+    compile_timeout_s: float | None = DEFAULT_COMPILATION_TIMEOUT_S,
+    max_instructions: int | None = DEFAULT_MAX_INSTRUCTIONS,
+) -> NumpySim: ...
+
+
+@overload
+def TargetNumpy(
+    x: Any,
+    *,
+    compile: bool = False,
+    optimization: str | None = None,
+    compile_timeout_s: float | None = DEFAULT_COMPILATION_TIMEOUT_S,
+    max_instructions: int | None = DEFAULT_MAX_INSTRUCTIONS,
+) -> NumpyRuntime: ...
+
+
+def TargetNumpy(
+    x: Any,
     *,
     compile: bool = False,
     optimization: str | None = None,

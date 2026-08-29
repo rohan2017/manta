@@ -18,6 +18,7 @@ from manta.fit import (
     AxisFitEvidence,
     FitAcceptanceCriteria,
     FitEvidence,
+    FitEvidenceBinding,
     HeldOutWindow,
     ProcessNoiseModel,
 )
@@ -46,9 +47,21 @@ def _evidence(*, white_sigma=0.5, gm=(0.2, 2.0), bias=(0.0, 0.0, 0.0),
             correlation_chi2_limit=9.21, white_floor_fraction=0.04, noise_model=model,
             white_sigma=white_sigma, autocorrelation_rmse=0.04,
             white_fallback=fallback, white_fallback_reason=reason))
+    held = HeldOutWindow(2, 600, 0.02, ("w0", "w1"))
+    binding = FitEvidenceBinding(
+        fitted_model_id="test-fitted-model",
+        fitted_artifact_id="test-fitted-artifact",
+        source_model_id="test-source-model",
+        source_artifact_id="test-source-artifact",
+        configuration_id="test-configuration",
+        profile_id="test-profile",
+        training_window_digests=(), selection_window_digests=(),
+        acceptance_window_digests=held.window_digests,
+        channel_shape=(3,), channel_rate_hz=None,
+        channel_contract_id="test-imu-accel-contract")
     return FitEvidence.evaluate(
-        channel=channel, held_out=HeldOutWindow(2, 600, 0.02, ("w0", "w1")),
-        axes=axes, criteria=criteria)
+        channel=channel, held_out=held, axes=axes, criteria=criteria,
+        binding=binding)
 
 
 DEFAULT_EVIDENCE = _evidence()

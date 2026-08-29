@@ -30,6 +30,9 @@ venv/
 __pycache__/
 *.py[cod]
 *.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 # MkDocs build output (homepage web/index.html + web/404.html stay tracked)
 web/docs/

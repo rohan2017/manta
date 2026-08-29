@@ -60,13 +60,22 @@ loops but yields a visibly unaccepted revision; a model-aided
 [`INS`][manta.INS] refuses a [`ModelForce`][manta.parts.ModelForce] built
 without accepted evidence.
 
-## Known limitation: every `Window` needs a trusted `x0`
+## Initial-state and control defaults
 
 The fit's decision vector contains **only the promoted parameters** —
 each window's initial state is a fixed constant of the problem. The
 predicted trajectory is the oracle `step` kernel folded from `x0` over
 the recorded controls, so any error in `x0` is misattributed to the
 parameters being fitted.
+
+Manta permits partial `x0` and `u` mappings for exploratory and sparse-log
+workflows. Missing fields use the model's initial state or declared control
+default. Every substituted field and exact finite value is retained as
+`FitDefaultFill` provenance in the result's derivation report and held-out
+evidence; it does not change the residual acceptance decision. Prefer explicit
+data whenever it exists. `dt` and `t0` are always concrete Window values and
+already participate directly in the window digest, so they are not default-fill
+records.
 
 Where to get a trustworthy `x0`:
 

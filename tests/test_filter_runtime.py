@@ -39,6 +39,7 @@ from manta.fields import GravityField
 from manta.fit import (
     AxisFitEvidence,
     FitEvidence,
+    FitEvidenceBinding,
     HeldOutWindow,
     ProcessNoiseModel,
 )
@@ -88,9 +89,20 @@ def _model_force_evidence():
         white_sigma=0.4, autocorrelation_rmse=0.04, white_fallback=False,
         white_fallback_reason=None)
         for axis, bias in zip("xyz", (0.02, -0.01, 0.03))]
+    held = HeldOutWindow(2, 600, 0.02, ("w0", "w1"))
+    binding = FitEvidenceBinding(
+        fitted_model_id="test-fitted-model",
+        fitted_artifact_id="test-fitted-artifact",
+        source_model_id="test-source-model",
+        source_artifact_id="test-source-artifact",
+        configuration_id="test-configuration", profile_id="test-profile",
+        training_window_digests=(), selection_window_digests=(),
+        acceptance_window_digests=held.window_digests,
+        channel_shape=(3,), channel_rate_hz=None,
+        channel_contract_id="test-imu-accel-contract")
     return FitEvidence.evaluate(
-        channel="drone.imu.accel",
-        held_out=HeldOutWindow(2, 600, 0.02, ("w0", "w1")), axes=axes)
+        channel="drone.imu.accel", held_out=held, axes=axes,
+        binding=binding)
 
 
 def _world(*, inertial: bool = False):

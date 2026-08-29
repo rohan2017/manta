@@ -4,7 +4,7 @@ derivation payload — never of a `repr()` that carries a memory address."""
 from __future__ import annotations
 
 import enum
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 import pytest
@@ -12,7 +12,7 @@ import pytest
 from manta import Craft, Sim, World
 from manta.fields import GravityField
 from manta.model import canonical_derivation_bytes
-from manta.parts import Mass
+from manta.parts import Mass, PositionSensor
 
 
 class _Kind(enum.Enum):
@@ -72,3 +72,41 @@ def test_payloads_without_a_canonical_encoding_are_refused():
         model.with_derivations({"fit": object()})
     # Nothing was attached by a refused call.
     assert dict(model.derivation) == {}
+
+
+def _sensor_model(*, rate=10.0, sigma=0.1):
+    craft = Craft("c")
+    craft.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
+    craft.add(PositionSensor("gps", rate=rate,
+                             position_noise_sigma=sigma))
+    world = World("tick_contract").add_field(
+        GravityField(g=(0.0, 0.0, -9.81)))
+    world.add_craft(craft)
+    return Sim(world)
+
+
+def test_model_identity_binds_cadence_and_noise_tick_contract():
+    base = _sensor_model()
+    assert _sensor_model(rate=20.0).model.model_id != base.model.model_id
+    assert _sensor_model(sigma=0.2).model.model_id != base.model.model_id
+
+
+def test_lowered_module_identity_binds_source_provenance_metadata():
+    base = _sensor_model().model
+    accepted = base.with_derivation("review", {"accepted": True})
+    rejected = base.with_derivation("review", {"accepted": False})
+    first = Sim(accepted).module()
+    second = Sim(rejected).module()
+    assert first.metadata["source_model_id"] == second.metadata["source_model_id"]
+    assert first.metadata["source_artifact_id"] != \
+        second.metadata["source_artifact_id"]
+    assert first.artifact_id != second.artifact_id
+
+
+def test_module_metadata_is_hashed_and_annotations_are_not():
+    module = _sensor_model().module()
+    annotated = replace(module, annotations={"display_name": "GPS model"})
+    changed_contract = replace(
+        module, metadata={**module.metadata, "runtime_contract": "changed"})
+    assert annotated.artifact_id == module.artifact_id
+    assert changed_contract.artifact_id != module.artifact_id

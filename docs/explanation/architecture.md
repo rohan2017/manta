@@ -5,6 +5,14 @@ step. The model is **declarative**; the transforms are **siblings** over
 it, each owning its math and emitting a typed `Module` IR; a `Target*`
 lowers any Module to a backend.
 
+Controllers and estimators remain generic transforms over any suitable
+`World` or `ModelArtifact`; they do not request or perform an operational
+model reduction. A deployment integration layer may fit or reduce a world
+offline, validate it under its own acceptance policy, then pass that accepted
+world to the same Manta APIs. Reusable fitting/reduction mathematics belongs
+in Manta, while vehicle identity, release thresholds, artifact installation,
+and readiness policy remain downstream concerns.
+
 ```
 Model            Transform            Target              Result
 ─────────────────────────────────────────────────────────────────
@@ -56,6 +64,12 @@ has stable content identity, a validated state/input/sensor layout, and an
 editable `world_copy()`. It can be passed directly to another transform. This
 keeps the common workflow deliberately open-ended:
 
+Physical-model identity includes the behavior-relevant tick contract,
+including channel cadence, defaults, and stochastic scale. Every
+model-derived module carries hashed source-model, source-artifact, validation,
+and transform-profile metadata. Descriptive labels may instead use
+`Module.annotations`, the explicitly non-hashed map.
+
 ```python
 sim = Sim(world)                 # revision A
 world.crafts[0].remove("camera")
@@ -93,11 +107,23 @@ A `Target*` lowers a Module to a backend:
   `.update()`/`.predict()`, an LQR Module yields `.control()`.
 - [`TargetCpp`][manta.TargetCpp] → a typed Eigen C++ class over flat-C
   kernels, plus a CMake project, for embedded deployment.
+- [`TargetWasm`][manta.TargetWasm] → the same flat-C kernels behind a
+  browser-facing WebAssembly/JavaScript bundle with the module's typed runtime
+  contract and checkpoint identity.
 - [`TargetJax`][manta.TargetJax] → a jitted JAX rollout.
 
 Backends contain **no per-transform code**: each implements exactly one
 generic lowering of a Module. This is what keeps the numpy and C++ paths
 behaving identically — you own the same driving loop in both.
+
+Target choice is per module, not a deployment-wide build mode. One runtime
+assembly may deliberately combine a compiled physics/controller kernel with an
+interpreted device or analysis kernel, and independently choose optimization
+levels or build deadlines for the compilations it requests. Manta does not
+upgrade, downgrade, or fill in those choices. In particular, failure to produce
+a requested compiled artifact is an explicit build/readiness failure; it does
+not silently turn that request into `TargetNumpy` execution. The integration
+layer validates and runs the artifact assembly it was given.
 
 ## Why error-state, why CasADi
 

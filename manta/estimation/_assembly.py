@@ -208,7 +208,14 @@ def emit_filter_module(sys, spec: StateSpec, *, name: str, x0: np.ndarray,
             writes=("x", "P"), returns=returns))
     # Keep deploy/runtime metadata out of naming conventions. Backends and
     # consumers can inspect this immutable map directly.
-    metadata = {"nis_gates": MappingProxyType(dict(gates))}
+    metadata = sys.model.transform_metadata({
+        "transform": name.rsplit("_", 1)[-1],
+        "discretization": getattr(sys, "discretization", "strapdown"),
+        "tracked": tuple(slot.name for slot in spec.slots),
+        "inputs": tuple(sys.input_names),
+        "sensors": tuple(sys.sensors),
+    })
+    metadata["nis_gates"] = MappingProxyType(dict(gates))
     if metadata_extra:
         overlap = set(metadata) & set(metadata_extra)
         if overlap:

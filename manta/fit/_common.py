@@ -16,6 +16,8 @@ from ..ir.state_spec import flatten_nested
 
 _CALLBACK_IDS = count()
 
+DEFAULT_FILL_POLICY_ID = "manta.model-default-fill.v1"
+
 
 class _BestIterate(ca.Callback):
     """Retain the lowest finite objective IPOPT has actually accepted."""
@@ -157,10 +159,12 @@ class Window:
     Args:
         x0 — nested initial state dict (the `sim.state` shape:
              `{craft: {slot: value}}`). Slots omitted fall back to the
-             world's initial state.
+             world's initial state and are recorded as `FitDefaultFill`
+             provenance.
         u  — recorded controls: `{input name/suffix: scalar | (K,)}`.
              A scalar is held for the whole window; inputs omitted hold
-             their model default.
+             their model default and are recorded as `FitDefaultFill`
+             provenance.
         x  — recorded state trajectories: nested or flat mapping from state
              slot name to `(K, ambient_dim)` values. Row k is the state after
              step k. Only named slots enter `Fit`; quaternion slots are
@@ -177,6 +181,10 @@ class Window:
              sensor needs a trace.
         dt — fixed step, seconds.
         t0 — world-clock time of x0.
+
+    ``dt`` and ``t0`` are always concrete values and are part of
+    :func:`window_digest`; `FitDefaultFill` records only actual model-value
+    substitutions for omitted ``x0`` and ``u`` fields.
     """
     x0: dict
     u: dict = field(default_factory=dict)
@@ -185,6 +193,102 @@ class Window:
     z: dict = field(default_factory=dict)
     dt: float = 0.01
     t0: float = 0.0
+
+
+@dataclass(frozen=True)
+class FitDefaultFill:
+    """One model value substituted for missing fit-window data.
+
+    The record is deliberately numeric and shape-explicit so model artifact
+    provenance has one deterministic JSON representation. ``dataset_role``
+    is one of ``training``, ``selection``, or ``acceptance``; ``source`` is
+    ``model_initial_state`` or ``model_control_default``.
+    """
+
+    dataset_role: str
+    window_digest: str
+    source: str
+    name: str
+    shape: tuple[int, ...]
+    values: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        if self.dataset_role not in {"training", "selection", "acceptance"}:
+            raise ValueError("FitDefaultFill.dataset_role is invalid")
+        if self.source not in {"model_initial_state", "model_control_default"}:
+            raise ValueError("FitDefaultFill.source is invalid")
+        if not isinstance(self.window_digest, str) or not self.window_digest:
+            raise TypeError("FitDefaultFill.window_digest must be non-empty")
+        if not isinstance(self.name, str) or not self.name:
+            raise TypeError("FitDefaultFill.name must be non-empty")
+        shape = tuple(self.shape)
+        values = tuple(float(value) for value in self.values)
+        if any(
+            isinstance(dim, bool) or not isinstance(dim, int) or dim < 0
+            for dim in shape
+        ):
+            raise ValueError("FitDefaultFill.shape is invalid")
+        size = int(np.prod(shape, dtype=int)) if shape else 1
+        if len(values) != size:
+            raise ValueError(
+                "FitDefaultFill.values does not match its declared shape"
+            )
+        if not all(np.isfinite(value) for value in values):
+            raise ValueError("FitDefaultFill.values must be finite")
+        object.__setattr__(self, "shape", shape)
+        object.__setattr__(self, "values", values)
+
+
+def default_fills_for_window(
+    world,
+    spec,
+    window: Window,
+    *,
+    dataset_role: str,
+    window_digest: str,
+    input_names: list[str],
+    input_defaults,
+    input_fields=None,
+    recorded_inputs: dict | None = None,
+) -> tuple[FitDefaultFill, ...]:
+    """Describe every fallback used when packing one fit window."""
+
+    def record(source: str, name: str, value) -> FitDefaultFill:
+        array = np.asarray(value, dtype=float)
+        return FitDefaultFill(
+            dataset_role=dataset_role,
+            window_digest=window_digest,
+            source=source,
+            name=name,
+            shape=tuple(int(dim) for dim in array.shape),
+            values=tuple(float(item) for item in array.ravel()),
+        )
+
+    base_state = flatten_nested(world._initial_state_dict())
+    supplied_state = flatten_nested(window.x0)
+    fills = [
+        record("model_initial_state", slot.name, base_state[slot.name])
+        for slot in sorted(spec.slots, key=lambda item: item.name)
+        if slot.name not in supplied_state
+    ]
+
+    supplied_inputs = window.u if recorded_inputs is None else recorded_inputs
+    supplied_full = {
+        resolve_suffix(key, input_names, label="input", who="fit provenance")
+        for key in supplied_inputs
+    }
+    if input_fields is None:
+        fields = tuple(zip(input_names, input_defaults, strict=True))
+    else:
+        fields = tuple(
+            (field.name, field.default) for field in input_fields
+        )
+    fills.extend(
+        record("model_control_default", name, default)
+        for name, default in sorted(fields)
+        if name not in supplied_full
+    )
+    return tuple(fills)
 
 
 # ---------------------------------------------------------------------------

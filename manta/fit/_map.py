@@ -66,13 +66,14 @@ EKF-innovation-likelihood fitter — after applying this fit's result.
 from __future__ import annotations
 
 import copy
+from hashlib import sha256
 
 import casadi as ca
 import numpy as np
 
 from ..ir._names import resolve_suffix
 from ..ir.module import PortRef, Role
-from ..model import ModelArtifact
+from ..model import ModelArtifact, canonical_derivation_bytes
 from ..sim import Sim
 from ._common import (
     Free,
@@ -82,6 +83,7 @@ from ._common import (
     _FitBlock,
     convergence_line,
     decision_bounds,
+    default_fills_for_window,
     expand_or_none,
     format_table,
     laplace_sigma,
@@ -252,13 +254,14 @@ class FitResult:
     expanded: bool = True
 
     def __init__(self, blocks, fields, tie_sources, v_opt, p_opt, JtJ,
-                 objective, stats, world, source_artifact_id,
+                 objective, stats, world, source_model_id, source_artifact_id,
                  source_derivation, *, posterior_computed: bool,
                  initial_objective: float) -> None:
         self._blocks = blocks
         self._fields = fields              # [(full, dim)] in port order
         self._tie_sources = tie_sources    # {tied full: source name}
         self._world = world
+        self._source_model_id = source_model_id
         self._source_artifact_id = source_artifact_id
         self._source_derivation = dict(source_derivation)
         self.v = np.asarray(v_opt, dtype=float).ravel()
@@ -312,6 +315,13 @@ class FitResult:
         self.posterior_sigma = (
             laplace_sigma(JtJ + np.diag(prior_prec))
             if posterior_computed else np.full_like(self.prior_sigma, np.nan))
+        self._profile_id = sha256(
+            b"manta-parameter-fit-profile-v1\0" + canonical_derivation_bytes({
+                "source_model_id": self._source_model_id,
+                "source_artifact_id": self._source_artifact_id,
+                "objective": self.objective,
+                "values": self.values,
+            })).hexdigest()
 
     def weak_directions(self, k: int = 3):
         """The `k` least-informed directions of the DATA alone: list of
@@ -382,18 +392,59 @@ class FitResult:
             setattr(part, name, value)
         return derived
 
+    def _candidate_artifact(self):
+        """The exact pre-evidence fitted artifact the replay evaluates."""
+        from ..sim import Sim
+        artifact = Sim(self.fitted_world()).model
+        if self._source_derivation:
+            artifact = artifact.with_derivations(self._source_derivation)
+        return artifact
+
     def evidence(self, held_out: list[Window], *, sensor: str,
                  criteria: FitAcceptanceCriteria | None = None,
-                 lag_count: int = 20) -> FitEvidence:
+                 lag_count: int = 20,
+                 selection: list[Window] = (),
+                 configuration_id: str | None = None,
+                 channel_contract_id: str | None = None) -> FitEvidence:
         """Held-out evidence for the fitted model (see `held_out_evidence`).
 
         ``held_out`` must be untouched by the fit: any window whose content
         matches a training window is refused. The result is what
         `derive(evidence=...)` attaches and what a `ModelForce` consumes.
         """
+        candidate = self._candidate_artifact()
+        candidate_sim = Sim(candidate)
+        candidate_module = candidate_sim.module()
+        candidate_u_fields = candidate_module.port("u").fields
+        selection_digests = tuple(window_digest(w) for w in selection)
+        selection_default_fills = tuple(
+            fill
+            for window, digest in zip(selection, selection_digests, strict=True)
+            for fill in default_fills_for_window(
+                candidate_sim.world,
+                candidate_module.spec,
+                window,
+                dataset_role="selection",
+                window_digest=digest,
+                input_names=[field.name for field in candidate_u_fields],
+                input_defaults=[field.default for field in candidate_u_fields],
+                input_fields=candidate_u_fields,
+            )
+        )
         return held_out_evidence(
-            self.fitted_world(), held_out, sensor=sensor, criteria=criteria,
-            lag_count=lag_count, training=self._training_digests)
+            candidate, held_out, sensor=sensor,
+            criteria=criteria, lag_count=lag_count,
+            training=self._training_digests,
+            selection=selection_digests,
+            source_model_id=self._source_model_id,
+            source_artifact_id=self._source_artifact_id,
+            configuration_id=(self._source_model_id
+                              if configuration_id is None
+                              else configuration_id),
+            profile_id=self._profile_id,
+            channel_contract_id=channel_contract_id,
+            training_default_fills=self._training_default_fills,
+            selection_default_fills=selection_default_fills)
 
     def derive(self, *, evidence: FitEvidence | None = None):
         """Return a new validated model revision carrying fit provenance.
@@ -404,13 +455,40 @@ class FitResult:
         resulting artifact visibly unaccepted — a model-aided estimator
         refuses it.
         """
-        from ..sim import Sim
-        artifact = Sim(self.fitted_world()).model
-        if self._source_derivation:
-            artifact = artifact.with_derivations(self._source_derivation)
+        artifact = self._candidate_artifact()
+        if evidence is not None:
+            if not isinstance(evidence, FitEvidence):
+                raise TypeError("FitResult.derive evidence must be a "
+                                "FitEvidence")
+            binding = evidence.binding
+            if binding is None:
+                raise ValueError("FitResult.derive refuses unbound evidence; "
+                                 "use this result's evidence(...) method")
+            expected = {
+                "fitted_model_id": artifact.model_id,
+                "fitted_artifact_id": artifact.artifact_id,
+                "source_model_id": self._source_model_id,
+                "source_artifact_id": self._source_artifact_id,
+                "profile_id": self._profile_id,
+                "training_window_digests": self._training_digests,
+            }
+            mismatch = [name for name, value in expected.items()
+                        if getattr(binding, name) != value]
+            evidence_training_fills = tuple(
+                fill for fill in evidence.default_fills
+                if fill.dataset_role == "training"
+            )
+            if evidence_training_fills != self._training_default_fills:
+                mismatch.append("training_default_fills")
+            if mismatch:
+                raise ValueError("FitResult.derive evidence was issued for a "
+                                 "different fit/model scope: "
+                                 f"{', '.join(mismatch)}")
         report = derivation_report(
             "parameter_fit", self._source_artifact_id, self.objective,
-            self.values, evidence)
+            self.values, evidence,
+            (self._training_default_fills if evidence is None
+             else evidence.default_fills))
         return artifact.with_derivation("fit", report)
 
     def summary(self) -> str:
@@ -692,6 +770,7 @@ class Fit:
                        for full, (src, _A, _b) in self._ties.items()}
         res = FitResult(self._blocks, self._fields, tie_sources, v_opt,
                         p_opt, JtJ, objective, stats, self.world,
+                        self.sim.model.model_id,
                         self.sim.model.artifact_id,
                         self.sim.model.derivation,
                         posterior_computed=compute_posterior,
@@ -700,6 +779,25 @@ class Fit:
         # Identity of the training set: `evidence()` refuses any of these
         # as a held-out window (the acceptance set must be untouched).
         res._training_digests = tuple(window_digest(w) for w in windows)
+        u_fields = self.module.port("u").fields
+        res._training_default_fills = tuple(sorted((
+            fill
+            for window, digest in zip(
+                windows, res._training_digests, strict=True
+            )
+            for fill in default_fills_for_window(
+                self.model_world,
+                self._spec,
+                window,
+                dataset_role="training",
+                window_digest=digest,
+                input_names=[field.name for field in u_fields],
+                input_defaults=[field.default for field in u_fields],
+                input_fields=u_fields,
+            )
+        ), key=lambda fill: (
+            fill.dataset_role, fill.window_digest, fill.source, fill.name
+        )))
         return res
 
     # ------------------------------------------------------------------

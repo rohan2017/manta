@@ -22,7 +22,8 @@ value wrapping a freshly built CasADi expression.
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Self, TypeVar
 
 import casadi as ca
 import numpy as np
@@ -338,7 +339,10 @@ def _scalar_op(a, b, fn):
 # Vec3
 # ---------------------------------------------------------------------------
 
-class Vec3(_IRValue):
+_FrameT = TypeVar("_FrameT")
+
+
+class Vec3(_IRValue, Generic[_FrameT]):  # noqa: UP046 - runtime frame subscription
     """A 3-vector tagged with a single frame."""
 
     _mx_shape: ClassVar[tuple[int, int]] = (3, 1)
@@ -357,6 +361,13 @@ class Vec3(_IRValue):
     def __class_getitem__(cls, frame):
         _validate_frame("Vec3[...]", frame)
         return _ParameterizedConstructor(cls, frame=frame)
+
+    if TYPE_CHECKING:
+        @classmethod
+        def from_mx(cls, mx: Any) -> Self: ...
+
+        @classmethod
+        def constant(cls, value: Sequence[float]) -> Self: ...
 
     @classmethod
     def _from_mx(cls, mx, *, frame):
