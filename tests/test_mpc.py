@@ -262,6 +262,9 @@ def test_structured_hpipm_matches_sparse_osqp(
     assert actual.qp_primal_residual < 2e-3
     assert actual.qp_dual_residual < 2e-3
     assert actual.predicted_bank_violation < 1e-8
+    assert actual.qp_used_uncondensed_fallback is (condense_to != 0)
+    assert actual.qp_condensed_candidate_valid is (
+        None if condense_to == 0 else True)
 
 
 def test_structured_hpipm_rebuilds_for_hard_attitude_constraints(

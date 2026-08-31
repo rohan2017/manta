@@ -41,7 +41,8 @@ The current optimized path has:
 - compiled horizon objective and accepted-plan diagnostic kernels;
 - persistent NumPy assembly and native solver workspaces;
 - a sparse OSQP reference backend with split update/iteration diagnostics;
-- an HPIPM optimal-control backend with optional partial condensing;
+- an HPIPM optimal-control backend with safety-shadowed experimental partial
+  condensing;
 - an augmented HPIPM stage state that preserves the exact actuator-slew cost;
 - no per-stage HPIPM heap allocation in steady state; and
 - shifted primal and dual warm starts.
@@ -49,6 +50,34 @@ The current optimized path has:
 The numerical path is currently double precision. NumPy arrays use
 `float64`, and the HPIPM bridge uses its `d_ocp_qp` API. The controller is
 compiled, but it is not an F32 implementation.
+
+Partial condensing is not currently a production optimization. A requested
+condensed solve is checked in the original shooting coordinates and shadowed
+by a persistent uncondensed solve; the uncondensed answer is authoritative.
+Telemetry reports both the fallback and whether the condensed candidate passed
+the expansion checks. This deliberately charges the full cost of the
+experiment and prevents a plausible early condensed step from contaminating
+later RTI warm starts.
+
+### Solver qualification finding (2026-08-30)
+
+The accepted `mako.sixdof.sf-bay` reduction exposed two distinct HPIPM failure
+modes that the earlier straight-line benchmark did not:
+
+| Backend / reduction | Corner | Reversal | Dive | Helix |
+| --- | --- | --- | --- | --- |
+| OSQP, sparse | pass | pass | pass | pass |
+| HPIPM, uncondensed | pass | pass | pass | nonfinite accepted rollout at 0.3 s |
+| HPIPM, `condense_to=10`, before safety shadow | not required | not required | NaN QP at 0.6 s | not required |
+
+The uncondensed HPIPM passes had maximum cross-track errors of 0.029 m,
+0.029 m, and 0.013 m respectively. The OSQP helix completed with 0.028 m
+maximum cross-track error. This localizes the remaining discrepancy to the
+HPIPM formulation/numerics for combined turning and diving; it is not evidence
+for a different vehicle cost function. Accordingly, six-DOF keeps OSQP as its
+qualified default while HPIPM remains enabled for controlled equivalence work.
+The next HPIPM promotion gate is full-horizon QP-data and actuator-plan
+equivalence on the helix, not another isolated first-command comparison.
 
 ### Reference measurements
 
@@ -133,8 +162,10 @@ unless the target-hardware profile justifies it.
 
 Partial condensing is workload- and CPU-dependent. Benchmark uncondensed and
 several fixed condensed horizons rather than assuming eight is universal.
-Sweep tolerance, iteration limit, regularization, and warm-start mode while
-recording residuals and closed-loop behavior.
+Until the six-DOF discrepancy above is fixed, condensed runs are safety-shadow
+experiments and cannot demonstrate a speedup. Sweep tolerance, iteration
+limit, regularization, and warm-start mode while recording residuals and
+closed-loop behavior.
 
 Promote solver defaults per deployment class only after the same settings pass
 the constraint and failure fixtures. OSQP should remain the numerical

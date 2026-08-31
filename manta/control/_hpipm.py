@@ -13,7 +13,7 @@ import contextlib
 import ctypes
 import math
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -504,6 +504,8 @@ class HPIPMResult:
     equality_residual: float
     inequality_residual: float
     complementarity_residual: float
+    used_uncondensed_fallback: bool = False
+    condensed_candidate_valid: bool | None = None
 
 
 class NativeHPIPM:
@@ -544,6 +546,8 @@ class NativeHPIPM:
             raise ValueError("HPIPM cost weights must be finite and non-negative")
         self.ng = 2*self.nc + self.attitude_rows
         self.nvar = self.horizon*(self.nx+self.nu+self.nc)
+        self.condense_to = int(condense_to)
+        self.tolerance = float(tolerance)
         self._library = _library()
         self._handle = self._library.manta_hpipm_create(
             self.horizon, self.nx, self.nu, self.nc,
@@ -552,8 +556,27 @@ class NativeHPIPM:
             float(bank_slack_weight), float(tolerance), int(max_iter))
         if not self._handle:
             raise RuntimeError("native HPIPM workspace setup failed")
+        self._uncondensed_fallback: NativeHPIPM | None = None
+        if 0 < self.condense_to < self.horizon:
+            try:
+                self._uncondensed_fallback = NativeHPIPM(
+                    self.horizon, self.nx, self.nu, self.nc,
+                    attitude_rows=self.attitude_rows,
+                    condense_to=0,
+                    effort_weight=effort_weight,
+                    control_rate_weight=control_rate_weight,
+                    bank_slack_weight=bank_slack_weight,
+                    tolerance=tolerance,
+                    max_iter=max_iter,
+                )
+            except Exception:
+                self.close()
+                raise
 
     def close(self) -> None:
+        if self._uncondensed_fallback is not None:
+            self._uncondensed_fallback.close()
+            self._uncondensed_fallback = None
         if self._handle:
             self._library.manta_hpipm_destroy(self._handle)
             self._handle = None
@@ -596,6 +619,44 @@ class NativeHPIPM:
             self._array(slack_scales, (n, nc), "HPIPM slack scales"),
             self._array(warm_start, (self.nvar,), "HPIPM warm start"),
         )
+        result = self._solve_native(values)
+        fallback = self._uncondensed_fallback
+        if fallback is None:
+            return result
+
+        # Partial condensing changes only the numerical representation of the
+        # same OCP-QP. Some ill-conditioned six-DOF linearizations produce a
+        # plausible, equality-consistent condensed step for several ticks and
+        # then fail after that step has contaminated the RTI nominal. Until the
+        # partial-condensing path is corrected, its solve is shadowed by
+        # the persistent uncondensed workspace and its answer is authoritative.
+        # This makes an explicitly requested reduction safe and makes its full
+        # compute cost visible instead of silently feeding a bad step forward.
+        condensed_valid = self._expanded_solution_is_valid(result, values)
+        recovered = fallback._solve_native(values)
+        recovery_iterations = recovered.iterations
+        recovery_update_ms = recovered.update_ms
+        recovery_iteration_ms = recovered.iteration_ms
+        if not recovered.success or not np.all(np.isfinite(recovered.x)):
+            # A bad condensed step may already have entered Manta's RTI warm
+            # vector on an earlier tick while still satisfying the linear
+            # equalities. The uncondensed solver must not inherit it.
+            cold_values = values[:-1] + (np.zeros_like(values[-1]),)
+            cold = fallback._solve_native(cold_values)
+            recovery_iterations += cold.iterations
+            recovery_update_ms += cold.update_ms
+            recovery_iteration_ms += cold.iteration_ms
+            recovered = cold
+        return replace(
+            recovered,
+            iterations=result.iterations + recovery_iterations,
+            update_ms=result.update_ms + recovery_update_ms,
+            iteration_ms=result.iteration_ms + recovery_iteration_ms,
+            used_uncondensed_fallback=True,
+            condensed_candidate_valid=condensed_valid,
+        )
+
+    def _solve_native(self, values: tuple[FloatArray, ...]) -> HPIPMResult:
         solution = np.empty(self.nvar)
         objective = ctypes.c_double()
         iterations = ctypes.c_int()
@@ -620,6 +681,95 @@ class NativeHPIPM:
             inequality_residual=float(residuals[2].value),
             complementarity_residual=float(residuals[3].value),
         )
+
+    def _expanded_solution_is_valid(
+        self,
+        result: HPIPMResult,
+        values: tuple[FloatArray, ...],
+    ) -> bool:
+        """Validate a condensed answer in the original OCP coordinates."""
+        diagnostics = (
+            result.cost,
+            result.update_ms,
+            result.iteration_ms,
+            result.stationarity_residual,
+            result.equality_residual,
+            result.inequality_residual,
+            result.complementarity_residual,
+        )
+        if (not result.success or not np.all(np.isfinite(result.x))
+                or not all(math.isfinite(value) for value in diagnostics)):
+            return False
+
+        n, nx, nu, nc, ng = (
+            self.horizon, self.nx, self.nu, self.nc, self.ng)
+        dynamics_A = values[0].reshape(n, nx, nx)
+        dynamics_B = values[1].reshape(n, nx, nu)
+        control_lower = values[6].reshape(n, nu)
+        control_upper = values[7].reshape(n, nu)
+        general_C = values[8].reshape(n, ng, nx)
+        general_lower = values[9].reshape(n, ng)
+        general_upper = values[10].reshape(n, ng)
+        slack_scales = values[11].reshape(n, nc)
+        states = result.x[:n*nx].reshape(n, nx)
+        controls = result.x[n*nx:n*(nx+nu)].reshape(n, nu)
+        slacks = result.x[n*(nx+nu):].reshape(n, nc)
+
+        previous = np.zeros(nx)
+        equality_scale = 1.0
+        equality_defect = 0.0
+        for stage in range(n):
+            predicted = (
+                dynamics_A[stage] @ previous
+                + dynamics_B[stage] @ controls[stage]
+            )
+            equality_defect = max(
+                equality_defect,
+                float(np.max(np.abs(states[stage] - predicted))),
+            )
+            equality_scale = max(
+                equality_scale,
+                float(np.max(np.abs(states[stage]))),
+                float(np.max(np.abs(predicted))),
+            )
+            previous = states[stage]
+        # Expansion is an algebraic operation, so its tolerance should be far
+        # tighter than the IPM stopping tolerance used for inequalities.
+        if equality_defect > 1e-9*equality_scale:
+            return False
+
+        bound_scale = max(
+            1.0,
+            float(np.max(np.abs(controls))),
+            float(np.max(np.abs(control_lower))),
+            float(np.max(np.abs(control_upper))),
+        )
+        bound_violation = max(
+            float(np.max(control_lower-controls)),
+            float(np.max(controls-control_upper)),
+            0.0,
+        )
+        if bound_violation > 5.0*self.tolerance*bound_scale:
+            return False
+
+        constrained = np.einsum("kij,kj->ki", general_C, states)
+        constrained[:, :nc] -= slack_scales*slacks
+        constrained[:, nc:2*nc] += slack_scales*slacks
+        general_violation = max(
+            float(np.max(general_lower-constrained)),
+            float(np.max(constrained-general_upper)),
+            0.0,
+        )
+        finite_bounds = np.concatenate((
+            np.abs(general_lower[np.abs(general_lower) < 1e20]),
+            np.abs(general_upper[np.abs(general_upper) < 1e20]),
+        ))
+        general_scale = max(
+            1.0,
+            float(np.max(np.abs(constrained))),
+            float(np.max(finite_bounds)) if finite_bounds.size else 0.0,
+        )
+        return general_violation <= 5.0*self.tolerance*general_scale
 
 
 __all__ = ["HPIPMResult", "NativeHPIPM"]

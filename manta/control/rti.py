@@ -236,6 +236,10 @@ class MPCResult:
     # outside its own bounds by more than roundoff and the projection, not
     # the QP, decided those values.
     clipped_controls: int = 0
+    # Partial HPIPM condensing is currently safety-shadowed by an uncondensed
+    # solve. These fields keep the reduction attempt visible to benchmarks.
+    qp_used_uncondensed_fallback: bool = False
+    qp_condensed_candidate_valid: bool | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "controls", MappingProxyType(dict(self.controls)))
@@ -1450,6 +1454,8 @@ class MPC:
         H, g, A_values, clo, chi, lower, upper, slack_scales = matrices
         next_lam_x = self._qp_lam_x.copy()
         next_lam_a = self._qp_lam_a.copy()
+        qp_used_uncondensed_fallback = False
+        qp_condensed_candidate_valid: bool | None = None
         if self.compiled:
             if self.qp_backend == "osqp":
                 self._native_a_values[self._native_a_from_base] = A_values
@@ -1503,6 +1509,10 @@ class MPC:
                 qp_dual_residual = native.stationarity_residual
                 qp_rho_updates = 0
                 qp_rho_estimate = math.nan
+                qp_used_uncondensed_fallback = bool(
+                    native.used_uncondensed_fallback)
+                qp_condensed_candidate_valid = (
+                    native.condensed_candidate_valid)
         else:
             result = self._qp(
                 h=self._sparse(self._h_sparsity, H), g=ca.DM(g),
@@ -1614,7 +1624,9 @@ class MPC:
             qp_rho_updates=qp_rho_updates,
             qp_rho_estimate=qp_rho_estimate,
             hessian_regularization=HESSIAN_REGULARIZATION,
-            clipped_controls=clipped_controls)
+            clipped_controls=clipped_controls,
+            qp_used_uncondensed_fallback=qp_used_uncondensed_fallback,
+            qp_condensed_candidate_valid=qp_condensed_candidate_valid)
         self.last_result = final
         return final
 
