@@ -16,7 +16,7 @@ from manta.ir._rotation import quat_to_rotmat
 from .earth_ins import build, prior
 
 
-def run(repetitions=1000):
+def run(repetitions=1000, *, expand=False):
     rows = []
     for propagation in ("raw", "preintegrated"):
         for mode in ("linearized", "nonlinear"):
@@ -59,13 +59,17 @@ def run(repetitions=1000):
                     u[ins.sys._input_slices[full]] = np.asarray(packet[name]).ravel()
                 dt = 0.1
             started = time.perf_counter()
+            functions = {
+                "predict": module.functions["predict"],
+                "update": module.functions["update_craft_dvl_velocity"],
+            }
+            if expand:
+                functions = {name: fn.expand() for name, fn in functions.items()}
             native = compile_functions(
-                {
-                    "predict": module.functions["predict"],
-                    "update": module.functions["update_craft_dvl_velocity"],
-                },
+                functions,
                 optimization="O1",
-                max_instructions=50000,
+                max_instructions=250000 if expand else 50000,
+                timeout_s=120,
             )
             compile_s = time.perf_counter() - started
             state = [runtime.x, runtime.P]
@@ -81,6 +85,27 @@ def run(repetitions=1000):
                 ("predict", state + [u, dt, 0]),
                 ("update", state + [np.zeros(3), u, 0]),
             ):
+                reference = module.functions[
+                    "predict" if name == "predict" else "update_craft_dvl_velocity"
+                ](*args)
+                actual = native[name](*args)
+                for index, (expected, observed) in enumerate(zip(reference, actual)):
+                    expected, observed = np.asarray(expected), np.asarray(observed)
+                    if not np.all(np.isfinite(observed)):
+                        raise ValueError(f"nonfinite native {name} output {index}")
+                    if index == 1:
+                        # Compare covariance in correlation units so large
+                        # position variances cannot hide tiny bias errors.
+                        scale = np.sqrt(np.maximum(np.diag(expected), 0))
+                        denominator = np.outer(scale, scale)
+                        denominator[denominator == 0] = 1
+                        expected, observed = (
+                            expected / denominator,
+                            observed / denominator,
+                        )
+                    np.testing.assert_allclose(
+                        observed, expected, rtol=1e-9, atol=1e-11
+                    )
                 fn = native[name].map(repetitions)
                 fn(*args)
                 samples = []
@@ -89,12 +114,14 @@ def run(repetitions=1000):
                     fn(*args)
                     samples.append((time.perf_counter() - started) * 1e6 / repetitions)
                 row[name + "_median_us"] = float(np.median(samples))
+            row["native_output_parity"] = "pass"
             rows.append(row)
             print(json.dumps(row), flush=True)
     return {
         "host": platform.platform(),
         "machine": platform.machine(),
         "repetitions": repetitions,
+        "expanded_kernels": expand,
         "scope": "native double-precision kernels, O1, CasADi map loop; excludes compilation, Python runtime validation, framing and I/O",
         "rows": rows,
     }
@@ -103,8 +130,9 @@ def run(repetitions=1000):
 def main():
     p = argparse.ArgumentParser(__doc__)
     p.add_argument("--output", type=Path, required=True)
+    p.add_argument("--expand", action="store_true")
     a = p.parse_args()
-    r = run()
+    r = run(expand=a.expand)
     a.output.write_text(json.dumps(r, indent=2) + "\n")
 
 

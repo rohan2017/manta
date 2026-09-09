@@ -151,4 +151,10 @@ native benchmark measured approximately five times the prediction cost and
 3.5–4 times the predict-plus-update cost of linearized INS. See the qualification
 report for timings, model, hardware, exclusions and reproducible commands.
 
+That qualification tests the combined implementation, not the necessity of
+sigma points in every sensor regime. The separate
+[compute investigation](../qualification/ins-compute-2026-09-09.md) isolates
+analytic prediction from the finite coordinates and identifies a cheaper
+candidate's passing calibrated/weak-bias cases and failing noisy-sensor case.
+
 No Shiver artifact, wire adapter, or deployed estimator has been changed.

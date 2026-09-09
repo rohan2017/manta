@@ -1,0 +1,19 @@
+{
+  "production_baseline": "ed86f36",
+  "production_estimator_modified": false,
+  "shiver_modified": false,
+  "release_qualified": false,
+  "comparison": "paired reuse of reference cohorts, not new held-out acceptance",
+  "native_candidate_tests": {
+    "passed": 4,
+    "pytest_workers": 0,
+    "profiles": [
+      "O1",
+      "O3 -march=native"
+    ],
+    "scope": "raw/packet prior, predict, update, checkpoint, NumPy/C++"
+  },
+  "expanded_weak16_matches_unexpanded": true,
+  "benchmark_output_parity": "pass for all expanded reference/candidate prediction and update kernels",
+  "runner_sha256": "e4a7e8e7757d6421a064b8d6197935268ad2af0dfc27fbcd0d58c5e685e7fe92"
+}
