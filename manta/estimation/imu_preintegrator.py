@@ -15,7 +15,11 @@ where the deltas are expressed in the sensor frame at the beginning of the
 packet.  ``covariance`` is the 9x9 covariance of ``[dtheta, dv, dp]`` and
 ``bias_jacobian`` is the 9x6 derivative with respect to
 ``[d gyro_bias, d accel_bias]``.  Both matrices are flattened in CasADi/Eigen
-column-major order.
+column-major order. These equations describe inertial/non-rotating axes;
+a planet-attached INS applies the companion-side navigation-frame correction.
+Packet schema 2 additionally carries velocity/position sampling-time moments
+(order zero through three), allowing that correction to preserve the actual
+left-held quadrature without teaching this recurrence about the planet.
 
 The packet also carries the joint covariance between its delta and its two
 gyro boundaries in standardized coordinates.  That information is required
@@ -33,6 +37,7 @@ buffer.
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from functools import lru_cache
 
 import casadi as ca
@@ -41,6 +46,8 @@ import numpy as np
 from ..ir._rotation import quat_conj, quat_mul, so3_exp, so3_log
 from ..ir.manifold import R3Manifold, RnManifold, ScalarManifold, SO3Manifold
 from ..recurrence import RecurrenceBlock
+
+PREINTEGRATION_PACKET_SCHEMA = 2
 
 PACKET_FIELDS = (
     "delta_orientation",
@@ -61,6 +68,8 @@ PACKET_FIELDS = (
     "end_gyro",
     "duration",
     "sample_count",
+    "velocity_time_moments",
+    "position_time_moments",
 )
 
 
@@ -300,6 +309,16 @@ class IMUPreintegrator(RecurrenceBlock):
 
             start_accel = ca.if_else(first, u["accel"], x["start_accel"])
             start_gyro = ca.if_else(first, u["gyro"], x["start_gyro"])
+            # Deterministic left-hold quadrature, independent of the planet.
+            # V[j] = sum h*t_left**j;
+            # P[j] = sum h*(T-t_left-h/2)*t_left**j.
+            # The companion uses these to rotate inertial force integrals.
+            elapsed = x["duration"]
+            powers = ca.vertcat(1, elapsed, elapsed**2, elapsed**3)
+            velocity_moments = x["velocity_time_moments"] + dt * powers
+            position_moments = (x["position_time_moments"]
+                                + dt * x["velocity_time_moments"]
+                                + 0.5 * dt * dt * powers)
             nxt = {
                 "delta_orientation": q_next,
                 "delta_velocity": dv_next,
@@ -322,6 +341,8 @@ class IMUPreintegrator(RecurrenceBlock):
                 "end_gyro": u["gyro"],
                 "duration": x["duration"] + dt,
                 "sample_count": x["sample_count"] + 1.0,
+                "velocity_time_moments": velocity_moments,
+                "position_time_moments": position_moments,
             }
             return nxt, dict(nxt)
 
@@ -347,6 +368,8 @@ class IMUPreintegrator(RecurrenceBlock):
                 ("end_gyro", R3Manifold()),
                 ("duration", ScalarManifold()),
                 ("sample_count", ScalarManifold()),
+                ("velocity_time_moments", RnManifold(4)),
+                ("position_time_moments", RnManifold(4)),
             ],
             inputs=[("accel", 3), ("gyro", 3),
                     ("accel_bias", 3), ("gyro_bias", 3)],
@@ -369,6 +392,8 @@ class IMUPreintegrator(RecurrenceBlock):
                 ("end_gyro", 3),
                 ("duration", 1),
                 ("sample_count", 1),
+                ("velocity_time_moments", 4),
+                ("position_time_moments", 4),
             ],
             x0={
                 "delta_orientation": (1.0, 0.0, 0.0, 0.0),
@@ -389,6 +414,8 @@ class IMUPreintegrator(RecurrenceBlock):
                 "end_gyro": zero3,
                 "duration": 0.0,
                 "sample_count": 0.0,
+                "velocity_time_moments": np.zeros(4),
+                "position_time_moments": np.zeros(4),
             },
             recurrence=rec,
         )
@@ -398,5 +425,15 @@ class IMUPreintegrator(RecurrenceBlock):
                 f"accel_noise_density={self.accel_noise_density} "
                 f"gyro_noise_density={self.gyro_noise_density}>")
 
+    def module(self):
+        module = super().module()
+        return replace(module, metadata={
+            **module.metadata,
+            "preintegration_packet_schema": PREINTEGRATION_PACKET_SCHEMA,
+            "rotation_reference": "inertial",
+            "integration_quadrature": "left_hold",
+        })
 
-__all__ = ["PACKET_FIELDS", "IMUPreintegrator", "frame_preintegrated_packet"]
+
+__all__ = ["PACKET_FIELDS", "PREINTEGRATION_PACKET_SCHEMA",
+           "IMUPreintegrator", "frame_preintegrated_packet"]

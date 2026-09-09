@@ -55,6 +55,8 @@ from ._assembly import (
     resolve_gates,
 )
 from ._kalman import joseph_update, schmidt_update, symmetrize
+from .imu_preintegrator import PREINTEGRATION_PACKET_SCHEMA
+from .navigation_frame import MAX_PACKET_FRAME_ROTATION_RAD, NavigationFrame
 
 _RIGID = ("position", "orientation", "velocity", "angular_velocity")
 
@@ -127,7 +129,7 @@ class _INSSystem:
     """Linearized-system-compatible IR over a strapdown recurrence."""
 
     def __init__(self, source, *, imu, track, sensors, inputs,
-                 propagation: str) -> None:
+                 propagation: str, navigation_frame: NavigationFrame | None) -> None:
         # Reuse the one authoritative model snapshot/compiler. The resulting
         # dynamics transition is only a source of ordinary measurement models
         # and non-navigation state recurrences; navigation is replaced below.
@@ -153,6 +155,7 @@ class _INSSystem:
         self.craft_name = self.imu_name.split(".", 1)[0]
         self.craft = next(c for c in self.crafts if c.name == self.craft_name)
         self.propagation = propagation
+        self.navigation_frame = navigation_frame
         self.lever_arm, self.R_craft_from_sensor = _rigid_mount(
             self.craft, self.imu, who="INS")
 
@@ -177,6 +180,8 @@ class _INSSystem:
                 "accel_bias_reference": 3,
                 "start_gyro": 3,
                 "duration": 1,
+                "velocity_time_moments": 4,
+                "position_time_moments": 4,
             }
             packet_defaults = {
                 "delta_orientation": (1.0, 0.0, 0.0, 0.0),
@@ -351,8 +356,11 @@ class _INSSystem:
                       if isinstance(f, GravityField)), None)
         if field is None:
             return ca.MX.zeros(3, 1)
-        return field.value_at_sym(
+        gravity = field.value_at_sym(
             Vec3[WorldFrame].from_mx(position), t).mx
+        if self.navigation_frame is not None:
+            gravity = self.navigation_frame.effective_gravity(gravity, position)
+        return gravity
 
     def _differentiate(self, spec: StateSpec) -> dict[str, Any]:
         n_tan = spec.tangent_dim
@@ -441,17 +449,19 @@ class _INSSystem:
                     gyro_sample - gyro_bias + ca.diag(end_sigma) @ end_error
                 )
                 accel_corrected = accel_sample - accel_bias
-            omega_body = R_bs @ gyro_corrected
+            omega_inertial_body = R_bs @ gyro_corrected
+            p = state_chunk(xv, p_name, 3)
+            q = state_chunk(xv, q_name, 4)
+            v = state_chunk(xv, v_name, 3)
+            R_wb = quat_to_rotmat(q)
+            frame = self.navigation_frame
+            omega_body = (omega_inertial_body if frame is None else
+                          frame.relative_rate(omega_inertial_body, R_wb))
 
             frozen = dict(frozen_base)
             frozen[omega_name] = omega_body
             outs = engine._tick_outputs(
                 spec, xv, frozen, model_u, dt, t, nv)
-
-            p = state_chunk(xv, p_name, 3)
-            q = state_chunk(xv, q_name, 4)
-            v = state_chunk(xv, v_name, 3)
-            R_wb = quat_to_rotmat(q)
 
             gravity_origin = self._gravity(p, t)
             if self.propagation == "raw":
@@ -473,14 +483,24 @@ class _INSSystem:
                 force_origin_body = (R_bs @ accel_corrected
                                      + gravity_delta_body - lever_accel)
                 accel_world = R_wb @ force_origin_body + gravity_origin
-                q_next = quat_mul(q, so3_exp(omega_body * dt))
+                q_next = (quat_mul(q, so3_exp(omega_body * dt))
+                          if frame is None else frame.attitude(
+                              q, so3_exp(omega_inertial_body * dt), dt))
                 q_next = q_next / ca.sqrt(
                     ca.dot(q_next, q_next) + 1e-30)
-                replacements = {
-                    p_name: p + v * dt + 0.5 * accel_world * dt * dt,
-                    q_name: q_next,
-                    v_name: v + accel_world * dt,
-                }
+                p_next = p + v * dt + 0.5 * accel_world * dt * dt
+                v_next = v + accel_world * dt
+                if frame is not None:
+                    # Specific force at a moving lever includes its Coriolis
+                    # acceleration as well as the origin's. Ordinary local
+                    # measurement models receive the relative body rate.
+                    force_nav = R_wb @ force_origin_body - 2 * ca.cross(
+                        ca.DM(frame.angular_velocity),
+                        R_wb @ ca.cross(omega_body, lever))
+                    p_next, v_next = frame.translation(
+                        p, v, gravity_origin, force_nav * dt,
+                        0.5 * force_nav * dt * dt, dt)
+                replacements = {p_name: p_next, q_name: q_next, v_name: v_next}
             else:
                 delta_q = packet_chunk("delta_orientation", 4)
                 delta_v = packet_chunk("delta_velocity", 3)
@@ -514,6 +534,8 @@ class _INSSystem:
                 omega_start = R_bs @ (
                     packet_chunk("start_gyro", 3) - gyro_bias
                     + ca.diag(start_sigma) @ start_error)
+                if frame is not None:
+                    omega_start = frame.relative_rate(omega_start, R_wb)
                 q_ws = quat_mul(q, q_bs)
                 R_ws = quat_to_rotmat(q_ws)
                 sensor_p = p + R_wb @ lever
@@ -523,10 +545,20 @@ class _INSSystem:
                                  + R_ws @ delta_p)
                 sensor_v_next = (sensor_v + gravity_origin * dt
                                  + R_ws @ delta_v)
-                q_next = quat_mul(quat_mul(q_ws, delta_q), q_sb)
+                if frame is not None:
+                    sensor_p_next, sensor_v_next = frame.translation(
+                        sensor_p, sensor_v, self._gravity(sensor_p, t),
+                        R_ws @ delta_v, R_ws @ delta_p, dt,
+                        packet_chunk("velocity_time_moments", 4),
+                        packet_chunk("position_time_moments", 4))
+                q_next = (quat_mul(quat_mul(q_ws, delta_q), q_sb)
+                          if frame is None else frame.attitude(
+                              q, quat_mul(quat_mul(q_bs, delta_q), q_sb), dt))
                 q_next = q_next / ca.sqrt(
                     ca.dot(q_next, q_next) + 1e-30)
                 R_wb_next = quat_to_rotmat(q_next)
+                omega_end = (omega_body if frame is None else
+                             frame.relative_rate(omega_inertial_body, R_wb_next))
                 # Residual consistency check: the packet was integrated over
                 # `duration`, the gravity/lever terms above over `dt`. They
                 # must agree; otherwise poison the navigation state so no
@@ -541,7 +573,7 @@ class _INSSystem:
                     p_name: sensor_p_next - R_wb_next @ lever + poison,
                     q_name: q_next + poison,
                     v_name: (sensor_v_next
-                             - R_wb_next @ ca.cross(omega_body, lever)
+                             - R_wb_next @ ca.cross(omega_end, lever)
                              + poison),
                 }
             chunks = []
@@ -754,6 +786,11 @@ class INS(_FilterBase):
     :class:`~manta.estimation.imu_preintegrator.IMUPreintegrator`; the
     high-rate recurrence and the lower-rate INS can both be lowered to
     generated C/C++.
+    ``navigation_frame`` supplies fixed planet-attached Cartesian kinematics.
+    The caller resolves its anchor and rotation vector; the IMU remains
+    inertial. Its gravity convention is explicit. See
+    ``docs/explanation/earth-relative-ins.md`` for equations, packet schema,
+    and the currently failing weak-bias gyrocompass qualification gate.
     """
 
     def __init__(self, world, *, imu,
@@ -762,7 +799,10 @@ class INS(_FilterBase):
                  inputs: list[str] | None = None,
                  discretization: str = "exact",
                  gates: float | dict[str, float] | None = None,
-                 propagation: str = "raw") -> None:
+                 propagation: str = "raw",
+                 navigation_frame: NavigationFrame | None = None) -> None:
+        if navigation_frame is not None and not isinstance(navigation_frame, NavigationFrame):
+            raise TypeError("INS navigation_frame must be a NavigationFrame")
         if discretization != "exact":
             raise ValueError(
                 "INS derives its exact strapdown F by autodiff; "
@@ -773,7 +813,7 @@ class INS(_FilterBase):
                 f"{propagation!r}")
         sys = _INSSystem(world, imu=imu, track=track,
                          sensors=sensors, inputs=inputs,
-                         propagation=propagation)
+                         propagation=propagation, navigation_frame=navigation_frame)
         require_measurement_only_consider(sys, who="INS")
         selected_imu_prefix = f"{sys.imu_name}."
         unsupported_imu_consider = tuple(
@@ -790,6 +830,7 @@ class INS(_FilterBase):
             )
         self._bind_system(world, sys)
         self.imu = sys.imu_name
+        self.navigation_frame = navigation_frame
         self.propagation = propagation
         self.preintegration_input_map = MappingProxyType({
             **dict(sys.preintegration_input_map),
@@ -963,6 +1004,11 @@ class INS(_FilterBase):
         metadata = {
             "estimator": "ins",
             "propagation": propagation,
+            "navigation_frame": (None if navigation_frame is None
+                                 else navigation_frame.metadata()),
+            "preintegration_packet_schema": PREINTEGRATION_PACKET_SCHEMA,
+            "max_packet_frame_rotation_rad": MAX_PACKET_FRAME_ROTATION_RAD,
+            "earth_translation_quadrature": "left_hold_cubic_rotation_midpoint_coriolis",
             "prediction_inputs": (
                 (sys.accel_input, sys.gyro_input)
                 if propagation == "raw"
@@ -994,7 +1040,9 @@ class INS(_FilterBase):
             # The filter deliberately carries no angular-velocity state.
             # Runtime adapters can still publish the current body rate from
             # the selected gyro by applying this fixed rigid-mount rotation
-            # and subtracting the estimated bias.
+            # and subtracting the estimated bias. With navigation_frame,
+            # publishing a relative body rate also requires subtracting
+            # R_nav_from_body.T @ frame.angular_velocity at that epoch.
             "rotation_body_from_imu": tuple(
                 float(v) for v in sys.R_craft_from_sensor.reshape(-1)
             ),

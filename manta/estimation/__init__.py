@@ -23,6 +23,7 @@ from .imu_integrator import IMUIntegrator
 from .imu_preintegrator import IMUPreintegrator, frame_preintegrated_packet
 from .madgwick import Madgwick
 from .mahony import Mahony
+from .navigation_frame import NavigationFrame
 from .observability import (
     ObservabilityReport,
     SigmaHorizonReport,
@@ -41,6 +42,7 @@ __all__ = [
     "Madgwick",
     "Mahony",
     "NEESReport",
+    "NavigationFrame",
     "ObservabilityReport",
     "SigmaHorizonReport",
     "chi2_gate",

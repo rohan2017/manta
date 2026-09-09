@@ -1,0 +1,362 @@
+"""Reproducible synthetic INS gyrocompass qualification (no vehicle dynamics).
+
+White-noise densities are converted to per-sample sigmas exactly once. The
+ordinary ConstantBiasIMU contract gives bias uncertainty without invented RW.
+A stationary, independently sampled DVL constrains velocity; gyro is only a
+process input. This analytical fixture complements the rotating-Earth plant
+oracle in tests/test_ins_navigation_frame.py.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import time
+from pathlib import Path
+
+import casadi as ca
+import numpy as np
+
+from manta import INS, Craft, NavigationFrame, TargetNumpy, World
+from manta.estimation import chi2_quantile, observability
+from manta.estimation import sigma_horizon as covariance_horizon
+from manta.fields import GravityField
+from manta.ir._rotation import quat_to_rotmat
+from manta.parts import ConstantBiasIMU, Mass, VelocitySensor
+
+SPIN = 7.2921159e-5
+
+
+def build(
+    latitude=37.78,
+    *,
+    rate=100,
+    spin=SPIN,
+    gyro_density=1e-7,
+    accel_density=1e-5,
+    propagation="raw",
+    frame_enabled=True,
+):
+    # Cartesian Earth-axis projection, independent of INS implementation.
+    phi = np.radians(latitude)
+    east = np.array([0.0, 1.0, 0.0])
+    up = np.array([np.cos(phi), 0, np.sin(phi)])
+    axes = np.column_stack([east, np.cross(up, east), up])
+    frame = NavigationFrame(
+        frame_id=f"synthetic/{latitude}",
+        epoch="1",
+        angular_velocity=axes.T @ np.array([0.0, 0.0, spin]),
+        origin_from_rotation_center=axes.T @ (6378137 * up),
+        gravity_convention="effective",
+    )
+    c = Craft("craft")
+    c.add(Mass("mass", mass=1, moi=(1, 1, 1)))
+    c.add(
+        ConstantBiasIMU(
+            "imu",
+            gyro_noise_sigma=gyro_density * np.sqrt(rate),
+            accel_noise_sigma=accel_density * np.sqrt(rate),
+        )
+    )
+    c.add(VelocitySensor("dvl", velocity_noise_sigma=0.001))
+    w = World("earth_ins_qualification").add_field(GravityField(g=(0, 0, -9.81)))
+    w.add_craft(c)
+    return INS(
+        w,
+        imu="imu",
+        sensors=["dvl.velocity"],
+        navigation_frame=frame if frame_enabled else None,
+        propagation=propagation,
+        gates=None,
+    )
+
+
+def prior(ins, bias_sigma, *, yaw_sigma_deg=5.0):
+    if not np.isfinite(yaw_sigma_deg) or yaw_sigma_deg <= 0:
+        raise ValueError("yaw_sigma_deg must be finite and positive")
+    p = np.zeros(ins.spec.tangent_dim)
+    for slot in ins.spec.slots:
+        value = {
+            "position": 0.01,
+            "velocity": 0.001,
+            "orientation": np.radians(0.1),
+            "imu.gyro_bias": bias_sigma,
+            "imu.accel_bias": 1e-5,
+        }[slot.name.split(".", 1)[1]]
+        p[slot.tangent_offset : slot.tangent_offset + slot.tangent_dim] = value**2
+    orientation = ins.spec.slot("craft.orientation").tangent_offset
+    p[orientation + 2] = np.radians(yaw_sigma_deg) ** 2
+    return np.diag(p)
+
+
+def normalized_nees(error, covariance):
+    """Whiten after unit scaling; attitude and bias variances differ greatly.
+
+    No covariance regularization: an indefinite matrix must still fail.
+    This is algebraically e.T @ solve(P, e), with a better scaled solve.
+    """
+    scale = np.sqrt(np.diag(covariance))
+    correlation = covariance / np.outer(scale, scale)
+    whitened = np.linalg.solve(np.linalg.cholesky(correlation), error / scale)
+    return float(whitened @ whitened)
+
+
+def run(
+    *,
+    latitude=37.78,
+    rate=100,
+    duration=300,
+    seeds=16,
+    spin=SPIN,
+    gyro_density=1e-7,
+    bias_sigma=1e-8,
+    yaw_sigma_deg=5.0,
+    seed=82719,
+    sigma_horizon=False,
+):
+    if not isinstance(seeds, int) or seeds < 2:
+        raise ValueError("seeds must be an integer >= 2")
+    if not isinstance(rate, int) or rate <= 0:
+        raise ValueError("rate must be a positive integer")
+    if not np.isfinite(duration) or duration < 10:
+        raise ValueError("duration must be finite and at least 10 seconds")
+    started = time.perf_counter()
+    ins = build(latitude, rate=rate, spin=spin, gyro_density=gyro_density)
+    module = ins.module()
+    runtime = TargetNumpy(ins)
+    P0 = prior(ins, bias_sigma, yaw_sigma_deg=yaw_sigma_deg)
+    x0 = runtime.x.copy()
+    n = ins.spec.tangent_dim
+    na = len(x0)
+    dt = 1 / rate
+    # Invoke the emitted kernels in a seed batch; no alternate covariance math.
+    xp = ca.MX.sym("x", na)
+    pp = ca.MX.sym("P", n, n)
+    u = ca.MX.sym("u", len(ins.sys.u_defaults))
+    z = ca.MX.sym("z", 3)
+    predict = module.functions["predict"]
+    update = module.functions["update_diagnostic_craft_dvl_velocity"]
+    predicted = predict(xp, pp, u, dt, 0.0)
+    updated = update(*predicted, z, u, 0.0)
+    from manta.codegen.numpy._compile import compile_functions
+
+    step = ca.Function(
+        "qualify", [xp, pp, u, z], [updated[0], updated[1], updated[4], updated[5]]
+    )
+    step = compile_functions(
+        {"qualify": step}, optimization="O1", max_instructions=30000
+    )["qualify"]
+    fn = step.map(seeds)
+    rng = np.random.default_rng(seed)
+    samples = rng.normal(size=(n, seeds)) * np.sqrt(np.diag(P0))[:, None]
+    true_x = np.asarray(ins.spec.boxplus_sym(ca.DM(x0), ca.DM.zeros(n)))[:, 0]
+    truth = np.column_stack(
+        [
+            np.asarray(ins.spec.boxplus_sym(ca.DM(true_x), ca.DM(samples[:, i])))[:, 0]
+            for i in range(seeds)
+        ]
+    )
+    # Position and velocity are physically zero in this stationary fixture.
+    # Their small priors are conservative; this ANEES scores attitude/bias only.
+    for name in ("craft.position", "craft.velocity"):
+        slot = ins.spec.slot(name)
+        truth[slot.ambient_offset : slot.ambient_offset + slot.ambient_dim] = 0
+    selected = []
+    marginal_indices = {}
+    for name in ["craft.orientation", "craft.imu.gyro_bias", "craft.imu.accel_bias"]:
+        sl = ins.spec.slot(name)
+        indices = list(range(sl.tangent_offset, sl.tangent_offset + sl.tangent_dim))
+        marginal_indices[name] = indices
+        selected.extend(indices)
+    qi = ins.spec.slot("craft.orientation").ambient_offset
+    gi = ins.spec.slot("craft.imu.gyro_bias").ambient_offset
+    ai = ins.spec.slot("craft.imu.accel_bias").ambient_offset
+    gyro = np.column_stack(
+        [
+            np.asarray(quat_to_rotmat(ca.DM(truth[qi : qi + 4, i]))).T
+            @ np.array(ins.navigation_frame.angular_velocity)
+            + truth[gi : gi + 3, i]
+            for i in range(seeds)
+        ]
+    )
+    accel = np.column_stack(
+        [
+            np.asarray(quat_to_rotmat(ca.DM(truth[qi : qi + 4, i]))).T
+            @ np.array([0, 0, 9.81])
+            + truth[ai : ai + 3, i]
+            for i in range(seeds)
+        ]
+    )
+    x = np.tile(x0[:, None], (1, seeds))
+    P = np.tile(P0, (1, seeds))
+    records = []
+    rejected = 0
+    ui_a = ins.sys._input_slices[ins.sys.accel_input]
+    ui_g = ins.sys._input_slices[ins.sys.gyro_input]
+    xt = ca.MX.sym("truth", na)
+    error = ca.Function("error", [xp, xt], [ins.spec.boxminus_sym(xp, xt)]).map(seeds)
+    every = max(1, int(rate * 10))
+    for k in range(round(duration * rate)):
+        inputs = np.tile(ins.sys.u_defaults[:, None], (1, seeds))
+        inputs[ui_a] = accel + rng.normal(size=(3, seeds)) * 1e-5 * np.sqrt(rate)
+        inputs[ui_g] = gyro + rng.normal(size=(3, seeds)) * gyro_density * np.sqrt(rate)
+        x, P, nis, accepted = fn(x, P, inputs, rng.normal(size=(3, seeds)) * 0.001)
+        rejected += int(np.count_nonzero(np.asarray(accepted) < 0.5))
+        if (k + 1) % every == 0:
+            errors = np.asarray(error(x, truth))
+            cov = np.asarray(P)
+            oi = ins.spec.slot("craft.orientation").tangent_offset
+            yaw = errors[oi + 2]
+            sig = np.array([np.sqrt(cov[oi + 2, i * n + oi + 2]) for i in range(seeds)])
+            nees = []
+            marginals = {name: [] for name in marginal_indices}
+            for i in range(seeds):
+                pi = cov[:, i * n : (i + 1) * n]
+                ps = pi[np.ix_(selected, selected)]
+                e = errors[selected, i]
+                nees.append(normalized_nees(e, ps))
+                for name, indices in marginal_indices.items():
+                    marginals[name].append(
+                        normalized_nees(
+                            errors[indices, i], pi[np.ix_(indices, indices)]
+                        )
+                    )
+            records.append(
+                {
+                    "t": (k + 1) / rate,
+                    "yaw_rmse_deg": float(np.degrees(np.sqrt(np.mean(yaw * yaw)))),
+                    "yaw_sigma_deg": float(np.degrees(np.sqrt(np.mean(sig * sig)))),
+                    "attitude_bias_anees": float(np.mean(nees)),
+                    "dof": len(selected),
+                    "marginal_anees": {
+                        name: {"value": float(np.mean(values)), "dof": 3}
+                        for name, values in marginals.items()
+                    },
+                    "anis": float(np.mean(np.asarray(nis))),
+                    "gyro_bias_rmse_rad_s": float(
+                        np.sqrt(
+                            np.mean(
+                                errors[
+                                    ins.spec.slot(
+                                        "craft.imu.gyro_bias"
+                                    ).tangent_offset : ins.spec.slot(
+                                        "craft.imu.gyro_bias"
+                                    ).tangent_offset
+                                    + 3
+                                ]
+                                ** 2
+                            )
+                        )
+                    ),
+                    "covariance_symmetry_error": float(
+                        max(
+                            np.max(
+                                np.abs(
+                                    cov[:, i * n : (i + 1) * n]
+                                    - cov[:, i * n : (i + 1) * n].T
+                                )
+                            )
+                            for i in range(seeds)
+                        )
+                    ),
+                    "covariance_min_eigenvalue": float(
+                        min(
+                            np.linalg.eigvalsh(cov[:, i * n : (i + 1) * n]).min()
+                            for i in range(seeds)
+                        )
+                    ),
+                }
+            )
+    report = observability(
+        ins,
+        inputs={
+            "imu.accel": (0, 0, 9.81),
+            "imu.gyro": ins.navigation_frame.angular_velocity,
+        },
+        dt=dt,
+    )
+    bounds = [chi2_quantile(len(selected) * seeds, p) / seeds for p in (0.025, 0.975)]
+    horizon_report = None
+    if sigma_horizon:
+        report_horizon = covariance_horizon(
+            ins,
+            horizon=duration,
+            dt=dt,
+            P0=P0,
+            control={
+                "imu.accel": (0, 0, 9.81),
+                "imu.gyro": ins.navigation_frame.angular_velocity,
+            },
+        )
+        horizon_report = {
+            "times": report_horizon.times.tolist(),
+            "sigmas": {
+                key: value.tolist() for key, value in report_horizon.sigmas.items()
+            },
+            "summary": report_horizon.summary(),
+        }
+    thresholds = {}
+    for degrees in (10, 5, 1):
+        thresholds[str(degrees)] = next(
+            (row["t"] for row in records if row["yaw_sigma_deg"] <= degrees), None
+        )
+    return {
+        "sigma_horizon": horizon_report,
+        "module_artifact_id": module.artifact_id,
+        "heading_sigma_threshold_times_s": thresholds,
+        "acceptance_scope": "final-epoch attitude/bias marginal ANEES only; not release",
+        "acceptance": (
+            "pass"
+            if bounds[0] <= records[-1]["attitude_bias_anees"] <= bounds[1]
+            else "fail"
+        ),
+        "attitude_bias_anees_95_percent_bounds": bounds,
+        "anis_95_percent_bounds": [
+            chi2_quantile(3 * seeds, p) / seeds for p in (0.025, 0.975)
+        ],
+        "rejected_updates": rejected,
+        "latitude": latitude,
+        "rate": rate,
+        "duration": duration,
+        "seeds": seeds,
+        "seed": seed,
+        "spin": spin,
+        "gyro_density": gyro_density,
+        "gyro_bias_prior_sigma": bias_sigma,
+        "initial_yaw_sigma_deg": yaw_sigma_deg,
+        "error_coordinates": "StateSpec product manifold; left attitude error in navigation axes",
+        "rank": report.rank,
+        "tangent_dim": report.tangent_dim,
+        "records": records,
+        "elapsed_s": time.perf_counter() - started,
+    }
+
+
+def main():
+    p = argparse.ArgumentParser(__doc__)
+    p.add_argument("--output", type=Path, required=True)
+    p.add_argument("--duration", type=float, default=300)
+    p.add_argument("--rate", type=int, default=100)
+    p.add_argument("--seeds", type=int, default=16)
+    p.add_argument("--latitude", type=float, default=37.78)
+    p.add_argument("--spin", type=float, default=SPIN)
+    p.add_argument("--gyro-density", type=float, default=1e-7)
+    p.add_argument("--bias-sigma", type=float, default=1e-8)
+    p.add_argument("--yaw-sigma-deg", type=float, default=5.0)
+    p.add_argument("--sigma-horizon", action="store_true")
+    args = p.parse_args()
+    values = vars(args).copy()
+    output = values.pop("output")
+    report = run(**values)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(report, indent=2) + "\n")
+    print(
+        json.dumps({"acceptance": report["acceptance"], **report["records"][-1]}),
+        flush=True,
+    )
+    if report["acceptance"] != "pass":
+        raise SystemExit(2)
+
+
+if __name__ == "__main__":
+    main()
