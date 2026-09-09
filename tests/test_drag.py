@@ -2,10 +2,10 @@
 
 import numpy as np
 import pytest
-
-from manta import Craft, NoiseDriver, Sim, TargetNumpy, World
 from manta.fields import FluidField, GravityField
 from manta.parts import DragSurface, Mass
+
+from manta import Craft, NoiseDriver, Sim, TargetNumpy, World
 
 
 def test_offset_drag_uses_mount_velocity_not_double_lever_arm():
@@ -246,3 +246,70 @@ def test_drag_force_vs_force_tensors_mutually_exclusive():
 def test_drag_polynomial_order_cap():
     with pytest.raises(ValueError, match="exceeds the cap"):
         DragSurface("d", force_tensors=[np.zeros((3, 3))] * 5)
+
+
+def test_positive_coefficient_area_form_matches_tensor_polynomial():
+    """The fit-friendly positive parameters retain the exact drag law."""
+    rho = 1000.0
+    linear = np.array((0.01, 0.02, 0.03))
+    quadratic = np.array((0.04, 0.05, 0.06))
+
+    def world(name, part):
+        result = (
+            World()
+            .add_field(GravityField().add_uniform((0.0, 0.0, 0.0)))
+            .add_field(FluidField().add_uniform(density=rho))
+        )
+        craft = Craft(name)
+        craft.add(Mass("body", mass=10.0, moi=(1.0, 1.0, 1.0)))
+        craft.add(part)
+        result.add_craft(craft, velocity=(1.2, -0.8, 0.4))
+        return result
+
+    semantic = TargetNumpy(Sim(world(
+        "semantic",
+        DragSurface(
+            "drag",
+            linear_coefficient_areas=tuple(linear),
+            quadratic_coefficient_areas=tuple(quadratic),
+        ),
+    )))
+    tensor = TargetNumpy(Sim(world(
+        "tensor",
+        DragSurface(
+            "drag",
+            force_tensors=[-np.diag(linear), -np.diag(quadratic)],
+        ),
+    )))
+    semantic.step(0.01)
+    tensor.step(0.01)
+    np.testing.assert_allclose(
+        semantic.state["semantic"]["velocity"],
+        tensor.state["tensor"]["velocity"],
+        atol=1e-12,
+    )
+
+
+def test_drag_coefficient_areas_are_promotable():
+    world = (
+        World()
+        .add_field(GravityField().add_uniform((0.0, 0.0, 0.0)))
+        .add_field(FluidField().add_uniform(density=1000.0))
+    )
+    craft = Craft("body")
+    craft.add(Mass("mass", mass=10.0, moi=(1.0, 1.0, 1.0)))
+    craft.add(DragSurface(
+        "drag", quadratic_coefficient_areas=(0.02, 0.03, 0.04)
+    ))
+    world.add_craft(craft, velocity=(1.0, 0.0, 0.0))
+    sim = TargetNumpy(Sim(
+        world, parameters=["drag.quadratic_coefficient_areas"]
+    ))
+    sim.set_parameters({"drag.quadratic_coefficient_areas": (0.04, 0.03, 0.04)})
+    sim.step(0.01)
+    assert sim.state["body"]["velocity"][0] < 0.98
+
+
+def test_negative_coefficient_area_is_rejected():
+    with pytest.raises(ValueError, match="non-negative"):
+        DragSurface("bad", quadratic_coefficient_areas=(0.1, -0.1, 0.1))

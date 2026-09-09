@@ -1,13 +1,11 @@
 """Earth — concrete Planet preset for near-Earth simulations.
 
-The Earth is the **WGS-84 ellipsoid**: equatorial radius `R_EQ`,
-flattening `FLATTENING`, spinning about +z at the sidereal rate. Sea
-level is the ellipsoid (plus `sea_level`), "up" is the geodetic normal,
-and lat/lon/alt (`ecef_from_geodetic`, `scene_at_geodetic`) are the same
-geodetic coordinates a GNSS receiver reports — so a craft placed at a
-WGS-84 position sits at the same height above the simulated sea as it
-would above the real one, and a consumer's own WGS-84 geodesy agrees
-with the truth world to the millimetre.
+The Earth uses the WGS-84 ellipsoid as Cartesian physical geometry:
+equatorial radius `R_EQ`, flattening `FLATTENING`, and a +z spin axis at
+the sidereal rate. Sea level is that ellipsoid plus `sea_level`, and local
+scene "up" is its outward normal. Latitude/longitude conversion deliberately
+does not belong to this plant model; callers provide planet-fixed Cartesian
+anchors from their own datum/geodesy boundary.
 
 `Earth` registers its standing field contributions on the World's
 shared GravityField, FluidField, CollisionField, and MagField:
@@ -31,7 +29,7 @@ shared GravityField, FluidField, CollisionField, and MagField:
 By default Earth spins at its true sidereal rate (`Earth.SIDEREAL`)
 about +z, so Coriolis + centrifugal effects and the co-rotating
 ocean/atmosphere are on out of the box — a craft pinned to the surface
-should be placed via `earth.scene_at_geodetic(...).at_rest(...)` to get
+should be placed via `earth.scene_at(cartesian_anchor).at_rest(...)` to get
 the matching orbital velocity + body spin rate. Pass `rotation_rate=0.0`
 for a non-rotating Earth (drops those pseudo-forces, handy for a simpler
 sim); pass `flattening=0.0` for a spherical Earth of radius `R_EQ`.
@@ -128,7 +126,7 @@ class Earth(Planet):
         flattening     — of the reference ellipsoid. Default WGS-84
                          (`Earth.FLATTENING`); 0 gives a sphere of
                          radius `R_EQ`.
-        sea_level      — geodetic height of the ocean's top above the
+        sea_level      — normal offset of the ocean's top above the
                          reference ellipsoid, m. Default 0 (the sea
                          surface IS the ellipsoid, as for a WGS-84
                          altitude with no geoid model).
@@ -216,9 +214,12 @@ class Earth(Planet):
         super().__init__(name=name,
                          position=position,
                          rotation_axis=rotation_axis,
-                         omega=omega,
-                         equatorial_radius=self.R_EQ,
-                         flattening=flattening)
+                         omega=omega)
+        self.flattening = float(flattening)
+        if not 0.0 <= self.flattening < 1.0:
+            raise ValueError(
+                f"Earth.flattening must be within [0, 1), got {flattening!r}"
+            )
         self.sea_level     = float(sea_level)
         self.water_density = float(water_density)
         self.ocean_current = tuple(float(v) for v in ocean_current)
@@ -253,7 +254,7 @@ class Earth(Planet):
     def sea_surface(self) -> Ellipsoid:
         """The mean sea surface as a solid `Ellipsoid` — the reference
         ellipsoid raised by `sea_level`, in WorldFrame about the planet
-        centre. Its `signed_height_sym` is the geodetic altitude every
+        centre. Its `signed_height_sym` is the signed height every
         Earth field is built on."""
         return Ellipsoid(center=tuple(self.center.tolist()),
                          equatorial_radius=self.R_EQ,
@@ -261,6 +262,14 @@ class Earth(Planet):
                          polar_axis=tuple(self.axis.tolist()),
                          height=self.sea_level,
                          name=f"{self.name}_surface")
+
+    def surface_normal(
+        self, position: tuple[float, float, float]
+    ) -> np.ndarray:
+        """Outward normal of Earth's Cartesian reference ellipsoid."""
+        offset = np.asarray(position, dtype=float) - self.center
+        _height, normal = self.sea_surface().signed_height(offset)
+        return normal
 
     # ------------------------------------------------------------------
 
@@ -316,8 +325,8 @@ class Earth(Planet):
             omega_wave = k_wave * c_wave
             dir_dm = ca.DM(wave_dir.reshape(3, 1))
 
-        # `surface.signed_height_sym(p_planet)` → (geodetic altitude above
-        # the mean sea surface, geodetic up), both in PlanetFrame: the spin
+        # `surface.signed_height_sym(p_planet)` → (signed height above
+        # the mean sea surface, outward normal), both in PlanetFrame: the spin
         # axis has the same coordinates there as in WorldFrame, which is
         # all the spheroid geometry depends on.
         def _signed_altitude(p_planet, t):
@@ -400,7 +409,7 @@ class Earth(Planet):
 
         # Solid surface: the mean sea surface as a collision obstacle —
         # locally indistinguishable from a ground plane (the outward
-        # normal is the geodetic up), valid anywhere on the planet.
+        # normal is the ellipsoid outward normal), valid anywhere on the planet.
         if self.surface_collision:
             world.get_or_create_field(CollisionField).add(surface)
 

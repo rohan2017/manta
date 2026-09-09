@@ -73,6 +73,7 @@ from ..linearization import LinearizedSystem
 from ._assembly import (
     _FilterBase,
     _q_auto,
+    consider_dimension,
     emit_filter_module,
     initial_ambient,
     prepared_sensors,
@@ -153,6 +154,11 @@ class UKF(_FilterBase):
         """
         sys = LinearizedSystem(world, track=track, sensors=sensors,
                                inputs=inputs, track_mode="closure")
+        if consider_dimension(sys):
+            raise NotImplementedError(
+                "UKF does not yet support static Schmidt consider parameters; "
+                "use EKF/INS or remove the calibration posterior explicitly"
+            )
         self._bind_system(world, sys)
         resolved_gates = resolve_gates(sys, gates, who="UKF")
 
@@ -263,7 +269,11 @@ class UKF(_FilterBase):
                  "nis", "accepted"])
             R_override = ca.MX.sym(f"R_{entry_ident(ps.full)}", ps.dim,
                                    ps.dim)
-            xo, Po, nuo, So, niso, acceptedo = expressions(R_override)
+            # Preserve non-overrideable white model uncertainty when a driver
+            # supplies the ordinary per-sample measurement covariance.
+            xo, Po, nuo, So, niso, acceptedo = expressions(
+                R_override + ps.model_R
+            )
             xo, Po, nuo, So, niso, acceptedo = ca.cse(
                 [xo, Po, nuo, So, niso, acceptedo])
             override_updates[ps.full] = ca.Function(

@@ -8,6 +8,7 @@ unobservable direction, and the posterior diagnostics.
 
 import copy
 from dataclasses import replace
+from itertools import pairwise
 
 import numpy as np
 import pytest
@@ -15,7 +16,9 @@ import pytest
 from manta import (
     Craft,
     Fit,
+    FitProgress,
     Free,
+    GaussianTangentPrior,
     ModelArtifact,
     NoiseDriver,
     Prior,
@@ -213,6 +216,28 @@ def test_fit_recovers_thrust_and_mass():
     assert np.all(res.posterior_sigma[finite] < 0.2 * res.prior_sigma[finite])
 
 
+def test_gauss_newton_fit_avoids_symbolic_second_derivatives():
+    windows = _record_windows(_drone(mass=1.32), n_win=2, K=40, seed=73)
+    fit = Fit(
+        _drone(mass=1.5),
+        parameters={"body.mass": Prior(sigma=0.3, log=True)},
+    )
+    result = fit.solve(
+        windows,
+        weights={"imu.accel": 1e4, "imu.gyro": 1e6},
+        solver="gauss-newton",
+        least_squares_options={"max_iterations": 40},
+    )
+
+    assert result.converged
+    assert result.stats["solver"] == "damped_gauss_newton"
+    assert result.values["drone.body.mass"] == pytest.approx(1.32, abs=0.01)
+    residuals = fit.sensor_residuals(result, windows)
+    assert residuals["drone.imu.accel"].shape == (80, 3)
+    assert residuals["drone.imu.gyro"].shape == (80, 3)
+    assert np.max(np.abs(residuals["drone.imu.accel"])) < 1e-4
+
+
 def test_fit_recovers_thruster_arm_from_gyro():
     # Truth has t1 mounted 3 cm off the modeled position; the torque arm
     # is observable through the gyro under differential thrust.
@@ -224,6 +249,48 @@ def test_fit_recovers_thruster_arm_from_gyro():
     res = fit.solve(windows)
     assert np.allclose(res.values["drone.t1.mount_offset"],
                        [0.12, 0.12, 0.0], atol=0.003)
+
+
+def test_fit_can_promote_part_mount_orientation():
+    """An identity nominal mount remains live and uses tangent coordinates."""
+    angle = 0.04
+    truth = _drone()
+    truth_t1 = next(part for part in truth.crafts[0].parts if part.name == "t1")
+    truth_t1.mount_orientation = (
+        np.cos(angle / 2.0), np.sin(angle / 2.0), 0.0, 0.0
+    )
+    windows = _record_windows(truth, n_win=3, K=50, seed=27)
+    fit = Fit(
+        _drone(),
+        parameters={"t1.mount_orientation": Prior(sigma=0.05)},
+    )
+    assert "drone.t1.mount_orientation" in fit.sim.model.parameter_names
+    assert fit.n_v == 3
+    result = fit.solve(
+        windows,
+        weights={"imu.gyro": 1e6, "imu.accel": 1e4},
+    )
+    assert result.converged
+    assert result.values["drone.t1.mount_orientation"] == pytest.approx(
+        truth_t1.mount_orientation, abs=1e-4
+    )
+
+
+def test_fit_uses_inline_measurements_for_rate_gated_sensor():
+    windows = _record_windows(_drone(mass=1.32), n_win=1, K=20)
+    model = _drone(mass=1.5)
+    imu = next(part for part in model.crafts[0].parts if part.name == "imu")
+    imu.rate = 50.0
+    result = Fit(
+        model,
+        parameters={"body.mass": Prior(sigma=0.3)},
+    ).solve(windows, compute_posterior=False)
+    assert result.converged
+    evidence = result.evidence(
+        _record_windows(_drone(mass=1.32), n_win=1, K=40, seed=99),
+        sensor="imu.accel",
+    )
+    assert evidence.held_out.sample_count == 40
 
 
 def test_prior_pins_unobservable_mass_accel_only():
@@ -247,6 +314,34 @@ def test_prior_pins_unobservable_mass_accel_only():
     # Mass: data added ~nothing beyond the prior.
     i_mass = res.labels.index("drone.body.mass")
     assert res.posterior_sigma[i_mass] > 0.5 * res.prior_sigma[i_mass]
+
+
+def test_sparse_tangent_prior_correlates_parameter_deviations():
+    windows = _record_windows(_drone(), n_win=1, K=20, seed=91)
+    model = _drone()
+    t1 = next(part for part in model.crafts[0].parts if part.name == "t1")
+    t2 = next(part for part in model.crafts[0].parts if part.name == "t2")
+    declared_t1 = np.asarray(t1.mount_offset, dtype=float)
+    declared_t2 = np.asarray(t2.mount_offset, dtype=float)
+    result = Fit(
+        model,
+        parameters={
+            "t1.mount_offset": Prior(sigma=None),
+            "t2.mount_offset": Prior(sigma=None),
+        },
+        priors=(GaussianTangentPrior(
+            name="shared-module-translation",
+            terms={"t1.mount_offset": -1.0, "t2.mount_offset": 1.0},
+            sigma=1e-5,
+        ),),
+    ).solve(windows, compute_posterior=True)
+
+    delta_t1 = np.asarray(result.values["drone.t1.mount_offset"]) - declared_t1
+    delta_t2 = np.asarray(result.values["drone.t2.mount_offset"]) - declared_t2
+    assert np.linalg.norm(delta_t2 - delta_t1) < 2e-5
+    i1 = result.labels.index("drone.t1.mount_offset[0]")
+    i2 = result.labels.index("drone.t2.mount_offset[0]")
+    assert result.prior_information[i1, i2] < 0.0
 
 
 def test_fit_recovers_moi_from_gyro():
@@ -401,13 +496,27 @@ def test_partial_window_defaults_are_provenance_across_dataset_roles():
 def test_fit_summary_and_weak_directions():
     windows = _record_windows(_drone(), n_win=2, K=30, seed=5)
     fit = Fit(_drone(), parameters={"body.mass": Prior(sigma=0.1, log=True)})
-    res = fit.solve(windows)
+    posterior_progress = []
+    res = fit.solve(windows, posterior_progress=posterior_progress.append)
     assert res.converged is True
     s = res.summary()
     assert "converged" in s
     assert "drone.body.mass" in s and "post/prior" in s
     dirs = res.weak_directions(1)
     assert len(dirs) == 1 and isinstance(dirs[0][0], float)
+    label = "drone.body.mass"
+    index = res.parameter_labels.index(label)
+    assert res.linear_contrast_posterior_sigma({label: 1.0}) == pytest.approx(
+        res.posterior_sigma[index]
+    )
+    covariance = res.parameter_posterior_covariance((label,))
+    assert covariance.shape == (1, 1)
+    assert covariance[0, 0] == pytest.approx(res.posterior_sigma[index] ** 2)
+    assert posterior_progress
+    assert posterior_progress[-1].completed_blocks \
+        == posterior_progress[-1].total_blocks
+    with pytest.raises(KeyError, match="unknown parameter labels"):
+        res.linear_contrast_posterior_sigma({"drone.unknown": 1.0})
 
 
 def test_fit_validates_windows():
@@ -466,6 +575,32 @@ def test_state_scales_make_loss_a_normalized_trajectory_mean():
     }).solve([window], compute_posterior=False,
              ipopt_options={"ipopt.max_iter": 0})
     assert result.initial_objective == pytest.approx(1.0)
+
+
+def test_fit_window_weights_scale_dataset_contributions() -> None:
+    world = _drone(mass=1.5, kf=11.0)
+    x0 = TargetNumpy(Sim(world)).state
+    truth = np.tile(
+        np.asarray(x0["drone"]["position"]) + np.array([2.0, 0.0, 0.0]),
+        (6, 1),
+    )
+    window = Window(
+        x0=x0,
+        x={"drone": {"position": truth}},
+        x_scale={"position": 2.0},
+        dt=0.0,
+    )
+    result = Fit(world, parameters={
+        "body.mass": Prior(sigma=0.5),
+    }).solve(
+        [window], window_weights=[0.25], compute_posterior=False,
+        ipopt_options={"ipopt.max_iter": 0},
+    )
+    assert result.initial_objective == pytest.approx(0.25)
+    with pytest.raises(ValueError, match="window_weights"):
+        Fit(world, parameters={"body.mass": Prior(sigma=0.5)}).solve(
+            [window], window_weights=[0.0]
+        )
 
 
 def test_state_robust_loss_bounds_a_bad_trajectory_influence():
@@ -532,6 +667,45 @@ def test_limited_fit_returns_the_best_accepted_iterate():
     assert result.objective_history[-1] == pytest.approx(result.objective)
 
 
+def test_fit_progress_exposes_checkpoint_safe_best_values_and_can_stop():
+    windows = _record_windows(_drone(mass=1.32), n_win=1, K=15)
+    seen: list[FitProgress] = []
+
+    def progress(update: FitProgress) -> bool:
+        seen.append(update)
+        return update.iteration < 1
+
+    with pytest.warns(RuntimeWarning, match="did NOT converge"):
+        result = Fit(_drone(mass=1.5), parameters={
+            "body.mass": Prior(sigma=0.5),
+            "t1.force_quad": Prior(sigma=1.0),
+            "t2.force_quad": Tied("t1.force_quad"),
+        }).solve(
+            windows,
+            compute_posterior=False,
+            progress=progress,
+            ipopt_options={"ipopt.max_iter": 20},
+        )
+
+    assert [update.iteration for update in seen] == [0, 1]
+    assert all("drone.body.mass" in update.values for update in seen)
+    assert all(
+        np.array_equal(
+            update.values["drone.t1.force_quad"],
+            update.values["drone.t2.force_quad"],
+        )
+        for update in seen
+    )
+    assert all(
+        update.best_objective <= update.initial_objective for update in seen
+    )
+    assert all(
+        later.best_objective <= earlier.best_objective
+        for earlier, later in pairwise(seen)
+    )
+    assert result.objective == pytest.approx(seen[-1].best_objective)
+
+
 def test_fit_validates_window_traces():
     """Wrong-width z, mismatched trace lengths, and a wrong-length u trace
     all raise before any solve."""
@@ -547,6 +721,81 @@ def test_fit_validates_window_traces():
     with pytest.raises(ValueError, match=r"scalar or length-10"):
         fit.solve([Window(x0=x0, z={"imu.gyro": np.zeros((K, 3))},
                           u={"t1.throttle": np.zeros(K + 3)}, dt=DT)])
+
+
+def test_fit_observation_mask_never_scores_storage_placeholders():
+    base = _record_windows(_drone(), n_win=1, K=18, seed=41)[0]
+    mask = np.arange(18) % 3 == 0
+    clean = replace(
+        base,
+        z_mask={name: mask for name in base.z},
+    )
+    corrupted_z = {name: values.copy() for name, values in base.z.items()}
+    for values in corrupted_z.values():
+        values[~mask] = 1e12
+    corrupted = replace(clean, z=corrupted_z)
+
+    def initial_loss(window):
+        with pytest.warns(RuntimeWarning, match="did NOT converge"):
+            return Fit(_drone(mass=1.4), parameters={
+                "body.mass": Prior(sigma=0.4),
+            }).solve(
+                [window], compute_posterior=False,
+                ipopt_options={"ipopt.max_iter": 0},
+            ).initial_objective
+
+    assert initial_loss(corrupted) == pytest.approx(initial_loss(clean))
+
+
+def test_fit_validates_observation_masks_and_tangent_initial_priors():
+    base = _record_windows(_drone(), n_win=1, K=10)[0]
+    fit = Fit(_drone(), parameters={"body.mass": Prior(sigma=0.1)})
+    with pytest.raises(ValueError, match=r"boolean \(10,\) array"):
+        fit.solve([replace(base, z_mask={"imu.gyro": np.ones(10)})])
+    with pytest.raises(ValueError, match="no z trace"):
+        fit.solve([replace(base, z_mask={"imu.accel": np.ones(10, bool)},
+                           z={"imu.gyro": base.z["imu.gyro"]})])
+    with pytest.raises(ValueError, match="3-component tangent sigma"):
+        fit.solve([replace(base, x0_sigma={
+            "drone.orientation": np.ones(4),
+        })])
+
+
+def test_fit_multiple_shooting_recovers_window_initial_velocity():
+    truth = TargetNumpy(Sim(_drone(mass=1.32, kf=11.0)))
+    truth.state["drone"]["velocity"] = np.array([0.0, 0.0, 0.45])
+    true_x0 = copy.deepcopy(truth.state)
+    K = 70
+    throttle = np.linspace(0.32, 0.72, K)
+    positions, velocities = [], []
+    for value in throttle:
+        truth.step(DT, u={f"t{i}.throttle": float(value)
+                          for i in range(1, 5)})
+        positions.append(truth.state["drone"]["position"].copy())
+        velocities.append(truth.state["drone"]["velocity"].copy())
+
+    prior_x0 = copy.deepcopy(true_x0)
+    prior_x0["drone"]["velocity"] = np.zeros(3)
+    window = Window(
+        x0=prior_x0,
+        x0_sigma={"drone.velocity": (0.05, 0.05, 1.0)},
+        u={f"t{i}.throttle": throttle for i in range(1, 5)},
+        x={"drone": {
+            "position": np.asarray(positions),
+            "velocity": np.asarray(velocities),
+        }},
+        dt=DT,
+    )
+    result = Fit(_drone(mass=1.5, kf=11.0), parameters={
+        "body.mass": Prior(sigma=0.5, lower=0.5, upper=3.0),
+    }).solve(
+        [window],
+        state_weights={"position": 1e5, "velocity": 1e5},
+    )
+    assert result.values["drone.body.mass"] == pytest.approx(1.32, abs=0.02)
+    delta = result.window_initial_state_deltas[(0, "drone.velocity")]
+    assert delta == pytest.approx([0.0, 0.0, 0.45], abs=0.015)
+    assert "window[0].x0.drone.velocity[2]" in result.labels
 
 
 def test_fit_unconverged_sets_flag_and_warns():
@@ -767,6 +1016,10 @@ def test_fit_exposes_loss_history_and_can_skip_posterior_diagnostics():
     assert res.objective_history[-1] < res.objective_history[0]
     assert not res.posterior_computed
     assert np.isnan(res.posterior_sigma).all()
+    with pytest.raises(RuntimeError, match="compute_posterior=True"):
+        res.linear_contrast_posterior_sigma({"drone.body.mass": 1.0})
+    with pytest.raises(RuntimeError, match="compute_posterior=True"):
+        res.parameter_posterior_covariance(("drone.body.mass",))
 
 
 def test_log_prior_with_bounds():

@@ -34,9 +34,23 @@ class NoiseDriver:
         self._channels = [(f.name, f.dim, float(f.sigma or 0.0))
                           for f in fields]
 
-    def sample(self) -> dict[str, np.ndarray]:
+    def sample(self, names: set[str] | frozenset[str] | None = None
+               ) -> dict[str, np.ndarray]:
+        """Draw only active channels, or every channel when unspecified.
+
+        Dependency-scheduled simulation uses this boundary so measurement
+        white noise advances on acquisition, not on unrelated plant ticks.
+        Channel order remains the bound NOISE-port order for deterministic
+        replay.
+        """
+        if names is not None:
+            known = {name for name, _dim, _sigma in self._channels}
+            unknown = set(names) - known
+            if unknown:
+                raise KeyError(f"NoiseDriver.sample: unknown channel(s) {sorted(unknown)}")
         return {name: self._rng.normal(0.0, sigma, dim)
-                for name, dim, sigma in self._channels if sigma > 0.0}
+                for name, dim, sigma in self._channels
+                if sigma > 0.0 and (names is None or name in names)}
 
     def reset(self) -> None:
         self._rng = np.random.default_rng(self._seed)

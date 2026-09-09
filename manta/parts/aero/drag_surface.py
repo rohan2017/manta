@@ -131,6 +131,12 @@ class DragSurface(Part):
     """Polynomial drag/lift surface.
 
     Parameters:
+        linear_coefficient_areas — positive diagonal coefficient-area vector
+                          for ``-rho * k1 * v``. This is the compact,
+                          physically constrained system-identification form.
+        quadratic_coefficient_areas — positive diagonal coefficient-area
+                          vector for ``-rho * k2 * v*abs(v)``. For the
+                          conventional drag law, ``k2 = 0.5 * Cd * A``.
         force_tensors   — list of 3×3 matrices [A_1, A_2, …, A_N], CraftFrame.
                           Default is a single zero matrix (no drag).
         moment_tensors  — same shape: the surface's FLOW-INDUCED moment
@@ -151,6 +157,10 @@ class DragSurface(Part):
     # (resp. moment variants), so this default never reaches update().
     requires_fields: ClassVar[list[type]] = [FluidField]
 
+    linear_coefficient_areas: tuple[float, float, float] = Parameter(
+        (0.0, 0.0, 0.0), manifold="R3", frame=PartFrame)
+    quadratic_coefficient_areas: tuple[float, float, float] = Parameter(
+        (0.0, 0.0, 0.0), manifold="R3", frame=PartFrame)
     force_tensors:  tuple = Parameter((np.zeros((3, 3)),))
     moment_tensors: tuple = Parameter((np.zeros((3, 3)),))
     flow_noise = WhiteNoise("R3", frame=PartFrame, sigma=0.0)
@@ -209,6 +219,15 @@ class DragSurface(Part):
         overrides["moment_tensors"] = _as_tensor_polynomial(
             force=moment, tensors=moment_tensors, name=name, kind="moment")
         super().__init__(name, **overrides)
+        for label in (
+            "linear_coefficient_areas", "quadratic_coefficient_areas"
+        ):
+            values = tuple(float(value) for value in getattr(self, label))
+            if len(values) != 3 or any(value < 0.0 for value in values):
+                raise ValueError(
+                    f"DragSurface {name!r}: {label} must contain three "
+                    f"non-negative values, got {values!r}"
+                )
 
     def update(self, ctx) -> PartUpdate:
         # --- v_rel at the mount point, in the surface's own frame -----------
@@ -239,8 +258,20 @@ class DragSurface(Part):
 
         # Sign-preserving element-wise powers of v_rel (the shared house
         # convention — see `_flow.signed_powers`): v_powers[k] = v·|v|^k.
-        max_order = max(len(self.force_tensors), len(self.moment_tensors))
+        # The semantic diagonal terms always need the first two powers. They
+        # deliberately coexist with the general tensor polynomial: ordinary
+        # hull drag can expose three positive coefficients to Fit, while a
+        # genuinely coupled lifting surface can retain its full matrices.
+        max_order = max(2, len(self.force_tensors), len(self.moment_tensors))
         v_powers = signed_powers(v_rel_mx, max_order)
+
+        linear = Vec3[PartFrame].coerce(self.linear_coefficient_areas)._mx
+        quadratic = Vec3[PartFrame].coerce(
+            self.quadratic_coefficient_areas
+        )._mx
+        F_mx = F_mx - rho * (
+            linear * v_powers[0] + quadratic * v_powers[1]
+        )
 
         for k, A_k in enumerate(self.force_tensors):
             if np.all(A_k == 0.0):

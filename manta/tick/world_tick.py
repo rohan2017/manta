@@ -185,6 +185,11 @@ def compile_world_tick(world,
     for craft in crafts:
         rates.update(per_craft[id(craft)].sample_rates)
     cg.sample_rates = rates
+    cg.plant_coupled_outputs = tuple(
+        output
+        for craft in crafts
+        for output in per_craft[id(craft)].plant_coupled_outputs
+    )
     return cg
 
 
@@ -538,6 +543,7 @@ class CraftTrace:
     com_rel_motion: tuple[ca.MX, ca.MX]  # body-relative COM (v, a)
     a_world_sym: ca.MX                 # body-acceleration placeholder
     alpha_sym: ca.MX                   # body-α placeholder
+    plant_coupled_outputs: tuple[str, ...] = ()
     # Genuinely optional — empty for a craft with no rate-declaring
     # parts / no random-walk Noise channels.
     sample_rates: dict[str, float] = dc_field(default_factory=dict)
@@ -622,10 +628,11 @@ def _trace_craft_pass1(craft,
     inertia["added_mass_lin_mx"] = (None if added is None
                                     else added["A_lin_mx"])
 
-    # Fields reach every ctx through `world` — nothing is materialized
-    # per tick, so `ctx.has_field` / `ctx.field` see exactly the
-    # world's registry (user-authored Field subclasses included).
-    fields_tuple = ()
+    # Physical fields reach every context through ``world``. Compile-time
+    # craft-scoped fields (currently the exact planet binding) ride in the
+    # local tuple; they are concrete Python objects resolved while tracing and
+    # add no runtime lookup or state.
+    fields_tuple = (() if world is None else world.fields_for_craft(craft))
 
     # Per-craft TickContext (root view) for couplings to read. The root's
     # own frame IS CraftFrame, so its frame-indexed views + body attitude
@@ -650,6 +657,18 @@ def _trace_craft_pass1(craft,
     own_wrench, new_state_outputs, sensor_outputs, sample_rates = \
         _run_part_updates(craft, prefix, kin_states, fields_tuple, dt, t,
                           world, state_input_nodes)
+    dynamics_placeholders = (
+        a_world_sym,
+        alpha_sym,
+        *joint_accel_syms.values(),
+    )
+    plant_coupled_outputs = tuple(
+        name
+        for name, value in sensor_outputs
+        if isinstance(value, _IRValue)
+        and any(ca.depends_on(value._mx, placeholder)
+                for placeholder in dynamics_placeholders)
+    )
 
     net = _net_wrench(craft, own_wrench, kin_states)
 
@@ -692,6 +711,7 @@ def _trace_craft_pass1(craft,
         com_rel_motion=(v_com_rel_mx, a_com_rel_mx),
         a_world_sym=a_world_sym,
         alpha_sym=alpha_sym,
+        plant_coupled_outputs=plant_coupled_outputs,
     )
 
 
@@ -762,6 +782,8 @@ def _placeholder_resolver(placeholders, real_values):
         new_mx = ca.substitute(val._mx, placeholders, real_values)
         if isinstance(val, ir.Vec3):
             return type(val)._from_mx(new_mx, frame=val._frame)
+        if isinstance(val, ir.VecN):
+            return type(val)._from_mx(new_mx, dim=val.dim)
         if isinstance(val, (ir.Mat3, ir.Quat)):
             return type(val)._from_mx(new_mx,
                                        from_frame=val._from_frame,

@@ -54,6 +54,8 @@ from manta.parts import (
     Output,
     Part,
     PartUpdate,
+    PositionSensor,
+    VelocitySensor,
     WhiteNoise,
 )
 
@@ -105,11 +107,18 @@ def _model_force_evidence():
         binding=binding)
 
 
-def _world(*, inertial: bool = False):
+def _world(*, inertial: bool = False, mount_sigma: float = 0.0):
     craft = Craft("drone")
     craft.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
+    factor = np.zeros((6, 6))
+    factor[:3, :3] = np.diag((0.3, 0.2, 0.1))
     craft.add(DriftingPositionSensor(
-        "gps", position_noise_sigma=0.5, position_drift_sigma=DRIFT_SIGMA))
+        "gps",
+        position_noise_sigma=0.5,
+        position_drift_sigma=DRIFT_SIGMA,
+        mount_uncertainty_sigma=mount_sigma,
+        mount_uncertainty_sqrt=tuple(factor.reshape(-1)),
+    ))
     if inertial:
         imu = IMU("imu", accel_noise_sigma=0.01, gyro_noise_sigma=0.001,
                   accel_bias_sigma=1e-4, gyro_bias_sigma=1e-5)
@@ -144,11 +153,31 @@ def _ins_preintegrated(**options):
                propagation="preintegrated", **options)
 
 
+def _ekf_schmidt(**options):
+    return EKF(_world(mount_sigma=1.0), **options)
+
+
+def _ins_preintegrated_schmidt(**options):
+    return INS(
+        _world(inertial=True, mount_sigma=1.0),
+        imu="imu",
+        sensors=_INS_SENSORS,
+        propagation="preintegrated",
+        **options,
+    )
+
+
 ESTIMATORS = [
     pytest.param(_ekf, id="EKF"),
     pytest.param(_ukf, id="UKF"),
     pytest.param(_ins_raw, id="INS-raw"),
     pytest.param(_ins_preintegrated, id="INS-preintegrated"),
+]
+
+CPP_ESTIMATORS = [
+    *ESTIMATORS,
+    pytest.param(_ekf_schmidt, id="EKF-Schmidt"),
+    pytest.param(_ins_preintegrated_schmidt, id="INS-preintegrated-Schmidt"),
 ]
 
 
@@ -307,6 +336,135 @@ def test_per_sample_R_override_is_typed_validated_and_effective(estimator):
         low.update("gps.position", z, R=np.zeros((3, 3)))
 
 
+@pytest.mark.parametrize("estimator", (_ekf, _ins_raw, _ins_preintegrated))
+def test_schmidt_mount_posterior_is_retained_with_per_sample_R(estimator):
+    baseline_transform = estimator()
+    if estimator is _ekf:
+        uncertain_transform = EKF(_world(mount_sigma=1.0))
+    else:
+        uncertain_transform = INS(
+            _world(inertial=True, mount_sigma=1.0),
+            imu="imu",
+            sensors=_INS_SENSORS,
+            propagation=(
+                "preintegrated"
+                if estimator is _ins_preintegrated
+                else "raw"
+            ),
+        )
+    baseline = TargetNumpy(baseline_transform)
+    uncertain = TargetNumpy(uncertain_transform)
+    supplied = np.eye(3) * 0.01
+    z = np.array([0.0, 0.0, 5.0])
+    base_result = baseline.update("gps.position", z, R=supplied)
+    uncertain_result = uncertain.update("gps.position", z, R=supplied)
+    np.testing.assert_allclose(
+        uncertain_result.innovation_covariance
+        - base_result.innovation_covariance,
+        np.diag((0.3**2, 0.2**2, 0.1**2)),
+        atol=1e-12,
+    )
+    assert uncertain.P_consider is not None
+
+
+def test_ukf_refuses_static_mount_posterior_until_schmidt_is_supported():
+    with pytest.raises(NotImplementedError, match="Schmidt"):
+        UKF(_world(mount_sigma=1.0))
+
+
+def test_mount_posterior_covariance_uses_state_dependent_sensor_jacobian():
+    craft = Craft("vehicle")
+    craft.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
+    factor = np.zeros((6, 6))
+    factor[3:, 3:] = np.eye(3) * 0.1
+    craft.add(VelocitySensor(
+        "dvl",
+        velocity_noise_sigma=0.01,
+        mount_uncertainty_sigma=1.0,
+        mount_uncertainty_sqrt=tuple(factor.reshape(-1)),
+    ))
+    world = World("mount_jacobian").add_field(GravityField.none())
+    world.add_craft(craft)
+    transform = EKF(world, sensors=["dvl.velocity"])
+    runtime = TargetNumpy(transform)
+    checkpoint = runtime.checkpoint()
+    x = checkpoint.x.copy()
+    slot = transform.sys.spec.slot("vehicle.velocity")
+    x[
+        slot.ambient_offset : slot.ambient_offset + slot.ambient_dim
+    ] = (2.0, 0.0, 0.0)
+    runtime.restore(FilterCheckpoint(
+        x=x,
+        P=np.zeros_like(checkpoint.P),
+        time=checkpoint.time,
+        artifact_id=checkpoint.artifact_id,
+        P_consider=checkpoint.P_consider,
+    ))
+    result = runtime.update(
+        "dvl.velocity", (2.0, 0.0, 0.0), R=np.eye(3) * 1e-4
+    )
+    # J_orientation = -skew(v) at the identity mount. Rotation about the
+    # measured velocity axis is invisible; the other two 0.1-rad posterior
+    # directions each contribute (2 m/s * 0.1 rad)^2.
+    np.testing.assert_allclose(
+        np.diag(result.innovation_covariance),
+        (1e-4, 1e-4 + 0.04, 1e-4 + 0.04),
+        atol=1e-12,
+    )
+
+
+def test_schmidt_mount_uncertainty_is_not_averaged_away_across_updates():
+    craft = Craft("vehicle")
+    craft.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
+    factor = np.zeros((6, 6))
+    factor[:3, :3] = np.eye(3) * 0.3
+    craft.add(PositionSensor(
+        "gps",
+        position_noise_sigma=0.01,
+        mount_uncertainty_sigma=1.0,
+        mount_uncertainty_sqrt=tuple(factor.reshape(-1)),
+    ))
+    world = World("static_mount").add_field(GravityField.none())
+    world.add_craft(craft)
+    transform = EKF(world, sensors=["gps.position"])
+    runtime = TargetNumpy(transform)
+    runtime.reset(P=np.eye(transform.spec.tangent_dim))
+
+    for _ in range(100):
+        runtime.update("gps.position", (0.0, 0.0, 0.0))
+
+    position = transform.spec.slot("vehicle.position")
+    position_variance = np.diag(runtime.P)[
+        position.tangent_offset : position.tangent_offset + 3
+    ]
+    # Repeated readings can remove white sensor noise, but not one unknown
+    # mount translation that remains the same for every reading.
+    assert np.all(position_variance > 0.08)
+    assert runtime.P_consider is not None
+    assert np.linalg.norm(runtime.P_consider) > 0.1
+
+
+def test_schmidt_restore_rejects_impossible_joint_covariance_atomically():
+    runtime = TargetNumpy(_ekf_schmidt())
+    before = runtime.checkpoint()
+    invalid = FilterCheckpoint(
+        x=before.x,
+        P=before.P,
+        time=before.time,
+        artifact_id=before.artifact_id,
+        P_consider=np.full_like(before.P_consider, 10.0),
+    )
+
+    with pytest.raises(ValueError, match="joint covariance"):
+        runtime.restore(invalid)
+
+    after = runtime.checkpoint()
+    np.testing.assert_array_equal(after.x, before.x)
+    np.testing.assert_array_equal(after.P, before.P)
+    np.testing.assert_array_equal(after.P_consider, before.P_consider)
+    assert after.time == before.time
+
+
 @pytest.mark.parametrize("estimator", ESTIMATORS)
 def test_gauss_markov_channel_is_filter_state_with_exact_transition(estimator):
     """The correlated drift is a tracked slot; one predict applies
@@ -411,7 +569,7 @@ _SPAN_PROBE = r"""
 """
 
 
-@pytest.mark.parametrize("estimator", ESTIMATORS)
+@pytest.mark.parametrize("estimator", CPP_ESTIMATORS)
 def test_extended_update_numpy_cpp_parity(estimator, tmp_path: Path):
     cxx = next((c for c in ("c++", "g++", "clang++") if shutil.which(c)),
                None)

@@ -126,6 +126,12 @@ class World:
             raise TypeError(
                 f"World.add_field: expected a Field, got "
                 f"{type(field).__name__}")
+        from .fields import PlanetBindingField
+        if isinstance(field, PlanetBindingField):
+            raise ValueError(  # noqa: TRY004 - valid Field, invalid scope
+                "PlanetBindingField is craft-scoped; pass its planet as "
+                "World.add_craft(..., planet=...) instead of add_field()"
+            )
         cls = type(field)
         owner = getattr(field, "_world", None)
         if owner is not None and owner is not self:
@@ -211,6 +217,7 @@ class World:
                   orientation=(1.0, 0.0, 0.0, 0.0),
                   velocity=(0.0, 0.0, 0.0),
                   angular_velocity=(0.0, 0.0, 0.0),
+                  planet=None,
                   **extra_state: Any) -> Craft:
         """Add a craft to the world.
 
@@ -224,6 +231,10 @@ class World:
                                (what a strapped-down gyro reads). For a
                                non-identity `orientation`, world-frame
                                rates must be rotated into the body first.
+            planet           — optional exact Planet whose body-fixed
+                               Cartesian frame this craft uses. The binding is
+                               compile-time context for planet-dependent parts;
+                               it does not select physical field contributions.
             **extra_state    — per-part state overrides
                                (e.g., `**{"wheel.angle": 0.5}`).
         """
@@ -231,6 +242,8 @@ class World:
             raise TypeError(
                 f"World.add_craft: expected a Craft, got "
                 f"{type(craft).__name__}")
+        from .fields import PlanetBindingField
+        binding = None if planet is None else PlanetBindingField(planet)
         from .planets.state import PlanetState
         for argument, value, expected_kind in (
                 ("position", position, "position"),
@@ -265,8 +278,25 @@ class World:
         self._crafts.append({
             "craft":  craft,
             "initial_state_overrides": initial_state_overrides,
+            "fields": () if binding is None else (binding,),
         })
         return craft
+
+    def fields_for_craft(self, craft: Craft) -> tuple[Field, ...]:
+        """Compile-time fields scoped to exactly ``craft``.
+
+        Physical fields remain world-scoped.  This narrow overlay currently
+        carries only ``PlanetBindingField`` and exists so two craft in one
+        world can resolve different planets without a context-wide
+        ``PlanetFrame``.
+        """
+        for entry in self._crafts:
+            if entry["craft"] is craft:
+                return tuple(entry.get("fields", ()))
+        raise KeyError(
+            f"World {self.name!r}: craft {getattr(craft, 'name', craft)!r} "
+            "is not registered"
+        )
 
     def add_coupling(self, coupling: Coupling) -> Coupling:
         """Add an inter-craft coupling. Both endpoint crafts must already
@@ -385,6 +415,7 @@ class World:
 
         Plain tuples / numpy arrays pass through unchanged.
         """
+        from .fields import PlanetBindingField
         from .planets.state import PlanetState
         for entry in self._crafts:
             overrides = entry["initial_state_overrides"]
@@ -398,6 +429,16 @@ class World:
             if pos_planet is None and vel_planet is None:
                 continue
             planet = (pos_planet or vel_planet).planet
+            bindings = [
+                field for field in entry.get("fields", ())
+                if isinstance(field, PlanetBindingField)
+            ]
+            if bindings and bindings[0].planet is not planet:
+                raise ValueError(
+                    f"World '{self.name}': craft {entry['craft'].name!r} is "
+                    f"bound to planet {bindings[0].planet.name!r} but its "
+                    f"initial state references planet {planet.name!r}"
+                )
             if all(registered is not planet for registered in self._planets):
                 raise ValueError(
                     f"World '{self.name}': craft {entry['craft'].name!r} "

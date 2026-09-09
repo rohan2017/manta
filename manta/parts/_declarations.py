@@ -202,6 +202,15 @@ class Noise(_Declaration):
     # Class-level metadata. Subclasses MUST set both.
     kind:              str  = None    # type: ignore[assignment]
     contributes_state: bool = False
+    # A caller-supplied measurement covariance replaces ordinary device
+    # noise. Specialized model-noise declarations may opt out so the filter
+    # retains their white contribution when using ``update_with_R``. Static
+    # calibration parameters are handled separately by the Schmidt state.
+    covariance_overrideable: bool = True
+    # A static nuisance is differentiated like a noise input by the common
+    # model graph, but an estimator carries its correlation across updates
+    # with a Schmidt consider-state covariance instead of adding it to white R.
+    static_parameter: bool = False
 
     __slots__ = ("sigma", "signal_manifold")
 
@@ -305,6 +314,31 @@ class WhiteNoise(Noise):
 
     def synthesize(self, *, base_name, name, dt, default_frame, owner):
         mfd = self.resolved_signal_manifold(default_frame=default_frame)
+        return SynthesizedNoise(signal_sym=mfd.ir_input(base_name))
+
+
+class CalibrationUncertaintyNoise(WhiteNoise):
+    """Gaussian static nuisance carried by a Schmidt consider filter.
+
+    The channel remains absent from the graph while sigma is zero. When active,
+    its graph input exists only so estimator autodiff can recover the nuisance
+    Jacobian. It is excluded from per-update measurement noise: generated
+    EKF/INS kernels retain its fixed covariance and their evolving
+    navigation-to-calibration cross-covariance explicitly.
+    """
+
+    covariance_overrideable = False
+    static_parameter = True
+
+    def initial_state_entries(self, name, owner):
+        if not self.is_active(owner, name):
+            return {}
+        return super().initial_state_entries(name, owner)
+
+    def synthesize(self, *, base_name, name, dt, default_frame, owner):
+        mfd = self.resolved_signal_manifold(default_frame=default_frame)
+        if not self.is_active(owner, name):
+            return SynthesizedNoise(signal_sym=mfd.ir_zero())
         return SynthesizedNoise(signal_sym=mfd.ir_input(base_name))
 
 
@@ -528,13 +562,15 @@ class PartUpdate:
                           rates={"gyro": self.rate})
 
     `rates` maps this part's Output slots and/or Input attribute names to
-    a rate in Hz (`None` ⇒ every tick). It is metadata only — the
-    compiled tick stays a pure function (no sample-and-hold state enters
-    the kernel, so it never complicates autodiff or the EKF/LQR
-    linearization). The runtimes gate the matching *port*: an Output is
-    published once per 1/rate window and held in between; an Input
-    command is latched (ZOH) once per window, so truth and the
-    estimator's predict see the *same* held command.
+    a positive rate in Hz (`None` ⇒ every tick). The symbolic world tick
+    stays a pure function: ``Sim.module()`` uses Output rates to partition
+    measurement-only expressions into independently scheduled kernels, and
+    the simulation runtime holds each reading between acquisitions. An Input
+    rate remains an intake-contract annotation; the command transport owns
+    its ZOH policy because an input that contributes force or state must
+    remain in every plant integration step. Deploy estimator kernels remain
+    continuous measurement functions and are invoked only when an external
+    observation arrives.
 
     Stateless parts can return a bare `Wrench` instead — the framework
     wraps it as `PartUpdate(wrench=w)` automatically.

@@ -68,6 +68,50 @@ def test_noise_fit_recovers_sigmas(fitted):
     assert np.all(res.posterior_sigma < 0.1 * res.prior_sigma)
 
 
+def test_batched_noise_fit_recovers_sigmas_and_reports_progress():
+    """Streaming windows through one graph preserves the NLL optimum."""
+    windows = _record(_noisy_drone(), n_win=2, K=35)
+    progress = []
+    result = NoiseFit(
+        _noisy_drone(gyro=0.02, accel=0.01),
+        noise={
+            "imu.gyro_noise": Prior(sigma=2.0),
+            "imu.accel_noise": Prior(sigma=2.0),
+        },
+    ).solve(
+        windows,
+        solver="batched",
+        progress=lambda update: progress.append(update) or True,
+    )
+
+    assert result.converged
+    assert result.stats["solver"] == "batched_inverse_bfgs"
+    assert result.stats["window_graph_count"] == 1
+    assert progress
+    assert set(progress[-1].values) == {
+        "drone.imu.gyro_noise",
+        "drone.imu.accel_noise",
+    }
+    assert abs(result.values["drone.imu.gyro_noise"] - TRUE_GYRO) / TRUE_GYRO < 0.2
+    assert abs(result.values["drone.imu.accel_noise"] - TRUE_ACCEL) / TRUE_ACCEL < 0.2
+
+
+def test_batched_noise_fit_can_checkpoint_and_stop():
+    windows = _record(_noisy_drone(), n_win=1, K=20)
+    fitter = NoiseFit(
+        _noisy_drone(gyro=0.02, accel=0.01),
+        noise={"imu.gyro_noise": Prior(sigma=2.0)},
+    )
+    with pytest.warns(RuntimeWarning, match="did NOT converge"):
+        result = fitter.solve(
+            windows,
+            solver="batched",
+            progress=lambda update: update.iteration < 1,
+        )
+    assert not result.converged
+    assert result.stats["return_status"] == "User_Requested_Stop"
+
+
 def test_noise_fit_apply_writes_sigma_attrs(fitted):
     model, res = fitted
     res.apply()
@@ -169,6 +213,43 @@ def test_noise_fit_validates_window_traces():
     with pytest.raises(ValueError, match=r"scalar or length-10"):
         nf.solve([Window(x0=x0, z={"imu.gyro": zg, "imu.accel": za},
                          u={"t1.throttle": np.zeros(K + 5)}, dt=DT)])
+
+
+def test_noise_fit_packs_independent_sensor_availability_masks():
+    window = _record(_noisy_drone(), n_win=1, K=12, seed=31)[0]
+    gyro_mask = np.arange(12) % 2 == 0
+    accel_mask = np.arange(12) % 3 == 0
+    z = {name: values.copy() for name, values in window.z.items()}
+    z["imu.gyro"][~gyro_mask] = np.nan
+    z["imu.accel"][~accel_mask] = np.nan
+    window = replace(
+        window,
+        z=z,
+        z_mask={"imu.gyro": gyro_mask, "imu.accel": accel_mask},
+    )
+    nf = NoiseFit(_noisy_drone(), noise={
+        "imu.gyro_noise": Prior(sigma=1.0),
+        "imu.accel_noise": Prior(sigma=1.0),
+    })
+    x0, U, Z, M, K = nf._window_arrays(window)
+    assert K == 12
+    assert np.array_equal(M, np.vstack([gyro_mask, accel_mask]))
+    assert np.all(Z[:3, ~gyro_mask] == 0.0)
+    assert np.all(Z[3:, ~accel_mask] == 0.0)
+
+    tan = nf.sys.spec.tangent_dim
+    s0 = np.concatenate([channel.init for channel in nf.channels])
+    result = nf._fold(K)(
+        x0,
+        (1e-6 * np.eye(tan)).reshape(-1, 1),
+        U,
+        Z,
+        M,
+        np.tile(s0.reshape(-1, 1), (1, K)),
+        np.full((1, K), DT),
+        np.arange(K, dtype=float).reshape(1, K) * DT,
+    )
+    assert np.all(np.isfinite(np.asarray(result[2])))
 
 
 def test_noise_fit_unconverged_sets_flag_and_warns():

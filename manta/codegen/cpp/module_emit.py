@@ -70,6 +70,12 @@ def _mat_type(r: int, c: int) -> str:
     return f"Eigen::Matrix<double, {r}, {c}>"
 
 
+def _state_matrix_type(field, ctx) -> str:
+    if field.name == "P" and field.shape == (ctx.tan, ctx.tan):
+        return "Cov"
+    return _mat_type(*field.shape)
+
+
 def _buf_dim(n: int) -> int:
     """A C scratch buffer (or Eigen vector type) needs ≥1 element even for a
     zero-width port — a control-free craft still declares `double u_in[1]`."""
@@ -445,7 +451,8 @@ def _body_buffers(ep, ctx, reads, writes_manifold, matrix_writes):
         L.append(f"    double u_in[{_buf_dim(n)}];"
                  + ("" if n else "   // no inputs"))
     for w in matrix_writes:
-        L.append(f"    Cov {w}_out;")
+        field = ctx.m.state.field(w)
+        L.append(f"    {_state_matrix_type(field, ctx)} {w}_out;")
     ret_bufs: list[tuple[str, str]] = []
     for name in ep.returns:
         port = ctx.port(name)
@@ -607,16 +614,27 @@ def emit_module_cpp(module, out_dir, *, class_name: str,
         if ctx.has_clock:
             H += ["    struct Checkpoint {", "        State x;"]
             for mf in ctx.mats:
-                H.append(f"        Cov {mf.name};")
+                H.append(
+                    f"        {_state_matrix_type(mf, ctx)} {mf.name};"
+                )
             H += ["        double time;", "    };", ""]
         H.append("    State x;")
         for mf in ctx.mats:
-            H.append(f"    Cov {mf.name};")
+            H.append(f"    {_state_matrix_type(mf, ctx)} {mf.name};")
         if ctx.has_clock:
             H.append("    double logical_time_ = 0.0;")
         H += ["", f"    {q}();"]
         if ctx.mats:
-            H.append("    void reset(const State& x0, const Cov& P0);")
+            reset_args = ", ".join(
+                ["const State& x0"]
+                + [
+                    f"const {_state_matrix_type(mf, ctx)}& {mf.name}0"
+                    for mf in ctx.mats
+                ]
+            )
+            H.append(f"    void reset({reset_args});")
+            if len(ctx.mats) > 1 and ctx.mats[0].name == "P":
+                H.append("    void reset(const State& x0, const Cov& P0);")
         else:
             reset = "x = x0;"
             if ctx.has_clock:
@@ -624,8 +642,13 @@ def emit_module_cpp(module, out_dir, *, class_name: str,
             H.append(f"    void reset(const State& x0) {{ {reset} }}")
         H.append("    const State& state() const { return x; }")
         for mf in ctx.mats:
-            H.append(f"    const Cov& covariance() const "
-                     f"{{ return {mf.name}; }}")
+            accessor = (
+                "covariance" if mf.name == "P" else f"{mf.name}_covariance"
+            )
+            H.append(
+                f"    const {_state_matrix_type(mf, ctx)}& {accessor}() const "
+                f"{{ return {mf.name}; }}"
+            )
         if ctx.has_clock:
             H += ["    double time() const { return logical_time_; }",
                   "    Checkpoint checkpoint() const;",
@@ -660,16 +683,31 @@ def emit_module_cpp(module, out_dir, *, class_name: str,
     if ctx.held:
         init = ["x = State{};"]
         for mf in ctx.mats:
-            init.append(f"{mf.name} = ({_matrix_init(mf)});")
+            init.append(f"{mf.name} = ({_matrix_init(mf, ctx)});")
         C += [f"{q}::{q}() {{ {' '.join(init)} }}", ""]
         if ctx.mats:
             args = ", ".join(["const State& x0"]
-                             + [f"const Cov& {mf.name}0" for mf in ctx.mats])
+                             + [
+                                 f"const {_state_matrix_type(mf, ctx)}& "
+                                 f"{mf.name}0"
+                                 for mf in ctx.mats
+                             ])
             sets = " ".join(["x = x0;"]
                             + [f"{mf.name} = {mf.name}0;" for mf in ctx.mats])
             if ctx.has_clock:
                 sets += " logical_time_ = 0.0;"
             C += [f"void {q}::reset({args}) {{ {sets} }}", ""]
+            if len(ctx.mats) > 1 and ctx.mats[0].name == "P":
+                defaults = ", ".join(
+                    ["x0", "P0"]
+                    + [f"({_matrix_init(mf, ctx)})" for mf in ctx.mats[1:]]
+                )
+                C += [
+                    f"void {q}::reset(const State& x0, const Cov& P0) {{",
+                    f"    reset({defaults});",
+                    "}",
+                    "",
+                ]
         if ctx.has_clock:
             checkpoint_values = ["x"] + [mf.name for mf in ctx.mats]
             checkpoint_values.append("logical_time_")
@@ -694,13 +732,17 @@ def emit_module_cpp(module, out_dir, *, class_name: str,
             "cmakelists": cmake}
 
 
-def _matrix_init(mf) -> str:
+def _matrix_init(mf, ctx=None) -> str:
     """Constructor initializer for a held matrix member (e.g. P0 = 1e-2·I)."""
     M = np.asarray(mf.init, dtype=float)
-    if M.ndim == 2 and np.allclose(M, np.diag(np.diag(M))) and \
+    matrix_type = "Cov" if ctx is None else _state_matrix_type(mf, ctx)
+    if np.allclose(M, 0.0):
+        return f"{matrix_type}::Zero()"
+    if M.ndim == 2 and M.shape[0] == M.shape[1] and \
+            np.allclose(M, np.diag(np.diag(M))) and \
             np.allclose(np.diag(M), M[0, 0]):
-        return f"Cov::Identity() * {float(M[0, 0])!r}"
+        return f"{matrix_type}::Identity() * {float(M[0, 0])!r}"
     rows, cols = M.shape
     body = ", ".join(repr(float(M[i, j])) for i in range(rows)
                      for j in range(cols))
-    return f"(Cov() << {body}).finished()"
+    return f"({matrix_type}() << {body}).finished()"

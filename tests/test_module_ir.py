@@ -165,6 +165,22 @@ def test_build_u_packs_vector_fields():
         rt.build_u({"gyro": [1.0, 2.0]})
 
 
+def test_default_control_vector_cache_preserves_public_ownership():
+    from manta import Madgwick
+
+    rt = TargetNumpy(Madgwick(beta=0.1))
+    first = rt.build_u(None)
+    second = rt.build_u({})
+    assert first is not second
+    first[:] = 123.0
+    assert not np.all(rt.build_u(None) == 123.0)
+
+    internal = rt._kernel_u(None)
+    assert internal is rt._kernel_u({})
+    assert rt._kernel_param_vector() is rt._kernel_param_vector()
+    assert rt.param_vector() is not rt.param_vector()
+
+
 def test_runtime_matches_direct_kernel():
     """The NumpyRuntime engine is a faithful gather→call→scatter."""
     w, _ = _gps_world()
@@ -201,6 +217,33 @@ def test_dense_kernel_buffer_returns_owned_results_across_calls():
         evaluation is not None
         for evaluation in runtime._evaluation_buffers.values()
     )
+
+
+def test_kernel_buffer_expands_sparse_outputs_without_aliasing():
+    """Structural zeros must survive the direct native boundary."""
+    import casadi as ca
+
+    from manta.codegen.numpy._runtime import _dense_evaluation_buffer
+
+    x = ca.MX.sym("x", 3)
+    sparse = ca.vertcat(x[0], ca.MX.zeros(1), x[2])
+    # Project through a fixed structural sparsity so the middle entry is not
+    # stored in the native result buffer.
+    sparse = ca.project(sparse, ca.Sparsity.triplet(3, 1, [0, 2], [0, 0]))
+    function = ca.Function("sparse_buffer_probe", [x], [sparse])
+    evaluation = _dense_evaluation_buffer(function)
+    assert evaluation is not None
+    assert evaluation.result.size == 2
+    assert evaluation.offsets[-1] == 3
+
+    argument = np.array((2.0, 99.0, -4.0))
+    evaluation.memory.set_arg(0, memoryview(argument))
+    evaluation.evaluate()
+    dense = np.zeros(int(evaluation.offsets[-1]))
+    scatter = evaluation.scatter_indices[0]
+    assert scatter is not None
+    dense[scatter] = evaluation.result.copy()
+    np.testing.assert_array_equal(dense, (2.0, 0.0, -4.0))
 
 
 def test_explicit_Q_override_matches_kernel():

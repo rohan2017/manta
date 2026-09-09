@@ -94,6 +94,36 @@ class PlanetFrameFluid(Disturbance):
         self.velocity_fn    = velocity_fn
         self.viscosity_fn   = viscosity_fn
 
+        # Inertial material acceleration for a velocity field authored in the
+        # rotating planet frame.  For relative flow u(p,t) and constant Omega:
+        #
+        #   Dv_world/Dt = R [du/dt + (u·grad)u
+        #                    + 2 Omega×u + Omega×(Omega×p)].
+        #
+        # The final term is essential: it is the centripetal acceleration of
+        # an otherwise stationary co-rotating ocean. Build this derivative
+        # kernel once from pure symbols, then evaluate it in each field query.
+        p = ca.MX.sym("fluid_material_p", 3, 1)
+        tau = ca.MX.sym("fluid_material_t")
+        u = (ca.MX.zeros(3, 1) if velocity_fn is None
+             else ca.MX(velocity_fn(p, tau)))
+        omega = ca.DM((planet.omega * planet.axis).reshape(3, 1))
+        du = ca.jacobian(u, tau) + ca.jacobian(u, p) @ u
+        acceleration = (
+            du + 2.0 * ca.cross(omega, u)
+            + ca.cross(omega, ca.cross(omega, p))
+        )
+        gradient = ca.jacobian(u, p)
+        curl = ca.vertcat(
+            gradient[2, 1] - gradient[1, 2],
+            gradient[0, 2] - gradient[2, 0],
+            gradient[1, 0] - gradient[0, 1],
+        )
+        fluid_omega = omega + 0.5 * curl
+        self._fluid_kinematics_planet = ca.Function(
+            "planet_fluid_kinematics", [p, tau], [acceleration, fluid_omega]
+        )
+
     def _to_planet(self, point, t):
         """World query point → PlanetFrame coords + the world-frame
         offset from the planet centre (shared by contribute + membership)."""
@@ -134,6 +164,11 @@ class PlanetFrameFluid(Disturbance):
         # tangential WorldFrame velocity `ω × r_world`.
         omega_w = self.planet.omega_world_sym()
         v_world = v_world + ca.cross(omega_w, r_world)
+        a_planet, fluid_omega_planet = self._fluid_kinematics_planet(
+            p_planet, t
+        )
+        a_world = R_wp @ a_planet
+        fluid_omega_world = R_wp @ fluid_omega_planet
 
         return FluidState(
             density     = rho,
@@ -141,6 +176,8 @@ class PlanetFrameFluid(Disturbance):
             temperature = temp,
             viscosity   = visc,
             velocity    = _VEC3_W.from_mx(v_world),
+            material_acceleration=_VEC3_W.from_mx(a_world),
+            angular_velocity=_VEC3_W.from_mx(fluid_omega_world),
         )
 
     def __repr__(self) -> str:

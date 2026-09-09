@@ -52,6 +52,7 @@ import numpy as np
 
 from .._validation import require_finite, require_positive
 from ._declarations import (
+    CalibrationUncertaintyNoise,
     Input,
     Noise,
     Output,
@@ -307,6 +308,16 @@ class Part(DeclarationHost):
     mount_orientation: tuple[float, float, float, float] = Parameter(
         (1.0, 0.0, 0.0, 0.0), manifold="SO3")
 
+    # Optional local Gaussian posterior over the static mount transform.
+    # The six-vector is [translation in parent coordinates, left-trivialized
+    # orientation tangent] and is mapped through this row-major 6x6 square
+    # root.  It is dormant by default and therefore contributes no graph
+    # input or runtime work.  Estimator artifacts set sigma=1 and provide the
+    # posterior square root; estimator autodiff then forms the measurement
+    # Jacobian used by its static Schmidt consider-state covariance.
+    mount_uncertainty_sqrt: tuple[float, ...] = Parameter((0.0,) * 36)
+    mount_uncertainty = CalibrationUncertaintyNoise("R6", sigma=0.0)
+
     def __init__(self, name: str, **overrides: Any) -> None:
         from ..ir.module import check_name
         self.name = check_name(name, who=type(self).__name__)
@@ -327,6 +338,21 @@ class Part(DeclarationHost):
             # drifts off the unit sphere silently rescales every vector
             # it touches.
             self.mount_orientation = tuple(float(v) for v in q / norm)
+        factor = np.asarray(
+            self.declared_value("mount_uncertainty_sqrt"), dtype=float
+        )
+        if factor.size != 36:
+            raise ValueError(
+                f"{type(self).__name__}({name!r}): "
+                "mount_uncertainty_sqrt must contain 36 row-major values"
+            )
+        factor = factor.reshape(6, 6)
+        if float(self.mount_uncertainty_sigma) > 0.0 and not np.any(factor):
+            raise ValueError(
+                f"{type(self).__name__}({name!r}): active mount uncertainty "
+                "requires a nonzero covariance square root"
+            )
+        self.mount_uncertainty_sqrt = tuple(float(v) for v in factor.reshape(-1))
 
     @property
     def mounted_upright(self) -> bool:

@@ -82,7 +82,7 @@ class CollisionField(SuperposedField):
                       *, height: float = 0.0) -> Ellipsoid:
         """Attach a solid oblate-spheroid obstacle (a WGS-84 Earth).
         Returns the `Ellipsoid` (not self) so the caller can reuse its
-        geodetic height for other surface-relative queries."""
+        signed height for other surface-relative queries."""
         el = Ellipsoid(center=center, equatorial_radius=equatorial_radius,
                        flattening=flattening, polar_axis=polar_axis,
                        height=height)
@@ -195,22 +195,21 @@ class Ellipsoid(Disturbance):
     """Solid oblate spheroid — a planet with an equatorial bulge, e.g.
     the WGS-84 Earth (`flattening` = 1/298.257…).
 
-    Points at negative geodetic height are inside; the outward direction
-    is the geodetic normal (the direction gravity + centrifugal force
+    Points at negative signed height are inside; the outward direction
+    is the ellipsoid normal (the direction gravity + centrifugal force
     hangs a plumb line along on a planet in hydrostatic balance), so a
     craft standing anywhere on the surface gets the same "up" the
-    planet's `local_tangent_basis` and a GNSS receiver use. The spheroid
+    planet's `local_tangent_basis` uses. The spheroid
     is symmetric about `polar_axis`, so it is the same shape whether the
     planet spins beneath it or not — a world-fixed obstacle serves a
     rotating planet.
 
-    `signed_height_sym` is the reusable core: the geodetic height of a
-    point (Bowring's method, CasADi-symbolic and smooth) together with the
-    geodetic up direction. `Earth` uses it for the sea surface (fluid
+    `signed_height_sym` is the reusable symbolic core: Cartesian signed
+    height and outward normal. `signed_height` is its numeric counterpart.
+    `Earth` uses the same geometry for the sea surface (fluid
     membership, hydrostatic column, wave orbital direction) so the water
-    line and the solid surface are one geometry. It mirrors the numpy
-    `manta.planets.base.geodetic_from_cylindrical`; the two are
-    cross-checked in the tests.
+    line and the solid surface are one geometry. The numeric and symbolic
+    forms are cross-checked in the tests.
 
     Args:
         center            — spheroid centre (world frame), m.
@@ -218,7 +217,7 @@ class Ellipsoid(Disturbance):
         flattening        — `(a − b)/a`; 0 is a sphere.
         polar_axis        — symmetry (spin) axis, world frame.
         height            — m; the solid surface sits this far above the
-                            reference spheroid along the geodetic normal
+                            reference spheroid along its outward normal
                             (a mean-sea-level offset). Default 0.
     """
 
@@ -250,10 +249,59 @@ class Ellipsoid(Disturbance):
         self.height = float(height)
         self._axis_dm = ca.DM(list(self.polar_axis))
 
+    def signed_height(self, r: np.ndarray) -> tuple[float, np.ndarray]:
+        """Numeric Cartesian ``(signed height, outward unit normal)``.
+
+        ``r`` is an offset from the ellipsoid centre in the same axes as
+        ``polar_axis``. This is surface geometry, not an LLA conversion: no
+        longitude, datum, or coordinate-system convention is introduced.
+        """
+        offset = np.asarray(r, dtype=float)
+        if offset.shape != (3,) or not np.isfinite(offset).all():
+            raise ValueError("Ellipsoid.signed_height needs a finite 3-vector")
+        if float(np.linalg.norm(offset)) == 0.0:
+            raise ValueError("Ellipsoid.signed_height is undefined at its centre")
+        a = self.equatorial_radius
+        f = self.flattening
+        e2 = f * (2.0 - f)
+        b = a * (1.0 - f)
+        ep2 = e2 / (1.0 - e2)
+        axis = np.asarray(self.polar_axis, dtype=float)
+        z = float(offset @ axis)
+        rho_vector = offset - z * axis
+        rho = float(np.linalg.norm(rho_vector))
+        beta = np.arctan2(a * z, b * rho)
+        latitude = np.arctan2(
+            z + ep2 * b * np.sin(beta) ** 3,
+            rho - e2 * a * np.cos(beta) ** 3,
+        )
+        beta = np.arctan2(
+            (1.0 - f) * np.sin(latitude), np.cos(latitude)
+        )
+        latitude = np.arctan2(
+            z + ep2 * b * np.sin(beta) ** 3,
+            rho - e2 * a * np.cos(beta) ** 3,
+        )
+        sin_latitude = np.sin(latitude)
+        cos_latitude = np.cos(latitude)
+        signed = (
+            rho * cos_latitude
+            + z * sin_latitude
+            - a * np.sqrt(1.0 - e2 * sin_latitude * sin_latitude)
+            - self.height
+        )
+        radial = rho_vector / rho if rho > 0.0 else np.zeros(3)
+        normal = cos_latitude * radial + sin_latitude * axis
+        normal_norm = float(np.linalg.norm(normal))
+        if normal_norm == 0.0:
+            raise ValueError("Ellipsoid.signed_height is undefined at its centre")
+        normal /= normal_norm
+        return float(signed), normal
+
     def signed_height_sym(self, r_mx: ca.MX) -> tuple[ca.MX, ca.MX]:
         """`(height, up)` for an offset `r_mx` (3×1 MX) from the centre —
-        geodetic height above the surface (negative inside; the `height`
-        offset already subtracted) and the geodetic up unit vector, both
+        signed height above the surface (negative inside; the `height`
+        offset already subtracted) and the outward unit normal, both
         in the frame `r_mx` is expressed in. That frame must share the
         `polar_axis` coordinates (true for the world frame and for any
         frame rotated about the axis, e.g. a planet's body frame)."""

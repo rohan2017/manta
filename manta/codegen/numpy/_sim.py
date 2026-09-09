@@ -28,6 +28,7 @@ class SimCheckpoint:
     artifact_id: str
     noise: NoiseCheckpoint | None
     models: tuple[tuple[str, Any], ...] = ()
+    schedule: tuple[tuple[str, float], ...] = ()
 
     def __post_init__(self) -> None:
         def own(entries, *, who):
@@ -77,6 +78,22 @@ class SimCheckpoint:
             raise ValueError("SimCheckpoint.models needs unique identifier names")
         object.__setattr__(self, "models", tuple(
             (name, copy.deepcopy(state)) for name, state in models))
+        schedule = tuple(self.schedule)
+        if any(not isinstance(item, (tuple, list)) or len(item) != 2
+               for item in schedule):
+            raise TypeError(
+                "SimCheckpoint.schedule entries must be (name, next_time) pairs")
+        schedule_names = [item[0] for item in schedule]
+        if (any(not isinstance(name, str) or not name
+                or any(not part.isidentifier() for part in name.split("."))
+                for name in schedule_names)
+                or len(schedule_names) != len(set(schedule_names))):
+            raise ValueError(
+                "SimCheckpoint.schedule needs unique qualified names")
+        object.__setattr__(self, "schedule", tuple(
+            (name, float(require_finite(
+                next_time, name=f"SimCheckpoint.schedule {name!r}")))
+            for name, next_time in schedule))
 
 
 def _stepn_port_arg(role: Role, *, hold, u, noise, params, dt, t, n):
@@ -95,8 +112,8 @@ def _stepn_port_arg(role: Role, *, hold, u, noise, params, dt, t, n):
 class NumpySim(NumpyRuntime):
     """The simulation oracle. The runtime holds the nested state dict
     (`sim.state`); `step(dt, u={...})` applies the commands and advances it,
-    realizing that step's sensor readings. The kernel is pure: rate gating is
-    the downstream driving loop's job; declared rates remain Module metadata.
+    realizing that step's sensor readings. Rate-limited measurement kernels
+    are called only when due and their last values are held between samples.
     Read sensors with `outputs()` (raw nested) or `reading(name)` (one, by
     name)."""
 
@@ -107,6 +124,42 @@ class NumpySim(NumpyRuntime):
         self._sim_state: dict | None = None
         self._stepn_cache: dict[int, Any] = {}   # n → folded step kernel
         self._coupled_models: list[Any] = []
+        profile = module.metadata.get("transform_profile", {})
+        raw_noise_dependencies = profile.get("noise_dependencies")
+        self._noise_dependencies = (
+            None
+            if raw_noise_dependencies is None
+            else {
+                method: frozenset(names)
+                for method, names in raw_noise_dependencies
+            }
+        )
+        contract = tuple(profile.get("scheduled_measurement_groups", ()))
+        self._scheduled: dict[str, tuple[tuple[str, ...], float]] = {}
+        for item in contract:
+            if not isinstance(item, (tuple, list)) or len(item) != 3:
+                raise ValueError(
+                    f"{module.name}: invalid scheduled measurement metadata")
+            method, rate, fulls = item
+            fulls = tuple(fulls)
+            if not fulls:
+                raise ValueError(
+                    f"{module.name}: scheduled group {method!r} is empty")
+            rate = float(require_positive(
+                rate, name=f"{module.name} measurement group rate {method!r}"))
+            for full in fulls:
+                port = module.port(full)
+                if port.role is not Role.MEASUREMENT or port.rate != rate:
+                    raise ValueError(
+                        f"{module.name}: schedule for {full!r} disagrees "
+                        "with its measurement port")
+            ep = module.entry(method)
+            if ep.writes or ep.returns != fulls:
+                raise ValueError(
+                    f"{module.name}: scheduled entry {method!r} returns "
+                    "a different measurement group")
+            self._scheduled[method] = (fulls, 1.0 / rate)
+        self._next_sample = {method: 0.0 for method in self._scheduled}
 
     # ---- held state ----------------------------------------------------
 
@@ -204,13 +257,19 @@ class NumpySim(NumpyRuntime):
                 "removed — pass commands as step(dt, u={...}).")
         dt = require_positive(dt, name="NumpySim.step dt")
         t0 = self._t if t is None else float(require_finite(t, name="NumpySim.step t"))
+        schedule_resync = (
+            t is not None
+            and abs(t0 - self._t) > 1e-12 * max(1.0, abs(t0), abs(self._t))
+        )
         next_t = float(require_finite(
             t0 + dt, name="NumpySim.step resulting time"))
         if not self._coupled_models:
             noise_before = self._driver.checkpoint() if self._driver else None
             x_before = self._state["x"].copy()
             try:
-                self._sim_state = self._advance(self.state, dt, t0, u)
+                self._sim_state = self._advance(
+                    self.state, dt, t0, u,
+                    reset_schedule=schedule_resync)
             except Exception:
                 self._state["x"] = x_before
                 if self._driver is not None and noise_before is not None:
@@ -222,7 +281,9 @@ class NumpySim(NumpyRuntime):
         before = self.checkpoint()
         try:
             merged_u = self._coupled_inputs(u, t0, dt)
-            self._sim_state = self._advance(self.state, dt, t0, merged_u)
+            self._sim_state = self._advance(
+                self.state, dt, t0, merged_u,
+                reset_schedule=schedule_resync)
             for model in self._coupled_models:
                 model.post_step(self, next_t, dt)
         except Exception:
@@ -265,7 +326,7 @@ class NumpySim(NumpyRuntime):
             self._snapshot_values(self._outputs),
             float(self._t), self.module.artifact_id,
             self._driver.checkpoint() if self._driver else None,
-            tuple(models))
+            tuple(models), tuple(sorted(self._next_sample.items())))
 
     def restore(self, checkpoint: SimCheckpoint) -> None:
         if not isinstance(checkpoint, SimCheckpoint):
@@ -294,6 +355,10 @@ class NumpySim(NumpyRuntime):
         if checkpoint_names != model_names:
             raise ValueError(
                 "NumpySim.restore: coupled-model layout differs from checkpoint")
+        checkpoint_schedule = dict(checkpoint.schedule)
+        if set(checkpoint_schedule) != set(self._next_sample):
+            raise ValueError(
+                "NumpySim.restore: measurement schedule differs from checkpoint")
         for model, (_, state) in zip(self._coupled_models, checkpoint.models):
             model.validate_checkpoint(state)
         if self._driver is not None:
@@ -309,6 +374,7 @@ class NumpySim(NumpyRuntime):
                 live.clear()
                 live.update(slots)
         self._outputs = next_outputs
+        self._next_sample = checkpoint_schedule
         self._t = float(checkpoint.time)
         self._state["x"] = self._spec.pack_projected(flat)
         for model, (_, state) in zip(self._coupled_models, checkpoint.models):
@@ -373,16 +439,59 @@ class NumpySim(NumpyRuntime):
                            who="step")
 
     def _advance(self, state: dict, dt: float, t: float,
-                 u: dict[str, Any] | None = None) -> dict:
+                 u: dict[str, Any] | None = None, *,
+                 reset_schedule: bool = False) -> dict:
         flat = flatten_nested(state)
         self._check_state_keys(flat)
         self._state["x"] = self._spec.pack_projected(flat)
         u = self._pack_u(flat, u)
+        due, next_sample = self._due_measurements(
+            t, reset=reset_schedule)
+        active_noise = None
+        if self._noise_dependencies is not None:
+            active_noise = set(self._noise_dependencies.get("step", ()))
+            for method, _fulls in due:
+                active_noise.update(self._noise_dependencies.get(method, ()))
+        noise = self._noise_vec(flat, active_names=active_noise)
+        values = {"u": u, "noise": noise, "dt": dt, "t": t}
+        sampled = {}
+        for method, fulls in due:
+            sample_entry = self.module.entry(method)
+            sample_values = {
+                ref.name: values[ref.name]
+                for ref in sample_entry.args
+                if not isinstance(ref, StateRef)
+            }
+            result = self._run(sample_entry, sample_values)
+            sampled.update((full, result[full]) for full in fulls)
         ep = self.module.entry("step")
-        res = self._run(ep, {"u": u, "noise": self._noise_vec(flat),
-                             "dt": dt, "t": t})
+        res = self._run(ep, values)
         readings = {name: res[name] for name in ep.returns}
+        readings.update(sampled)
+        self._next_sample = next_sample
         return self._commit_step(state, readings)
+
+    def _due_measurements(
+        self, t: float, *, reset: bool = False
+    ) -> tuple[list[tuple[str, tuple[str, ...]]], dict[str, float]]:
+        """Return due entries plus a staged next-deadline map.
+
+        A deadline advances by its declared period rather than ``t + period``
+        so plant steps that cross deadlines do not accumulate cadence drift.
+        The sample occurs at the first plant boundary at or after a deadline.
+        """
+        tolerance = 1e-12 * max(1.0, abs(t))
+        staged = ({method: t for method in self._next_sample}
+                  if reset else dict(self._next_sample))
+        due = []
+        for method, (fulls, period) in self._scheduled.items():
+            deadline = staged[method]
+            if deadline <= t + tolerance:
+                due.append((method, fulls))
+                while deadline <= t + tolerance:
+                    deadline += period
+                staged[method] = deadline
+        return due, staged
 
     def _commit_step(self, prev_state: dict, readings: dict) -> dict:
         """Write the freshly packed `self._state['x']` back into `prev_state`
@@ -390,11 +499,10 @@ class NumpySim(NumpyRuntime):
         (commands, noise placeholders — sensor readings deliberately stay OUT
         of the state dict) are untouched. Mutating in place keeps every dict
         reference a caller may hold (`st = sim.state['craft']`) live across
-        steps. This step's `{full sensor name: reading}` is scattered into
-        `self._outputs`."""
+        steps. Fresh readings are merged into `self._outputs`; rate-limited
+        readings not sampled on this step retain their previous value."""
         for owner, slots in self._spec.to_nested(self._state["x"]).items():
             prev_state.setdefault(owner, {}).update(slots)
-        self._outputs = {}
         for full, reading in readings.items():
             owner, slot = _split(full)
             self._outputs.setdefault(owner, {})[slot] = reading
@@ -417,7 +525,8 @@ class NumpySim(NumpyRuntime):
         n = int(n)
         if t is not None:
             t = float(require_finite(t, name="NumpySim.step_n t"))
-        if n <= 1 or self._driver is not None or self._coupled_models:
+        if (n <= 1 or self._driver is not None or self._coupled_models
+                or self._scheduled):
             before = self.checkpoint()
             try:
                 for k in range(n):
@@ -490,17 +599,21 @@ class NumpySim(NumpyRuntime):
         self._state["x"] = next_x
         return self._commit_step(state, readings)
 
-    def _noise_vec(self, flat: dict | None = None) -> np.ndarray:
+    def _noise_vec(self, flat: dict | None = None, *,
+                   active_names: set[str] | None = None) -> np.ndarray:
         """The flat noise draw, in port-field order: a `NoiseDriver` sample
         takes precedence, else a channel value set directly in the state
         dict (deterministic tests), else zero."""
         port = self._noise_port
         if port is None:
             return np.zeros(0)
-        draw = self._driver.sample() if self._driver is not None else {}
+        draw = (self._driver.sample(active_names)
+                if self._driver is not None else {})
         held = flat if flat is not None else {}
         selected = {}
         for f in port.fields:
+            if active_names is not None and f.name not in active_names:
+                continue
             if f.name in draw:                     # a draw wins over the dict
                 selected[f.name] = draw[f.name]
             elif f.name in held:
@@ -534,8 +647,8 @@ class NumpySim(NumpyRuntime):
 
     def reading(self, name: str) -> Any:
         """The latest raw reading for a sensor (full or suffix name) from the
-        most recent step. Readings are realized every step; gate feeding
-        downstream according to the measurement port's declared rate."""
+        most recent acquisition. A rate-limited reading is held between
+        acquisitions; an unrated reading is realized every plant step."""
         full = resolve_suffix(name, [p.name for p in self._meas_ports_ir],
                               label="output", who=type(self).__name__)
         owner, slot = _split(full)

@@ -36,9 +36,46 @@ def test_nees_report_structure():
     rep = nees(_hover_world(), **_KW)
     assert rep.dof == 12
     assert rep.anees > 0
+    assert len(rep.tangent_rmse) == rep.dof
+    assert len(rep.full_tangent_rmse) == 12
+    assert len(rep.full_marginal_nes) == 12
+    assert np.all(np.isfinite(rep.tangent_rmse))
+    assert np.all(np.isfinite(rep.full_tangent_rmse))
+    assert np.all(np.isfinite(rep.full_marginal_nes))
+    assert "c.gps.position" in rep.sensor_updates
+    assert rep.sensor_updates["c.gps.position"] > 0
+    assert 0 <= rep.sensor_rejections["c.gps.position"] <= rep.sensor_updates[
+        "c.gps.position"
+    ]
+    assert np.isfinite(rep.sensor_mean_nis["c.gps.position"])
     assert rep.lower < rep.upper
     assert rep.samples == rep.runs * (250 - 250 // 5)
     assert "ANEES" in rep.summary()
+
+
+def test_nees_static_truth_ensemble_factory_and_progress():
+    """One truth model is materialized per independent trajectory."""
+    created = []
+    progress = []
+
+    def truth_world(run_index):
+        created.append(run_index)
+        return _hover_world()
+
+    report = nees(
+        _hover_world(),
+        dt=0.01,
+        steps=20,
+        control={"t.throttle": M * G},
+        runs=3,
+        seed=11,
+        truth_world_factory=truth_world,
+        progress=lambda completed, total: progress.append((completed, total)),
+    )
+
+    assert report.runs == 3
+    assert created == [0, 1, 2]
+    assert progress == [(1, 3), (2, 3), (3, 3)]
 
 
 def test_nees_unknown_sensor_raises():

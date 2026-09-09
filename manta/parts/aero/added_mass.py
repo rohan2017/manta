@@ -9,22 +9,25 @@ vehicle's own mass: a slender hull's transverse added mass is roughly
 100 % of its displaced mass (it accelerates sideways as if it weighed
 twice its dry mass), axial is 5–15 %.
 
-The effect splits into two physically distinct halves, and this part
-deliberately implements only one of them here:
+The effect splits into acceleration and velocity-product halves:
 
 * **Acceleration-proportional inertia** — `(m·I + A)·ν̇ = F`. This
   CANNOT be a wrench: a wrench that depends on acceleration would make
   the dynamics implicit (the tick validates against exactly that). The
-  tick compiler collects `AddedMass` parts and augments the linear
-  solve and the rotational inertia directly (see
-  `tick/world_tick.py`); the gyroscopic couple of the added rotational
-  inertia, `−ω×(B·ω)`, then emerges from the ordinary Euler term and
-  MUST NOT be emitted here (it would be double-counted).
+    tick compiler collects `AddedMass` parts and augments the linear
+    solve and rotational inertia directly (see `tick/world_tick.py`). In a
+    moving medium, ``update()`` supplies the corresponding ``A*a_fluid``
+    right-hand side and replaces the absolute rotational gyroscopic term
+    with its fluid-relative counterpart.
 * **Velocity-product forces** — the added-mass Coriolis terms, which
   ARE ordinary state-dependent wrenches and live in `update()`:
 
-      F = A(ω×ν_rel) − ω×(A·ν_rel)      (vanishes for isotropic A)
+      F = A·a_fluid + A(ω_rel×ν_rel) − ω_rel×(A·ν_rel)
       τ = −ν_rel×(A·ν_rel)              (the Munk moment)
+
+  plus the correction that makes the ``B`` gyroscopic term relative to
+  local fluid angular velocity. This is zero in the original still-water
+  case and cancels spurious inertial-frame torque for co-rotation.
 
   The Munk moment is the destabilizing couple that turns a slender
   body broadside to the flow — the reason bare torpedo hulls are
@@ -108,25 +111,59 @@ class AddedMass(Part):
         nu = R_part_from_world.apply(v_rel_world)._mx
         omega = R_part_from_world.apply(
             ctx.angular_velocity[WorldFrame])._mx
+        zero_world = Vec3[WorldFrame].constant((0.0, 0.0, 0.0))
+        fluid_acceleration_world = (
+            fluid.material_acceleration
+            if fluid.material_acceleration is not None else zero_world
+        )
+        fluid_omega_world = (
+            fluid.angular_velocity
+            if fluid.angular_velocity is not None else zero_world
+        )
+        fluid_acceleration = R_part_from_world.apply(
+            fluid_acceleration_world
+        )._mx
+        omega_rel = omega - R_part_from_world.apply(fluid_omega_world)._mx
 
         # Diagonal A applied element-wise; `coerce` reads the parameter
         # whether it is a plain tuple or promoted to a live input.
         a = Vec3[PartFrame].coerce(self.translational)._mx
         a_nu = a * nu
 
-        # F = A(ω×ν) − ω×(Aν): the linear added-momentum Coriolis pair.
+        # The solve carries A*a_body on the left, so A*a_fluid belongs on
+        # the right. This makes the inertia relative to an accelerating
+        # medium: a body at rest in a co-rotating ocean does not lag behind
+        # merely because it entrains water.
+        # F = A*a_fluid + A(ω_rel×ν) − ω_rel×(Aν).
         # Identically zero for isotropic A — an isotropic added mass is
         # just extra mass, and the tick's inertia side carries all of
         # that.
-        force_mx = a * ca.cross(omega, nu) - ca.cross(omega, a_nu)
+        force_mx = (
+            a * fluid_acceleration
+            + a * ca.cross(omega_rel, nu)
+            - ca.cross(omega_rel, a_nu)
+        )
 
         # Munk moment: τ = −ν×(Aν). Anisotropy again — a slender hull
         # at incidence is torqued toward broadside.
         torque_mx = -ca.cross(nu, a_nu)
 
-        # NOTE deliberately absent: −ω×(B·ω). The rotational added
-        # inertia is folded into I_com by the tick, so the ordinary
-        # Euler gyroscopic term already produces it.
+        # The tick folds B into the absolute body inertia and therefore emits
+        # -omega×(B*omega). Added rotational inertia belongs to motion
+        # relative to the local fluid. Cancel the absolute term and replace it
+        # with -omega_rel×(B*omega_rel). A co-rotating body then has no
+        # artificial added-fluid gyroscopic torque.
+        b = Vec3[PartFrame].coerce(self.rotational)._mx
+        torque_mx = (
+            torque_mx
+            + ca.cross(omega, b * omega)
+            - ca.cross(omega_rel, b * omega_rel)
+        )
+
+        # Angular acceleration of a time-varying vortical fluid is not yet a
+        # FluidState property. Planet co-rotation and the current irrotational
+        # wave model have zero inertial angular acceleration, so no B*alpha_f
+        # correction is required for the supported cases.
         return PartUpdate(wrench=Wrench(
             force=Vec3[PartFrame].from_mx(force_mx),
             torque=Vec3[PartFrame].from_mx(torque_mx)))

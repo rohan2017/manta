@@ -129,6 +129,14 @@ class JaxModule:
         `jax.grad` through the whole window works. Readings row k is
         produced by the step taken FROM state k (the manta data
         convention); `x_traj` rows are the K post-step states."""
+        profile = self.module.metadata.get("transform_profile", {})
+        scheduled = tuple(profile.get("scheduled_measurement_groups", ()))
+        if scheduled:
+            raise ValueError(
+                f"{self.module.name}: make_rollout() requires an all-inline "
+                "simulation oracle; pass Sim(...).inline_module() to "
+                "TargetJax. Scheduled acquisition kernels remain callable "
+                "individually through call().")
         ep = self.module.entry("step")
         if len(ep.writes) != 1:
             # The scan carries outs[0] as THE state; a two-write module

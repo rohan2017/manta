@@ -7,10 +7,12 @@ carries its own orientation estimate independent of the framework's
 rigid-body orientation.
 """
 
+import casadi as ca
 import numpy as np
 import pytest
 
 from manta import Craft, Sim, TargetNumpy, World
+from manta.estimation._kalman import _reset_jacobian_np
 from manta.fields import GravityField
 from manta.ir.frames import CraftFrame, PartFrame, WorldFrame
 from manta.ir.manifold import SO3Manifold
@@ -198,6 +200,49 @@ def test_state_spec_picks_up_so3_state_slot():
     assert slot.ambient_dim              == 4
     assert slot.tangent_dim      == 3
     assert slot.manifold.kind    == "quat"
+
+
+def test_so3_covariance_reset_matches_retraction_basis_change():
+    """A finite attitude injection changes the posterior tangent basis."""
+    c = Craft("c"); c.add(Mass("body", mass=1.0))
+    c.add(_SO3PassthroughPart("att"))
+    w = World().add_field(GravityField(g=(0, 0, 0)))
+    w.add_craft(c)
+    from manta import state_spec_from_world
+    spec = state_spec_from_world(w)
+    state = spec.pack_projected(w._initial_state_dict())
+    slot = spec.slot("c.orientation")
+    correction = np.zeros(spec.tangent_dim)
+    correction[slot.tangent_offset:slot.tangent_offset + 3] = (1.0, 0.5, -0.3)
+    shifted = spec.boxplus_num(state, correction)
+    first = ca.MX.sym("reset_first", spec.ambient_dim)
+    second = ca.MX.sym("reset_second", spec.ambient_dim)
+    boxminus = ca.Function(
+        "reset_boxminus", [first, second], [spec.boxminus_sym(first, second)]
+    )
+    h = 1e-6
+    numeric = np.zeros((3, 3))
+    for axis in range(3):
+        perturbation = np.zeros(spec.tangent_dim)
+        perturbation[slot.tangent_offset + axis] = h
+        plus = np.asarray(boxminus(
+            spec.boxplus_num(state, correction + perturbation), shifted
+        )).reshape(-1)
+        minus = np.asarray(boxminus(
+            spec.boxplus_num(state, correction - perturbation), shifted
+        )).reshape(-1)
+        numeric[:, axis] = (
+            plus[slot.tangent_offset:slot.tangent_offset + 3]
+            - minus[slot.tangent_offset:slot.tangent_offset + 3]
+        ) / (2.0 * h)
+
+    reset = _reset_jacobian_np(spec, correction)
+    block = reset[
+        slot.tangent_offset:slot.tangent_offset + 3,
+        slot.tangent_offset:slot.tangent_offset + 3,
+    ]
+    np.testing.assert_allclose(block, numeric, atol=2e-10)
+    assert np.linalg.norm(block - np.eye(3)) > 0.5
 
 
 # ---------------------------------------------------------------------------

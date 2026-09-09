@@ -49,11 +49,9 @@ class Scene:
     Construct via `planet.scene_at(position, heading=...)` rather than
     directly. `position` is the anchor point in PlanetFrame (typically a
     point on the surface); the scene's axes are the local tangent frame
-    there — +z up (the geodetic normal of the planet's reference spheroid;
-    the radial for a sphere), +x north (the planet spin axis projected into
-    the tangent plane), +y = up×north — optionally yawed by `heading`
-    (radians) about up. `planet.scene_at_geodetic(lat, lon, alt)` anchors
-    by geodetic coordinates.
+    there — +z along the planet's Cartesian surface normal (radial for the
+    base planet), +x north (the planet spin axis projected into the tangent
+    plane), +y = up×north — optionally yawed by `heading` (radians) about up.
     """
 
     def __init__(self,

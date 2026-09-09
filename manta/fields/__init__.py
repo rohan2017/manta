@@ -57,6 +57,8 @@ from .optical import (
     OpticalField,
     SemanticEllipsoid,
 )
+from .planet_binding import PlanetBindingField
+from .wave_ocean import WaveOcean
 from .wind_bubble import CraftWindBubble
 
 __all__ = [
@@ -79,6 +81,7 @@ __all__ = [
     "J2Gravity",
     "MagField",
     "OpticalField",
+    "PlanetBindingField",
     "PointMassGravity",
     "SemanticEllipsoid",
     "Sphere",
@@ -86,6 +89,7 @@ __all__ = [
     "UniformFluid",
     "UniformGravity",
     "UniformMag",
+    "WaveOcean",
     "WeatherPatch",
     "below_surface",
     "gravity_at",

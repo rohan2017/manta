@@ -1,15 +1,11 @@
-"""The oblate planet — geodetic up, WGS-84 Earth, and why J2 comes with it.
+"""The oblate Earth surface, Cartesian normals, and why J2 comes with it.
 
 Contracts pinned here:
 
-  * `Planet.local_tangent_basis` returns the GEODETIC normal of the
-    reference spheroid (a plumb line, a GNSS "up"), reducing exactly to
-    the radial for a sphere.
-  * `ecef_from_geodetic` / `geodetic_from_ecef` round-trip and hit the
-    textbook WGS-84 points; the numpy and CasADi (collision `Ellipsoid`)
-    formulations agree.
-  * Earth's sea surface is the ellipsoid: geodetic altitude is 0 on it at
-    every latitude and +h at height h; the ocean/atmosphere switch there.
+  * `Planet.local_tangent_basis` consumes a Cartesian surface normal,
+    reducing exactly to the radial for the base planet and a sphere.
+  * Numeric and CasADi `Ellipsoid` geometry agree.
+  * Earth's sea surface is the ellipsoid; the ocean/atmosphere switch there.
   * The physical reason for all of it: point mass + J2 + the spinning
     frame's centrifugal term leave a craft at rest on the ellipsoid with
     no tangential acceleration to O(f²) — gravity is normal to the sea.
@@ -25,7 +21,6 @@ from manta.ir.frames import WorldFrame
 from manta.ir.types import Vec3
 from manta.parts import Mass
 from manta.planets import Earth
-from manta.planets.base import geodetic_from_cylindrical
 
 A = Earth.R_EQ
 F = Earth.FLATTENING
@@ -39,6 +34,20 @@ def _geodetic_normal(lat_deg, lon_deg=0.0):
                      np.sin(lat)])
 
 
+def _earth_point(lat_deg: float, lon_deg: float, height_m: float = 0.0):
+    """Test-only WGS-84 fixture; Manta's production API stays Cartesian."""
+    lat, lon = np.radians(lat_deg), np.radians(lon_deg)
+    e2 = F * (2.0 - F)
+    radius = A / np.sqrt(1.0 - e2 * np.sin(lat) ** 2)
+    return np.array(
+        (
+            (radius + height_m) * np.cos(lat) * np.cos(lon),
+            (radius + height_m) * np.cos(lat) * np.sin(lon),
+            (radius * (1.0 - e2) + height_m) * np.sin(lat),
+        )
+    )
+
+
 # ---------------------------------------------------------------------------
 # local_tangent_basis
 # ---------------------------------------------------------------------------
@@ -47,7 +56,7 @@ def test_tangent_basis_up_is_geodetic_normal_on_the_ellipsoid():
     """At 45° N on the WGS-84 surface the outward normal is the geodetic
     (cos φ, 0, sin φ) — ~0.19° poleward of the radial. North/East follow."""
     earth = Earth()
-    p = earth.ecef_from_geodetic(45.0, 0.0, 0.0)
+    p = _earth_point(45.0, 0.0, 0.0)
     east, north, up = earth.local_tangent_basis(tuple(p))
     np.testing.assert_allclose(up, _geodetic_normal(45.0), atol=1e-12)
     radial = p / np.linalg.norm(p)
@@ -61,7 +70,7 @@ def test_tangent_basis_geodetic_up_holds_at_altitude_and_off_meridian():
     """The normal through a point 10 km up at (−33°, 151°) is the same
     geodetic normal — the basis is a function of geodetic lat/lon only."""
     earth = Earth()
-    p = earth.ecef_from_geodetic(-33.0, 151.0, 10_000.0)
+    p = _earth_point(-33.0, 151.0, 10_000.0)
     _, _, up = earth.local_tangent_basis(tuple(p))
     np.testing.assert_allclose(up, _geodetic_normal(-33.0, 151.0), atol=1e-12)
 
@@ -83,15 +92,16 @@ def test_tangent_basis_flattening_zero_is_the_radial():
     np.testing.assert_allclose(up, _geodetic_normal(45.0), atol=1e-15)
 
 
-def test_oblate_planet_requires_a_size():
-    with pytest.raises(ValueError, match="equatorial_radius"):
-        Planet(flattening=0.001)
+def test_base_planet_has_no_shape_or_geodesy_contract():
+    planet = Planet()
+    assert not hasattr(planet, "flattening")
+    assert not hasattr(planet, "ecef_from_geodetic")
     with pytest.raises(ValueError, match="flattening"):
-        Planet(equatorial_radius=1.0, flattening=1.0)
+        Earth(flattening=1.0)
 
 
 # ---------------------------------------------------------------------------
-# Geodetic ↔ Cartesian
+# Cartesian ellipsoid geometry
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("lat, lon, alt, expected", [
@@ -102,77 +112,46 @@ def test_oblate_planet_requires_a_size():
     (45.0, 0.0, 0.0, (A / np.sqrt(1.0 + (1.0 - F) ** 2), 0.0,
                       A * (1.0 - F) ** 2 / np.sqrt(1.0 + (1.0 - F) ** 2))),
 ])
-def test_ecef_from_geodetic_known_points(lat, lon, alt, expected):
-    """Textbook WGS-84 points; the 45° case is the closed form
-    ρ = a cos β, z = b sin β with tan β = (1−f) tan φ."""
-    p = Earth().ecef_from_geodetic(lat, lon, alt)
+def test_cartesian_fixture_hits_known_wgs84_points(lat, lon, alt, expected):
+    """Pin the external test fixture used to probe Earth's geometry."""
+    p = _earth_point(lat, lon, alt)
     np.testing.assert_allclose(p, expected, atol=1e-6)
 
 
-@pytest.mark.parametrize("lat, lon, alt", [
-    (0.0, 0.0, 0.0), (32.7, -117.2, 5.0), (-45.0, 170.0, -3000.0),
-    (89.9, 12.0, 0.0), (90.0, 0.0, 10.0), (-90.0, 0.0, 0.0),
-    (60.0, -179.9, 400e3), (1e-9, 0.0, -1.0),
-])
-def test_geodetic_round_trip(lat, lon, alt):
-    earth = Earth()
-    p = earth.ecef_from_geodetic(lat, lon, alt)
-    lat2, lon2, alt2 = earth.geodetic_from_ecef(p)
-    assert lat2 == pytest.approx(lat, abs=1e-9)
-    if abs(lat) < 90.0:                              # lon undefined at the pole
-        assert lon2 == pytest.approx(lon, abs=1e-9)
-    assert alt2 == pytest.approx(alt, abs=1e-6)
-
-
-def test_geodetic_conversion_needs_a_reference_shape():
-    with pytest.raises(ValueError, match="equatorial_radius"):
-        Planet().ecef_from_geodetic(0.0, 0.0)
-    with pytest.raises(ValueError, match="lat must be"):
-        Earth().ecef_from_geodetic(91.0, 0.0)
-
-
-def test_planet_frame_axes_are_ecef_for_the_default_spin_axis():
-    """axis +z, prime meridian along +x, 90° E along +y — the WGS-84 ECEF
-    convention, so a consumer's ECEF vector IS Earth's PlanetFrame vector."""
-    earth = Earth()
-    np.testing.assert_allclose(earth.ecef_from_geodetic(0, 0), (A, 0, 0), atol=1e-9)
-    np.testing.assert_allclose(earth.ecef_from_geodetic(0, 90), (0, A, 0), atol=1e-9)
-    np.testing.assert_allclose(earth.ecef_from_geodetic(90, 0), (0, 0, B), atol=1e-9)
-
-
-def test_numpy_and_symbolic_geodesy_agree():
-    """`geodetic_from_cylindrical` (numpy, Planet) and
-    `Ellipsoid.signed_height_sym` (CasADi, fields) are the same formulas —
-    the surface the collider feels and the altitude the planet reports
-    must be one geometry."""
+def test_numeric_and_symbolic_ellipsoid_geometry_agree():
+    """The numeric scene normal and symbolic field use one geometry."""
     surface = Ellipsoid(center=(0, 0, 0), equatorial_radius=A, flattening=F)
     x = ca.MX.sym("x", 3)
     h_sym, up_sym = surface.signed_height_sym(x)
     fn = ca.Function("geo", [x], [h_sym, up_sym])
-    earth = Earth()
     for lat, lon, alt in ((0, 0, 0), (32.7, -117.2, 5.0), (-45, 170, -3000),
                           (89.999, 0, 0), (90, 0, 10), (60, 20, 400e3)):
-        p = earth.ecef_from_geodetic(lat, lon, alt)
+        p = _earth_point(lat, lon, alt)
         h, up = fn(p)
-        rho = float(np.hypot(p[0], p[1]))
-        lat_np, h_np = geodetic_from_cylindrical(rho, float(p[2]), A, F)
+        h_np, up_np = surface.signed_height(p)
         assert float(h) == pytest.approx(h_np, abs=1e-6)
         assert float(h) == pytest.approx(alt, abs=1e-6)
         np.testing.assert_allclose(np.asarray(up).ravel(),
                                    _geodetic_normal(lat, lon), atol=1e-9)
-        assert np.degrees(lat_np) == pytest.approx(lat, abs=1e-9)
+        np.testing.assert_allclose(up_np, np.asarray(up).ravel(), atol=1e-9)
 
 
-def test_scene_at_geodetic_anchors_on_the_ellipsoid_with_geodetic_up():
+def test_numeric_ellipsoid_normal_is_explicitly_undefined_at_centre():
+    surface = Ellipsoid(center=(0, 0, 0), equatorial_radius=A, flattening=F)
+    with pytest.raises(ValueError, match="undefined at its centre"):
+        surface.signed_height(np.zeros(3))
+
+
+def test_scene_at_cartesian_anchor_uses_ellipsoid_normal():
     earth = Earth()
-    scene = earth.scene_at_geodetic(32.0, -117.0, 0.0)
-    np.testing.assert_allclose(scene.anchor_planet,
-                               earth.ecef_from_geodetic(32.0, -117.0), atol=0)
+    anchor = _earth_point(32.0, -117.0, 0.0)
+    scene = earth.scene_at(tuple(anchor))
+    np.testing.assert_allclose(scene.anchor_planet, anchor, atol=0)
     np.testing.assert_allclose(scene.R_planet_from_scene[:, 2],
                                _geodetic_normal(32.0, -117.0), atol=1e-12)
     ks = scene.at_rest((0.0, 0.0, -10.0))
-    assert earth.geodetic_from_ecef(ks["position"])[2] == pytest.approx(-10.0,
-                                                                        abs=1e-6)
+    height, _normal = earth.sea_surface().signed_height(ks["position"])
+    assert height == pytest.approx(-10.0, abs=1e-6)
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +177,7 @@ def test_sea_surface_is_the_ellipsoid_at_every_latitude(lat):
     old R_EQ sphere would have put the 45° surface 10.7 km up in the air."""
     earth, w = _fluid_world()
     for alt, rho in ((0.05, earth.air_density), (-0.05, earth.water_density)):
-        p = earth.ecef_from_geodetic(lat, 30.0, alt)
+        p = _earth_point(lat, 30.0, alt)
         got = float(ca.evalf(_sample(w, tuple(p)).density))
         assert got == pytest.approx(rho, rel=1e-3), f"lat={lat} alt={alt}"
 
@@ -210,10 +189,10 @@ def test_hydrostatic_and_isa_columns_use_geodetic_altitude():
     earth, w = _fluid_world()
     g0 = earth.gravity_mu / earth.planet_radius ** 2
     P0 = earth.air_density * R_AIR * earth.sea_level_temperature
-    p_wet = earth.ecef_from_geodetic(45.0, 10.0, -100.0)
+    p_wet = _earth_point(45.0, 10.0, -100.0)
     P_wet = float(ca.evalf(_sample(w, tuple(p_wet)).pressure))
     assert P_wet == pytest.approx(P0 + earth.water_density * g0 * 100.0, rel=1e-9)
-    p_dry = earth.ecef_from_geodetic(45.0, 10.0, 1500.0)
+    p_dry = _earth_point(45.0, 10.0, 1500.0)
     P_dry = float(ca.evalf(_sample(w, tuple(p_dry)).pressure))
     assert P_dry == pytest.approx(
         isa_pressure(1500.0, P0, earth.sea_level_temperature,
@@ -222,8 +201,8 @@ def test_hydrostatic_and_isa_columns_use_geodetic_altitude():
 
 def test_sea_level_offset_raises_the_ellipsoid():
     earth, w = _fluid_world(sea_level=2.0)
-    p_air = earth.ecef_from_geodetic(45.0, 0.0, 2.05)
-    p_wet = earth.ecef_from_geodetic(45.0, 0.0, 1.95)
+    p_air = _earth_point(45.0, 0.0, 2.05)
+    p_wet = _earth_point(45.0, 0.0, 1.95)
     assert float(ca.evalf(_sample(w, tuple(p_air)).density)) == pytest.approx(
         earth.air_density, rel=1e-3)
     assert float(ca.evalf(_sample(w, tuple(p_wet)).density)) == pytest.approx(
@@ -239,11 +218,11 @@ def test_surface_collision_is_the_ellipsoid_with_geodetic_normal():
     w.add_craft(c, position=(A, 0, 0))
     w = Sim(w).world
     cf = w.get_field(CollisionField)
-    p_in = earth.ecef_from_geodetic(45.0, -20.0, -0.3)
+    p_in = _earth_point(45.0, -20.0, -0.3)
     pen = np.asarray(ca.evalf(cf.value_at_sym(
         Vec3[WorldFrame].constant(tuple(p_in)), ca.MX(0.0))._mx)).ravel()
     np.testing.assert_allclose(pen, 0.3 * _geodetic_normal(45.0, -20.0), atol=1e-6)
-    p_out = earth.ecef_from_geodetic(45.0, -20.0, 0.3)
+    p_out = _earth_point(45.0, -20.0, 0.3)
     pen = np.asarray(ca.evalf(cf.value_at_sym(
         Vec3[WorldFrame].constant(tuple(p_out)), ca.MX(0.0))._mx)).ravel()
     np.testing.assert_allclose(pen, 0.0, atol=1e-6)
@@ -271,7 +250,7 @@ def test_effective_gravity_is_normal_to_the_ellipsoid(lat):
     c = Craft("probe"); c.add(Mass("body", mass=1.0))
     w.add_craft(c, position=(A, 0, 0))
     w = Sim(w).world
-    p = earth.ecef_from_geodetic(lat, 0.0, 0.0)
+    p = _earth_point(lat, 0.0, 0.0)
     g = np.asarray(ca.evalf(w.get_field(GravityField).value_at_sym(
         Vec3[WorldFrame].constant(tuple(p)), ca.MX(0.0))._mx)).ravel()
     omega = earth.omega_vec_world()
@@ -304,7 +283,7 @@ def test_craft_at_rest_on_the_ellipsoid_feels_no_tangential_acceleration():
     earth = Earth(surface_collision=False)
     w = World(); w.add_planet(earth)
     c = Craft("probe"); c.add(Mass("body", mass=1.0, moi=(0.1, 0.1, 0.1)))
-    scene = earth.scene_at_geodetic(32.0, -117.0, 0.0)
+    scene = earth.scene_at(tuple(_earth_point(32.0, -117.0, 0.0)))
     w.add_craft(c, **scene.at_rest())
     sim = TargetNumpy(Sim(w))
     dt = 1e-3

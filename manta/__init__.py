@@ -94,7 +94,10 @@ from .couplings import Coupling
 from .craft import Craft
 from .estimation.ekf import EKF
 from .estimation.imu_integrator import IMUIntegrator
-from .estimation.imu_preintegrator import IMUPreintegrator
+from .estimation.imu_preintegrator import (
+    IMUPreintegrator,
+    frame_preintegrated_packet,
+)
 from .estimation.ins import INS
 from .estimation.madgwick import Madgwick
 from .estimation.mahony import Mahony
@@ -108,10 +111,14 @@ from .fit import (
     FitDerivationReport,
     FitEvidence,
     FitEvidenceBinding,
+    FitPosteriorProgress,
+    FitProgress,
     FitResult,
     Free,
+    GaussianTangentPrior,
     HeldOutWindow,
     NoiseFit,
+    NoiseFitProgress,
     NoiseFitResult,
     Prior,
     ProcessNoiseModel,
@@ -157,8 +164,11 @@ __all__ = [
     "FitDerivationReport",
     "FitEvidence",
     "FitEvidenceBinding",
+    "FitPosteriorProgress",
+    "FitProgress",
     "FitResult",
     "Free",
+    "GaussianTangentPrior",
     "HeldOutWindow",
     "IMUIntegrator",
     "IMUPreintegrator",
@@ -174,6 +184,7 @@ __all__ = [
     "NoiseCheckpoint",
     "NoiseDriver",
     "NoiseFit",
+    "NoiseFitProgress",
     "NoiseFitResult",
     "Planet",
     "Prior",
@@ -200,6 +211,7 @@ __all__ = [
     "__version__",
     "bartlett_hac_residual_statistics",
     "compile_functions",
+    "frame_preintegrated_packet",
     "held_out_evidence",
     "hold_out",
     "ir",

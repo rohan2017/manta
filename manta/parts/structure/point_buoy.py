@@ -4,10 +4,13 @@ A craft submerged in a fluid feels a buoyant force opposing gravity at
 each sampled volume element. PointBuoy is the simplest such element: a
 single sample with displacement volume V at the part's mount offset.
 
-  F = -ρ(p) · V · g(p)
+  F = ρ(p) · V · (a_fluid(p) - g(p))
 
-evaluated at the buoy's world-frame position. ρ comes from the
-registered FluidField; g from the registered GravityField. A world with
+evaluated at the buoy's world-frame position. This is the pressure resultant
+implied by ``grad(P) = rho * (g - a_fluid)``. It reduces to ordinary
+Archimedes buoyancy in a static fluid and supplies the centripetal force
+required by a co-rotating ocean. ρ and the fluid material acceleration come
+from the registered FluidField; g from the registered GravityField. A world with
 no FluidField is a configuration error (`requires_fields`), rejected
 when the first transform is built — an in-vacuum sanity world simply
 omits the buoy. With Part.mount_offset set to a
@@ -38,7 +41,7 @@ class PointBuoy(Part):
     Parameters:
         volume — m³ displaced by the buoyancy element. Default 1e-3.
 
-    Force = -ρ(p_world) · V · g(p_world) at the part's mount point,
+    Force = ρ(p_world) · V · (a_fluid - g) at the part's mount point,
     rotated from anchor to craft frame, applied at the offset (so the
     framework lifts force-at-offset → body-frame torque for tilt
     response).
@@ -46,7 +49,9 @@ class PointBuoy(Part):
 
     requires_fields: ClassVar[list[type]] = [FluidField, GravityField]
 
-    volume: float = Parameter(1e-3)     # m³
+    # Positive scalar and a system-identification target. Calibration should
+    # normally tie distributed samples to one physical displacement scale.
+    volume: float = Parameter(1e-3, manifold="R1")     # m³
 
     def __init__(self, name: str, **overrides) -> None:
         super().__init__(name, **overrides)
@@ -64,11 +69,14 @@ class PointBuoy(Part):
         fluid    = ctx.field(FluidField).value_at_sym(p_world, ctx.t)
         g_world  = ctx.field(GravityField).value_at_sym(p_world, ctx.t)
 
-        # F = -ρ·V·g  (opposes gravity, scaled by displaced mass), rotated
-        # into the buoy's own frame for the wrench return (the framework
-        # rotates it back to body and lifts force-at-offset → torque).
+        # A static fluid has a_fluid=0 and recovers -rho*V*g. A rotating
+        # fluid supplies the centripetal acceleration needed for an
+        # Earth-fixed neutral body instead of making drag react after drift.
         scale = fluid.density * self.volume
-        f_world = g_world * (-1.0) * scale
+        a_fluid = fluid.material_acceleration
+        if a_fluid is None:
+            a_fluid = Vec3[WorldFrame].constant((0.0, 0.0, 0.0))
+        f_world = (a_fluid - g_world) * scale
         f_part  = ctx.orientation.conjugate().apply(f_world)
 
         zero_t = Vec3[PartFrame].constant((0.0, 0.0, 0.0))

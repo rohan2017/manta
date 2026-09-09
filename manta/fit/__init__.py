@@ -31,6 +31,7 @@ from ._common import (
     DEFAULT_FILL_POLICY_ID,
     FitDefaultFill,
     Free,
+    GaussianTangentPrior,
     Prior,
     Tied,
     Window,
@@ -48,8 +49,8 @@ from ._evidence import (
     hold_out,
     window_digest,
 )
-from ._map import Fit, FitResult
-from ._nll import NoiseFit, NoiseFitResult
+from ._map import Fit, FitPosteriorProgress, FitProgress, FitResult
+from ._nll import NoiseFit, NoiseFitProgress, NoiseFitResult
 from ._report import FitDerivationReport
 from ._residuals import ResidualStatistics, bartlett_hac_residual_statistics
 
@@ -64,10 +65,14 @@ __all__ = [
     "FitDerivationReport",
     "FitEvidence",
     "FitEvidenceBinding",
+    "FitPosteriorProgress",
+    "FitProgress",
     "FitResult",
     "Free",
+    "GaussianTangentPrior",
     "HeldOutWindow",
     "NoiseFit",
+    "NoiseFitProgress",
     "NoiseFitResult",
     "Prior",
     "ProcessNoiseModel",

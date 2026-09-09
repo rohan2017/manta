@@ -9,6 +9,7 @@ from manta.ir.frames import PartFrame
 from manta.ir.types import Vec3
 from manta.parts import (
     IMU,
+    ConstantBiasIMU,
     Mass,
     Output,
     Part,
@@ -45,6 +46,26 @@ def test_output_not_in_initial_state():
     # The actual Outputs are NOT in initial_state.
     assert "g.gyro"  not in state
     assert "g.accel" not in state
+
+
+def test_constant_bias_imu_retains_bias_states_without_invented_drift():
+    c = Craft("with_bias_states")
+    c.add(Mass("body", mass=1.0))
+    imu = ConstantBiasIMU("g")
+    c.add(imu)
+    state = c.initial_state()
+    assert {k for k in state if k.startswith("g.")} == {
+        "g.gyro_noise",
+        "g.accel_noise",
+        "g.gyro_bias",
+        "g.accel_bias",
+    }
+    assert not any(name.endswith("_driver") for name in state)
+    assert imu.noise_declarations() == {
+        "gyro_noise": type(imu).gyro_noise,
+        "accel_noise": type(imu).accel_noise,
+        "mount_uncertainty": type(imu).mount_uncertainty,
+    }
 
 
 # ---------------------------------------------------------------------------

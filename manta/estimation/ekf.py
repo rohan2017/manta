@@ -49,12 +49,14 @@ from ..linearization import LinearizedSystem
 from ._assembly import (
     _FilterBase,
     _q_auto,
+    consider_dimension,
     emit_filter_module,
     initial_ambient,
     prepared_sensors,
+    require_measurement_only_consider,
     resolve_gates,
 )
-from ._kalman import joseph_update, symmetrize
+from ._kalman import joseph_update, schmidt_update, symmetrize
 
 
 class EKF(_FilterBase):
@@ -89,28 +91,49 @@ class EKF(_FilterBase):
         sys = LinearizedSystem(world, track=track, sensors=sensors,
                                inputs=inputs, track_mode="closure",
                                discretization=discretization)
+        require_measurement_only_consider(sys, who="EKF")
         self._bind_system(world, sys)
         resolved_gates = resolve_gates(sys, gates, who="EKF")
 
         # ---- the Kalman recursion, symbolically, once -------------------
         spec, n_tan = sys.spec, sys.spec.tangent_dim
+        n_consider = consider_dimension(sys)
         x, u = sys.x_sym, sys.u_sym
         dt, t = sys.dt_sym, sys.t_sym
         P = ca.MX.sym("P", n_tan, n_tan)
+        P_consider = (
+            ca.MX.sym("P_consider", n_tan, n_consider)
+            if n_consider else None
+        )
         Q = ca.MX.sym("Q", n_tan, n_tan)
         F = sys.F_sym
 
         # predict: auto process noise Q = L Σ Lᵀ baked into the kernel
         # (zero when the model declares none) + an explicit-Q override.
         Q_auto = _q_auto(sys)
+        predict_inputs = [x, P] + ([P_consider] if n_consider else [])
+        predict_input_names = ["x", "P"] + (
+            ["P_consider"] if n_consider else []
+        )
+        predict_outputs = [
+            sys.x_new,
+            symmetrize(F @ P @ F.T + Q_auto),
+        ] + ([F @ P_consider] if n_consider else [])
+        predict_output_names = ["x_new", "P_new"] + (
+            ["P_consider_new"] if n_consider else []
+        )
         predict_fn = ca.Function(
-            "ekf_predict", [x, P, u, dt, t],
-            [sys.x_new, symmetrize(F @ P @ F.T + Q_auto)],
-            ["x", "P", "u", "dt", "t"], ["x_new", "P_new"])
+            "ekf_predict", [*predict_inputs, u, dt, t], predict_outputs,
+            [*predict_input_names, "u", "dt", "t"], predict_output_names)
         predict_q_fn = ca.Function(
-            "ekf_predict_with_Q", [x, P, Q, u, dt, t],
-            [sys.x_new, symmetrize(F @ P @ F.T + Q)],
-            ["x", "P", "Q", "u", "dt", "t"], ["x_new", "P_new"])
+            "ekf_predict_with_Q", [*predict_inputs, Q, u, dt, t],
+            [
+                sys.x_new,
+                symmetrize(F @ P @ F.T + Q),
+                *([F @ P_consider] if n_consider else []),
+            ],
+            [*predict_input_names, "Q", "u", "dt", "t"],
+            predict_output_names)
 
         # per-sensor Joseph update (the shared `joseph_update` kernel —
         # see estimation/_kalman.py). `prepared_sensors` eliminates dt and
@@ -126,43 +149,78 @@ class EKF(_FilterBase):
             threshold = resolved_gates[ps.full]
 
             def expressions(R, ps=ps, H=H, threshold=threshold):
-                x_candidate, P_candidate, nu, S = joseph_update(
-                    x, P, ps.h, H, R, ps.z, spec)
+                if n_consider:
+                    x_candidate, P_candidate, C_candidate, nu, S = (
+                        schmidt_update(
+                            x,
+                            P,
+                            P_consider,
+                            ca.MX.eye(n_consider),
+                            ps.h,
+                            H,
+                            ps.consider_H,
+                            R,
+                            ps.z,
+                            spec,
+                        )
+                    )
+                else:
+                    x_candidate, P_candidate, nu, S = joseph_update(
+                        x, P, ps.h, H, R, ps.z, spec)
                 nis = ca.dot(nu, spd_solve(S, nu))
                 accepted = (ca.MX.ones(1, 1) if threshold is None
                             else nis <= threshold)
                 x_result = ca.if_else(accepted, x_candidate, x)
                 P_result = ca.if_else(accepted, P_candidate, P)
-                return x_result, P_result, nu, S, nis, accepted
+                states = [x_result, P_result]
+                if n_consider:
+                    states.append(ca.if_else(
+                        accepted, C_candidate, P_consider
+                    ))
+                return (*states, nu, S, nis, accepted)
 
-            x_upd, P_upd, nu, S, nis, accepted = expressions(ps.R)
+            values = expressions(ps.R)
+            n_state_outputs = 3 if n_consider else 2
+            state_values = values[:n_state_outputs]
+            state_input_values = [x, P] + (
+                [P_consider] if n_consider else []
+            )
+            state_input_names = ["x", "P"] + (
+                ["P_consider"] if n_consider else []
+            )
+            state_output_names = ["x_new", "P_new"] + (
+                ["P_consider_new"] if n_consider else []
+            )
             updates[ps.full] = ca.Function(
                 f"ekf_update_{entry_ident(ps.full)}",
-                [x, P, ps.z, u, t], [x_upd, P_upd],
-                ["x", "P", "z", "u", "t"], ["x_new", "P_new"])
+                [*state_input_values, ps.z, u, t], state_values,
+                [*state_input_names, "z", "u", "t"], state_output_names)
             diagnostic_updates[ps.full] = ca.Function(
                 f"ekf_update_diagnostic_{entry_ident(ps.full)}",
-                [x, P, ps.z, u, t],
-                [x_upd, P_upd, nu, S, nis, accepted],
-                ["x", "P", "z", "u", "t"],
-                ["x_new", "P_new", "innovation", "innovation_covariance",
+                [*state_input_values, ps.z, u, t], values,
+                [*state_input_names, "z", "u", "t"],
+                [*state_output_names, "innovation", "innovation_covariance",
                  "nis", "accepted"])
             R_override = ca.MX.sym(f"R_{entry_ident(ps.full)}", ps.dim,
                                    ps.dim)
-            xo, Po, nuo, So, niso, acceptedo = expressions(R_override)
+            # Runtime covariance replaces device-reportable white noise.
+            # Ordinary non-overrideable model noise remains additive; static
+            # calibration uncertainty is already carried by the Schmidt
+            # consider state and must not be folded into white R here.
+            overridden = expressions(R_override + ps.model_R)
             override_updates[ps.full] = ca.Function(
                 f"ekf_update_with_R_{entry_ident(ps.full)}",
-                [x, P, ps.z, R_override, u, t],
-                [xo, Po, nuo, So, niso, acceptedo],
-                ["x", "P", "z", "R", "u", "t"],
-                ["x_new", "P_new", "innovation", "innovation_covariance",
+                [*state_input_values, ps.z, R_override, u, t], overridden,
+                [*state_input_names, "z", "R", "u", "t"],
+                [*state_output_names, "innovation", "innovation_covariance",
                  "nis", "accepted"])
 
         self._module = emit_filter_module(
             sys, spec, name=f"{world.name}_ekf", x0=x0,
             predict_fn=predict_fn, predict_q_fn=predict_q_fn,
             updates=updates, diagnostic_updates=diagnostic_updates,
-            override_updates=override_updates, gates=resolved_gates)
+            override_updates=override_updates, gates=resolved_gates,
+            consider_dim=n_consider)
 
     # module() / n_blocks / observability() / sigma_horizon() / __repr__
     # are the shared `_FilterBase` analysis tail (estimation/_assembly.py).

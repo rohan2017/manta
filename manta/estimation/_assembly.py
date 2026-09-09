@@ -50,6 +50,55 @@ class PreparedSensor:
     z: ca.MX
     h: ca.MX
     R: ca.MX
+    model_R: ca.MX
+    consider_H: ca.MX
+
+
+def consider_channels(sys) -> tuple[Any, ...]:
+    """Static nuisance channels in their global Schmidt covariance order."""
+    return tuple(
+        channel for channel in sys.noise_specs if channel.static_parameter
+    )
+
+
+def consider_dimension(sys) -> int:
+    return sum(channel.dim for channel in consider_channels(sys))
+
+
+def require_measurement_only_consider(sys, *, who: str) -> None:
+    """Reject static nuisances that affect dynamics rather than observations."""
+    if sys.L_sym is None:
+        return
+    offset = 0
+    for channel in sys.noise_specs:
+        end = offset + channel.dim
+        if channel.static_parameter and np.array(
+            ca.DM(sys.L_sym[:, offset:end].sparsity())
+        ).any():
+            raise NotImplementedError(
+                f"{who}: static consider parameter {channel.full!r} affects "
+                "state propagation; only measurement-side static "
+                "calibration is currently supported"
+            )
+        offset = end
+
+
+def sensor_consider_jacobian(sys, sm) -> ca.MX:
+    """Measurement Jacobian against whitened static nuisance coordinates."""
+    dimension = consider_dimension(sys)
+    if dimension == 0:
+        return ca.MX.zeros(sm.dim, 0)
+    if sm.L_h_sym is None:
+        return ca.MX.zeros(sm.dim, dimension)
+    L_h = ca.substitute(sm.L_h_sym, sys.dt_sym, ca.MX.zeros(1, 1))
+    columns = []
+    offset = 0
+    for channel in sys.noise_specs:
+        end = offset + channel.dim
+        if channel.static_parameter:
+            columns.append(L_h[:, offset:end] * float(channel.sigma))
+        offset = end
+    return ca.horzcat(*columns)
 
 
 def resolve_gates(sys, gates, *, who: str) -> dict[str, float | None]:
@@ -90,7 +139,7 @@ def initial_ambient(world, spec: StateSpec) -> np.ndarray:
     return spec.pack_projected(flatten_nested(world._initial_state_dict()))
 
 
-def sensor_R_expr(sys, sm) -> ca.MX:
+def sensor_R_expr(sys, sm, *, model_only: bool = False) -> ca.MX:
     """One sensor's measurement covariance `R = L_h Σ L_hᵀ` with dt
     eliminated (a measurement is dt-independent — the filters' convention),
     or a zero `dim×dim` when the model declares no noise on it. The single
@@ -99,8 +148,22 @@ def sensor_R_expr(sys, sm) -> ca.MX:
     L_h = (ca.substitute(sm.L_h_sym, sys.dt_sym, ca.MX.zeros(1, 1))
            if sm.L_h_sym is not None and sys.Sigma is not None
            else None)
-    return lin_cov(L_h, ca.DM(sys.Sigma) if L_h is not None else None,
-                   sm.dim)
+    covariance = None
+    if L_h is not None:
+        covariance = np.asarray(sys.Sigma, dtype=float).copy()
+        offset = 0
+        for channel in sys.noise_specs:
+            end = offset + channel.dim
+            if channel.static_parameter or (
+                model_only and channel.covariance_overrideable
+            ):
+                covariance[offset:end, offset:end] = 0.0
+            offset = end
+    return lin_cov(
+        L_h,
+        ca.DM(covariance) if covariance is not None else None,
+        sm.dim,
+    )
 
 
 def prepared_sensors(sys, spec: StateSpec, *, x0: np.ndarray,
@@ -115,11 +178,22 @@ def prepared_sensors(sys, spec: StateSpec, *, x0: np.ndarray,
         z = ca.MX.sym("z", s.dim)
         h = ca.substitute(s.h_sym, dt, zero_dt)
         R = sensor_R_expr(sys, s)
+        model_R = sensor_R_expr(sys, s, model_only=True)
         R_fn = ca.Function("R0", [x, u, t], [R])
         require_active_R(R, R_fn, ca.vertcat(x, u, t),
                          x0=x0, u_defaults=sys.u_defaults, spec=spec,
                          full=full, who=who)
-        out.append(PreparedSensor(full=full, dim=s.dim, z=z, h=h, R=R))
+        out.append(
+            PreparedSensor(
+                full=full,
+                dim=s.dim,
+                z=z,
+                h=h,
+                R=R,
+                model_R=model_R,
+                consider_H=sensor_consider_jacobian(sys, s),
+            )
+        )
     return out
 
 
@@ -129,6 +203,7 @@ def emit_filter_module(sys, spec: StateSpec, *, name: str, x0: np.ndarray,
                        diagnostic_updates: dict[str, ca.Function],
                        override_updates: dict[str, ca.Function],
                        gates: dict[str, float | None],
+                       consider_dim: int = 0,
                        metadata_extra: Mapping[str, Any] | None = None) -> Module:
     """The typed filter Module both twins emit — identical shape by
     construction:
@@ -138,15 +213,33 @@ def emit_filter_module(sys, spec: StateSpec, *, name: str, x0: np.ndarray,
                  predict_with_Q(x,P, Q,u,dt,t)     — explicit-Q override
                  update_<sensor>(x,P, z,u,t)       — compatible state fold
                  update_diagnostic_<sensor>(...)  — fold + innovation/NIS
-                 update_with_R_<sensor>(...,R,...) — per-sample covariance
+                 update_with_R_<sensor>(...,R,...) — per-sample device
+                                                     covariance plus retained
+                                                     white model uncertainty
+
+        Filters with Schmidt nuisance coordinates add ``P_consider`` to every
+        entry. It is the navigation-to-nuisance cross covariance. Ordinary
+        calibration coordinates are static; transforms such as preintegrated
+        INS may append documented dynamic nuisance coordinates while retaining
+        the same generated filter ABI.
     """
     n_tan = spec.tangent_dim
-    fields = (
+    fields = [
         StateField("x", "manifold", (spec.ambient_dim,),
                    init=x0, spec=spec),
         StateField("P", "matrix", (n_tan, n_tan),
                    init=np.eye(n_tan) * 1e-2),
-    )
+    ]
+    if consider_dim:
+        fields.append(StateField(
+            "P_consider", "matrix", (n_tan, consider_dim),
+            init=np.zeros((n_tan, consider_dim)),
+        ))
+    state_refs = [StateRef("x"), StateRef("P")]
+    state_writes = ["x", "P"]
+    if consider_dim:
+        state_refs.append(StateRef("P_consider"))
+        state_writes.append("P_consider")
     input_fields = getattr(sys, "input_fields", None)
     if input_fields is None:
         input_fields = tuple(
@@ -163,13 +256,13 @@ def emit_filter_module(sys, spec: StateSpec, *, name: str, x0: np.ndarray,
     functions = {"predict": predict_fn, "predict_with_Q": predict_q_fn}
     entries = [
         EntryPoint("predict", "predict",
-                   (StateRef("x"), StateRef("P"), PortRef("u"),
+                   (*state_refs, PortRef("u"),
                     PortRef("dt"), PortRef("t")),
-                   writes=("x", "P")),
+                   writes=tuple(state_writes)),
         EntryPoint("predict_with_Q", "predict_with_Q",
-                   (StateRef("x"), StateRef("P"), PortRef("Q"),
+                   (*state_refs, PortRef("Q"),
                     PortRef("u"), PortRef("dt"), PortRef("t")),
-                   writes=("x", "P")),
+                   writes=tuple(state_writes)),
     ]
     for full, s in sys.sensors.items():
         ident = entry_ident(full)
@@ -192,20 +285,20 @@ def emit_filter_module(sys, spec: StateSpec, *, name: str, x0: np.ndarray,
         functions[f"update_with_R_{ident}"] = override_updates[full]
         entries.append(EntryPoint(
             f"update_{ident}", f"update_{ident}",
-            (StateRef("x"), StateRef("P"), PortRef(full),
+            (*state_refs, PortRef(full),
              PortRef("u"), PortRef("t")),
-            writes=("x", "P")))
+            writes=tuple(state_writes)))
         returns = (innovation, innovation_cov, nis, accepted)
         entries.append(EntryPoint(
             f"update_diagnostic_{ident}", f"update_diagnostic_{ident}",
-            (StateRef("x"), StateRef("P"), PortRef(full),
+            (*state_refs, PortRef(full),
              PortRef("u"), PortRef("t")),
-            writes=("x", "P"), returns=returns))
+            writes=tuple(state_writes), returns=returns))
         entries.append(EntryPoint(
             f"update_with_R_{ident}", f"update_with_R_{ident}",
-            (StateRef("x"), StateRef("P"), PortRef(full), PortRef(r_name),
+            (*state_refs, PortRef(full), PortRef(r_name),
              PortRef("u"), PortRef("t")),
-            writes=("x", "P"), returns=returns))
+            writes=tuple(state_writes), returns=returns))
     # Keep deploy/runtime metadata out of naming conventions. Backends and
     # consumers can inspect this immutable map directly.
     metadata = sys.model.transform_metadata({
@@ -216,13 +309,21 @@ def emit_filter_module(sys, spec: StateSpec, *, name: str, x0: np.ndarray,
         "sensors": tuple(sys.sensors),
     })
     metadata["nis_gates"] = MappingProxyType(dict(gates))
+    metadata["consider_parameters"] = tuple(
+        {
+            "name": channel.full,
+            "dimension": channel.dim,
+            "sigma": float(channel.sigma),
+        }
+        for channel in consider_channels(sys)
+    )
     if metadata_extra:
         overlap = set(metadata) & set(metadata_extra)
         if overlap:
             raise ValueError(
                 f"emit_filter_module: duplicate metadata keys {sorted(overlap)}")
         metadata.update(metadata_extra)
-    return Module(name=name, state=StateLayout(fields),
+    return Module(name=name, state=StateLayout(tuple(fields)),
                   ports=tuple(ports), functions=functions,
                   entry_points=tuple(entries), kind=ModuleKind.FILTER,
                   hosting=Hosting.HELD,
@@ -339,31 +440,23 @@ def estimator_inputs(estimator, controls, *, reading=None,
     """Merge physical controls with any sensor samples driving prediction.
 
     EKF/UKF declare no ``prediction_inputs`` and pass through unchanged. INS
-    declares its selected IMU outputs in Module metadata; trajectory/NEES
-    tools supply those readings from the truth simulator through this one
-    transform-neutral adapter.
+    with raw propagation declares its selected IMU outputs in Module metadata;
+    trajectory tools supply those readings from the truth simulator through
+    this transform-neutral adapter. A preintegrated interval requires two
+    independently timestamped boundaries and is deliberately refused here;
+    use :func:`estimator_interval_inputs` for prediction or
+    :func:`estimator_observation_inputs` for a same-epoch correction.
     """
     out = dict(controls or {})
     metadata = estimator.module().metadata
     names = metadata.get("prediction_inputs", ())
     packet_map = dict(metadata.get("preintegration_input_map", {}))
     if packet_map and reading is not None:
-        if dt is None:
-            raise ValueError(
-                f"{type(estimator).__name__}: preintegrated truth adapter "
-                "needs dt")
-        from .imu_preintegrator import _single_sample_packet
-        accel_name = packet_map["end_accel"]
-        gyro_name = packet_map["end_gyro"]
-        accel = out[accel_name] if accel_name in out else reading(accel_name)
-        gyro = out[gyro_name] if gyro_name in out else reading(gyro_name)
-        packet = _single_sample_packet(
-            accel=accel, gyro=gyro, dt=dt,
-            accel_noise_sigma=float(estimator.sys.imu.accel_noise_sigma),
-            gyro_noise_sigma=float(estimator.sys.imu.gyro_noise_sigma))
-        for short, full in packet_map.items():
-            out.setdefault(full, packet[short])
-        return out
+        raise ValueError(
+            f"{type(estimator).__name__}: one reading cannot define both "
+            "boundaries of a preintegrated interval; use "
+            "estimator_interval_inputs(start_reading=..., end_reading=...)"
+        )
     if names and reading is None:
         missing = [name for name in names if name not in out]
         if missing:
@@ -376,4 +469,63 @@ def estimator_inputs(estimator, controls, *, reading=None,
             if value is None:
                 raise ValueError(f"prediction input {name!r} has no reading")
             out[name] = value
+    return out
+
+
+def estimator_observation_inputs(estimator, controls, *, reading) -> dict[str, Any]:
+    """Inputs for an observation at one epoch, without inventing a packet."""
+    metadata = estimator.module().metadata
+    packet_map = dict(metadata.get("preintegration_input_map", {}))
+    if not packet_map:
+        return estimator_inputs(estimator, controls, reading=reading)
+    out = dict(controls or {})
+    for name in (packet_map["end_accel"], packet_map["end_gyro"]):
+        out.setdefault(name, reading(name))
+    return out
+
+
+def estimator_interval_inputs(
+    estimator,
+    controls,
+    *,
+    start_reading,
+    end_reading,
+    dt: float,
+) -> dict[str, Any]:
+    """Build prediction inputs for one timestamp-bounded interval.
+
+    Raw INS propagation consumes the left-endpoint IMU sample.  A
+    preintegrated packet also carries an independently sampled right endpoint:
+    its gyro is required to remove the IMU lever-arm velocity at the packet
+    boundary, and its accelerometer is the matching endpoint observation for
+    optional model-force aiding.  Keeping this construction separate from
+    :func:`estimator_inputs` prevents a one-sample convenience adapter from
+    silently labeling the held left sample as both endpoints.
+    """
+    metadata = estimator.module().metadata
+    packet_map = dict(metadata.get("preintegration_input_map", {}))
+    if not packet_map:
+        return estimator_inputs(
+            estimator, controls, reading=start_reading, dt=dt
+        )
+
+    def read(source, name):
+        return source(name) if callable(source) else source[name]
+
+    from .imu_preintegrator import _single_sample_packet
+
+    accel_name = packet_map["end_accel"]
+    gyro_name = packet_map["end_gyro"]
+    packet = _single_sample_packet(
+        accel=read(start_reading, accel_name),
+        gyro=read(start_reading, gyro_name),
+        end_accel=read(end_reading, accel_name),
+        end_gyro=read(end_reading, gyro_name),
+        dt=dt,
+        accel_noise_sigma=float(estimator.sys.imu.accel_noise_sigma),
+        gyro_noise_sigma=float(estimator.sys.imu.gyro_noise_sigma),
+    )
+    out = dict(controls or {})
+    for short, full in packet_map.items():
+        out[full] = packet[short]
     return out

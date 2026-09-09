@@ -2,8 +2,6 @@
 
 import casadi as ca
 import numpy as np
-
-from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import (
     CurrentFlow,
     FluidField,
@@ -12,7 +10,10 @@ from manta.fields import (
 )
 from manta.ir.frames import WorldFrame
 from manta.ir.types import Vec3
-from manta.parts import Mass, PointBuoy
+from manta.parts import AddedMass, Mass, PointBuoy
+from manta.planets import Earth
+
+from manta import Craft, Sim, TargetNumpy, World
 
 
 def _eval_fluid_at(field, point_xyz):
@@ -92,6 +93,48 @@ def test_buoy_neutral_when_displaced_weight_equals_craft_weight():
                                np.array([0.0, 0.0, 10.0]), atol=1e-6)
     np.testing.assert_allclose(cw.state["float"]["velocity"],
                                np.zeros(3), atol=1e-6)
+
+
+def test_neutral_buoy_co_rotates_without_drag_manufacturing_centripetal_force():
+    """A submerged neutral body at rest in a rotating ocean remains at rest
+    in PlanetFrame. The pressure resultant must carry the ocean's material
+    acceleration; cancelling gravity alone leaves the body on a tangent."""
+    earth = Earth(surface_collision=False)
+    latitude = np.radians(37.8)
+    eccentricity_sq = earth.flattening * (2.0 - earth.flattening)
+    prime_vertical = earth.R_EQ / np.sqrt(
+        1.0 - eccentricity_sq * np.sin(latitude) ** 2
+    )
+    anchor = np.array((
+        prime_vertical * np.cos(latitude),
+        0.0,
+        prime_vertical * (1.0 - eccentricity_sq) * np.sin(latitude),
+    ))
+    scene = earth.scene_at(tuple(anchor), heading=0.37)
+    mass = 10.0
+
+    world = World()
+    world.add_planet(earth)
+    craft = Craft("float")
+    craft.add(Mass("body", mass=mass, moi=(1.0, 2.0, 3.0)))
+    craft.add(PointBuoy("buoy", volume=mass / earth.water_density))
+    craft.add(AddedMass(
+        "water_inertia",
+        translational=(1.0, 8.0, 9.0),
+        rotational=(0.1, 1.5, 2.5),
+    ))
+    world.add_craft(craft, planet=earth, **scene.at_rest((0.0, 0.0, -10.0)))
+    sim = TargetNumpy(Sim(world))
+
+    dt = 0.002
+    for _ in range(2500):
+        sim.step(dt)
+
+    relative = scene.relative(dict(sim.state["float"]), t=5.0)
+    np.testing.assert_allclose(relative["position"], (0.0, 0.0, -10.0),
+                               atol=2e-5)
+    np.testing.assert_allclose(relative["velocity"], (0.0, 0.0, 0.0),
+                               atol=2e-8)
 
 
 def test_buoy_sinks_when_displaced_weight_less_than_craft_weight():

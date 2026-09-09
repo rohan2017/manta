@@ -38,6 +38,7 @@ class FilterCheckpoint:
     P: np.ndarray
     time: float
     artifact_id: str
+    P_consider: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         x = np.asarray(self.x)
@@ -57,6 +58,17 @@ class FilterCheckpoint:
         object.__setattr__(self, "x", x)
         object.__setattr__(self, "P", P)
         object.__setattr__(self, "time", float(self.time))
+        if self.P_consider is not None:
+            cross = np.asarray(self.P_consider)
+            if cross.dtype.kind not in "iuf":
+                raise TypeError(
+                    "FilterCheckpoint: P_consider must be a real numeric array"
+                )
+            cross = np.asarray(cross, dtype=float).copy()
+            if not np.all(np.isfinite(cross)):
+                raise ValueError("FilterCheckpoint: P_consider must be finite")
+            cross.flags.writeable = False
+            object.__setattr__(self, "P_consider", cross)
 
 
 @dataclass(frozen=True)
@@ -125,6 +137,12 @@ class NumpyFilter(NumpyRuntime):
         return self._state["P"].copy()
 
     @property
+    def P_consider(self) -> np.ndarray | None:
+        """Navigation-to-Schmidt-nuisance cross-covariance, when present."""
+        value = self._state.get("P_consider")
+        return None if value is None else value.copy()
+
+    @property
     def estimate_vector(self) -> np.ndarray:
         return self._state["x"]
 
@@ -161,8 +179,16 @@ class NumpyFilter(NumpyRuntime):
         if P is not None:
             next_P = self._validate_covariance(P, who="reset P",
                                                positive_definite=False)
-        self._validate_staged_state({"x": next_x, "P": next_P})
-        self._state["x"], self._state["P"], self._t = next_x, next_P, 0.0
+        staged = {"x": next_x, "P": next_P}
+        if "P_consider" in self._state:
+            field = self.module.state.field("P_consider")
+            staged["P_consider"] = np.asarray(
+                field.init, dtype=float
+            ).reshape(field.shape).copy()
+        self._validate_staged_state(staged)
+        self._state.update(staged)
+        self._state_revision += 1
+        self._t = 0.0
 
     def reset_from_model_record(self, record: dict, *,
                                 P: np.ndarray | None = None) -> None:
@@ -178,7 +204,8 @@ class NumpyFilter(NumpyRuntime):
     def checkpoint(self) -> FilterCheckpoint:
         """Capture nominal state, covariance, and logical time atomically."""
         return FilterCheckpoint(self._state["x"], self._state["P"],
-                                float(self._t), self.module.artifact_id)
+                                float(self._t), self.module.artifact_id,
+                                self._state.get("P_consider"))
 
     def restore(self, checkpoint: FilterCheckpoint) -> None:
         """Restore a checkpoint after strict shape/finite validation.
@@ -209,8 +236,25 @@ class NumpyFilter(NumpyRuntime):
             raise ValueError("restore: P must be symmetric")
         if np.linalg.eigvalsh(P).min() < -_psd_roundoff_tolerance(P):
             raise ValueError("restore: P must be positive semidefinite")
-        new_x, new_P = x.copy(), P.copy()
-        self._state["x"], self._state["P"], self._t = new_x, new_P, t
+        has_consider = "P_consider" in self._state
+        if has_consider != (checkpoint.P_consider is not None):
+            raise ValueError(
+                "restore: checkpoint Schmidt consider-state layout differs"
+            )
+        staged = {"x": x.copy(), "P": P.copy()}
+        if has_consider:
+            field = self.module.state.field("P_consider")
+            cross = np.asarray(checkpoint.P_consider, dtype=float)
+            if cross.shape != field.shape:
+                raise ValueError(
+                    f"restore: P_consider shape {cross.shape} doesn't match "
+                    f"{field.shape}"
+                )
+            staged["P_consider"] = cross.copy()
+        self._validate_staged_state(staged)
+        self._state.update(staged)
+        self._state_revision += 1
+        self._t = t
 
     def set_state_keep_covariance(self, state: dict) -> None:
         """Replace the nominal state while preserving covariance and clock.
@@ -221,6 +265,7 @@ class NumpyFilter(NumpyRuntime):
         """
         self._state["x"] = self._spec.pack_any(
             state, base=self.module.state.field("x").init)
+        self._state_revision += 1
 
     @property
     def Q(self):
@@ -302,7 +347,7 @@ class NumpyFilter(NumpyRuntime):
         if process_Q is not None:
             process_Q = self._validate_covariance(
                 process_Q, who="predict Q", positive_definite=False)
-        u_vec = self.build_u(u)
+        u_vec = self._kernel_u(u)
         self._check_packet_duration(dt, u_vec)
         self._predict_kernel(dt, t0, u_vec, process_Q)
         self._t = next_t
@@ -338,7 +383,9 @@ class NumpyFilter(NumpyRuntime):
         * `update("gps.position", z)` — by sensor name (full or suffix),
           through the baked covariance and gate.
         * `update("gps.position", z, R=sample_R)` — typed per-sample
-          covariance override through the deployable Module entry point.
+          device covariance through the deployable Module entry point;
+          non-overrideable white model covariance remains additive, while
+          static calibration uncertainty remains in the Schmidt recursion.
         * `update(h_sym, z, R=R)` — a caller-supplied `h(x)` callable +
           measurement covariance (custom measurements; numpy-only).
 
@@ -350,7 +397,7 @@ class NumpyFilter(NumpyRuntime):
                 raise TypeError("update(h_sym, z, R=...): z and R required")
             return self._update_custom(target, z, R)
         return self._fold_sensor(
-            self._resolve_sensor(target), z, self.build_u(u), R=R,
+            self._resolve_sensor(target), z, self._kernel_u(u), R=R,
             t=self._t if t is None else float(require_finite(
                 t, name=f"{type(self).__name__}.update t")))
 
@@ -457,6 +504,29 @@ class NumpyFilter(NumpyRuntime):
         if "P" in state:
             self._validate_covariance(
                 state["P"], who="filter state P", positive_definite=False)
+        if "P_consider" in state:
+            cross = np.asarray(state["P_consider"], dtype=float)
+            expected = self.module.state.field("P_consider").shape
+            if cross.shape != expected or not np.all(np.isfinite(cross)):
+                raise ValueError(
+                    "filter state P_consider must be finite with shape "
+                    f"{expected}"
+                )
+            if "P" in state:
+                covariance = np.asarray(state["P"], dtype=float)
+                consider_covariance = np.eye(expected[1])
+                joint = np.block([
+                    [covariance, cross],
+                    [cross.T, consider_covariance],
+                ])
+                minimum = float(np.linalg.eigvalsh(joint).min())
+                tolerance = _psd_roundoff_tolerance(joint)
+                if minimum < -tolerance:
+                    raise ValueError(
+                        "filter Schmidt joint covariance must be positive "
+                        f"semidefinite (minimum eigenvalue {minimum:.17g}, "
+                        f"roundoff tolerance {tolerance:.17g})"
+                    )
 
     def _custom_h_fns(self, h_sym: Callable):
         """The `(h, H)` `ca.Function` pair for a caller-supplied `h(x)`,
@@ -505,7 +575,7 @@ class NumpyFilter(NumpyRuntime):
         R = self._validate_measurement_covariance(R, z.size, "custom")
         x_new, P_new, innovation, S = joseph_update_np(
             self._state["P"], H, R,
-            x=x_now, z=z, h=h_x, boxplus=spec.boxplus_num)
+            x=x_now, z=z, h=h_x, boxplus=spec.boxplus_num, spec=spec)
         nis = float(innovation @ np.linalg.solve(S, innovation))
         if not np.isfinite(nis) or not np.all(np.isfinite(innovation)) \
                 or not np.all(np.isfinite(S)):
@@ -513,5 +583,6 @@ class NumpyFilter(NumpyRuntime):
         self._validate_staged_state({"x": x_new, "P": P_new})
         self._state["x"] = x_new
         self._state["P"] = P_new
+        self._state_revision += 1
         return UpdateResult("custom", innovation.copy(), S.copy(), nis,
                             True, None, True)

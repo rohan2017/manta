@@ -67,6 +67,9 @@ class DuctedPropeller(Part):
                             the provisional default is 1.5.
         oblique_inflow_scale — crossflow loss strength. One uses the same
                             velocity scale as axial advance; zero disables it.
+        command_scale — dimensionless achieved-static-thrust / requested-
+                            thrust calibration. One preserves the wire's
+                            nominal newton calibration.
 
     Input:
         thrust_command — signed thrust that the static calibration would
@@ -92,6 +95,7 @@ class DuctedPropeller(Part):
     zero_thrust_advance_speed: float = Parameter(0.0)
     torque_unload_exponent: float = Parameter(1.5)
     oblique_inflow_scale: float = Parameter(1.0)
+    command_scale: float = Parameter(1.0, manifold="R1")
 
     thrust_command: float = Input(default=0.0)
 
@@ -121,6 +125,8 @@ class DuctedPropeller(Part):
                 f"{who}: torque_unload_exponent must be > 0")
         if float(self.oblique_inflow_scale) < 0.0:
             raise ValueError(f"{who}: oblique_inflow_scale must be >= 0")
+        if float(self.command_scale) <= 0.0:
+            raise ValueError(f"{who}: command_scale must be > 0")
         if float(self.zero_thrust_advance_speed) == 0.0:
             disk_area = math.pi * (float(self.diameter) / 2.0) ** 2
             self.zero_thrust_advance_speed = math.sqrt(
@@ -129,6 +135,14 @@ class DuctedPropeller(Part):
 
     def update(self, ctx) -> PartUpdate:
         command = scalar_mx(self._effective_thrust_command())
+        command_scale = scalar_mx(self.command_scale)
+        max_static_thrust = scalar_mx(self.max_static_thrust)
+        max_static_torque = scalar_mx(self.max_static_torque)
+        reaction_sign = scalar_mx(self.reaction_sign)
+        reference_density = scalar_mx(self.reference_density)
+        velocity_scale = scalar_mx(self.zero_thrust_advance_speed)
+        torque_unload_exponent = scalar_mx(self.torque_unload_exponent)
+        oblique_inflow_scale = scalar_mx(self.oblique_inflow_scale)
         command_abs = ca.sqrt(command * command + _COMMAND_EPS_N ** 2)
         direction = command / command_abs
 
@@ -140,29 +154,29 @@ class DuctedPropeller(Part):
         crossflow = ca.sqrt(v_part[1] ** 2 + v_part[2] ** 2
                             + _FLOW_NORM_EPS_SQ)
 
-        velocity_scale = float(self.zero_thrust_advance_speed)
         advance = axial / velocity_scale
         helpful_advance = smooth_max0(
             direction * advance, _FLOW_NORM_EPS_SQ)
 
-        oblique_ratio = (float(self.oblique_inflow_scale) * crossflow
+        oblique_ratio = (oblique_inflow_scale * crossflow
                          / velocity_scale)
         oblique = 1.0 / ca.sqrt(1.0 + oblique_ratio * oblique_ratio)
-        density_scale = fluid.density / float(self.reference_density)
+        density_scale = fluid.density / reference_density
 
         # Smooth x|x| at zero only to keep the symbolic derivative defined.
         # Unlike the previous clipped load curve, command remains an affine
         # term: its local control derivative never vanishes at positive
         # advance.  The signed quadratic also represents windmilling drag.
         advance_abs = ca.sqrt(advance * advance + _FLOW_NORM_EPS_SQ)
-        axial_loss = float(self.max_static_thrust) * advance * advance_abs
+        axial_loss = max_static_thrust * advance * advance_abs
+        static_command = command * command_scale
         achieved_thrust = (
-            command * oblique - axial_loss) * density_scale
+            static_command * oblique - axial_loss) * density_scale
         static_torque = (
-            command * float(self.max_static_torque)
-            / float(self.max_static_thrust) * float(self.reaction_sign))
+            static_command * max_static_torque
+            / max_static_thrust * reaction_sign)
         torque_load = 1.0 / (
-            1.0 + helpful_advance ** float(self.torque_unload_exponent))
+            1.0 + helpful_advance ** torque_unload_exponent)
         achieved_torque = (
             static_torque
             * torque_load * oblique * density_scale)

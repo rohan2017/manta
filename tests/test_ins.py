@@ -7,7 +7,7 @@ import casadi as ca
 import numpy as np
 import pytest
 
-from manta import INS, Craft, NoiseFit, Prior, TargetNumpy, Window, World
+from manta import INS, Craft, NoiseFit, Prior, Sim, TargetNumpy, Window, World
 from manta.estimation import nees, observability_trajectory
 from manta.estimation.ins import (
     MODEL_FORCE_RHO_CEILING,
@@ -22,7 +22,7 @@ from manta.fit import (
     HeldOutWindow,
     ProcessNoiseModel,
 )
-from manta.parts import IMU, DragSurface, Mass, ModelForce
+from manta.parts import IMU, DragSurface, Mass, ModelForce, Thruster, VelocitySensor
 
 
 def _evidence(*, white_sigma=0.5, gm=(0.2, 2.0), bias=(0.0, 0.0, 0.0),
@@ -147,6 +147,61 @@ def test_centripetal_lever_arm_does_not_accelerate_craft_origin():
     state = runtime.state_dict()["craft"]
     np.testing.assert_allclose(state["position"], np.zeros(3), atol=1e-8)
     np.testing.assert_allclose(state["velocity"], np.zeros(3), atol=1e-8)
+
+
+def test_dynamic_lever_arm_strapdown_matches_exact_plant() -> None:
+    """A translating/turning rigid sensor must recover the craft origin."""
+    craft = Craft("vehicle")
+    craft.add(Mass("body", mass=20.0, moi=(1.0, 2.0, 3.0)))
+    craft.add(Thruster(
+        "turn",
+        force=(0.0, 1.0, 0.0),
+        mount_offset=(1.0, 0.0, 0.0),
+    ))
+    craft.add(IMU(
+        "imu",
+        mount_offset=(-0.625, 0.0, 0.0),
+        accel_noise_sigma=0.01,
+        gyro_noise_sigma=0.001,
+    ))
+    craft.add(VelocitySensor(
+        "dvl",
+        mount_offset=(-0.264, 0.0, -0.1),
+        velocity_noise_sigma=0.002,
+    ))
+    world = World("dynamic_lever").add_field(
+        GravityField(g=(0.0, 0.0, -9.81))
+    )
+    world.add_craft(craft)
+    sim = TargetNumpy(Sim(world))
+    ins = TargetNumpy(INS(
+        world,
+        imu="vehicle.imu",
+        sensors=["vehicle.dvl.velocity"],
+        gates=None,
+    ))
+    for index in range(50):
+        t = index * 0.004
+        control = {"turn.throttle": 10.0}
+        sim.step(0.004, t=t, u=control)
+        inputs = {
+            **control,
+            "vehicle.imu.accel": sim.reading("vehicle.imu.accel"),
+            "vehicle.imu.gyro": sim.reading("vehicle.imu.gyro"),
+        }
+        if index % 50 == 0:
+            ins.update(
+                "vehicle.dvl.velocity",
+                sim.reading("vehicle.dvl.velocity"),
+                t=t,
+                u=inputs,
+            )
+        ins.predict(0.004, t=t, u=inputs)
+    truth = sim.state["vehicle"]
+    estimate = ins.state_dict()["vehicle"]
+    np.testing.assert_allclose(
+        estimate["velocity"], truth["velocity"], atol=1e-5
+    )
 
 
 def test_autodiff_F_matches_finite_difference_oracle():
@@ -326,7 +381,7 @@ def test_noisefit_accepts_ins_prediction_and_measurement_sources():
         },
         dt=0.02,
     )
-    _x0, U, Z, count = fit._window_arrays(window)
+    _x0, U, Z, _mask, count = fit._window_arrays(window)
     assert count == K
     assert U.shape == (6, K)
     assert Z.shape == (3, K)

@@ -61,9 +61,10 @@ _COVERAGE_EPS_SQ: float = 1e-12
 class FluidState:
     """Local fluid properties at a world-frame point.
 
-    Fields are ordered `density, pressure, temperature, viscosity,
-    velocity` — the four scalars first, the Vec3 velocity last — and that
-    order is used in every signature and call site.
+    The required fields retain their historical order: `density, pressure,
+    temperature, viscosity, velocity`. Optional fluid-kinematics vectors
+    follow them so existing user-authored disturbances remain source
+    compatible.
 
     density      — kg/m³. CasADi-MX scalar (composes with symbolic state).
     pressure     — Pa. MX scalar.
@@ -75,6 +76,14 @@ class FluidState:
                    Perturbation/overlay disturbances that carry no
                    viscosity pass `ca.MX(0.0)`.
     velocity     — bulk fluid velocity at the point, Vec3[WorldFrame].
+    material_acceleration — optional inertial material acceleration of the
+                   bulk fluid, Vec3[WorldFrame]. Static world-frame fluids
+                   leave it unset (equivalent to zero); rotating-planet
+                   fluids provide it for pressure-force equilibrium.
+    angular_velocity — optional local bulk-fluid angular velocity, equal to
+                   half the velocity-field curl. Rotating-planet fluids use
+                   it to make added rotational inertia relative to the water
+                   rather than to an arbitrary inertial frame.
 
     Disturbances and `FluidField.value_at_sym` return / consume this
     type. `__add__` (per-component sum) backs the additive pool;
@@ -85,7 +94,21 @@ class FluidState:
     pressure: ca.MX                 # scalar MX
     temperature: ca.MX              # scalar MX
     viscosity: ca.MX                # scalar MX
-    velocity: Vec3                # Vec3[WorldFrame]
+    velocity: Vec3                  # Vec3[WorldFrame]
+    material_acceleration: Vec3 | None = None
+    angular_velocity: Vec3 | None = None
+
+    @staticmethod
+    def _acceleration_or_zero(value: FluidState) -> Vec3:
+        if value.material_acceleration is not None:
+            return value.material_acceleration
+        return _VEC3_W.constant((0.0, 0.0, 0.0))
+
+    @staticmethod
+    def _angular_velocity_or_zero(value: FluidState) -> Vec3:
+        if value.angular_velocity is not None:
+            return value.angular_velocity
+        return _VEC3_W.constant((0.0, 0.0, 0.0))
 
     def __add__(self, other: FluidState) -> FluidState:
         return FluidState(
@@ -94,6 +117,14 @@ class FluidState:
             temperature = self.temperature + other.temperature,
             viscosity   = self.viscosity + other.viscosity,
             velocity    = self.velocity + other.velocity,
+            material_acceleration=(
+                self._acceleration_or_zero(self)
+                + self._acceleration_or_zero(other)
+            ),
+            angular_velocity=(
+                self._angular_velocity_or_zero(self)
+                + self._angular_velocity_or_zero(other)
+            ),
         )
 
     def scaled(self, s) -> FluidState:
@@ -105,6 +136,16 @@ class FluidState:
             temperature = s * self.temperature,
             viscosity   = s * self.viscosity,
             velocity    = _VEC3_W.from_mx(s * self.velocity._mx),
+            material_acceleration=(
+                None
+                if self.material_acceleration is None
+                else _VEC3_W.from_mx(s * self.material_acceleration._mx)
+            ),
+            angular_velocity=(
+                None
+                if self.angular_velocity is None
+                else _VEC3_W.from_mx(s * self.angular_velocity._mx)
+            ),
         )
 
 

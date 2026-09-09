@@ -47,12 +47,14 @@ from ..parts.articulation.joint import ArticulatedJoint
 from ._assembly import (
     _FilterBase,
     _q_auto,
+    consider_dimension,
     emit_filter_module,
     initial_ambient,
     prepared_sensors,
+    require_measurement_only_consider,
     resolve_gates,
 )
-from ._kalman import joseph_update, symmetrize
+from ._kalman import joseph_update, schmidt_update, symmetrize
 
 _RIGID = ("position", "orientation", "velocity", "angular_velocity")
 
@@ -165,6 +167,11 @@ class _INSSystem:
                 "delta_velocity": 3,
                 "delta_position": 3,
                 "covariance": 81,
+                "delta_start_gyro_cross_covariance": 27,
+                "delta_end_gyro_cross_covariance": 27,
+                "start_end_gyro_correlation": 9,
+                "start_gyro_noise_sigma": 3,
+                "end_gyro_noise_sigma": 3,
                 "bias_jacobian": 54,
                 "gyro_bias_reference": 3,
                 "accel_bias_reference": 3,
@@ -389,6 +396,20 @@ class _INSSystem:
 
         packet_covariance = (ca.reshape(packet_chunk("covariance", 81), 9, 9)
                              if self.propagation == "preintegrated" else None)
+        packet_delta_start_cross = (
+            ca.reshape(packet_chunk(
+                "delta_start_gyro_cross_covariance", 27), 9, 3)
+            if self.propagation == "preintegrated" else None
+        )
+        packet_delta_end_cross = (
+            ca.reshape(packet_chunk(
+                "delta_end_gyro_cross_covariance", 27), 9, 3)
+            if self.propagation == "preintegrated" else None
+        )
+        packet_start_end_correlation = (
+            ca.reshape(packet_chunk("start_end_gyro_correlation", 9), 3, 3)
+            if self.propagation == "preintegrated" else None
+        )
 
         def state_chunk(xv, name, dim):
             if name not in spec:
@@ -400,7 +421,8 @@ class _INSSystem:
             sl = noise_slices.get(name)
             return ca.MX.zeros(3, 1) if sl is None else nv[sl]
 
-        def evaluate(xv, nv, packet_error=None):
+        def evaluate(xv, nv, packet_error=None,
+                     boundary_start_error=None, boundary_end_error=None):
             gyro_bias = state_chunk(xv, gyro_bias_name, 3)
             accel_bias = state_chunk(xv, accel_bias_name, 3)
             gyro_noise = noise_chunk(nv, f"{self.imu_name}.gyro_noise")
@@ -412,7 +434,12 @@ class _INSSystem:
                 # The packet covariance already represents the raw IMU white
                 # noise. Endpoint readings remain available to ordinary
                 # measurement models but must not inject that noise twice.
-                gyro_corrected = gyro_sample - gyro_bias
+                end_error = (ca.MX.zeros(3, 1) if boundary_end_error is None
+                             else boundary_end_error)
+                end_sigma = packet_chunk("end_gyro_noise_sigma", 3)
+                gyro_corrected = (
+                    gyro_sample - gyro_bias + ca.diag(end_sigma) @ end_error
+                )
                 accel_corrected = accel_sample - accel_bias
             omega_body = R_bs @ gyro_corrected
 
@@ -479,8 +506,14 @@ class _INSSystem:
                 # back to the craft origin. This makes the lever arm exact at
                 # packet boundaries without differentiating the gyro or using
                 # the vehicle torque model.
+                start_error = (
+                    ca.MX.zeros(3, 1) if boundary_start_error is None
+                    else boundary_start_error
+                )
+                start_sigma = packet_chunk("start_gyro_noise_sigma", 3)
                 omega_start = R_bs @ (
-                    packet_chunk("start_gyro", 3) - gyro_bias)
+                    packet_chunk("start_gyro", 3) - gyro_bias
+                    + ca.diag(start_sigma) @ start_error)
                 q_ws = quat_mul(q, q_bs)
                 R_ws = quat_to_rotmat(q_ws)
                 sensor_p = p + R_wb @ lever
@@ -521,6 +554,12 @@ class _INSSystem:
         x_new = ca.substitute(x_new_noisy, noise, zero_noise)
 
         packet_Q = ca.MX.zeros(n_tan, n_tan)
+        boundary_start_G = ca.MX.zeros(n_tan, 3)
+        boundary_end_G = ca.MX.zeros(n_tan, 3)
+        boundary_conditional_gain = ca.MX.zeros(12, 3)
+        boundary_conditional_covariance = ca.MX.zeros(12, 12)
+        boundary_start_total_G = ca.MX.zeros(n_tan, 3)
+        boundary_end_residual_cross = ca.MX.zeros(n_tan, 3)
         if self.propagation == "preintegrated":
             packet_error = ca.MX.sym("packet_error", 9, 1)
             x_packet, _ = evaluate(x, zero_noise, packet_error)
@@ -528,7 +567,52 @@ class _INSSystem:
             G_packet = ca.substitute(
                 ca.jacobian(packet_state_error, packet_error), packet_error,
                 ca.MX.zeros(9, 1))
-            packet_Q = G_packet @ packet_covariance @ G_packet.T
+            start_error = ca.MX.sym("boundary_start_error", 3, 1)
+            x_start, _ = evaluate(
+                x, zero_noise, boundary_start_error=start_error)
+            start_state_error = spec.boxminus_sym(x_start, x_new)
+            boundary_start_G = ca.substitute(
+                ca.jacobian(start_state_error, start_error), start_error,
+                ca.MX.zeros(3, 1))
+            end_error = ca.MX.sym("boundary_end_error", 3, 1)
+            x_end, outs_boundary_end = evaluate(
+                x, zero_noise, boundary_end_error=end_error)
+            end_state_error = spec.boxminus_sym(x_end, x_new)
+            boundary_end_G = ca.substitute(
+                ca.jacobian(end_state_error, end_error), end_error,
+                ca.MX.zeros(3, 1))
+
+            # Condition the packet's joint [delta, end-boundary] error on
+            # the start-boundary error carried by the filter. This prevents
+            # the first gyro sample from being counted once in the packet Q
+            # and again in the lever-arm transform. It also supports a packet
+            # whose recurrence-end is the same physical sample as its start;
+            # a normal framer replaces that end with an independent boundary.
+            boundary_conditional_gain = ca.vertcat(
+                packet_delta_start_cross,
+                packet_start_end_correlation.T,
+            )
+            joint_delta_end = ca.vertcat(
+                ca.horzcat(packet_covariance, packet_delta_end_cross),
+                ca.horzcat(packet_delta_end_cross.T, ca.MX.eye(3)),
+            )
+            boundary_conditional_covariance = symmetrize(
+                joint_delta_end
+                - boundary_conditional_gain @ boundary_conditional_gain.T
+            )
+            packet_map = ca.horzcat(G_packet, boundary_end_G)
+            packet_Q = (
+                packet_map @ boundary_conditional_covariance @ packet_map.T
+            )
+            boundary_start_total_G = (
+                boundary_start_G
+                + packet_map @ boundary_conditional_gain
+            )
+            boundary_end_residual_cross = (
+                packet_map @ boundary_conditional_covariance[:, 9:12]
+            )
+        else:
+            outs_boundary_end = None
 
         delta = ca.MX.sym("delta", n_tan, 1)
         x_pert = spec.boxplus_sym(x, delta)
@@ -550,6 +634,7 @@ class _INSSystem:
             Sigma = np.diag(variances)
 
         sensors: dict[str, SensorModel] = {}
+        boundary_sensor_H: dict[str, ca.MX] = {}
         h_supports = []
         for full in self._chosen_sensors:
             dim = int(outs_noisy[full].numel())
@@ -567,6 +652,18 @@ class _INSSystem:
                 ["x", "u", "dt", "t"], ["H"])
             sensors[full] = SensorModel(
                 full, dim, h, h_noisy, H, L_h, cols, H_fn)
+            if self.propagation == "preintegrated":
+                h_boundary = ca.reshape(outs_boundary_end[full], dim, 1)
+                boundary_error = ca.MX.sym(
+                    f"boundary_error_{entry_ident(full)}", 3, 1)
+                # `outs_boundary_end` was built against `end_error`; substitute
+                # a sensor-local symbol before differentiating so generated
+                # entry-point graphs do not share a free symbol.
+                h_boundary = ca.substitute(
+                    h_boundary, end_error, boundary_error)
+                boundary_sensor_H[full] = ca.substitute(
+                    ca.jacobian(h_boundary, boundary_error), boundary_error,
+                    ca.MX.zeros(3, 1))
 
         predict_fn = ca.Function("predict", [x, u, dt, t], [x_new],
                                  ["x", "u", "dt", "t"], ["x_new"])
@@ -581,6 +678,15 @@ class _INSSystem:
             "x_new": x_new, "x_new_noisy": x_new_noisy,
             "F_sym": F, "F_pattern": F_pattern,
             "packet_Q_sym": packet_Q,
+            "boundary_start_G_sym": boundary_start_G,
+            "boundary_end_G_sym": boundary_end_G,
+            "boundary_conditional_gain_sym": boundary_conditional_gain,
+            "boundary_conditional_covariance_sym": (
+                boundary_conditional_covariance),
+            "boundary_start_total_G_sym": boundary_start_total_G,
+            "boundary_end_residual_cross_sym": (
+                boundary_end_residual_cross),
+            "boundary_sensor_H": boundary_sensor_H,
             "L_sym": L, "L_pattern": L_pattern, "Sigma": Sigma,
             "sensors": sensors, "predict_fn": predict_fn,
             "F_fn": F_fn, "L_fn": L_fn, "blocks": blocks,
@@ -596,6 +702,17 @@ class _INSSystem:
         self.x_new_noisy = result["x_new_noisy"]
         self.F_sym = result["F_sym"]
         self.packet_Q_sym = result["packet_Q_sym"]
+        self.boundary_start_G_sym = result["boundary_start_G_sym"]
+        self.boundary_end_G_sym = result["boundary_end_G_sym"]
+        self.boundary_conditional_gain_sym = result[
+            "boundary_conditional_gain_sym"]
+        self.boundary_conditional_covariance_sym = result[
+            "boundary_conditional_covariance_sym"]
+        self.boundary_start_total_G_sym = result[
+            "boundary_start_total_G_sym"]
+        self.boundary_end_residual_cross_sym = result[
+            "boundary_end_residual_cross_sym"]
+        self.boundary_sensor_H = result["boundary_sensor_H"]
         self.L_sym = result["L_sym"]
         self.Sigma = result["Sigma"]
         self.sensors = result["sensors"]
@@ -657,6 +774,20 @@ class INS(_FilterBase):
         sys = _INSSystem(world, imu=imu, track=track,
                          sensors=sensors, inputs=inputs,
                          propagation=propagation)
+        require_measurement_only_consider(sys, who="INS")
+        selected_imu_prefix = f"{sys.imu_name}."
+        unsupported_imu_consider = tuple(
+            channel.full
+            for channel in sys.noise_specs
+            if channel.static_parameter
+            and channel.full.startswith(selected_imu_prefix)
+        )
+        if unsupported_imu_consider:
+            raise NotImplementedError(
+                "INS selected-IMU mount uncertainty affects strapdown "
+                "propagation and cannot be a measurement-only Schmidt "
+                f"parameter: {list(unsupported_imu_consider)}"
+            )
         self._bind_system(world, sys)
         self.imu = sys.imu_name
         self.propagation = propagation
@@ -671,22 +802,81 @@ class INS(_FilterBase):
         resolved_gates = resolve_gates(sys, gates, who="INS")
 
         spec, n_tan = sys.spec, sys.spec.tangent_dim
+        n_static_consider = consider_dimension(sys)
+        # A preintegrated filter carries the standardized error of the current
+        # gyro boundary as a dynamic Schmidt nuisance. Its mean is never
+        # estimated, but its navigation cross-covariance survives aiding
+        # updates and is handed into the next packet prediction. This is the
+        # missing memory in an otherwise insufficient 9x9 packet covariance.
+        n_boundary_consider = 3 if propagation == "preintegrated" else 0
+        n_consider = n_static_consider + n_boundary_consider
         x, u, dt, t = sys.x_sym, sys.u_sym, sys.dt_sym, sys.t_sym
         P = ca.MX.sym("P", n_tan, n_tan)
+        P_consider = (
+            ca.MX.sym("P_consider", n_tan, n_consider)
+            if n_consider else None
+        )
         Q = ca.MX.sym("Q", n_tan, n_tan)
         F = sys.F_sym
         # Packet uncertainty is intrinsic to a preintegrated measurement and
         # is therefore retained even when the caller overrides the model's Q.
         Q_packet = sys.packet_Q_sym
         Q_auto = _q_auto(sys) + Q_packet
+        predict_inputs = [x, P] + ([P_consider] if n_consider else [])
+        predict_input_names = ["x", "P"] + (
+            ["P_consider"] if n_consider else []
+        )
+        def prediction_covariance(base_Q):
+            covariance = F @ P @ F.T + base_Q
+            if not n_boundary_consider:
+                cross_new = F @ P_consider if n_consider else None
+                return symmetrize(covariance), cross_new
+
+            boundary_cross = P_consider[:, n_static_consider:n_consider]
+            boundary_G = sys.boundary_start_total_G_sym
+            covariance += (
+                F @ boundary_cross @ boundary_G.T
+                + boundary_G @ boundary_cross.T @ F.T
+                + boundary_G @ boundary_G.T
+            )
+            # The packet joint covariance gives E[eta_end | eta_start].
+            # Usually this is zero because the framer supplies a fresh right
+            # boundary; retaining the general term also makes a one-sample
+            # recurrence packet mathematically well-defined.
+            end_from_start = sys.boundary_conditional_gain_sym[9:12, :]
+            boundary_cross_new = (
+                F @ boundary_cross @ end_from_start.T
+                + boundary_G @ end_from_start.T
+                + sys.boundary_end_residual_cross_sym
+            )
+            pieces = []
+            if n_static_consider:
+                pieces.append(F @ P_consider[:, :n_static_consider])
+            pieces.append(boundary_cross_new)
+            return symmetrize(covariance), ca.horzcat(*pieces)
+
+        P_auto, P_consider_auto = prediction_covariance(Q_auto)
+        predict_outputs = [
+            sys.x_new,
+            P_auto,
+            *([P_consider_auto] if n_consider else []),
+        ]
+        predict_output_names = ["x_new", "P_new"] + (
+            ["P_consider_new"] if n_consider else []
+        )
         predict_fn = ca.Function(
-            "ins_predict", [x, P, u, dt, t],
-            [sys.x_new, symmetrize(F @ P @ F.T + Q_auto)],
-            ["x", "P", "u", "dt", "t"], ["x_new", "P_new"])
+            "ins_predict", [*predict_inputs, u, dt, t], predict_outputs,
+            [*predict_input_names, "u", "dt", "t"], predict_output_names)
+        P_override, P_consider_override = prediction_covariance(Q + Q_packet)
         predict_q_fn = ca.Function(
-            "ins_predict_with_Q", [x, P, Q, u, dt, t],
-            [sys.x_new, symmetrize(F @ P @ F.T + Q + Q_packet)],
-            ["x", "P", "Q", "u", "dt", "t"], ["x_new", "P_new"])
+            "ins_predict_with_Q", [*predict_inputs, Q, u, dt, t],
+            [
+                sys.x_new,
+                P_override,
+                *([P_consider_override] if n_consider else []),
+            ],
+            [*predict_input_names, "Q", "u", "dt", "t"],
+            predict_output_names)
 
         x0 = initial_ambient(sys.world, spec)
         updates = {}
@@ -694,35 +884,80 @@ class INS(_FilterBase):
         override_updates = {}
         for ps in prepared_sensors(sys, spec, x0=x0, who="INS"):
             H = ca.substitute(sys.sensors[ps.full].H_sym, dt, ca.MX.zeros(1, 1))
+            consider_H = ps.consider_H
+            if n_boundary_consider:
+                consider_H = ca.horzcat(
+                    consider_H,
+                    ca.substitute(
+                        sys.boundary_sensor_H[ps.full], dt,
+                        ca.MX.zeros(1, 1)),
+                )
             threshold = resolved_gates[ps.full]
 
-            def expressions(R, ps=ps, H=H, threshold=threshold):
-                candidate_x, candidate_P, nu, S = joseph_update(
-                    x, P, ps.h, H, R, ps.z, spec)
+            def expressions(R, ps=ps, H=H, consider_H=consider_H,
+                            threshold=threshold):
+                if n_consider:
+                    candidate_x, candidate_P, C_candidate, nu, S = (
+                        schmidt_update(
+                            x,
+                            P,
+                            P_consider,
+                            ca.MX.eye(n_consider),
+                            ps.h,
+                            H,
+                            consider_H,
+                            R,
+                            ps.z,
+                            spec,
+                        )
+                    )
+                else:
+                    candidate_x, candidate_P, nu, S = joseph_update(
+                        x, P, ps.h, H, R, ps.z, spec)
                 nis = ca.dot(nu, spd_solve(S, nu))
                 accepted = (ca.MX.ones(1, 1) if threshold is None
                             else nis <= threshold)
-                return (ca.if_else(accepted, candidate_x, x),
-                        ca.if_else(accepted, candidate_P, P),
-                        nu, S, nis, accepted)
+                states = [
+                    ca.if_else(accepted, candidate_x, x),
+                    ca.if_else(accepted, candidate_P, P),
+                ]
+                if n_consider:
+                    states.append(ca.if_else(
+                        accepted, C_candidate, P_consider
+                    ))
+                return (*states, nu, S, nis, accepted)
 
             values = expressions(ps.R)
             ident = entry_ident(ps.full)
+            n_state_outputs = 3 if n_consider else 2
+            state_input_values = [x, P] + (
+                [P_consider] if n_consider else []
+            )
+            state_input_names = ["x", "P"] + (
+                ["P_consider"] if n_consider else []
+            )
+            state_output_names = ["x_new", "P_new"] + (
+                ["P_consider_new"] if n_consider else []
+            )
             updates[ps.full] = ca.Function(
-                f"ins_update_{ident}", [x, P, ps.z, u, t], values[:2],
-                ["x", "P", "z", "u", "t"], ["x_new", "P_new"])
+                f"ins_update_{ident}",
+                [*state_input_values, ps.z, u, t],
+                values[:n_state_outputs],
+                [*state_input_names, "z", "u", "t"],
+                state_output_names)
             diagnostic_updates[ps.full] = ca.Function(
-                f"ins_update_diagnostic_{ident}", [x, P, ps.z, u, t], values,
-                ["x", "P", "z", "u", "t"],
-                ["x_new", "P_new", "innovation", "innovation_covariance",
+                f"ins_update_diagnostic_{ident}",
+                [*state_input_values, ps.z, u, t], values,
+                [*state_input_names, "z", "u", "t"],
+                [*state_output_names, "innovation", "innovation_covariance",
                  "nis", "accepted"])
             R_override = ca.MX.sym(f"R_{ident}", ps.dim, ps.dim)
-            overridden = expressions(R_override)
+            overridden = expressions(R_override + ps.model_R)
             override_updates[ps.full] = ca.Function(
                 f"ins_update_with_R_{ident}",
-                [x, P, ps.z, R_override, u, t], overridden,
-                ["x", "P", "z", "R", "u", "t"],
-                ["x_new", "P_new", "innovation", "innovation_covariance",
+                [*state_input_values, ps.z, R_override, u, t], overridden,
+                [*state_input_names, "z", "R", "u", "t"],
+                [*state_output_names, "innovation", "innovation_covariance",
                  "nis", "accepted"])
 
         metadata = {
@@ -750,6 +985,12 @@ class INS(_FilterBase):
                 name for name, rho in sys.rho_by_sensor.items()
                 if rho > MODEL_FORCE_RHO_WARNING)),
             "lever_arm_m": tuple(float(v) for v in sys.lever_arm),
+            "preintegration_boundary_covariance_qualified": True,
+            "preintegration_boundary_consider_dimension": (
+                n_boundary_consider),
+            "preintegration_boundary_covariance_model": (
+                "dynamic_schmidt_joint_packet"
+                if n_boundary_consider else None),
             # The filter deliberately carries no angular-velocity state.
             # Runtime adapters can still publish the current body rate from
             # the selected gyro by applying this fixed rigid-mount rotation
@@ -763,4 +1004,5 @@ class INS(_FilterBase):
             predict_fn=predict_fn, predict_q_fn=predict_q_fn,
             updates=updates, diagnostic_updates=diagnostic_updates,
             override_updates=override_updates, gates=resolved_gates,
+            consider_dim=n_consider,
             metadata_extra=metadata)

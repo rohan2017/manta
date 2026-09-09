@@ -42,6 +42,7 @@ from ._common import (
     default_fills_for_window,
     pack_u_trace,
     pack_x0,
+    resolve_trace_masks,
     resolve_traces,
 )
 
@@ -579,7 +580,7 @@ def window_digest(window: Window) -> str:
     if not isinstance(window, Window):
         raise TypeError(f"window_digest expects a Window, got "
                         f"{type(window).__name__}")
-    digest = hashlib.sha256(b"manta-window-v1\0")
+    digest = hashlib.sha256(b"manta-window-v2\0")
 
     def feed(tag: str, mapping: dict) -> None:
         digest.update(tag.encode())
@@ -593,10 +594,12 @@ def window_digest(window: Window) -> str:
             digest.update(np.ascontiguousarray(array).tobytes())
 
     feed("x0", window.x0)
+    feed("x0_sigma", window.x0_sigma)
     feed("u", window.u)
     feed("x", window.x)
     feed("x_scale", window.x_scale)
     feed("z", window.z)
+    feed("z_mask", window.z_mask)
     digest.update(repr((float(window.dt), float(window.t0))).encode())
     return digest.hexdigest()
 
@@ -755,8 +758,10 @@ def held_out_evidence(model, windows: Sequence[Window], *, sensor: str,
                    mean prediction (noise zeroed) is folded from each
                    window's ``x0`` over the recorded controls.
         windows  — the held-out windows; each needs a ``z`` trace for
-                   ``sensor`` longer than ``lag_count`` samples and all
-                   must share ``dt``.
+                   ``sensor`` with more than ``lag_count`` observed samples
+                   and all must share ``dt``. A regular ``z_mask`` cadence is
+                   supported; irregular masks are refused because the
+                   autocorrelation model assumes a fixed sample interval.
         sensor   — the measured output whose residual ``z − h`` is the
                    model error (full name or unique suffix).
         criteria — acceptance thresholds (default
@@ -826,10 +831,13 @@ def held_out_evidence(model, windows: Sequence[Window], *, sensor: str,
         raise ValueError(
             f"held_out_evidence: held-out windows must share dt, got "
             f"{sorted(dts)}")
-    dt = dts.pop()
+    base_dt = dts.pop()
 
     sim = Sim(model)
-    module = sim.module()
+    # Held-out windows already encode acquisition events in z_mask. Replay
+    # against the all-inline observation graph so rate-gated sensors remain
+    # available to the batch evaluator without fabricating held samples.
+    module = sim.inline_module()
     spec = module.spec
     ep = module.entry("step")
     meas_names = [pt.name for pt in module.ports_by_role(Role.MEASUREMENT)]
@@ -848,6 +856,7 @@ def held_out_evidence(model, windows: Sequence[Window], *, sensor: str,
     segments: list[list[np.ndarray]] = [[] for _ in range(dim)]
     default_fills = [*training_default_fills, *selection_default_fills]
     total = 0
+    observed_stride: int | None = None
     for index, w in enumerate(windows):
         traces, K = resolve_traces(w.z, meas_names, dims,
                                    who="held_out_evidence")
@@ -855,11 +864,32 @@ def held_out_evidence(model, windows: Sequence[Window], *, sensor: str,
             raise ValueError(
                 f"held_out_evidence: windows[{index}] has no z trace for "
                 f"{full!r}")
-        if K <= lag_count:
+        masks = resolve_trace_masks(
+            w.z_mask, traces, meas_names, K, who="held_out_evidence"
+        )
+        observed = np.flatnonzero(masks[full])
+        if observed.size <= lag_count:
             raise ValueError(
-                f"held_out_evidence: windows[{index}] has {K} samples; the "
+                f"held_out_evidence: windows[{index}] has "
+                f"{observed.size} observed samples; the "
                 f"autocorrelation fit over {lag_count} lags needs more than "
                 f"{lag_count}")
+        differences = np.diff(observed)
+        stride = int(differences[0])
+        if np.any(differences != stride):
+            raise ValueError(
+                f"held_out_evidence: windows[{index}] has an irregular "
+                f"z_mask cadence for {full!r}; fixed-step autocorrelation "
+                "evidence requires regularly spaced observations"
+            )
+        if observed_stride is None:
+            observed_stride = stride
+        elif stride != observed_stride:
+            raise ValueError(
+                "held_out_evidence: held-out windows must share one "
+                f"observation cadence, got strides {observed_stride} and "
+                f"{stride}"
+            )
         x0 = pack_x0(sim.world, spec, w)
         default_fills.extend(default_fills_for_window(
             sim.world,
@@ -879,8 +909,8 @@ def held_out_evidence(model, windows: Sequence[Window], *, sensor: str,
             "x": x0,
             "u": U if U.size else np.zeros((0, K)),
             "noise": np.zeros((n_noise, K)),
-            "dt": np.full((1, K), dt),
-            "t": np.array([[w.t0 + i * dt for i in range(K)]]),
+            "dt": np.full((1, K), base_dt),
+            "t": np.array([[w.t0 + i * base_dt for i in range(K)]]),
         }
         if params is not None:
             p = np.concatenate([np.atleast_1d(np.asarray(
@@ -896,20 +926,22 @@ def held_out_evidence(model, windows: Sequence[Window], *, sensor: str,
             ordered.append(call_args[key])
         outs = step.mapaccum(f"evidence_x{K}", K, [0], [0])(*ordered)
         predicted = np.asarray(outs[out_index], dtype=float).reshape(dim, K)
-        residual = traces[full] - predicted.T
+        residual = traces[full][observed] - predicted.T[observed]
         if not np.all(np.isfinite(residual)):
             raise ValueError(
                 f"held_out_evidence: windows[{index}] produced a non-finite "
                 f"residual for {full!r}")
         for i in range(dim):
             segments[i].append(residual[:, i])
-        total += K
+        total += observed.size
 
-    axes = [_axis_evidence(axis_names[i], segments[i], dt=dt,
+    assert observed_stride is not None
+    evidence_dt = base_dt * observed_stride
+    axes = [_axis_evidence(axis_names[i], segments[i], dt=evidence_dt,
                            lag_count=lag_count, chi2_limit=chi2_limit)
             for i in range(dim)]
     held = HeldOutWindow(window_count=len(windows), sample_count=total,
-                         dt=dt, window_digests=tuple(digests))
+                         dt=evidence_dt, window_digests=tuple(digests))
     evaluated = sim.model
     source_model_id = evaluated.model_id if source_model_id is None \
         else source_model_id
@@ -918,10 +950,12 @@ def held_out_evidence(model, windows: Sequence[Window], *, sensor: str,
     configuration_id = evaluated.model_id if configuration_id is None \
         else configuration_id
     if channel_contract_id is None:
+        observed_rate_hz = 1.0 / evidence_dt
         contract = repr((full, channel_port.role.value, channel_port.shape,
-                         channel_port.rate)).encode()
+                         observed_rate_hz)).encode()
         channel_contract_id = hashlib.sha256(
             b"manta-channel-contract-v1\0" + contract).hexdigest()
+    observed_rate_hz = 1.0 / evidence_dt
     binding = FitEvidenceBinding(
         fitted_model_id=evaluated.model_id,
         fitted_artifact_id=evaluated.artifact_id,
@@ -933,7 +967,7 @@ def held_out_evidence(model, windows: Sequence[Window], *, sensor: str,
         selection_window_digests=selection,
         acceptance_window_digests=tuple(digests),
         channel_shape=channel_port.shape,
-        channel_rate_hz=channel_port.rate,
+        channel_rate_hz=observed_rate_hz,
         channel_contract_id=channel_contract_id,
     )
     return FitEvidence.evaluate(channel=full, held_out=held, axes=axes,

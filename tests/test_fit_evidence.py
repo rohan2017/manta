@@ -9,6 +9,7 @@ the untouched-acceptance-set guard, and the consumer refusals.
 """
 
 import copy
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -457,6 +458,30 @@ def test_pipeline_refuses_training_windows_short_windows_and_mixed_dt():
         hold_out(windows[:1])
 
 
+def test_held_out_evidence_uses_regular_observation_cadence():
+    windows = _windows(
+        _imu_world(), n_win=1, K=240, rng=np.random.default_rng(33),
+        bias=np.zeros(3), white=0.05, gm_sigma=0.0, tau=None,
+    )
+    mask = np.arange(240) % 4 == 0
+    masked = replace(windows[0], z_mask={"imu.accel": mask})
+    evidence = held_out_evidence(
+        _imu_world(), [masked], sensor="imu.accel", lag_count=10,
+    )
+    assert evidence.held_out.sample_count == 60
+    assert evidence.held_out.dt == pytest.approx(4 * DT)
+    assert evidence.binding.channel_rate_hz == pytest.approx(1 / (4 * DT))
+
+    irregular = mask.copy()
+    irregular[5] = True
+    with pytest.raises(ValueError, match="irregular"):
+        held_out_evidence(
+            _imu_world(), [replace(windows[0], z_mask={
+                "imu.accel": irregular,
+            })], sensor="imu.accel", lag_count=10,
+        )
+
+
 def test_window_digest_is_a_content_identity():
     rng = np.random.default_rng(4)
     a, b = _windows(_imu_world(), n_win=2, K=30, rng=rng, bias=np.zeros(3),
@@ -464,3 +489,11 @@ def test_window_digest_is_a_content_identity():
     assert window_digest(a) == window_digest(copy.deepcopy(a))
     assert window_digest(a) != window_digest(b)
     assert window_digest(a) != window_digest(Window(x0=a.x0, z=a.z, dt=2 * DT))
+    mask = np.ones(len(a.z["imu.accel"]), dtype=bool)
+    mask[0] = False
+    assert window_digest(a) != window_digest(replace(
+        a, z_mask={"imu.accel": mask}
+    ))
+    assert window_digest(a) != window_digest(replace(
+        a, x0_sigma={"c.velocity": 0.1}
+    ))

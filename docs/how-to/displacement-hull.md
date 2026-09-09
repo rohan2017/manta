@@ -76,3 +76,10 @@ This model covers low-speed displacement behavior. It does not model planing,
 slamming, dynamic wave radiation, mesh collision, or CFD interaction between
 multiple hulls. Add separate Manta parts for effects such as added mass; do not
 fold vehicle control policy into the hull.
+
+For a modular slender hull, author sectional hydrodynamic inertia beside the
+module geometry but assemble it into one rigid-body tensor before evaluation.
+Computing an isolated-body Munk moment for every joined module is generally not
+physical: concealed interfaces and pressure-flow interactions mean arbitrary
+body hydrodynamics are not additive. Strip-theory transverse sections are a
+useful approximation; axial and end effects need a whole-assembly correction.
