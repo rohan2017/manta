@@ -28,6 +28,7 @@ def chart():
             quat_to_rotmat(so3_exp(ca.DM([0.2, -0.4, 0.7])))
         ),
         reference_specific_force=[1.3, -2.4, 9.2],
+        reference_angular_velocity=[1e-5, -4e-5, 5e-5],
     )
 
 
@@ -86,6 +87,11 @@ def test_finite_gravity_and_body_velocity_are_affine_in_chart(chart):
     actual = M.T @ Rt.T @ g + shifted[13:16] - (M.T @ R.T @ g + x[13:16])
     expected = d[12:15] - M.T @ R.T @ np.cross(tilt, g)
     np.testing.assert_allclose(actual, expected, atol=3e-14)
+    earth = np.asarray(chart.earth_rate).ravel()
+    gyro_residual = M.T @ Rt.T @ earth + shifted[10:13] - (M.T @ R.T @ earth + x[10:13])
+    np.testing.assert_allclose(
+        gyro_residual, d[9:12] - M.T @ R.T @ np.cross(d[3:6], earth), atol=1e-16
+    )
     residual = Rt.T @ shifted[7:10] - R.T @ x[7:10]
     np.testing.assert_allclose(
         residual, R.T @ (d[6:9] - np.cross(d[3:6], x[7:10])), atol=3e-14
@@ -288,7 +294,9 @@ int main() {
             str(tmp_path / "run"),
         ],
     ):
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120, check=False)
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=120, check=False
+        )
         assert result.returncode == 0, result.stderr
     actual = subprocess.run(
         [str(tmp_path / "run")], capture_output=True, text=True, check=True, timeout=20

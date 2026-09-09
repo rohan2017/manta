@@ -1,10 +1,56 @@
 # Nonlinear INS investigation — September 9, 2026
 
-**Status: experimental; weak-bias statistical acceptance still fails.**
-The severe original covariance collapse is substantially reduced, but this
-branch must not be described as a fully validated estimator fix. Defaults remain
-linearized and Shiver is untouched. Work is durable in the workspace worktree
-`.worktrees/manta-ins-gyrocompass`, branch `fix/ins-gyrocompass`.
+**Current status: the v2 covariance chart passes the synthetic consistency
+cases listed below.** The first v1 implementation still failed weak-bias
+qualification; those failures and controls are preserved later in this report.
+Defaults remain linearized and Shiver is untouched. Work is durable in the
+workspace worktree `.worktrees/manta-ins-gyrocompass`, branch
+`fix/ins-gyrocompass`.
+
+## Current v2 result
+
+The final gyro-bias retraction is
+
+```text
+bg_true = bg + delta_bg + R_sensor.T (Omega - D.T Omega - theta × Omega)
+```
+
+It makes stationary gyro observations affine in joint attitude/bias error,
+including away from a zero-residual stationary family. The previous chart's
+bias transport preserved that family but curved gyro observations at nonzero
+residuals; repeated noisy conditioning still gained false heading information.
+The accelerometer chart, joint state/noise quadrature, physical-prior mapping,
+full reset and estimated packet endpoint error remain necessary parts of the
+estimator. Sensor noise, physical truth priors and acceptance intervals were
+not changed to obtain these results.
+
+Fresh held-out trials use seed 104729, which was not used to develop the chart.
+Each run lasts 300 seconds with a known displaced/rotated IMU, a 100 Hz
+acquisition rate, 10 Hz packets and independent 10 Hz DVL observations:
+
+| Case | Trials | Physical heading RMSE / sigma | Heading ANEES (expected 1) | Joint attitude/bias ANEES (expected 9) |
+| --- | ---: | ---: | ---: | ---: |
+| Calibrated bias 1e-8, gyro density 1e-7 | 64 | 0.02111° / 0.01954° | 1.167 | 9.511 |
+| Weak bias 1e-5, gyro density 1e-7 | 256 | 4.33239° / 4.34204° | 0.9995 | 9.146 |
+| Noisy bias 0.001, gyro density 0.001 | 128 | 16.38811° / 17.89843° | 0.8385 | 8.802 |
+
+All three pass their final 95% heading and joint ANEES intervals. Their joint
+12-dimensional tests including endpoint gyro error also pass. These are three
+separate sensor-grade models, not noise values adjusted against the same data.
+
+Additional controls pass: zero Earth rotation (64 trials, heading 18.74° / 17.93°,
+ANEES 9.022), prescribed rotation (64 trials, 0.00729° / 0.00628°, ANEES 9.437),
+southern latitude -60° with 200 Hz IMU, and the equator with 500 Hz IMU.
+The final 6/12/24-hour numerical check also passes. The wheel builds and an
+extracted-wheel prediction/update smoke test passes with the v2 estimator.
+Final complete-suite validation and matched raw/packet comparison are recorded
+below when complete. Data filenames prefixed `v2-` identify this version.
+
+This qualifies the synthetic acquisition/model contract, not a particular
+hardware IMU, vehicle mission or Shiver deployment. Nonlinear raw propagation
+requires a colocated IMU; displaced IMUs use framed packets, including
+one-sample packets. The chart is local and refuses branch-crossing sigma
+points instead of wrapping a broad heading distribution into false confidence.
 
 ## What changed
 
@@ -25,7 +71,7 @@ The previous installation-uncertainty refactor is present. It solves reuse of
 correlated mount errors, a different failure from the colocated/no-mount-error
 cases reproduced here.
 
-## Matched statistical evidence
+## Earlier v1 matched statistical evidence (superseded)
 
 The physical truth prior and declared sensor noise agree: independent constant
 IMU biases, gyro per-sample sigma equal to density × sqrt(sample rate), and
@@ -65,12 +111,12 @@ from the new mode rather than hidden by changing noise.
 A negative control understating gyro noise by ten times fails strongly. The
 estimator is not made consistent by blanket covariance inflation.
 
-## Remaining issue and bounded controls
+## Earlier v1 issue and bounded controls (resolved by v2)
 
 A noiseless stationary control retains the analytically expected roughly 4.47°
 heading sigma for a 5° initial heading prior and 1e-5 rad/s gyro-bias prior.
 With matching noisy inputs the weak-bias filter instead falls to about 3.8°.
-The unresolved effect therefore concerns the noisy finite posterior and repeated
+That residual effect concerned the noisy finite posterior and repeated
 conditioning, not an error in the assumed sensor grade.
 
 A complete unscented posterior reset, in place of the reset Jacobian, changes
@@ -127,5 +173,6 @@ pytest tests/test_ins_nonlinear.py tests/test_ins_navigation_frame.py tests/test
 Detailed data, including failed trials, are in
 [data/ins-nonlinear-2026-09-09](data/ins-nonlinear-2026-09-09).
 The full recovered-baseline suite and the first nonlinear checkpoint have the
-same five pre-existing failures (EKF/UKF consistency/tracking tests); the newest
-boundary/arithmetic changes are still undergoing final regression validation.
+same five pre-existing failures (EKF/UKF consistency/tracking tests); the boundary/arithmetic checkpoint (`fa017e7`) passes 1303 tests, with five
+skips and exactly those same five existing failures. No new suite failures
+were introduced. The targeted nonlinear/Earth contracts pass 79 tests.

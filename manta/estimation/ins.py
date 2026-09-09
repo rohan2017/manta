@@ -874,7 +874,9 @@ class INS(_FilterBase):
             sys.spec = INSStateSpec(
                 physical, craft=sys.craft_name, imu=sys.imu_name,
                 rotation_body_from_imu=sys.R_craft_from_sensor,
-                reference_specific_force=reference)
+                reference_specific_force=reference,
+                reference_angular_velocity=(navigation_frame.angular_velocity
+                                            if navigation_frame is not None else (0, 0, 0)))
         self._bind_system(world, sys)
         self.covariance = covariance
         self.imu = sys.imu_name
@@ -1062,6 +1064,7 @@ class INS(_FilterBase):
             "covariance": covariance,
             "error_model": getattr(spec, "error_model", "product_manifold"),
             "reference_specific_force": getattr(spec, "reference_specific_force", None),
+            "reference_angular_velocity": getattr(spec, "reference_angular_velocity", None),
             "propagation": propagation,
             "navigation_frame": (None if navigation_frame is None
                                  else navigation_frame.metadata()),

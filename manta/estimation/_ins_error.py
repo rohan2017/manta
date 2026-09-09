@@ -9,13 +9,15 @@ same retraction, including every off-diagonal block.
 For relative orientation D = Z(psi) S(tilt), theta = tilt + psi * up:
 
   v_true = D (v + delta_v - theta x v)
-  bg_true = bg + R_sensor.T S.T Jr(psi * up) R_sensor delta_bg
+  bg_true = bg + delta_bg + R_sensor.T (Omega - D.T Omega - theta x Omega)
   ba_true = ba + delta_ba + R_sensor.T (g - S.T g - tilt x g)
 
-Here g is the *reference specific-force vector*, opposite effective gravity.
-The last expression makes the stationary gravity observation affine in tilt
-and accelerometer-bias error. The reference is a coordinate choice; it does
-not replace gravity or Earth rotation in the process model.
+Here g is the reference specific-force vector, opposite effective gravity,
+and Omega is the navigation frame's angular velocity. These expressions make
+both stationary inertial observations affine in joint attitude/bias error.
+They define coordinates and do not replace the process model's gravity or
+Earth rotation. Preserving only one zero-residual yaw/bias family is insufficient:
+the stationary gyro observation must remain affine away from that family too.
 
 A physical Gaussian prior must be mapped into these coordinates. Covariance
 and error scoring refer to boxminus(truth, estimate), which is not generally
@@ -30,7 +32,6 @@ import numpy as np
 
 from ..ir._rotation import quat_conj, quat_mul, quat_to_rotmat, so3_exp, so3_log
 from ..ir.state_spec import StateSpec
-from ._kalman import _so3_reset_jacobian
 
 
 def _ambient(slot):
@@ -54,10 +55,17 @@ def _left_inverse(theta):
 
 
 class INSStateSpec(StateSpec):
-    error_model = "gravity_referenced_swing_twist_v1"
+    error_model = "gravity_and_earth_referenced_swing_twist_v2"
 
     def __init__(
-        self, product, *, craft, imu, rotation_body_from_imu, reference_specific_force
+        self,
+        product,
+        *,
+        craft,
+        imu,
+        rotation_body_from_imu,
+        reference_specific_force,
+        reference_angular_velocity=(0, 0, 0),
     ):
         super().__init__(list(product.slots))
         self.product_spec = product
@@ -80,6 +88,13 @@ class INSStateSpec(StateSpec):
         self.reference_specific_force = tuple(float(v) for v in reference)
         self.gravity = ca.DM(reference)
         self.up = ca.DM(reference / magnitude)
+        angular_velocity = np.asarray(reference_angular_velocity, dtype=float).reshape(
+            3
+        )
+        if not np.all(np.isfinite(angular_velocity)):
+            raise ValueError("nonlinear INS requires finite frame angular velocity")
+        self.reference_angular_velocity = tuple(float(v) for v in angular_velocity)
+        self.earth_rate = ca.DM(angular_velocity)
 
     def _plus(self, x, d):
         out = self.product_spec.boxplus_sym(x, d)
@@ -97,7 +112,9 @@ class INSStateSpec(StateSpec):
             )
         sensor = quat_to_rotmat(x[_ambient(self.orientation)]) @ self.mount
         S = quat_to_rotmat(swing)
-        B = sensor.T @ S.T @ _so3_reset_jacobian(-twist_vector, symbolic=True) @ sensor
+        gyro_offset = sensor.T @ (
+            self.earth_rate - D.T @ self.earth_rate - ca.cross(theta, self.earth_rate)
+        )
         offset = sensor.T @ (
             self.gravity - S.T @ self.gravity - ca.cross(tilt, self.gravity)
         )
@@ -105,7 +122,7 @@ class INSStateSpec(StateSpec):
             increment = (
                 offset + d[_tangent(slot)]
                 if slot.name.endswith("accel_bias")
-                else B @ d[_tangent(slot)]
+                else gyro_offset + d[_tangent(slot)]
             )
             out[_ambient(slot)] = x[_ambient(slot)] + increment
         # A local Gaussian must not wrap sigma points across the chart branch
@@ -137,14 +154,18 @@ class INSStateSpec(StateSpec):
             )
         sensor = quat_to_rotmat(b[_ambient(self.orientation)]) @ self.mount
         S = quat_to_rotmat(swing)
-        inverse_B = sensor.T @ _left_inverse(-twist_vector) @ S @ sensor
+        gyro_offset = sensor.T @ (
+            self.earth_rate - D.T @ self.earth_rate - ca.cross(theta, self.earth_rate)
+        )
         offset = sensor.T @ (
             self.gravity - S.T @ self.gravity - ca.cross(tilt, self.gravity)
         )
         for slot in self.biases:
             diff = a[_ambient(slot)] - b[_ambient(slot)]
             out[_tangent(slot)] = (
-                diff - offset if slot.name.endswith("accel_bias") else inverse_B @ diff
+                diff - offset
+                if slot.name.endswith("accel_bias")
+                else diff - gyro_offset
             )
         return out
 

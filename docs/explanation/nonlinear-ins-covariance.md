@@ -1,7 +1,9 @@
 # Nonlinear INS covariance
 
-**Experimental: not statistically accepted.** The larger weak-bias tests still
-fail; see [the qualification report](../qualification/ins-nonlinear-2026-09-09.md).
+**Opt-in, with synthetic qualification.** The current v2 chart passes the
+matched calibrated, weak-bias and noisy-gyro trials. See the
+[qualification report](../qualification/ins-nonlinear-2026-09-09.md) for the
+measured scope, independent trials and retained earlier failures.
 
 `INS(..., covariance="nonlinear")` selects a gravity-referenced finite error
 model and nonlinear uncertainty propagation. `covariance="linearized"` retains
@@ -19,13 +21,15 @@ sensor noise. This is separate from the earlier Schmidt installation-uncertainty
 refactor, which is retained.
 
 The new chart separates relative twist around a fixed reference vertical from
-relative swing. Navigation vectors use the same rotation; gyro-bias increments
-and accelerometer-bias curvature are carried in sensor axes. The differential
+relative swing. Navigation vectors use the same rotation; Earth-rate/gyro-bias and gravity/accelerometer-bias curvature are carried in
+sensor axes. Both stationary inertial observations are affine in the joint
+error coordinates, including at nonzero gyro residuals. The differential
 at zero retains the existing tangent units and state layout. Finite covariance
 is local to the complete chart, rather than an independent quaternion block.
 See `_ins_error.py` for the forward and inverse maps. The reference vector is
 opposite effective gravity evaluated at the declared initial position and time
-zero. It defines coordinates and does not replace the world gravity model.
+zero; the angular reference is the navigation frame's declared rotation. They
+define coordinates and do not replace the world gravity or frame model.
 
 The full covariance reset is the derivative of
 

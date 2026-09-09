@@ -178,6 +178,21 @@ def run(
     cross = np.zeros((n, nc * seeds))
     xt = ca.MX.sym("truth", na)
     error = ca.Function("error", [xp, xt], [spec.boxminus_sym(xt, xp)]).map(seeds)
+    rotation = quat_to_rotmat(xp[orientation])
+    heading_value = ca.atan2(rotation[1, 0], rotation[0, 0])
+    heading_delta = ca.MX.sym("heading_delta", n)
+    heading_gradient = ca.substitute(
+        ca.jacobian(
+            ca.substitute(heading_value, xp, spec.boxplus_sym(xp, heading_delta)),
+            heading_delta,
+        ),
+        heading_delta,
+        ca.MX.zeros(n),
+    )
+    heading_fn = ca.Function(
+        "physical_heading", [xp], [heading_value, heading_gradient]
+    )
+    truth_heading = np.array([float(heading_fn(truth[:, i])[0]) for i in range(seeds)])
     selected = []
     for name in ("craft.orientation", "craft.imu.gyro_bias", "craft.imu.accel_bias"):
         slot = spec.slot(name)
@@ -253,6 +268,20 @@ def run(
                     marginal_nees[j].append(
                         normalized_nees(e[selected, i][sl], marginal[sl, sl])
                     )
+            physical_heading, physical_heading_variance = [], []
+            for i in range(seeds):
+                value, gradient = heading_fn(x[:, i])
+                difference = truth_heading[i] - float(value)
+                physical_heading.append(
+                    np.arctan2(np.sin(difference), np.cos(difference))
+                )
+                gradient = np.asarray(gradient).ravel()
+                physical_heading_variance.append(
+                    float(gradient @ cov[:, i * n : (i + 1) * n] @ gradient)
+                )
+            physical_heading = np.asarray(physical_heading)
+            physical_heading_variance = np.asarray(physical_heading_variance)
+            standardized_heading = physical_heading / np.sqrt(physical_heading_variance)
             records.append(
                 {
                     "t": (k + 1) * dt,
@@ -272,6 +301,17 @@ def run(
                         )
                     ),
                     "attitude_bias_anees": float(np.mean(nees)),
+                    "physical_heading_rmse_deg": float(
+                        np.degrees(np.sqrt(np.mean(physical_heading**2)))
+                    ),
+                    "physical_heading_sigma_deg": float(
+                        np.degrees(np.sqrt(np.mean(physical_heading_variance)))
+                    ),
+                    "physical_heading_anees": float(np.mean(standardized_heading**2)),
+                    "physical_heading_coverage": {
+                        str(k): float(np.mean(np.abs(standardized_heading) <= k))
+                        for k in (1, 2, 3)
+                    },
                     "marginal_anees": {
                         name: float(np.mean(values))
                         for name, values in zip(
@@ -332,6 +372,9 @@ def run(
         "seeds": seeds,
         "rejected_updates": rejected,
         "attitude_bias_anees_95_percent_bounds": bounds,
+        "heading_anees_95_percent_bounds": [
+            chi2_quantile(seeds, p) / seeds for p in (0.025, 0.975)
+        ],
         "records": records,
         "module_artifact_id": module.artifact_id,
         "elapsed_s": time.perf_counter() - started,
