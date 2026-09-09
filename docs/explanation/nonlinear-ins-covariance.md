@@ -1,5 +1,8 @@
 # Nonlinear INS covariance
 
+**Experimental: not statistically accepted.** The larger weak-bias tests still
+fail; see [the qualification report](../qualification/ins-nonlinear-2026-09-09.md).
+
 `INS(..., covariance="nonlinear")` selects a gravity-referenced finite error
 model and nonlinear uncertainty propagation. `covariance="linearized"` retains
 the existing implementation for compatibility. This option changes covariance
@@ -37,8 +40,15 @@ including navigation/bias cross blocks and the nuisance cross covariance.
 
 Positive-weight augmented quadrature propagates state and process uncertainty
 through the ordinary strapdown function. Packet deltas, left/right gyro
-boundaries, and the retained Schmidt variables form a joint Gaussian; none is
-reintroduced as an independent noise observation. The covariance square root
+boundaries, and retained static Schmidt variables form a joint Gaussian. The
+nonlinear packet filter adds three active, transient coordinates for the
+standardized error of the current gyro endpoint. Aiding updates their mean and
+covariance before the next packet reuses that sample. The next endpoint
+replaces these coordinates using the packet's conditional noise law. They are
+not vehicle angular-rate dynamics or a persistent gyro bias. Holding that
+endpoint error at zero mean as a Schmidt nuisance failed the displaced-IMU
+consistency test; estimating it resolves that failure. Installation uncertainty
+remains a static Schmidt parameter and is not averaged away. The covariance square root
 supports zero-variance directions, removes only correlation-scale floating-point
 roundoff, and adds no physical variance floor.
 
@@ -60,7 +70,10 @@ chart is incorrect: gravity curvature also changes the chart mean.
 
 The generated `initialize_prior(prior_x, prior_P)` entry provides the same
 operation to native callers. Generated C++ `reset(State{}, P0)` uses it too.
-`State{}` describes the physical initial state; a constructed filter holds the
+For a basic bias-tracking packet INS, `PriorCov` is 15×15 and stored `Cov` is
+18×18. The extra endpoint error starts independent, with zero mean and unit
+covariance; callers supply only the physical prior. `State{}` describes the
+physical initial state; a constructed filter holds the
 mapped chart state. Initial Schmidt variables are independent of that prior.
 Restoring a checkpoint restores its already-mapped state, covariance, nuisance
 cross covariance, and time directly; it does not map the prior a second time.
@@ -78,8 +91,18 @@ at 180 degrees, and twist has an angular branch cut. It is not a global
 multi-hypothesis attitude estimator. Linear observability and sigma-horizon
 utilities remain local analyses, not certificates of nonlinear consistency.
 
-The development branch is still being qualified. Raw matched-noise, calibrated
-and weak-bias gyrocompassing, zero-spin, rotation, generated C++ parity, and
-independent covariance audits have passed their current checks. Packet tests
-are being rerun after correcting their acquisition fixture. No Shiver artifact,
-wire adapter, or deployed estimator has been changed by this work.
+A displaced IMU requires `propagation="preintegrated"` in this mode. Framed
+one-sample packets are allowed. The legacy single-sample raw path uses the
+vehicle model's angular acceleration in its lever correction and still fails
+the noisy displaced-IMU consistency test. This restriction does not change the
+legacy linearized API. A rotated IMU colocated with the craft origin can use raw
+propagation.
+
+Prediction uses augmented unscented quadrature; measurement updates still use
+Jacobians and the Joseph/Schmidt recursion, followed by the coupled reset.
+This is a hybrid, not the package's conventional `UKF` transform. The initial
+native benchmark measured approximately six times the prediction cost and
+four times the predict-plus-update cost of linearized INS. See the qualification
+report for timings, model, hardware, exclusions and reproducible commands.
+
+No Shiver artifact, wire adapter, or deployed estimator has been changed.

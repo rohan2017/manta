@@ -53,7 +53,8 @@ def predict_moments(sys, spec, P, C, *, process_noise=True, extra_Q=None):
     n = spec.tangent_dim
     nc = 0 if C is None else C.size2()
     packet = sys.propagation == "preintegrated"
-    ns = nc - (3 if packet else 0)
+    boundary_state = hasattr(sys, "boundary_state_name")
+    ns = nc - (3 if packet and not boundary_state else 0)
     joint = ca.vertcat(ca.horzcat(P, C), ca.horzcat(C.T, ca.MX.eye(nc))) if nc else P
     root = psd_root(joint)
     active = []
@@ -89,7 +90,10 @@ def predict_moments(sys, spec, P, C, *, process_noise=True, extra_Q=None):
     propagated, considered = [], []
     for joint_delta, noise, residual in points:
         state = spec.boxplus_sym(x, joint_delta[:n])
-        if packet:
+        if packet and boundary_state:
+            propagated.append(sys.packet_residual_fn(state, u, dt, t, noise, residual))
+            considered.append(joint_delta[n:])
+        elif packet:
             start = joint_delta[n + ns : n + nc]
             packet_error = sys.boundary_conditional_gain_sym @ start + residual
             propagated.append(
@@ -143,6 +147,10 @@ def prior_moments_function(spec, consider_dimension=0):
     reference = ca.MX.sym("reference", spec.ambient_dim)
     physical_point = spec.product_spec.boxplus_sym(x, d)
     error = spec.boxminus_sym(physical_point, reference)
+    # A wrapped broad physical prior is not a Gaussian in this local chart.
+    # Reject quadrature points outside the attitude logarithm branch instead
+    # of aliasing them into an apparently confident initialization.
+    error = ca.if_else(ca.dot(d[axes], d[axes]) < np.pi**2, error, ca.MX.nan(n, 1))
     errors_fn = ca.Function(
         "ins_prior_error", [x, d, reference], [error, ca.jacobian(error, d)]
     )
@@ -167,19 +175,37 @@ def prior_moments_function(spec, consider_dimension=0):
     if consider_dimension:
         outputs.append(ca.MX.zeros(n, consider_dimension))
         output_names.append("P_consider_new")
-    return ca.Function(
+    full_initializer = ca.Function(
         "ins_initialize_prior", [x, P], outputs, ["prior_x", "prior_P"], output_names
+    )
+    physical = getattr(spec.product_spec, "physical_spec", None)
+    if physical is None:
+        return full_initializer
+    xp = ca.MX.sym("prior_x", physical.ambient_dim)
+    pp = ca.MX.sym("prior_P", physical.tangent_dim, physical.tangent_dim)
+    augmented_x = ca.vertcat(xp, ca.MX.zeros(3))
+    augmented_P = ca.diagcat(pp, ca.MX.eye(3))
+    return ca.Function(
+        "ins_initialize_physical_prior",
+        [xp, pp],
+        list(full_initializer(augmented_x, augmented_P)),
+        ["prior_x", "prior_P"],
+        output_names,
     )
 
 
 def with_prior_initialization(module, spec, consider_dimension=0):
     """Add the deployable physical-prior entry and map the Module defaults."""
     from dataclasses import replace
+
     from ..ir.module import EntryPoint, Port, PortRef, Role, StateField, StateLayout
 
     initializer = prior_moments_function(spec, consider_dimension)
-    x0 = np.asarray(module.state.field("x").init)
-    P0 = np.asarray(module.state.field("P").init)
+    physical = getattr(spec.product_spec, "physical_spec", spec.product_spec)
+    x0 = np.asarray(module.state.field("x").init)[: physical.ambient_dim]
+    P0 = np.asarray(module.state.field("P").init)[
+        : physical.tangent_dim, : physical.tangent_dim
+    ]
     initialized = initializer(x0, P0)
     fields = list(module.state.fields)
     for index, name in enumerate(
@@ -195,10 +221,13 @@ def with_prior_initialization(module, spec, consider_dimension=0):
         )
     ports = (
         *module.ports,
+        Port("prior_x", Role.STATE, (physical.ambient_dim,), spec=physical, init=x0),
         Port(
-            "prior_x", Role.STATE, (spec.ambient_dim,), spec=spec.product_spec, init=x0
+            "prior_P",
+            Role.MATRIX,
+            (physical.tangent_dim, physical.tangent_dim),
+            init=P0,
         ),
-        Port("prior_P", Role.MATRIX, (spec.tangent_dim, spec.tangent_dim), init=P0),
     )
     writes = ("x", "P") + (("P_consider",) if consider_dimension else ())
     return replace(

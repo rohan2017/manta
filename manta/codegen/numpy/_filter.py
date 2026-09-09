@@ -169,21 +169,20 @@ class NumpyFilter(NumpyRuntime):
         state while deliberately preserving covariance, use
         :meth:`set_state_keep_covariance`.
         """
-        x_field = self.module.state.field("x")
-        next_x = self._spec.pack_any(
-            state, base=x_field.init) if state is not None else np.asarray(
-                x_field.init, dtype=float).reshape(-1).copy()
-        pf = self.module.state.field("P")
-        next_P = np.asarray(
-            pf.init, dtype=float).reshape(pf.shape).copy()
+        physical_prior = "initialize_prior" in self.module.functions
+        x_field = (self.module.port("prior_x") if physical_prior
+                   else self.module.state.field("x"))
+        packing_spec = x_field.spec if physical_prior else self._spec
+        next_x = (packing_spec.pack_any(state, base=x_field.init)
+                  if state is not None else
+                  np.asarray(x_field.init, dtype=float).reshape(-1).copy())
+        pf = self.module.port("prior_P") if physical_prior else self.module.state.field("P")
+        next_P = np.asarray(pf.init, dtype=float).reshape(pf.shape).copy()
         if P is not None:
-            next_P = self._validate_covariance(P, who="reset P",
-                                               positive_definite=False)
-        if "initialize_prior" in self.module.functions:
-            prior_x = self.module.port("prior_x")
-            physical_x = prior_x.spec.pack_any(state, base=prior_x.init) if state is not None else np.asarray(prior_x.init).copy()
-            physical_P = next_P if P is not None else np.asarray(self.module.port("prior_P").init).copy()
-            mapped = self._functions["initialize_prior"](physical_x, physical_P)
+            next_P = self._validate_covariance(
+                P, who="reset P", positive_definite=False, dim=pf.shape[0])
+        if physical_prior:
+            mapped = self._functions["initialize_prior"](next_x, next_P)
             next_x, next_P = np.asarray(mapped[0]).ravel(), np.asarray(mapped[1])
         staged = {"x": next_x, "P": next_P}
         if "P_consider" in self._state:
@@ -477,8 +476,8 @@ class NumpyFilter(NumpyRuntime):
         return R.copy()
 
     def _validate_covariance(self, value, *, who: str,
-                             positive_definite: bool) -> np.ndarray:
-        dim = self._spec.tangent_dim
+                             positive_definite: bool, dim: int | None = None) -> np.ndarray:
+        dim = self._spec.tangent_dim if dim is None else dim
         matrix = np.asarray(value)
         if matrix.dtype.kind not in "iuf":
             raise TypeError(f"{who}: covariance must be real numeric data")

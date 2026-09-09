@@ -54,8 +54,16 @@ class _Ctx:
         self.y_port = module.sole_port(Role.OUTPUT)
         self.x_port = module.sole_port(Role.STATE)
         self.physical_prior = module.metadata.get("prior_coordinates") == "physical_product_gaussian"
-        self.x_init = (module.port("prior_x").init if self.physical_prior
-                       else module.initial_x)  # State{} represents a physical prior
+        self.x_init = module.initial_x
+        if self.physical_prior:
+            prior = module.port("prior_x")
+            # State{} also contains internal estimator slots. The physical
+            # initializer consumes its prefix; fail if that ABI is violated.
+            layout = lambda spec: [(s.name, s.ambient_offset, s.ambient_dim)
+                                   for s in spec.slots]
+            if layout(prior.spec) != layout(self.spec)[:len(prior.spec.slots)]:
+                raise ValueError("C++ physical prior must be a prefix of held state")
+            self.x_init = self.spec.pack_projected(prior.spec.to_nested(prior.init))
         self.has_clock = self.held and any(
             isinstance(a, PortRef) and module.port(a.name).role is Role.TIME
             for ep in module.entry_points for a in ep.args)
@@ -76,6 +84,12 @@ def _state_matrix_type(field, ctx) -> str:
     if field.name == "P" and field.shape == (ctx.tan, ctx.tan):
         return "Cov"
     return _mat_type(*field.shape)
+
+
+def _reset_matrix_type(field, ctx):
+    if ctx.physical_prior and field.name == "P":
+        return "PriorCov"
+    return _state_matrix_type(field,ctx)
 
 
 def _buf_dim(n: int) -> int:
@@ -602,6 +616,9 @@ def emit_module_cpp(module, out_dir, *, class_name: str,
         H.append("    using Cov = Eigen::Matrix<double, tangent_dim, "
                  "tangent_dim>;")
     H.append("")
+    if ctx.physical_prior:
+        prior_shape = ctx.port("prior_P").shape
+        H.append(f"    using PriorCov = {_mat_type(*prior_shape)};")
     if ctx.spec is not None:
         H += _state_struct(ctx.spec, ctx.x_init) + [""]
     if ctx.u_port is not None:
@@ -630,13 +647,13 @@ def emit_module_cpp(module, out_dir, *, class_name: str,
             reset_args = ", ".join(
                 ["const State& x0"]
                 + [
-                    f"const {_state_matrix_type(mf, ctx)}& {mf.name}0"
+                    f"const {_reset_matrix_type(mf, ctx)}& {mf.name}0"
                     for mf in ctx.mats
                 ]
             )
             H.append(f"    void reset({reset_args});")
             if len(ctx.mats) > 1 and ctx.mats[0].name == "P":
-                H.append("    void reset(const State& x0, const Cov& P0);")
+                H.append(f"    void reset(const State& x0, const {_reset_matrix_type(ctx.mats[0],ctx)}& P0);")
         else:
             reset = "x = x0;"
             if ctx.has_clock:
@@ -692,7 +709,7 @@ def emit_module_cpp(module, out_dir, *, class_name: str,
         if ctx.mats:
             args = ", ".join(["const State& x0"]
                              + [
-                                 f"const {_state_matrix_type(mf, ctx)}& "
+                                 f"const {_reset_matrix_type(mf, ctx)}& "
                                  f"{mf.name}0"
                                  for mf in ctx.mats
                              ])
@@ -712,7 +729,7 @@ def emit_module_cpp(module, out_dir, *, class_name: str,
                     + [f"({_matrix_init(mf, ctx)})" for mf in ctx.mats[1:]]
                 )
                 C += [
-                    f"void {q}::reset(const State& x0, const Cov& P0) {{",
+                    f"void {q}::reset(const State& x0, const {_reset_matrix_type(ctx.mats[0],ctx)}& P0) {{",
                     f"    reset({defaults});",
                     "}",
                     "",

@@ -27,7 +27,6 @@ from ..fields import GravityField
 from ..ir._linalg import spd_solve
 from ..ir._names import resolve_suffix
 from ..ir._rotation import (
-    quat_conj,
     quat_from_rotmat_np,
     quat_mul,
     quat_to_rotmat,
@@ -396,7 +395,6 @@ class _INSSystem:
         R_bs = ca.DM(self.R_craft_from_sensor)
         lever = ca.DM(self.lever_arm)
         q_bs = ca.DM(quat_from_rotmat_np(self.R_craft_from_sensor))
-        q_sb = quat_conj(q_bs)
 
         def packet_chunk(name, dim):
             full = self.preintegration_input_map[name]
@@ -551,9 +549,13 @@ class _INSSystem:
                         R_ws @ delta_v, R_ws @ delta_p, dt,
                         packet_chunk("velocity_time_moments", 4),
                         packet_chunk("position_time_moments", 4))
-                q_next = (quat_mul(quat_mul(q_ws, delta_q), q_sb)
+                # Quaternion conjugation by the mount rotates only the
+                # vector part. Avoid cancelling two O(1) mount quaternions
+                # around a tiny Earth-rate delta at every packet boundary.
+                body_delta = ca.vertcat(delta_q[0], R_bs @ delta_q[1:4])
+                q_next = (quat_mul(q, body_delta)
                           if frame is None else frame.attitude(
-                              q, quat_mul(quat_mul(q_bs, delta_q), q_sb), dt))
+                              q, body_delta, dt))
                 q_next = q_next / ca.sqrt(
                     ca.dot(q_next, q_next) + 1e-30)
                 R_wb_next = quat_to_rotmat(q_next)
@@ -610,6 +612,7 @@ class _INSSystem:
             end_error = ca.MX.sym("boundary_end_error", 3, 1)
             x_end, outs_boundary_end = evaluate(
                 x, zero_noise, boundary_end_error=end_error)
+            _, outs_boundary_end_noisy = evaluate(x, noise, boundary_end_error=end_error)
             end_state_error = spec.boxminus_sym(x_end, x_new)
             boundary_end_G = ca.substitute(
                 ca.jacobian(end_state_error, end_error), end_error,
@@ -675,6 +678,7 @@ class _INSSystem:
 
         sensors: dict[str, SensorModel] = {}
         boundary_sensor_H: dict[str, ca.MX] = {}
+        boundary_sensor_functions: dict[str, ca.Function] = {}
         h_supports = []
         for full in self._chosen_sensors:
             dim = int(outs_noisy[full].numel())
@@ -701,6 +705,10 @@ class _INSSystem:
                 # entry-point graphs do not share a free symbol.
                 h_boundary = ca.substitute(
                     h_boundary, end_error, boundary_error)
+                boundary_sensor_functions[full] = ca.Function(
+                    f"boundary_measurement_{entry_ident(full)}",
+                    [x,u,dt,t,noise,end_error],
+                    [ca.reshape(outs_boundary_end_noisy[full],dim,1)])
                 boundary_sensor_H[full] = ca.substitute(
                     ca.jacobian(h_boundary, boundary_error), boundary_error,
                     ca.MX.zeros(3, 1))
@@ -728,6 +736,7 @@ class _INSSystem:
             "boundary_end_residual_cross_sym": (
                 boundary_end_residual_cross),
             "boundary_sensor_H": boundary_sensor_H,
+            "boundary_sensor_functions": boundary_sensor_functions,
             "L_sym": L, "L_pattern": L_pattern, "Sigma": Sigma,
             "sensors": sensors, "predict_fn": predict_fn,
             "F_fn": F_fn, "L_fn": L_fn, "blocks": blocks,
@@ -755,6 +764,7 @@ class _INSSystem:
         self.boundary_end_residual_cross_sym = result[
             "boundary_end_residual_cross_sym"]
         self.boundary_sensor_H = result["boundary_sensor_H"]
+        self.boundary_sensor_functions = result["boundary_sensor_functions"]
         self.L_sym = result["L_sym"]
         self.Sigma = result["Sigma"]
         self.sensors = result["sensors"]
@@ -830,6 +840,13 @@ class INS(_FilterBase):
         sys = _INSSystem(world, imu=imu, track=track,
                          sensors=sensors, inputs=inputs,
                          propagation=propagation, navigation_frame=navigation_frame)
+        if covariance == "nonlinear" and propagation == "raw" and np.any(sys.lever_arm):
+            raise NotImplementedError(
+                "Nonlinear INS with a displaced IMU requires propagation='preintegrated' "
+                "and timestamped gyro endpoints. The single-sample raw lever correction "
+                "uses model angular acceleration and has not passed noisy-IMU consistency "
+                "qualification. One-sample framed packets are supported."
+            )
         require_measurement_only_consider(sys, who="INS")
         selected_imu_prefix = f"{sys.imu_name}."
         unsupported_imu_consider = tuple(
@@ -844,6 +861,9 @@ class INS(_FilterBase):
                 "propagation and cannot be a measurement-only Schmidt "
                 f"parameter: {list(unsupported_imu_consider)}"
             )
+        if covariance == "nonlinear" and propagation == "preintegrated":
+            from ._ins_boundary import with_boundary_state
+            sys = with_boundary_state(sys)
         if covariance == "nonlinear":
             from ._ins_error import INSStateSpec
             physical = sys.spec
@@ -877,7 +897,7 @@ class INS(_FilterBase):
         # estimated, but its navigation cross-covariance survives aiding
         # updates and is handed into the next packet prediction. This is the
         # missing memory in an otherwise insufficient 9x9 packet covariance.
-        n_boundary_consider = 3 if propagation == "preintegrated" else 0
+        n_boundary_consider = 3 if propagation == "preintegrated" and covariance == "linearized" else 0
         n_consider = n_static_consider + n_boundary_consider
         x, u, dt, t = sys.x_sym, sys.u_sym, sys.dt_sym, sys.t_sym
         P = ca.MX.sym("P", n_tan, n_tan)
@@ -1071,11 +1091,12 @@ class INS(_FilterBase):
                 if rho > MODEL_FORCE_RHO_WARNING)),
             "lever_arm_m": tuple(float(v) for v in sys.lever_arm),
             "preintegration_boundary_covariance_qualified": True,
-            "preintegration_boundary_consider_dimension": (
-                n_boundary_consider),
+            "preintegration_boundary_consider_dimension": n_boundary_consider,
+            "gyro_boundary_error_state": getattr(sys,"boundary_state_name",None),
             "preintegration_boundary_covariance_model": (
-                "dynamic_schmidt_joint_packet"
-                if n_boundary_consider else None),
+                "estimated_transient_gyro_error"
+                if hasattr(sys, "boundary_state_name") else
+                "dynamic_schmidt_joint_packet" if n_boundary_consider else None),
             # The filter deliberately carries no angular-velocity state.
             # Runtime adapters can still publish the current body rate from
             # the selected gyro by applying this fixed rigid-mount rotation

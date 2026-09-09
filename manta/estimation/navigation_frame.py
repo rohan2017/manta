@@ -79,10 +79,19 @@ class NavigationFrame:
         )
 
     def attitude(self, orientation, inertial_delta, dt):
-        return quat_mul(
-            so3_exp(-ca.DM(self.angular_velocity) * dt),
-            quat_mul(orientation, inertial_delta),
-        )
+        # Form the net increment before adding it to q. At Earth-fixed rest
+        # the two small rotations cancel; multiplying each into q separately
+        # discards that cancellation at the scale of the O(1) quaternion.
+        def increment(unit_quaternion):
+            w, v = unit_quaternion[0], unit_quaternion[1:4]
+            real = ca.if_else(w >= 0, -ca.dot(v, v) / (1 + w), w - 1)
+            return ca.vertcat(real, v)
+
+        left = increment(so3_exp(-ca.DM(self.angular_velocity) * dt))
+        right = increment(inertial_delta)
+        qr = quat_mul(orientation, right)
+        correction = qr + quat_mul(left, orientation) + quat_mul(left, qr)
+        return orientation + correction
 
     def translation(
         self,

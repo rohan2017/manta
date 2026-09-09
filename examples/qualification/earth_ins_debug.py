@@ -34,7 +34,12 @@ def stationary_state(ins, heading_deg):
     Only this synthetic fixture has uniform effective gravity, a root-mounted
     IMU, and constant biases. This is not a global symmetry of moving INS.
     """
-    x = np.array(ins.module().port("prior_x").init if "initialize_prior" in ins.module().functions else ins.module().state.field("x").init, dtype=float)
+    x = np.array(
+        ins.module().port("prior_x").init
+        if "initialize_prior" in ins.module().functions
+        else ins.module().state.field("x").init,
+        dtype=float,
+    )
     q = so3_exp_np(np.array([0.0, 0.0, np.radians(heading_deg)]))
     r = np.asarray(quat_to_rotmat(ca.DM(q)))
     w = np.array(ins.navigation_frame.angular_velocity)
@@ -103,7 +108,12 @@ def jacobian_audit(ins):
     """Central differences at a moving, tilted state with nonzero biases."""
     spec, sys = ins.spec, ins.sys
     n = spec.tangent_dim
-    x = np.array(ins.module().port("prior_x").init if "initialize_prior" in ins.module().functions else ins.module().state.field("x").init, dtype=float)
+    x = np.array(
+        ins.module().port("prior_x").init
+        if "initialize_prior" in ins.module().functions
+        else ins.module().state.field("x").init,
+        dtype=float,
+    )
     delta = np.zeros(n)
     delta[state_slice(ins, "orientation", tangent=True)] = (0.2, -0.1, 0.7)
     delta[state_slice(ins, "velocity", tangent=True)] = (0.3, -0.2, 0.1)

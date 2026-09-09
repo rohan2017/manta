@@ -108,7 +108,13 @@ class INSStateSpec(StateSpec):
                 else B @ d[_tangent(slot)]
             )
             out[_ambient(slot)] = x[_ambient(slot)] + increment
-        return out
+        # A local Gaussian must not wrap sigma points across the chart branch
+        # and silently turn a broad heading distribution into a narrow one.
+        # This guard is emitted into every backend along with the retraction.
+        valid = ca.logic_and(
+            ca.dot(twist_vector, twist_vector) < np.pi**2, ca.dot(tilt, tilt) < np.pi**2
+        )
+        return ca.if_else(valid, out, ca.MX.nan(self.ambient_dim, 1))
 
     def _minus(self, a, b):
         out = self.product_spec.boxminus_sym(a, b)
@@ -153,6 +159,9 @@ class INSStateSpec(StateSpec):
         a = ca.MX.sym("a", self.ambient_dim)
         b = ca.MX.sym("b", self.ambient_dim)
         return ca.Function("ins_error_minus", [a, b], [self._minus(a, b)])
+
+    def pack_projected(self, source):
+        return self.product_spec.pack_projected(source)
 
     def boxplus_sym(self, x, d):
         return self.plus(x, d)
