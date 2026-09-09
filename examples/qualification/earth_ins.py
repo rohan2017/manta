@@ -21,7 +21,7 @@ from manta import INS, Craft, NavigationFrame, TargetNumpy, World
 from manta.estimation import chi2_quantile, observability
 from manta.estimation import sigma_horizon as covariance_horizon
 from manta.fields import GravityField
-from manta.ir._rotation import quat_to_rotmat
+from manta.ir._rotation import quat_to_rotmat, quat_mul, so3_exp
 from manta.parts import ConstantBiasIMU, Mass, VelocitySensor
 
 SPIN = 7.2921159e-5
@@ -113,6 +113,7 @@ def run(
     yaw_sigma_deg=5.0,
     seed=82719,
     sigma_horizon=False,
+    motion=False,
 ):
     if not isinstance(seeds, int) or seeds < 2:
         raise ValueError("seeds must be an integer >= 2")
@@ -149,10 +150,13 @@ def run(
     fn = step.map(seeds)
     rng = np.random.default_rng(seed)
     samples = rng.normal(size=(n, seeds)) * np.sqrt(np.diag(P0))[:, None]
-    true_x = np.asarray(ins.spec.boxplus_sym(ca.DM(x0), ca.DM.zeros(n)))[:, 0]
+    physical_spec = getattr(ins.spec, "product_spec", ins.spec)
+    true_x = np.asarray(physical_spec.boxplus_sym(ca.DM(x0), ca.DM.zeros(n)))[:, 0]
     truth = np.column_stack(
         [
-            np.asarray(ins.spec.boxplus_sym(ca.DM(true_x), ca.DM(samples[:, i])))[:, 0]
+            np.asarray(physical_spec.boxplus_sym(ca.DM(true_x), ca.DM(samples[:, i])))[
+                :, 0
+            ]
             for i in range(seeds)
         ]
     )
@@ -194,20 +198,80 @@ def run(
     ui_a = ins.sys._input_slices[ins.sys.accel_input]
     ui_g = ins.sys._input_slices[ins.sys.gyro_input]
     xt = ca.MX.sym("truth", na)
-    error = ca.Function("error", [xp, xt], [ins.spec.boxminus_sym(xp, xt)]).map(seeds)
+    error = ca.Function("error", [xp, xt], [ins.spec.boxminus_sym(xt, xp)]).map(seeds)
+    # Physical heading and its differential covariance are independent of the
+    # finite error chart used for the multivariate consistency score.
+    rotation = quat_to_rotmat(xp[qi : qi + 4])
+    heading = ca.atan2(rotation[1, 0], rotation[0, 0])
+    delta = ca.MX.sym("heading_delta", n)
+    shifted = ins.spec.boxplus_sym(xp, delta)
+    heading_delta = ca.substitute(heading, xp, shifted)
+    heading_jacobian = ca.substitute(
+        ca.jacobian(heading_delta, delta), delta, ca.MX.zeros(n)
+    )
+    heading_fn = ca.Function("physical_heading", [xp], [heading, heading_jacobian]).map(
+        seeds
+    )
+    true_heading = np.asarray(heading_fn(truth)[0]).ravel()
+    if motion:
+        body_rate = ca.MX.sym("relative_body_rate", 3)
+        q_truth = xt[qi : qi + 4]
+        rotation_truth = quat_to_rotmat(q_truth)
+        earth = ca.DM(ins.navigation_frame.angular_velocity)
+        inertial_body_rate = body_rate + rotation_truth.T @ earth
+        next_truth = ca.MX(xt)
+        next_truth[qi : qi + 4] = quat_mul(
+            so3_exp(-earth * dt), quat_mul(q_truth, so3_exp(inertial_body_rate * dt))
+        )
+        # Analytic left-held acquisition contract, independent of INS functions.
+        motion_fn = ca.Function(
+            "rotation_truth",
+            [xt, body_rate],
+            [
+                next_truth,
+                inertial_body_rate + xt[gi : gi + 3],
+                rotation_truth.T @ ca.DM([0, 0, 9.81]) + xt[ai : ai + 3],
+            ],
+        ).map(seeds)
     every = max(1, int(rate * 10))
     for k in range(round(duration * rate)):
+        if motion:
+            time_s = k * dt
+            body_rate = [
+                0.03 * np.sin(0.13 * time_s),
+                0.025 * np.cos(0.17 * time_s),
+                0.02 + 0.01 * np.sin(0.07 * time_s),
+            ]
+            next_truth, gyro, accel = motion_fn(truth, body_rate)
+            gyro, accel = np.asarray(gyro), np.asarray(accel)
         inputs = np.tile(ins.sys.u_defaults[:, None], (1, seeds))
         inputs[ui_a] = accel + rng.normal(size=(3, seeds)) * 1e-5 * np.sqrt(rate)
         inputs[ui_g] = gyro + rng.normal(size=(3, seeds)) * gyro_density * np.sqrt(rate)
         x, P, nis, accepted = fn(x, P, inputs, rng.normal(size=(3, seeds)) * 0.001)
+        if motion:
+            truth = np.asarray(next_truth)
+            true_heading = np.asarray(heading_fn(truth)[0]).ravel()
         rejected += int(np.count_nonzero(np.asarray(accepted) < 0.5))
         if (k + 1) % every == 0:
             errors = np.asarray(error(x, truth))
             cov = np.asarray(P)
             oi = ins.spec.slot("craft.orientation").tangent_offset
-            yaw = errors[oi + 2]
-            sig = np.array([np.sqrt(cov[oi + 2, i * n + oi + 2]) for i in range(seeds)])
+            estimated_heading, heading_jac = heading_fn(x)
+            angle_difference = true_heading - np.asarray(estimated_heading).ravel()
+            yaw = np.arctan2(np.sin(angle_difference), np.cos(angle_difference))
+            heading_jac = np.asarray(heading_jac)
+            sig = np.array(
+                [
+                    np.sqrt(
+                        (
+                            heading_jac[:, i * n : (i + 1) * n]
+                            @ cov[:, i * n : (i + 1) * n]
+                            @ heading_jac[:, i * n : (i + 1) * n].T
+                        ).item()
+                    )
+                    for i in range(seeds)
+                ]
+            )
             nees = []
             marginals = {name: [] for name in marginal_indices}
             for i in range(seeds):
@@ -226,6 +290,10 @@ def run(
                     "t": (k + 1) / rate,
                     "yaw_rmse_deg": float(np.degrees(np.sqrt(np.mean(yaw * yaw)))),
                     "yaw_sigma_deg": float(np.degrees(np.sqrt(np.mean(sig * sig)))),
+                    "heading_coverage": {
+                        str(width): float(np.mean(np.abs(yaw) <= width * sig))
+                        for width in (1, 2, 3)
+                    },
                     "attitude_bias_anees": float(np.mean(nees)),
                     "dof": len(selected),
                     "marginal_anees": {
@@ -236,18 +304,28 @@ def run(
                     "gyro_bias_rmse_rad_s": float(
                         np.sqrt(
                             np.mean(
-                                errors[
-                                    ins.spec.slot(
-                                        "craft.imu.gyro_bias"
-                                    ).tangent_offset : ins.spec.slot(
-                                        "craft.imu.gyro_bias"
-                                    ).tangent_offset
-                                    + 3
-                                ]
-                                ** 2
+                                (np.asarray(x)[gi : gi + 3] - truth[gi : gi + 3]) ** 2
                             )
                         )
                     ),
+                    "accel_bias_mean_error_m_s2": np.mean(
+                        np.asarray(x)[ai : ai + 3] - truth[ai : ai + 3], axis=1
+                    ).tolist(),
+                    "accel_bias_rms_error_m_s2": np.sqrt(
+                        np.mean(
+                            (np.asarray(x)[ai : ai + 3] - truth[ai : ai + 3]) ** 2,
+                            axis=1,
+                        )
+                    ).tolist(),
+                    "accel_bias_rms_sigma_m_s2": np.sqrt(
+                        np.mean(
+                            [
+                                np.diag(cov[:, i * n : (i + 1) * n])[12:15]
+                                for i in range(seeds)
+                            ],
+                            axis=0,
+                        )
+                    ).tolist(),
                     "covariance_symmetry_error": float(
                         max(
                             np.max(
@@ -321,10 +399,12 @@ def run(
         "seeds": seeds,
         "seed": seed,
         "spin": spin,
+        "motion": motion,
         "gyro_density": gyro_density,
         "gyro_bias_prior_sigma": bias_sigma,
         "initial_yaw_sigma_deg": yaw_sigma_deg,
-        "error_coordinates": "StateSpec product manifold; left attitude error in navigation axes",
+        "error_coordinates": getattr(ins.spec, "error_model", "product_manifold"),
+        "physical_prior": "Independent SO(3) attitude and additive physical bias samples",
         "rank": report.rank,
         "tangent_dim": report.tangent_dim,
         "records": records,
@@ -338,12 +418,14 @@ def main():
     p.add_argument("--duration", type=float, default=300)
     p.add_argument("--rate", type=int, default=100)
     p.add_argument("--seeds", type=int, default=16)
+    p.add_argument("--seed", type=int, default=82719)
     p.add_argument("--latitude", type=float, default=37.78)
     p.add_argument("--spin", type=float, default=SPIN)
     p.add_argument("--gyro-density", type=float, default=1e-7)
     p.add_argument("--bias-sigma", type=float, default=1e-8)
     p.add_argument("--yaw-sigma-deg", type=float, default=5.0)
     p.add_argument("--sigma-horizon", action="store_true")
+    p.add_argument("--motion", action="store_true")
     args = p.parse_args()
     values = vars(args).copy()
     output = values.pop("output")
