@@ -1,0 +1,85 @@
+# Nonlinear INS covariance
+
+`INS(..., covariance="nonlinear")` selects a gravity-referenced finite error
+model and nonlinear uncertainty propagation. `covariance="linearized"` retains
+the existing implementation for compatibility. This option changes covariance
+handling and correction coordinates; both use the same strapdown mechanics.
+
+## Why the error representation changes
+
+Stationary gravity and Earth-rate measurements couple attitude with sensor
+bias. A Gaussian over independent attitude and additive bias errors cannot
+retain that curved relationship through repeated corrections. In the recovered
+fixture, the old estimator reported 1.64 degrees of heading uncertainty while
+its error was about 25 degrees, even with Earth rotation disabled and matching
+sensor noise. This is separate from the earlier Schmidt installation-uncertainty
+refactor, which is retained.
+
+The new chart separates relative twist around a fixed reference vertical from
+relative swing. Navigation vectors use the same rotation; gyro-bias increments
+and accelerometer-bias curvature are carried in sensor axes. The differential
+at zero retains the existing tangent units and state layout. Finite covariance
+is local to the complete chart, rather than an independent quaternion block.
+See `_ins_error.py` for the forward and inverse maps. The reference vector is
+opposite effective gravity evaluated at the declared initial position and time
+zero. It defines coordinates and does not replace the world gravity model.
+
+The full covariance reset is the derivative of
+
+```text
+boxminus(boxplus(x, correction + error), boxplus(x, correction))
+```
+
+with respect to `error` at zero. Joseph and Schmidt updates use that same map,
+including navigation/bias cross blocks and the nuisance cross covariance.
+
+## Prediction and acquisition correlations
+
+Positive-weight augmented quadrature propagates state and process uncertainty
+through the ordinary strapdown function. Packet deltas, left/right gyro
+boundaries, and the retained Schmidt variables form a joint Gaussian; none is
+reintroduced as an independent noise observation. The covariance square root
+supports zero-variance directions, removes only correlation-scale floating-point
+roundoff, and adds no physical variance floor.
+
+A packet must describe the samples actually used. In particular, a fresh right
+boundary must replace both the recurrence endpoint reading and its correlation
+metadata, using `frame_preintegrated_packet`. That exact right sample becomes
+the next packet's left sample. Reusing a correlation while supplying an unrelated
+sample is an incorrect sensor model, not evidence of estimator inconsistency.
+The recovered split-rate qualification fixture had this bug; its old packet
+results are invalidated and must be replaced with fixture-schema-2 results.
+
+## Initialization and checkpoints
+
+`NumpyFilter.reset(state=..., P=...)` accepts a physical product-Gaussian prior.
+Its mean and covariance are transformed together using conditional Gauss-Hermite
+integration over attitude. The other conditional Euclidean coordinates are
+integrated analytically. Copying only the supplied covariance into the new
+chart is incorrect: gravity curvature also changes the chart mean.
+
+The generated `initialize_prior(prior_x, prior_P)` entry provides the same
+operation to native callers. Generated C++ `reset(State{}, P0)` uses it too.
+`State{}` describes the physical initial state; a constructed filter holds the
+mapped chart state. Initial Schmidt variables are independent of that prior.
+Restoring a checkpoint restores its already-mapped state, covariance, nuisance
+cross covariance, and time directly; it does not map the prior a second time.
+
+## Interpretation and scope
+
+Score joint errors with `spec.boxminus_sym(truth, estimate)`. Finite boxminus
+is not antisymmetric. A Gaussian in this chart maps to a curved distribution in
+ordinary physical attitude/bias coordinates; converting it to another Gaussian
+and applying the same chi-square gate does not preserve that test's assumptions.
+The qualification also reports physical heading and bias errors separately.
+
+This remains a local Gaussian approximation. Relative swing has a singularity
+at 180 degrees, and twist has an angular branch cut. It is not a global
+multi-hypothesis attitude estimator. Linear observability and sigma-horizon
+utilities remain local analyses, not certificates of nonlinear consistency.
+
+The development branch is still being qualified. Raw matched-noise, calibrated
+and weak-bias gyrocompassing, zero-spin, rotation, generated C++ parity, and
+independent covariance audits have passed their current checks. Packet tests
+are being rerun after correcting their acquisition fixture. No Shiver artifact,
+wire adapter, or deployed estimator has been changed by this work.

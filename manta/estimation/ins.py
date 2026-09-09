@@ -585,6 +585,7 @@ class _INSSystem:
         x_new_noisy, outs_noisy = evaluate(x, noise)
         x_new = ca.substitute(x_new_noisy, noise, zero_noise)
 
+        packet_noisy_fn = None
         packet_Q = ca.MX.zeros(n_tan, n_tan)
         boundary_start_G = ca.MX.zeros(n_tan, 3)
         boundary_end_G = ca.MX.zeros(n_tan, 3)
@@ -613,6 +614,13 @@ class _INSSystem:
             boundary_end_G = ca.substitute(
                 ca.jacobian(end_state_error, end_error), end_error,
                 ca.MX.zeros(3, 1))
+
+            # Nonlinear covariance propagation uses this same mechanization,
+            # including the correlated packet and both acquisition boundaries.
+            x_joint, _ = evaluate(x, noise, packet_error, start_error, end_error)
+            packet_noisy_fn = ca.Function(
+                "ins_packet_noisy", [x, u, dt, t, noise, packet_error, start_error, end_error],
+                [x_joint])
 
             # Condition the packet's joint [delta, end-boundary] error on
             # the start-boundary error carried by the filter. This prevents
@@ -710,6 +718,7 @@ class _INSSystem:
             "x_new": x_new, "x_new_noisy": x_new_noisy,
             "F_sym": F, "F_pattern": F_pattern,
             "packet_Q_sym": packet_Q,
+            "packet_noisy_fn": packet_noisy_fn,
             "boundary_start_G_sym": boundary_start_G,
             "boundary_end_G_sym": boundary_end_G,
             "boundary_conditional_gain_sym": boundary_conditional_gain,
@@ -734,6 +743,7 @@ class _INSSystem:
         self.x_new_noisy = result["x_new_noisy"]
         self.F_sym = result["F_sym"]
         self.packet_Q_sym = result["packet_Q_sym"]
+        self.packet_noisy_fn = result["packet_noisy_fn"]
         self.boundary_start_G_sym = result["boundary_start_G_sym"]
         self.boundary_end_G_sym = result["boundary_end_G_sym"]
         self.boundary_conditional_gain_sym = result[
@@ -790,7 +800,10 @@ class INS(_FilterBase):
     The caller resolves its anchor and rotation vector; the IMU remains
     inertial. Its gravity convention is explicit. See
     ``docs/explanation/earth-relative-ins.md`` for equations, packet schema,
-    and the currently failing weak-bias gyrocompass qualification gate.
+    and qualification scope. ``covariance="nonlinear"`` enables joint nonlinear
+    uncertainty propagation with a gravity-referenced finite error chart and
+    physical-prior initialization. The default ``"linearized"`` retains the
+    existing covariance recursion. See ``docs/explanation/nonlinear-ins-covariance.md``.
     """
 
     def __init__(self, world, *, imu,
@@ -800,7 +813,10 @@ class INS(_FilterBase):
                  discretization: str = "exact",
                  gates: float | dict[str, float] | None = None,
                  propagation: str = "raw",
-                 navigation_frame: NavigationFrame | None = None) -> None:
+                 navigation_frame: NavigationFrame | None = None,
+                 covariance: str = "linearized") -> None:
+        if covariance not in {"linearized", "nonlinear"}:
+            raise ValueError("INS covariance must be 'linearized' or 'nonlinear'")
         if navigation_frame is not None and not isinstance(navigation_frame, NavigationFrame):
             raise TypeError("INS navigation_frame must be a NavigationFrame")
         if discretization != "exact":
@@ -828,7 +844,19 @@ class INS(_FilterBase):
                 "propagation and cannot be a measurement-only Schmidt "
                 f"parameter: {list(unsupported_imu_consider)}"
             )
+        if covariance == "nonlinear":
+            from ._ins_error import INSStateSpec
+            physical = sys.spec
+            initial = initial_ambient(sys.world, physical)
+            position = physical.slot(f"{sys.craft_name}.position")
+            p0 = initial[position.ambient_offset:position.ambient_offset + 3]
+            reference = -np.asarray(ca.evalf(sys._gravity(ca.MX(p0), ca.MX(0)))).ravel()
+            sys.spec = INSStateSpec(
+                physical, craft=sys.craft_name, imu=sys.imu_name,
+                rotation_body_from_imu=sys.R_craft_from_sensor,
+                reference_specific_force=reference)
         self._bind_system(world, sys)
+        self.covariance = covariance
         self.imu = sys.imu_name
         self.navigation_frame = navigation_frame
         self.propagation = propagation
@@ -897,8 +925,12 @@ class INS(_FilterBase):
             return symmetrize(covariance), ca.horzcat(*pieces)
 
         P_auto, P_consider_auto = prediction_covariance(Q_auto)
+        x_auto = sys.x_new
+        if covariance == "nonlinear":
+            from ._ins_moments import predict_moments
+            x_auto, P_auto, P_consider_auto = predict_moments(sys, spec, P, P_consider)
         predict_outputs = [
-            sys.x_new,
+            x_auto,
             P_auto,
             *([P_consider_auto] if n_consider else []),
         ]
@@ -909,10 +941,14 @@ class INS(_FilterBase):
             "ins_predict", [*predict_inputs, u, dt, t], predict_outputs,
             [*predict_input_names, "u", "dt", "t"], predict_output_names)
         P_override, P_consider_override = prediction_covariance(Q + Q_packet)
+        x_override = sys.x_new
+        if covariance == "nonlinear":
+            x_override, P_override, P_consider_override = predict_moments(
+                sys, spec, P, P_consider, process_noise=False, extra_Q=Q)
         predict_q_fn = ca.Function(
             "ins_predict_with_Q", [*predict_inputs, Q, u, dt, t],
             [
-                sys.x_new,
+                x_override,
                 P_override,
                 *([P_consider_override] if n_consider else []),
             ],
@@ -1003,6 +1039,9 @@ class INS(_FilterBase):
 
         metadata = {
             "estimator": "ins",
+            "covariance": covariance,
+            "error_model": getattr(spec, "error_model", "product_manifold"),
+            "reference_specific_force": getattr(spec, "reference_specific_force", None),
             "propagation": propagation,
             "navigation_frame": (None if navigation_frame is None
                                  else navigation_frame.metadata()),
@@ -1054,3 +1093,6 @@ class INS(_FilterBase):
             override_updates=override_updates, gates=resolved_gates,
             consider_dim=n_consider,
             metadata_extra=metadata)
+        if covariance == "nonlinear":
+            from ._ins_moments import with_prior_initialization
+            self._module = with_prior_initialization(self._module, spec, n_consider)

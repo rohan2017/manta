@@ -17,6 +17,7 @@ import casadi as ca
 import numpy as np
 
 from manta import IMUPreintegrator
+from manta.estimation.imu_preintegrator import frame_preintegrated_packet
 from manta.codegen.numpy._compile import compile_functions
 from manta.estimation import chi2_quantile
 from manta.ir._rotation import quat_to_rotmat
@@ -33,6 +34,8 @@ def run(
     seed=82719,
     seeds=16,
     packet_samples=10,
+    covariance="linearized",
+    aiding_samples=10,
 ):
     rate = 100
     if not isinstance(seeds, int) or seeds < 2:
@@ -43,16 +46,18 @@ def run(
         or 1000 % packet_samples
     ):
         raise ValueError("packet_samples must be a positive divisor of 1000")
+    if not isinstance(aiding_samples,int) or aiding_samples <= 0 or aiding_samples % packet_samples:
+        raise ValueError("aiding_samples must be a positive multiple of packet_samples")
     ticks = round(duration * rate)
     if not np.isfinite(duration) or duration < 10 or ticks % 1000:
         raise ValueError("duration must be a positive multiple of 10 seconds")
     started = time.perf_counter()
     dt = 1 / rate
-    ins = build(propagation=propagation, gyro_density=gyro_density)
+    ins = build(propagation=propagation, gyro_density=gyro_density, covariance=covariance)
     spec = ins.spec
     module = ins.module()
     n, na = spec.tangent_dim, spec.ambient_dim
-    x0 = np.asarray(module.state.field("x").init)
+    x0 = np.asarray(module.port("prior_x").init if "initialize_prior" in module.functions else module.state.field("x").init)
     p0 = prior(ins, bias_sigma)
     xp = ca.MX.sym("x", na)
     pp = ca.MX.sym("P", n, n)
@@ -70,13 +75,11 @@ def run(
         [up[0], up[1], up[2] if pre else cc, up[-2], up[-1]],
     )
     funcs = {"packet_qualify": step}
-    if not pre:
-        funcs["raw_qualify"] = ca.Function(
-            "raw_qualify", [xp, pp, u], [pred[0], pred[1]]
-        )
+    funcs["predict_qualify"] = ca.Function(
+        "predict_qualify",[xp,pp,cc,u],[pred[0],pred[1],pred[2] if pre else cc])
     native = compile_functions(funcs, optimization="O1", max_instructions=50000)
     step = native["packet_qualify"].map(seeds)
-    raw_predict = native["raw_qualify"].map(seeds) if not pre else None
+    predict_only = native["predict_qualify"].map(seeds)
     if pre:
         block = IMUPreintegrator(
             gyro_noise_density=gyro_density, accel_noise_density=1e-5
@@ -122,6 +125,9 @@ def run(
             for i in range(seeds)
         ]
     )
+    if "initialize_prior" in module.functions:
+        mapped = module.functions["initialize_prior"](x0,p0)
+        x0,p0 = np.asarray(mapped[0]).ravel(), np.asarray(mapped[1])
     x = np.tile(x0[:, None], (1, seeds))
     covariance = np.tile(p0, (1, seeds))
     cross = np.zeros((n, 3 * seeds))
@@ -136,27 +142,42 @@ def run(
     heading = spec.slot("craft.orientation").tangent_offset + 2
     records = []
     rejected = 0
+    # Independent acquisition and aiding streams keep samples identical when
+    # changing packet length. Look ahead to the real right boundary; the same
+    # sample becomes the next interval's left acquisition.
+    a_seed,g_seed,d_seed=np.random.SeedSequence(seed).spawn(3)
+    a_rng,g_rng,d_rng=(np.random.default_rng(s) for s in (a_seed,g_seed,d_seed))
+    def sample():
+        return (accel+a_rng.normal(size=(3,seeds))*1e-5/np.sqrt(dt),
+                gyro+g_rng.normal(size=(3,seeds))*gyro_density/np.sqrt(dt))
+    next_a,next_g=sample()
     for k in range(ticks):
-        a = accel + rng.normal(size=(3, seeds)) * 1e-5 / np.sqrt(dt)
-        g = gyro + rng.normal(size=(3, seeds)) * gyro_density / np.sqrt(dt)
+        a,g=next_a,next_g
+        next_a,next_g=sample()
         if pre:
             accum_x, y = accum(accum_x, np.vstack([a, g, np.zeros((6, seeds))]), dt, 0)
             if (k + 1) % packet_samples:
                 continue
             packet = np.asarray(y)
+            framed = [frame_preintegrated_packet(
+                {name:packet[sl,i] for name,sl in packet_slices.items()},
+                end_accel=next_a[:,i],end_gyro=next_g[:,i],
+                end_gyro_noise_sigma=np.full(3,gyro_density/np.sqrt(dt)))
+                for i in range(seeds)]
             inputs = np.tile(ins.sys.u_defaults[:, None], (1, seeds))
             for name, full in ins.preintegration_input_map.items():
-                inputs[ins.sys._input_slices[full]] = packet[packet_slices[name]]
+                inputs[ins.sys._input_slices[full]] = np.column_stack([p[name] for p in framed])
             accum_x = accum_zero.copy()
         else:
             inputs = np.tile(ins.sys.u_defaults[:, None], (1, seeds))
             inputs[ins.sys._input_slices[ins.sys.accel_input]] = a
             inputs[ins.sys._input_slices[ins.sys.gyro_input]] = g
-            if (k + 1) % packet_samples:
-                x, covariance = raw_predict(x, covariance, inputs)
-                continue
+
+        if (k + 1) % aiding_samples:
+            x, covariance, cross = predict_only(x,covariance,cross,inputs)
+            continue
         x, covariance, cross, nis, accepted = step(
-            x, covariance, cross, inputs, rng.normal(size=(3, seeds)) * 0.001
+            x, covariance, cross, inputs, d_rng.normal(size=(3, seeds)) * 0.001
         )
         rejected += int(np.count_nonzero(np.asarray(accepted) < 0.5))
         if (k + 1) % 1000 == 0:
@@ -195,13 +216,17 @@ def run(
         else "fail",
         "acceptance_scope": "final attitude/bias ANEES; not release",
         "truth_motion": "stationary, colocated IMU, constant biases",
+        "acquisition_contract": "fresh right boundary reused as next left sample",
+        "random_stream_contract": "SeedSequence(seed).spawn(3): accel,gyro,DVL; independent physical prior stream",
+        "fixture_schema": 2,
         "physical_prior": "product SO(3) attitude and independent additive bias samples",
         "error_coordinates": getattr(spec, "error_model", "product_manifold"),
         "propagation": propagation,
+        "covariance_model": module.metadata["covariance"],
         "gyro_density": gyro_density,
         "gyro_bias_prior_sigma": bias_sigma,
         "rate": rate,
-        "aiding_rate": rate / packet_samples,
+        "aiding_rate": rate / aiding_samples,
         "packet_samples": packet_samples,
         "duration": duration,
         "seed": seed,
@@ -225,6 +250,8 @@ def main():
     parser.add_argument("--seed", type=int, default=82719)
     parser.add_argument("--seeds", type=int, default=16)
     parser.add_argument("--packet-samples", type=int, default=10)
+    parser.add_argument("--aiding-samples", type=int, default=10)
+    parser.add_argument("--covariance", choices=("linearized", "nonlinear"), default="linearized")
     parser.add_argument("--output", type=Path, required=True)
     args = vars(parser.parse_args())
     output = args.pop("output")

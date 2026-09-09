@@ -36,6 +36,7 @@ def build(
     accel_density=1e-5,
     propagation="raw",
     frame_enabled=True,
+    covariance="linearized",
 ):
     # Cartesian Earth-axis projection, independent of INS implementation.
     phi = np.radians(latitude)
@@ -68,6 +69,7 @@ def build(
         navigation_frame=frame if frame_enabled else None,
         propagation=propagation,
         gates=None,
+        covariance=covariance,
     )
 
 
@@ -114,6 +116,9 @@ def run(
     seed=82719,
     sigma_horizon=False,
     motion=False,
+    initialize_prior=None,
+    covariance="linearized",
+    assumed_gyro_density=None,
 ):
     if not isinstance(seeds, int) or seeds < 2:
         raise ValueError("seeds must be an integer >= 2")
@@ -122,11 +127,18 @@ def run(
     if not np.isfinite(duration) or duration < 10:
         raise ValueError("duration must be finite and at least 10 seconds")
     started = time.perf_counter()
-    ins = build(latitude, rate=rate, spin=spin, gyro_density=gyro_density)
+    ins = build(latitude, rate=rate, spin=spin,
+                gyro_density=gyro_density if assumed_gyro_density is None else assumed_gyro_density,
+                covariance=covariance)
     module = ins.module()
     runtime = TargetNumpy(ins)
     P0 = prior(ins, bias_sigma, yaw_sigma_deg=yaw_sigma_deg)
     x0 = runtime.x.copy()
+    if "initialize_prior" in module.functions:
+        x0 = np.asarray(module.port("prior_x").init).copy()
+        def initialize_prior(ir, mean, covariance):
+            mapped = ir.module().functions["initialize_prior"](mean, covariance)
+            return np.asarray(mapped[0]).ravel(), np.asarray(mapped[1])
     n = ins.spec.tangent_dim
     na = len(x0)
     dt = 1 / rate
@@ -191,6 +203,8 @@ def run(
             for i in range(seeds)
         ]
     )
+    if initialize_prior is not None:
+        x0, P0 = initialize_prior(ins, x0, P0)
     x = np.tile(x0[:, None], (1, seeds))
     P = np.tile(P0, (1, seeds))
     records = []
@@ -233,6 +247,15 @@ def run(
                 rotation_truth.T @ ca.DM([0, 0, 9.81]) + xt[ai : ai + 3],
             ],
         ).map(seeds)
+    physical_moments_fn = None
+    if hasattr(ins.spec, "product_spec"):
+        from manta.estimation._kalman import sigma_deltas, unscented_weights, ut_predict
+        wm, wc, spread = unscented_weights(n, 1., 2., 0.)
+        points = [ins.spec.boxplus_sym(xp, d) for d in sigma_deltas(pp, spread, n)]
+        physical_mean, physical_cov = ut_predict(points, ca.MX.zeros(n,n), wm, wc, physical_spec, 3)
+        physical_error = physical_spec.boxminus_sym(xt, physical_mean)
+        physical_moments_fn = ca.Function("physical_moments", [xp,pp,xt],
+            [physical_mean,physical_cov,physical_error]).map(seeds)
     every = max(1, int(rate * 10))
     for k in range(round(duration * rate)):
         if motion:
@@ -320,7 +343,7 @@ def run(
                     "accel_bias_rms_sigma_m_s2": np.sqrt(
                         np.mean(
                             [
-                                np.diag(cov[:, i * n : (i + 1) * n])[12:15]
+                                np.diag(cov[:, i * n : (i + 1) * n])[marginal_indices["craft.imu.accel_bias"]]
                                 for i in range(seeds)
                             ],
                             axis=0,
@@ -345,6 +368,13 @@ def run(
                     ),
                 }
             )
+            if physical_moments_fn is not None:
+                pm, pc, pe = (np.asarray(value) for value in physical_moments_fn(x,P,truth))
+                pnees = [normalized_nees(pe[selected,i],pc[:,i*n:(i+1)*n][np.ix_(selected,selected)]) for i in range(seeds)]
+                records[-1]["physical_moment_anees"] = float(np.mean(pnees))
+                records[-1]["physical_accel_bias_mean_error_m_s2"] = np.mean(pm[ai:ai+3]-truth[ai:ai+3],axis=1).tolist()
+                records[-1]["physical_accel_bias_rms_error_m_s2"] = np.sqrt(np.mean((pm[ai:ai+3]-truth[ai:ai+3])**2,axis=1)).tolist()
+                records[-1]["physical_accel_bias_rms_sigma_m_s2"] = np.sqrt(np.mean([np.diag(pc[:, i*n:(i+1)*n])[marginal_indices["craft.imu.accel_bias"]] for i in range(seeds)],axis=0)).tolist()
     report = observability(
         ins,
         inputs={
@@ -401,10 +431,12 @@ def run(
         "spin": spin,
         "motion": motion,
         "gyro_density": gyro_density,
+        "assumed_gyro_density": gyro_density if assumed_gyro_density is None else assumed_gyro_density,
         "gyro_bias_prior_sigma": bias_sigma,
         "initial_yaw_sigma_deg": yaw_sigma_deg,
         "error_coordinates": getattr(ins.spec, "error_model", "product_manifold"),
         "physical_prior": "Independent SO(3) attitude and additive physical bias samples",
+        "covariance_model": covariance,
         "rank": report.rank,
         "tangent_dim": report.tangent_dim,
         "records": records,
@@ -422,10 +454,12 @@ def main():
     p.add_argument("--latitude", type=float, default=37.78)
     p.add_argument("--spin", type=float, default=SPIN)
     p.add_argument("--gyro-density", type=float, default=1e-7)
+    p.add_argument("--assumed-gyro-density", type=float)
     p.add_argument("--bias-sigma", type=float, default=1e-8)
     p.add_argument("--yaw-sigma-deg", type=float, default=5.0)
     p.add_argument("--sigma-horizon", action="store_true")
     p.add_argument("--motion", action="store_true")
+    p.add_argument("--covariance", choices=("linearized", "nonlinear"), default="linearized")
     args = p.parse_args()
     values = vars(args).copy()
     output = values.pop("output")

@@ -34,7 +34,7 @@ def stationary_state(ins, heading_deg):
     Only this synthetic fixture has uniform effective gravity, a root-mounted
     IMU, and constant biases. This is not a global symmetry of moving INS.
     """
-    x = np.array(ins.module().state.field("x").init, dtype=float)
+    x = np.array(ins.module().port("prior_x").init if "initialize_prior" in ins.module().functions else ins.module().state.field("x").init, dtype=float)
     q = so3_exp_np(np.array([0.0, 0.0, np.radians(heading_deg)]))
     r = np.asarray(quat_to_rotmat(ca.DM(q)))
     w = np.array(ins.navigation_frame.angular_velocity)
@@ -86,7 +86,7 @@ def stationary_audit(ins):
         )
     x0, x1 = (stationary_state(ins, angle) for angle in (0, 5))
     correction = np.asarray(ins.spec.boxminus_sym(ca.DM(x1), ca.DM(x0))).ravel()
-    reset = _reset_jacobian_np(ins.spec, correction)
+    reset = _reset_jacobian_np(ins.spec, correction, x0)
     mismatch = reset @ heading_tangent(ins, x0) - heading_tangent(ins, x1)
     return {
         "family": rows,
@@ -103,7 +103,7 @@ def jacobian_audit(ins):
     """Central differences at a moving, tilted state with nonzero biases."""
     spec, sys = ins.spec, ins.sys
     n = spec.tangent_dim
-    x = np.array(ins.module().state.field("x").init, dtype=float)
+    x = np.array(ins.module().port("prior_x").init if "initialize_prior" in ins.module().functions else ins.module().state.field("x").init, dtype=float)
     delta = np.zeros(n)
     delta[state_slice(ins, "orientation", tangent=True)] = (0.2, -0.1, 0.7)
     delta[state_slice(ins, "velocity", tangent=True)] = (0.3, -0.2, 0.1)
@@ -166,7 +166,7 @@ def jacobian_audit(ins):
             np.max(np.abs(numeric_l - np.asarray(sys.L_fn(x, u, dt, 0))))
         ),
         "reset_central_difference_max_error": float(
-            np.max(np.abs(numeric_reset - _reset_jacobian_np(spec, delta)))
+            np.max(np.abs(numeric_reset - _reset_jacobian_np(spec, delta, x)))
         ),
     }
 
@@ -208,7 +208,7 @@ def linearization_probe(ins, *, seconds=60):
                 correction = np.asarray(
                     spec.boxminus_sym(ca.DM(next_state), ca.DM(state))
                 ).ravel()
-                reset = _reset_jacobian_np(spec, correction)
+                reset = _reset_jacobian_np(spec, correction, state)
                 covariance = reset @ covariance @ reset.T
                 state = next_state
             covariance, innovation = step(state, covariance)

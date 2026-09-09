@@ -179,6 +179,12 @@ class NumpyFilter(NumpyRuntime):
         if P is not None:
             next_P = self._validate_covariance(P, who="reset P",
                                                positive_definite=False)
+        if "initialize_prior" in self.module.functions:
+            prior_x = self.module.port("prior_x")
+            physical_x = prior_x.spec.pack_any(state, base=prior_x.init) if state is not None else np.asarray(prior_x.init).copy()
+            physical_P = next_P if P is not None else np.asarray(self.module.port("prior_P").init).copy()
+            mapped = self._functions["initialize_prior"](physical_x, physical_P)
+            next_x, next_P = np.asarray(mapped[0]).ravel(), np.asarray(mapped[1])
         staged = {"x": next_x, "P": next_P}
         if "P_consider" in self._state:
             field = self.module.state.field("P_consider")
