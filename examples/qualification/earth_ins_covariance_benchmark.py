@@ -19,9 +19,10 @@ from .earth_ins import build, prior
 def run(repetitions=1000, *, expand=False):
     rows = []
     for propagation in ("raw", "preintegrated"):
-        for mode in ("linearized", "nonlinear"):
+        for mode in ("linearized", "geometric", "nonlinear"):
             ins = build(
                 covariance=mode,
+                expand=expand,
                 propagation=propagation,
                 mounted=propagation == "preintegrated",
             )

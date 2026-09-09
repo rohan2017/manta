@@ -1,0 +1,288 @@
+{
+  "broad_statistical_acceptance": false,
+  "note": "Retains failures in the geometric and sigma-point references; unchanged 95% intervals. Older raw reports do not contain heading ANEES and their audit is joint-only.",
+  "reports": [
+    {
+      "report": "geometric-calibrated64.json",
+      "checks": {
+        "attitude_bias_anees": {
+          "value": 9.97204837567395,
+          "bounds": [
+            7.990479696783882,
+            10.068702565043756
+          ],
+          "pass": true
+        },
+        "physical_heading_anees": {
+          "value": 1.723984746359343,
+          "bounds": [
+            0.6839992597276423,
+            1.3750632969765226
+          ],
+          "pass": false
+        },
+        "attitude_bias_boundary_anees": {
+          "value": 12.94361467847208,
+          "bounds": [
+            10.829639150968099,
+            13.229546813543077
+          ],
+          "pass": true
+        }
+      },
+      "pass_all_available": false
+    },
+    {
+      "report": "geometric-calibrated-confirm256.json",
+      "checks": {
+        "attitude_bias_anees": {
+          "value": 8.715330303260032,
+          "bounds": [
+            8.487724811191853,
+            9.527073529552844
+          ],
+          "pass": true
+        },
+        "physical_heading_anees": {
+          "value": 0.7687336529645541,
+          "bounds": [
+            0.8342760452578426,
+            1.18051488321174
+          ],
+          "pass": false
+        },
+        "attitude_bias_boundary_anees": {
+          "value": 11.68462941796874,
+          "bounds": [
+            11.40731960075175,
+            12.607478971033332
+          ],
+          "pass": true
+        }
+      },
+      "pass_all_available": false
+    },
+    {
+      "report": "geometric-reference-calibrated64.json",
+      "checks": {
+        "attitude_bias_anees": {
+          "value": 9.966078054302447,
+          "bounds": [
+            7.990479696783882,
+            10.068702565043756
+          ],
+          "pass": true
+        },
+        "physical_heading_anees": {
+          "value": 1.7239317254490094,
+          "bounds": [
+            0.6839992597276423,
+            1.3750632969765226
+          ],
+          "pass": false
+        },
+        "attitude_bias_boundary_anees": {
+          "value": 12.93764435711918,
+          "bounds": [
+            10.829639150968099,
+            13.229546813543077
+          ],
+          "pass": true
+        }
+      },
+      "pass_all_available": false
+    },
+    {
+      "report": "geometric-weak256.json",
+      "checks": {
+        "attitude_bias_anees": {
+          "value": 8.653001882179122,
+          "bounds": [
+            8.487724811191853,
+            9.527073529552844
+          ],
+          "pass": true
+        },
+        "physical_heading_anees": {
+          "value": 1.1582352389955806,
+          "bounds": [
+            0.8342760452578426,
+            1.18051488321174
+          ],
+          "pass": true
+        },
+        "attitude_bias_boundary_anees": {
+          "value": 11.702831319762566,
+          "bounds": [
+            11.40731960075175,
+            12.607478971033332
+          ],
+          "pass": true
+        }
+      },
+      "pass_all_available": true
+    },
+    {
+      "report": "geometric-motion64.json",
+      "checks": {
+        "attitude_bias_anees": {
+          "value": 12.479552940281284,
+          "bounds": [
+            7.990479696783882,
+            10.068702565043756
+          ],
+          "pass": false
+        }
+      },
+      "pass_all_available": false
+    },
+    {
+      "report": "geometric-reference-motion64.json",
+      "checks": {
+        "attitude_bias_anees": {
+          "value": 11.383683377735537,
+          "bounds": [
+            7.990479696783882,
+            10.068702565043756
+          ],
+          "pass": false
+        }
+      },
+      "pass_all_available": false
+    },
+    {
+      "report": "geometric-moment-motion64.json",
+      "checks": {
+        "attitude_bias_anees": {
+          "value": 11.315005200296728,
+          "bounds": [
+            7.990479696783882,
+            10.068702565043756
+          ],
+          "pass": false
+        }
+      },
+      "pass_all_available": false
+    },
+    {
+      "report": "geometric-moment-calibrated64.json",
+      "checks": {
+        "attitude_bias_anees": {
+          "value": 9.972176800209155,
+          "bounds": [
+            7.990479696783882,
+            10.068702565043756
+          ],
+          "pass": true
+        },
+        "physical_heading_anees": {
+          "value": 1.7239859595221536,
+          "bounds": [
+            0.6839992597276423,
+            1.3750632969765226
+          ],
+          "pass": false
+        },
+        "attitude_bias_boundary_anees": {
+          "value": 12.943743103025916,
+          "bounds": [
+            10.829639150968099,
+            13.229546813543077
+          ],
+          "pass": true
+        }
+      },
+      "pass_all_available": false
+    },
+    {
+      "report": "geometric-moment-weak256.json",
+      "checks": {
+        "attitude_bias_anees": {
+          "value": 8.662163850173155,
+          "bounds": [
+            8.487724811191853,
+            9.527073529552844
+          ],
+          "pass": true
+        },
+        "physical_heading_anees": {
+          "value": 1.1587005299702064,
+          "bounds": [
+            0.8342760452578426,
+            1.18051488321174
+          ],
+          "pass": true
+        },
+        "attitude_bias_boundary_anees": {
+          "value": 11.711993287978652,
+          "bounds": [
+            11.40731960075175,
+            12.607478971033332
+          ],
+          "pass": true
+        }
+      },
+      "pass_all_available": true
+    },
+    {
+      "report": "geometric-moment-noisy16.json",
+      "checks": {
+        "attitude_bias_anees": {
+          "value": 9.589633415386716,
+          "bounds": [
+            7.041945711273557,
+            11.194604888387575
+          ],
+          "pass": true
+        },
+        "physical_heading_anees": {
+          "value": 1.1406257586252289,
+          "bounds": [
+            0.4317290220935628,
+            1.802834420212797
+          ],
+          "pass": true
+        },
+        "attitude_bias_boundary_anees": {
+          "value": 12.814384723210186,
+          "bounds": [
+            9.720038526874283,
+            14.51657170294451
+          ],
+          "pass": true
+        }
+      },
+      "pass_all_available": true
+    },
+    {
+      "report": "geometric-moment-noisy128.json",
+      "checks": {
+        "attitude_bias_anees": {
+          "value": 9.725022711810047,
+          "bounds": [
+            8.279922837398724,
+            9.749671995048699
+          ],
+          "pass": true
+        },
+        "physical_heading_anees": {
+          "value": 1.0184225816914236,
+          "bounds": [
+            0.7701218522849307,
+            1.2594432388576637
+          ],
+          "pass": true
+        },
+        "attitude_bias_boundary_anees": {
+          "value": 12.50561693818824,
+          "bounds": [
+            11.166205507998376,
+            12.86339024911375
+          ],
+          "pass": true
+        }
+      },
+      "pass_all_available": true
+    }
+  ]
+}

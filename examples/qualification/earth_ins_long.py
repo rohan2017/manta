@@ -23,10 +23,22 @@ from manta.ir._rotation import quat_to_rotmat
 from .earth_ins import build, prior
 
 
-def run(*, hours=24, rate=1000, packet_samples=100, mounted=True):
+def run(
+    *,
+    hours=24,
+    rate=1000,
+    packet_samples=100,
+    mounted=True,
+    covariance="nonlinear",
+    expand=False,
+):
     started = time.perf_counter()
     ins = build(
-        covariance="nonlinear", propagation="preintegrated", rate=rate, mounted=mounted
+        covariance=covariance,
+        expand=expand,
+        propagation="preintegrated",
+        rate=rate,
+        mounted=mounted,
     )
     module, spec = ins.module(), ins.spec
     dt = packet_samples / rate
@@ -127,6 +139,8 @@ def run(*, hours=24, rate=1000, packet_samples=100, mounted=True):
     return {
         "acceptance": "pass",
         "scope": "stationary numerical durability; not statistical acceptance",
+        "covariance": covariance,
+        "expanded_filter_kernels": expand,
         "rate": rate,
         "packet_samples": packet_samples,
         "mounted": mounted,
@@ -137,6 +151,10 @@ def run(*, hours=24, rate=1000, packet_samples=100, mounted=True):
 
 def main():
     parser = argparse.ArgumentParser(__doc__)
+    parser.add_argument(
+        "--covariance", choices=("geometric", "nonlinear"), default="nonlinear"
+    )
+    parser.add_argument("--expand", action="store_true")
     parser.add_argument("--hours", type=float, default=24)
     parser.add_argument("--rate", type=int, default=1000)
     parser.add_argument("--packet-samples", type=int, default=100)

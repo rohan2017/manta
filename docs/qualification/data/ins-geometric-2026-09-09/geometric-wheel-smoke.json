@@ -1,0 +1,8 @@
+{
+  "pass": true,
+  "source": "/home/rohanix/ulysses/new_stack/.worktrees/ins-artifacts/geometric-wheel/manta/__init__.py",
+  "compiler": "runtime O3 march=native",
+  "max_instructions": 150000,
+  "seconds": 29.822302617001696,
+  "artifact_id": "50ec30fcbe43753d25d3a1f5b83c2fcf4cff234c37dbcc94cd6fa8679da9415a"
+}

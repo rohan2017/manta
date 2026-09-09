@@ -21,10 +21,30 @@ from manta import INS, Craft, NavigationFrame, TargetNumpy, World
 from manta.estimation import chi2_quantile, observability
 from manta.estimation import sigma_horizon as covariance_horizon
 from manta.fields import GravityField
-from manta.ir._rotation import quat_to_rotmat, quat_mul, so3_exp
+from manta.ir._rotation import quat_mul, quat_to_rotmat, so3_exp
 from manta.parts import ConstantBiasIMU, Mass, VelocitySensor
 
 SPIN = 7.2921159e-5
+
+
+def final_consistency_checks(record, seeds):
+    """Keep heading and joint consistency visible in the top-level verdict."""
+    checks = {}
+    for metric, dof in (
+        ("attitude_bias_anees", 9),
+        ("physical_heading_anees", 1),
+        ("attitude_bias_boundary_anees", 12),
+    ):
+        if metric not in record:
+            continue
+        bounds = [chi2_quantile(dof * seeds, q) / seeds for q in (0.025, 0.975)]
+        value = record[metric]
+        checks[metric] = {
+            "value": value,
+            "bounds": bounds,
+            "pass": bounds[0] <= value <= bounds[1],
+        }
+    return checks
 
 
 def build(
@@ -37,6 +57,7 @@ def build(
     propagation="raw",
     frame_enabled=True,
     covariance="linearized",
+    expand=False,
     mounted=False,
 ):
     # Cartesian Earth-axis projection, independent of INS implementation.
@@ -82,6 +103,7 @@ def build(
         propagation=propagation,
         gates=None,
         covariance=covariance,
+        expand=expand,
     )
 
 
@@ -133,6 +155,7 @@ def run(
     motion=False,
     initialize_prior=None,
     covariance="linearized",
+    expand=False,
     assumed_gyro_density=None,
     mounted=False,
 ):
@@ -151,6 +174,7 @@ def run(
         if assumed_gyro_density is None
         else assumed_gyro_density,
         covariance=covariance,
+        expand=expand,
         mounted=mounted,
     )
     if mounted and motion:
@@ -317,7 +341,6 @@ def run(
         if (k + 1) % every == 0:
             errors = np.asarray(error(x, truth))
             cov = np.asarray(P)
-            oi = ins.spec.slot("craft.orientation").tangent_offset
             estimated_heading, heading_jac = heading_fn(x)
             angle_difference = true_heading - np.asarray(estimated_heading).ravel()
             yaw = np.arctan2(np.sin(angle_difference), np.cos(angle_difference))
@@ -351,6 +374,7 @@ def run(
                 {
                     "t": (k + 1) / rate,
                     "yaw_rmse_deg": float(np.degrees(np.sqrt(np.mean(yaw * yaw)))),
+                    "physical_heading_anees": float(np.mean((yaw / sig) ** 2)),
                     "yaw_sigma_deg": float(np.degrees(np.sqrt(np.mean(sig * sig)))),
                     "heading_coverage": {
                         str(width): float(np.mean(np.abs(yaw) <= width * sig))
@@ -475,10 +499,13 @@ def run(
         "sigma_horizon": horizon_report,
         "module_artifact_id": module.artifact_id,
         "heading_sigma_threshold_times_s": thresholds,
-        "acceptance_scope": "final-epoch attitude/bias marginal ANEES only; not release",
+        "acceptance_scope": "final heading and joint ANEES; not release",
+        "consistency_checks": final_consistency_checks(records[-1], seeds),
         "acceptance": (
             "pass"
-            if bounds[0] <= records[-1]["attitude_bias_anees"] <= bounds[1]
+            if all(
+                c["pass"] for c in final_consistency_checks(records[-1], seeds).values()
+            )
             else "fail"
         ),
         "attitude_bias_anees_95_percent_bounds": bounds,
@@ -525,9 +552,12 @@ def main():
     p.add_argument("--yaw-sigma-deg", type=float, default=5.0)
     p.add_argument("--sigma-horizon", action="store_true")
     p.add_argument("--motion", action="store_true")
+    p.add_argument("--expand", action="store_true")
     p.add_argument("--mounted", action="store_true")
     p.add_argument(
-        "--covariance", choices=("linearized", "nonlinear"), default="linearized"
+        "--covariance",
+        choices=("linearized", "geometric", "nonlinear"),
+        default="linearized",
     )
     args = p.parse_args()
     values = vars(args).copy()

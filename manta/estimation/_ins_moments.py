@@ -48,6 +48,73 @@ def psd_root(matrix):
     )
 
 
+def predict_first_order(sys, spec, P, C, *, process_noise=True, extra_Q=None):
+    """Analytic local prediction retaining the finite chart and boundary state.
+
+    Both charts have the same zero-error differential, so the physical F, L
+    and residual G also linearize the finite coordinates. Full retraction,
+    prior mapping and reset still use those finite coordinates. This does not
+    preserve higher moments of a broad noisy posterior as quadrature does.
+    """
+    from ._assembly import _q_auto
+
+    F = sys.F_sym
+    covariance = F @ P @ F.T
+    if process_noise:
+        covariance += _q_auto(sys)
+    if sys.propagation == "preintegrated":
+        # Factor before conditioning, including exact zero directions in a
+        # one-sample packet. Do not subtract then renormalize tiny residuals.
+        root = psd_root(sys.boundary_joint_covariance_sym)[3:, 3:]
+        noise_root = sys.packet_residual_G_sym @ root
+        covariance += noise_root @ noise_root.T
+    if extra_Q is not None:
+        covariance += extra_Q
+    # A zero chart-error mean is not a zero *physical* bias offset. When
+    # orientation or its covariance changes, carry the quadratic rotation
+    # moment into the new nominal bias. Otherwise an ordinary turn creates
+    # spurious bias drift even with constant physical biases. This is a
+    # closed-form mean correction; covariance propagation remains first order.
+    from ..ir._rotation import quat_to_rotmat
+
+    orientation = spec.orientation
+    oi = orientation.tangent_offset
+    qi = orientation.ambient_offset
+    vertical = spec.up @ spec.up.T
+    horizontal = ca.MX.eye(3) - vertical
+
+    def offsets(state, cov):
+        attitude = cov[oi : oi + 3, oi : oi + 3]
+        tilt = horizontal @ attitude @ horizontal
+        yaw = vertical @ attitude @ vertical
+        swing_moment = 0.5 * (tilt - ca.trace(tilt) * ca.MX.eye(3))
+        rotation_moment = (
+            swing_moment
+            + 0.5 * (yaw - ca.trace(yaw) * ca.MX.eye(3))
+            + vertical @ attitude @ horizontal
+        )
+        sensor = quat_to_rotmat(state[qi : qi + 4]) @ spec.mount
+        return {
+            "gyro_bias": -sensor.T @ rotation_moment @ spec.earth_rate,
+            "accel_bias": -sensor.T @ swing_moment @ spec.gravity,
+        }
+
+    old = offsets(sys.x_sym, P)
+    new = offsets(sys.x_new, covariance)
+    physical_offset = ca.MX.zeros(spec.tangent_dim)
+    for slot in spec.biases:
+        index = slot.tangent_offset
+        physical_offset[index : index + 3] = old[slot.name.rsplit(".", 1)[-1]]
+    transported = F @ physical_offset
+    mean = ca.MX(sys.x_new)
+    for slot in spec.biases:
+        index, ambient = slot.tangent_offset, slot.ambient_offset
+        mean[ambient : ambient + 3] += (
+            transported[index : index + 3] - new[slot.name.rsplit(".", 1)[-1]]
+        )
+    return mean, symmetrize(covariance), None if C is None else F @ C
+
+
 def predict_moments(sys, spec, P, C, *, process_noise=True, extra_Q=None):
     x, u, dt, t = sys.x_sym, sys.u_sym, sys.dt_sym, sys.t_sym
     n = spec.tangent_dim

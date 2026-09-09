@@ -81,6 +81,7 @@ def with_boundary_state(base):
     sys.F_sym = F
     sys.L_sym = L
     sys.packet_Q_sym = G @ base.boundary_conditional_covariance_sym @ G.T
+    sys.packet_residual_G_sym = G
     sys.predict_fn = ca.Function("predict", [x, u, dt, t], [x_new])
     sys.F_fn = ca.Function("F", [x, u, dt, t], [F])
     sys.L_fn = ca.Function("L", [x, u, dt, t], [L]) if L is not None else None

@@ -1,9 +1,20 @@
-# Nonlinear INS covariance
+# Finite-chart INS covariance
 
-**Opt-in, with synthetic qualification.** The current v2 chart passes the
+`INS(..., covariance="geometric", expand=True)` selects analytic covariance
+prediction with a quadratic bias-mean transport correction. It uses no
+prediction sigma points. The finite prior, coupled measurement/reset and
+active packet-boundary contracts below also apply to this mode. It is an
+available API, **not broadly statistically qualified**: fresh calibrated and
+motion cohorts expose a confidence gap shared with the sigma-point reference.
+See the [geometric implementation report](../qualification/ins-geometric-2026-09-09.md).
+
+**Historical sigma-point qualification.** The v2 chart passes the
 matched calibrated, weak-bias and noisy-gyro trials. See the
 [qualification report](../qualification/ins-nonlinear-2026-09-09.md) for the
 measured scope, independent trials and retained earlier failures.
+
+The newer failures above limit that earlier evidence; passing its selected
+cohorts was not a guarantee over every calibration and initialization case.
 
 `INS(..., covariance="nonlinear")` selects a gravity-referenced finite error
 model and nonlinear uncertainty propagation. `covariance="linearized"` retains
@@ -158,3 +169,36 @@ analytic prediction from the finite coordinates and identifies a cheaper
 candidate's passing calibrated/weak-bias cases and failing noisy-sensor case.
 
 No Shiver artifact, wire adapter, or deployed estimator has been changed.
+
+## Analytic mode and explicit scalar expansion
+
+```python
+ins = INS(world, imu="craft.imu", sensors=["dvl.velocity"],
+          navigation_frame=frame, propagation="preintegrated",
+          covariance="geometric", expand=True)
+runtime = TargetNumpy(ins, compile=True, max_instructions=150000)
+runtime.reset(state=initial_state, P=physical_prior_covariance)
+```
+
+The analytic predictor retains `F P F.T + Q` and the conditional packet noise
+factor. It also transports the physical bias mean when orientation or attitude
+covariance changes. A zero mean in the finite chart includes quadratic
+rotation/bias offsets, so holding only the nominal bias constant during a turn
+is incorrect. Closed-form second moments supply that correction. The remaining
+covariance propagation is first order; this is not an exact nonlinear filter.
+
+`expand=True` is independent of the covariance algorithm and can also be used
+with `linearized` or `nonlinear`. It expands predict/update kernels, including
+noise overrides and diagnostic updates, before the common backend lowers the
+artifact. Initialization remains a separate quadrature operation. No compiler
+optimization flags, floating-point precision or runtime noise values change.
+The option is explicit because expansion can help some graphs and enlarge
+others. An unsupported scalar operation fails with its kernel name. The
+artifact records expansion and prediction semantics in metadata.
+
+The complete expanded geometric example has roughly 124,000 instructions
+summed across its six entry functions; its prediction alone is about 29,000.
+The explicit 150,000 instruction build ceiling above covers that example,
+including all updates and overrides. This is a build budget, not an estimate
+of executed instructions or a universal ceiling for larger vehicle models.
+Existing defaults remain `covariance="linearized", expand=False`.

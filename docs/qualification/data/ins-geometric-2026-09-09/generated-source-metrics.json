@@ -1,0 +1,26 @@
+[
+  {
+    "expanded": false,
+    "bytes": 4081747,
+    "lines": 136465,
+    "symbolic_instructions": 6557,
+    "helper_call_sites": {
+      "casadi_copy": 820,
+      "casadi_clear": 1087,
+      "casadi_mtimes": 9
+    },
+    "function_symbols": 7
+  },
+  {
+    "expanded": true,
+    "bytes": 602779,
+    "lines": 29141,
+    "symbolic_instructions": 28879,
+    "helper_call_sites": {
+      "casadi_copy": 0,
+      "casadi_clear": 0,
+      "casadi_mtimes": 0
+    },
+    "function_symbols": 1
+  }
+]

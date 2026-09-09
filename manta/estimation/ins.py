@@ -17,6 +17,7 @@ separate pseudo-parts.
 from __future__ import annotations
 
 import warnings
+from dataclasses import replace
 from types import MappingProxyType
 from typing import Any
 
@@ -817,10 +818,15 @@ class INS(_FilterBase):
     The caller resolves its anchor and rotation vector; the IMU remains
     inertial. Its gravity convention is explicit. See
     ``docs/explanation/earth-relative-ins.md`` for equations, packet schema,
-    and qualification scope. ``covariance="nonlinear"`` enables joint nonlinear
-    uncertainty propagation with a gravity-referenced finite error chart and
-    physical-prior initialization. The default ``"linearized"`` retains the
-    existing covariance recursion. See ``docs/explanation/nonlinear-ins-covariance.md``.
+    and qualification scope. ``covariance="geometric"`` uses analytic prediction
+    and bias-mean transport in a gravity/Earth-referenced finite error chart.
+    ``covariance="nonlinear"`` instead uses augmented sigma-point prediction in
+    that chart. Both map physical priors and apply the coupled covariance reset.
+    The default ``"linearized"`` retains the existing covariance recursion.
+    ``expand=True`` expands the hot filter kernels to scalar expressions before
+    lowering; this preserves equations but changes code size and evaluation cost.
+    Initialization quadrature is kept separate. Unsupported scalar operations
+    fail explicitly. See ``docs/explanation/nonlinear-ins-covariance.md``.
     """
 
     def __init__(self, world, *, imu,
@@ -831,9 +837,13 @@ class INS(_FilterBase):
                  gates: float | dict[str, float] | None = None,
                  propagation: str = "raw",
                  navigation_frame: NavigationFrame | None = None,
-                 covariance: str = "linearized") -> None:
-        if covariance not in {"linearized", "nonlinear"}:
-            raise ValueError("INS covariance must be 'linearized' or 'nonlinear'")
+                 covariance: str = "linearized",
+                 expand: bool = False) -> None:
+        if covariance not in {"linearized", "geometric", "nonlinear"}:
+            raise ValueError("INS covariance must be 'linearized', 'geometric' or 'nonlinear'")
+        if not isinstance(expand, bool):
+            raise TypeError("INS expand must be a bool")
+        finite_chart = covariance != "linearized"
         if navigation_frame is not None and not isinstance(navigation_frame, NavigationFrame):
             raise TypeError("INS navigation_frame must be a NavigationFrame")
         if discretization != "exact":
@@ -847,9 +857,9 @@ class INS(_FilterBase):
         sys = _INSSystem(world, imu=imu, track=track,
                          sensors=sensors, inputs=inputs,
                          propagation=propagation, navigation_frame=navigation_frame)
-        if covariance == "nonlinear" and propagation == "raw" and np.any(sys.lever_arm):
+        if finite_chart and propagation == "raw" and np.any(sys.lever_arm):
             raise NotImplementedError(
-                "Nonlinear INS with a displaced IMU requires propagation='preintegrated' "
+                "Finite-chart INS with a displaced IMU requires propagation='preintegrated' "
                 "and timestamped gyro endpoints. The single-sample raw lever correction "
                 "uses model angular acceleration and has not passed noisy-IMU consistency "
                 "qualification. One-sample framed packets are supported."
@@ -868,10 +878,10 @@ class INS(_FilterBase):
                 "propagation and cannot be a measurement-only Schmidt "
                 f"parameter: {list(unsupported_imu_consider)}"
             )
-        if covariance == "nonlinear" and propagation == "preintegrated":
+        if finite_chart and propagation == "preintegrated":
             from ._ins_boundary import with_boundary_state
             sys = with_boundary_state(sys)
-        if covariance == "nonlinear":
+        if finite_chart:
             from ._ins_error import INSStateSpec
             physical = sys.spec
             initial = initial_ambient(sys.world, physical)
@@ -955,9 +965,10 @@ class INS(_FilterBase):
 
         P_auto, P_consider_auto = prediction_covariance(Q_auto)
         x_auto = sys.x_new
-        if covariance == "nonlinear":
-            from ._ins_moments import predict_moments
-            x_auto, P_auto, P_consider_auto = predict_moments(sys, spec, P, P_consider)
+        if finite_chart:
+            from ._ins_moments import predict_first_order, predict_moments
+            prediction = predict_first_order if covariance == "geometric" else predict_moments
+            x_auto, P_auto, P_consider_auto = prediction(sys, spec, P, P_consider)
         predict_outputs = [
             x_auto,
             P_auto,
@@ -971,8 +982,8 @@ class INS(_FilterBase):
             [*predict_input_names, "u", "dt", "t"], predict_output_names)
         P_override, P_consider_override = prediction_covariance(Q + Q_packet)
         x_override = sys.x_new
-        if covariance == "nonlinear":
-            x_override, P_override, P_consider_override = predict_moments(
+        if finite_chart:
+            x_override, P_override, P_consider_override = prediction(
                 sys, spec, P, P_consider, process_noise=False, extra_Q=Q)
         predict_q_fn = ca.Function(
             "ins_predict_with_Q", [*predict_inputs, Q, u, dt, t],
@@ -1069,6 +1080,11 @@ class INS(_FilterBase):
         metadata = {
             "estimator": "ins",
             "covariance": covariance,
+            "expanded_filter_kernels": expand,
+            "uncertainty_prediction": (
+                "augmented_unscented" if covariance == "nonlinear" else
+                "first_order_with_quadratic_bias_mean_transport" if covariance == "geometric"
+                else "first_order"),
             "error_model": getattr(spec, "error_model", "product_manifold"),
             "reference_specific_force": getattr(spec, "reference_specific_force", None),
             "reference_angular_velocity": getattr(spec, "reference_angular_velocity", None),
@@ -1124,6 +1140,19 @@ class INS(_FilterBase):
             override_updates=override_updates, gates=resolved_gates,
             consider_dim=n_consider,
             metadata_extra=metadata)
-        if covariance == "nonlinear":
+        if expand:
+            functions = {}
+            for name, function in self._module.functions.items():
+                if name == "predict" or name.startswith(("predict_", "update_")):
+                    try:
+                        function = function.expand()
+                    except RuntimeError as error:
+                        raise ValueError(
+                            f"INS expand=True cannot expand kernel {name!r}; "
+                            "its graph contains operations without scalar expansion support"
+                        ) from error
+                functions[name] = function
+            self._module = replace(self._module, functions=functions)
+        if finite_chart:
             from ._ins_moments import with_prior_initialization
             self._module = with_prior_initialization(self._module, spec, n_consider)

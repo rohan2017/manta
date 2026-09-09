@@ -1,0 +1,63 @@
+{
+  "host": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+  "machine": "x86_64",
+  "repetitions": 1000,
+  "expanded_kernels": true,
+  "scope": "native double-precision kernels, O1, CasADi map loop; excludes compilation, Python runtime validation, framing and I/O",
+  "rows": [
+    {
+      "propagation": "raw",
+      "covariance": "linearized",
+      "state_dimension": 15,
+      "compile_or_cache_load_s": 0.03063720399950398,
+      "predict_median_us": 4.924254997604294,
+      "update_median_us": 5.069045997515786,
+      "native_output_parity": "pass"
+    },
+    {
+      "propagation": "raw",
+      "covariance": "geometric",
+      "state_dimension": 15,
+      "compile_or_cache_load_s": 1.54886286799956,
+      "predict_median_us": 4.873724999924889,
+      "update_median_us": 5.93669400041108,
+      "native_output_parity": "pass"
+    },
+    {
+      "propagation": "raw",
+      "covariance": "nonlinear",
+      "state_dimension": 15,
+      "compile_or_cache_load_s": 0.15944986800241168,
+      "predict_median_us": 22.76275800250005,
+      "update_median_us": 5.849049997777911,
+      "native_output_parity": "pass"
+    },
+    {
+      "propagation": "preintegrated",
+      "covariance": "linearized",
+      "state_dimension": 15,
+      "compile_or_cache_load_s": 0.05433127000287641,
+      "predict_median_us": 9.84898900060216,
+      "update_median_us": 7.469645999663044,
+      "native_output_parity": "pass"
+    },
+    {
+      "propagation": "preintegrated",
+      "covariance": "geometric",
+      "state_dimension": 18,
+      "compile_or_cache_load_s": 2.6051636910015077,
+      "predict_median_us": 14.136164001683937,
+      "update_median_us": 11.151803002576344,
+      "native_output_parity": "pass"
+    },
+    {
+      "propagation": "preintegrated",
+      "covariance": "nonlinear",
+      "state_dimension": 18,
+      "compile_or_cache_load_s": 0.3069977060004021,
+      "predict_median_us": 61.5194550009619,
+      "update_median_us": 10.762601003079908,
+      "native_output_parity": "pass"
+    }
+  ]
+}

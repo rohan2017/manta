@@ -1,5 +1,12 @@
 # INS compute investigation — September 9, 2026
 
+This is the historical prototype comparison at commit `f944935`. Its temporary
+predictor override has since been replaced by the public `covariance="geometric"`
+option. The [implementation report](ins-geometric-2026-09-09.md) records the
+subsequent mean-transport correction and newly discovered reference failures.
+The commands below reproduce the old experiment from `f944935`; current
+qualification runners accept `--covariance geometric --expand` directly.
+
 The accepted sigma-point implementation establishes a consistency reference,
 not a minimum compute requirement. Its qualification tested the combined
 coordinate, prior, reset, boundary-state and prediction changes. It did not

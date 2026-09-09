@@ -12,9 +12,9 @@ from manta.estimation._kalman import schmidt_update
 from manta.ir._rotation import quat_to_rotmat, so3_exp
 
 
-@pytest.fixture(scope="module")
-def ins():
-    return build(covariance="nonlinear")
+@pytest.fixture(scope="module", params=["nonlinear", "geometric"])
+def ins(request):
+    return build(covariance=request.param, expand=request.param == "geometric")
 
 
 @pytest.fixture(scope="module")
@@ -187,13 +187,15 @@ def test_schmidt_cross_covariance_uses_same_full_reset(ins):
 
 
 @pytest.mark.cpp
+@pytest.mark.parametrize("covariance", ["nonlinear", "geometric"])
 @pytest.mark.parametrize("propagation", ["raw", "preintegrated"])
 @pytest.mark.parametrize("compiler_flags", [["-O1"], ["-O3", "-march=native"]])
 def test_nonlinear_numpy_cpp_prior_predict_update_and_checkpoint(
-    propagation, compiler_flags, tmp_path
+    propagation, compiler_flags, covariance, tmp_path
 ):
     ins = build(
-        covariance="nonlinear",
+        covariance=covariance,
+        expand=covariance == "geometric",
         propagation=propagation,
         mounted=propagation == "preintegrated",
     )
@@ -424,12 +426,14 @@ def test_local_chart_refuses_to_wrap_broad_uncertainty(ins):
     np.testing.assert_array_equal(runtime.P, old.P)
 
 
-def test_packet_boundary_error_is_estimated_then_replaced():
+@pytest.mark.parametrize("covariance", ["nonlinear", "geometric"])
+def test_packet_boundary_error_is_estimated_then_replaced(covariance):
     from manta import IMUPreintegrator
     from manta.estimation.imu_preintegrator import frame_preintegrated_packet
 
     ins = build(
-        covariance="nonlinear",
+        covariance=covariance,
+        expand=covariance == "geometric",
         propagation="preintegrated",
         mounted=True,
         gyro_density=0.001,
@@ -471,7 +475,10 @@ def test_packet_boundary_error_is_estimated_then_replaced():
     np.testing.assert_allclose(runtime.P[-3:, -3:], np.eye(3), atol=1e-12)
 
 
-def test_packet_active_boundary_retains_static_schmidt_installation_covariance():
+@pytest.mark.parametrize("covariance", ["nonlinear", "geometric"])
+def test_packet_active_boundary_retains_static_schmidt_installation_covariance(
+    covariance,
+):
     from manta import INS, Craft, IMUPreintegrator, World
     from manta.fields import GravityField
     from manta.parts import ConstantBiasIMU, Mass, PositionSensor
@@ -495,7 +502,8 @@ def test_packet_active_boundary_retains_static_schmidt_installation_covariance()
         world,
         imu="imu",
         sensors=["gps.position"],
-        covariance="nonlinear",
+        covariance=covariance,
+        expand=covariance == "geometric",
         propagation="preintegrated",
     )
     runtime = TargetNumpy(ins)

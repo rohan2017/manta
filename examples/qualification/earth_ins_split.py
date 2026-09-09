@@ -22,7 +22,7 @@ from manta.estimation import chi2_quantile
 from manta.estimation.imu_preintegrator import frame_preintegrated_packet
 from manta.ir._rotation import quat_to_rotmat
 
-from .earth_ins import SPIN, build, normalized_nees, prior
+from .earth_ins import SPIN, build, final_consistency_checks, normalized_nees, prior
 
 
 def run(
@@ -35,6 +35,7 @@ def run(
     seeds=16,
     packet_samples=10,
     covariance="linearized",
+    expand=False,
     aiding_samples=10,
     mounted=False,
     rate=100,
@@ -66,6 +67,7 @@ def run(
         propagation=propagation,
         gyro_density=gyro_density,
         covariance=covariance,
+        expand=expand,
         mounted=mounted,
         rate=rate,
         latitude=latitude,
@@ -348,9 +350,11 @@ def run(
     bounds = [chi2_quantile(9 * seeds, p) / seeds for p in (0.025, 0.975)]
     return {
         "acceptance": "pass"
-        if bounds[0] <= records[-1]["attitude_bias_anees"] <= bounds[1]
+        if all(c["pass"] for c in final_consistency_checks(records[-1], seeds).values())
         else "fail",
-        "acceptance_scope": "final attitude/bias ANEES; not release",
+        "acceptance_scope": "final heading, joint attitude/bias and boundary ANEES; not release",
+        "consistency_checks": final_consistency_checks(records[-1], seeds),
+        "expanded_filter_kernels": expand,
         "truth_motion": "stationary, known rigid IMU installation, constant biases",
         "acquisition_contract": "fresh right boundary reused as next left sample",
         "random_stream_contract": "SeedSequence(seed).spawn(3): accel,gyro,DVL; independent physical prior stream",
@@ -394,9 +398,12 @@ def main():
     parser.add_argument("--packet-samples", type=int, default=10)
     parser.add_argument("--aiding-samples", type=int, default=10)
     parser.add_argument(
-        "--covariance", choices=("linearized", "nonlinear"), default="linearized"
+        "--covariance",
+        choices=("linearized", "geometric", "nonlinear"),
+        default="linearized",
     )
     parser.add_argument("--mounted", action="store_true")
+    parser.add_argument("--expand", action="store_true")
     parser.add_argument("--rate", type=int, default=100)
     parser.add_argument("--latitude", type=float, default=37.78)
     parser.add_argument("--spin", type=float, default=SPIN)

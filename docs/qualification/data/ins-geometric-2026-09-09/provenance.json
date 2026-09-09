@@ -1,0 +1,24 @@
+{
+  "base_commit": "f944935",
+  "geometric_public_api": true,
+  "expanded_public_api": true,
+  "full_suite": {
+    "passed": 1321,
+    "failed": 5,
+    "skipped": 5,
+    "failures_match_baseline": true
+  },
+  "broad_statistical_acceptance": false,
+  "shiver_modified": false,
+  "wheel_sha256": "0a91655e4653ae114a76cc23d82277c2d8cc2b55ee20da0a73273e370a2f0097",
+  "production_source_sha256": {
+    "manta/estimation/ins.py": "3bd2ab01aff54935c1838cd8673223fe2a1cec14578a458ba85f29c8e776597a",
+    "manta/estimation/_ins_moments.py": "e8448e85c416fb47fddf3646c6c9165ddaf2961ba0724bd4ac188300e6e2a7f9",
+    "manta/estimation/_ins_boundary.py": "360c265299114fe751418796aeb8853132367e2b5913083a49e57997479e9615"
+  },
+  "server_smoke": {
+    "passed": 8,
+    "failed": 1,
+    "failure_reproduced_on_baseline": true
+  }
+}
