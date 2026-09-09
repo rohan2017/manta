@@ -1,0 +1,23 @@
+{
+  "covariance_chart_commit": "ce015bb",
+  "joint_factor_commit": "7c0cefd",
+  "qualification_note": "Held-out 10-sample cohorts use ce015bb. 7c0cefd factors the same conditional Gaussian law without subtractive cancellation. Optimized one-sample Monte Carlo, native parity and the 24-hour numerical run validate that refinement.",
+  "full_suite": {
+    "passed": 1305,
+    "skipped": 5,
+    "failed": 5,
+    "failures_match_recovered_baseline": true
+  },
+  "native_parity_profiles": [
+    "-O1",
+    "-O3 -march=native"
+  ],
+  "compiled_wheel_smoke": {
+    "pass": true,
+    "max_instructions": 50000,
+    "compile_and_smoke_seconds": 30.129752210999868,
+    "profile": "runtime: -O3 -march=native"
+  },
+  "wheel_sha256": "2e79664f0ae4273a5b641656ed3d7e81f03734b68ad7367c58caa4c7fe581698",
+  "shiver_modified": false
+}

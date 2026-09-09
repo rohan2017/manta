@@ -1,0 +1,40 @@
+{
+  "host": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+  "machine": "x86_64",
+  "repetitions": 1000,
+  "scope": "native double-precision kernels, O1, CasADi map loop; excludes compilation, Python runtime validation, framing and I/O",
+  "rows": [
+    {
+      "propagation": "raw",
+      "covariance": "linearized",
+      "state_dimension": 15,
+      "compile_or_cache_load_s": 0.06890241899964167,
+      "predict_median_us": 14.164333999360679,
+      "update_median_us": 11.45671999984188
+    },
+    {
+      "propagation": "raw",
+      "covariance": "nonlinear",
+      "state_dimension": 15,
+      "compile_or_cache_load_s": 3.5404909039989434,
+      "predict_median_us": 71.05622599920025,
+      "update_median_us": 16.758723999373615
+    },
+    {
+      "propagation": "preintegrated",
+      "covariance": "linearized",
+      "state_dimension": 15,
+      "compile_or_cache_load_s": 0.0819217119988025,
+      "predict_median_us": 25.743647000126657,
+      "update_median_us": 16.291426998577663
+    },
+    {
+      "propagation": "preintegrated",
+      "covariance": "nonlinear",
+      "state_dimension": 18,
+      "compile_or_cache_load_s": 5.209464817999105,
+      "predict_median_us": 135.38037699981942,
+      "update_median_us": 26.905647000603494
+    }
+  ]
+}

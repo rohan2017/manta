@@ -11,6 +11,7 @@ import numpy as np
 from manta import IMUPreintegrator, TargetNumpy
 from manta.codegen.numpy._compile import compile_functions
 from manta.estimation.imu_preintegrator import frame_preintegrated_packet
+from manta.ir._rotation import quat_to_rotmat
 
 from .earth_ins import build, prior
 
@@ -27,12 +28,15 @@ def run(repetitions=1000):
             module = ins.module()
             runtime = TargetNumpy(ins)
             runtime.reset(P=prior(ins, 1e-8))
+            rotation = (
+                np.asarray(quat_to_rotmat(runtime.x[3:7])) @ ins.sys.R_craft_from_sensor
+            )
+            accel = rotation.T @ np.array([0.0, 0.0, 9.81])
+            gyro = rotation.T @ np.asarray(ins.navigation_frame.angular_velocity)
             u = ins.sys.u_defaults.copy()
             if propagation == "raw":
-                u[ins.sys._input_slices[ins.sys.accel_input]] = [0, 0, 9.81]
-                u[ins.sys._input_slices[ins.sys.gyro_input]] = (
-                    ins.navigation_frame.angular_velocity
-                )
+                u[ins.sys._input_slices[ins.sys.accel_input]] = accel
+                u[ins.sys._input_slices[ins.sys.gyro_input]] = gyro
                 dt = 0.01
             else:
                 pre = TargetNumpy(
@@ -41,15 +45,15 @@ def run(repetitions=1000):
                 for _ in range(10):
                     packet = pre.step(
                         0.01,
-                        accel=[0, 0, 9.81],
-                        gyro=ins.navigation_frame.angular_velocity,
+                        accel=accel,
+                        gyro=gyro,
                         accel_bias=np.zeros(3),
                         gyro_bias=np.zeros(3),
                     )
                 packet = frame_preintegrated_packet(
                     packet,
-                    end_accel=[0, 0, 9.81],
-                    end_gyro=ins.navigation_frame.angular_velocity,
+                    end_accel=accel,
+                    end_gyro=gyro,
                 )
                 for name, full in ins.preintegration_input_map.items():
                     u[ins.sys._input_slices[full]] = np.asarray(packet[name]).ravel()

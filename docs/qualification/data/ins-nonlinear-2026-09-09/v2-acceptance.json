@@ -1,0 +1,156 @@
+{
+  "scope": "synthetic final-epoch qualification, not hardware deployment",
+  "pass": true,
+  "checks": [
+    {
+      "report": "v2-calibrated-heldout64.json",
+      "metric": "attitude_bias_anees",
+      "value": 9.511214224094855,
+      "bounds": [
+        7.990479696783882,
+        10.068702565043756
+      ],
+      "pass": true
+    },
+    {
+      "report": "v2-calibrated-heldout64.json",
+      "metric": "physical_heading_anees",
+      "value": 1.167146080605128,
+      "bounds": [
+        0.6839992597276423,
+        1.3750632969765226
+      ],
+      "pass": true
+    },
+    {
+      "report": "v2-calibrated-heldout64.json",
+      "metric": "attitude_bias_boundary_anees",
+      "value": 12.219785240612161,
+      "bounds": [
+        10.829639150968099,
+        13.229546813543077
+      ],
+      "pass": true
+    },
+    {
+      "report": "v2-weak-heldout256.json",
+      "metric": "attitude_bias_anees",
+      "value": 9.146388152084448,
+      "bounds": [
+        8.487724811191853,
+        9.527073529552844
+      ],
+      "pass": true
+    },
+    {
+      "report": "v2-weak-heldout256.json",
+      "metric": "physical_heading_anees",
+      "value": 0.9994797929082271,
+      "bounds": [
+        0.8342760452578426,
+        1.18051488321174
+      ],
+      "pass": true
+    },
+    {
+      "report": "v2-weak-heldout256.json",
+      "metric": "attitude_bias_boundary_anees",
+      "value": 12.309324799663866,
+      "bounds": [
+        11.40731960075175,
+        12.607478971033332
+      ],
+      "pass": true
+    },
+    {
+      "report": "v2-noisy-heldout128.json",
+      "metric": "attitude_bias_anees",
+      "value": 8.802336402756676,
+      "bounds": [
+        8.279922837398724,
+        9.749671995048699
+      ],
+      "pass": true
+    },
+    {
+      "report": "v2-noisy-heldout128.json",
+      "metric": "physical_heading_anees",
+      "value": 0.8385161597404833,
+      "bounds": [
+        0.7701218522849307,
+        1.2594432388576637
+      ],
+      "pass": true
+    },
+    {
+      "report": "v2-noisy-heldout128.json",
+      "metric": "attitude_bias_boundary_anees",
+      "value": 11.970708397952304,
+      "bounds": [
+        11.166205507998376,
+        12.86339024911375
+      ],
+      "pass": true
+    },
+    {
+      "report": "v2-zero-spin64.json",
+      "metric": "attitude_bias_anees",
+      "value": 9.021866292912815,
+      "bounds": [
+        7.990479696783882,
+        10.068702565043756
+      ],
+      "pass": true
+    },
+    {
+      "report": "v2-motion64.json",
+      "metric": "attitude_bias_anees",
+      "value": 9.436756821765812,
+      "bounds": [
+        7.990479696783882,
+        10.068702565043756
+      ],
+      "pass": true
+    },
+    {
+      "report": "v2-south200.json",
+      "metric": "attitude_bias_anees",
+      "value": 7.961262611447949,
+      "bounds": [
+        7.590088824866566,
+        10.52824603128351
+      ],
+      "pass": true
+    },
+    {
+      "report": "v2-equator500.json",
+      "metric": "attitude_bias_anees",
+      "value": 8.264079246132415,
+      "bounds": [
+        7.590088824866566,
+        10.52824603128351
+      ],
+      "pass": true
+    },
+    {
+      "report": "v2-matched-raw.json",
+      "metric": "attitude_bias_anees",
+      "value": 8.039381995484732,
+      "bounds": [
+        7.041945711273557,
+        11.194604888387575
+      ],
+      "pass": true
+    },
+    {
+      "report": "v2-matched-packet.json",
+      "metric": "attitude_bias_anees",
+      "value": 7.122296538000076,
+      "bounds": [
+        7.041945711273557,
+        11.194604888387575
+      ],
+      "pass": true
+    }
+  ]
+}

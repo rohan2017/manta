@@ -1,0 +1,49 @@
+{
+  "acceptance": "pass",
+  "scope": "stationary numerical durability; not statistical acceptance",
+  "rate": 1000,
+  "packet_samples": 100,
+  "mounted": true,
+  "records": [
+    {
+      "hours": 6.0,
+      "quaternion_norm_error": 2.220446049250313e-16,
+      "scaled_covariance_asymmetry": 0.0,
+      "minimum_correlation_eigenvalue": 0.00037122232122487324,
+      "oracle_position_norm_m": 6.483509164876544e-07,
+      "oracle_velocity_norm_mps": 5.377728090472938e-11,
+      "oracle_quaternion_error": 0.0,
+      "aided_position_norm_m": 3.476145186968651e-07,
+      "aided_velocity_norm_mps": 3.8565338643971234e-08,
+      "yaw_sigma_deg": 0.01852385958391113,
+      "elapsed_s": 44.71143082100025
+    },
+    {
+      "hours": 12.0,
+      "quaternion_norm_error": 2.220446049250313e-16,
+      "scaled_covariance_asymmetry": 0.0,
+      "minimum_correlation_eigenvalue": 0.0001856074646428044,
+      "oracle_position_norm_m": 1.7416309141380658e-06,
+      "oracle_velocity_norm_mps": 6.916973703947468e-11,
+      "oracle_quaternion_error": 0.0,
+      "aided_position_norm_m": 3.4744160307197423e-07,
+      "aided_velocity_norm_mps": 6.997538077523161e-08,
+      "yaw_sigma_deg": 0.018501963977099994,
+      "elapsed_s": 82.66641528600121
+    },
+    {
+      "hours": 24.0,
+      "quaternion_norm_error": 2.220446049250313e-16,
+      "scaled_covariance_asymmetry": 0.0,
+      "minimum_correlation_eigenvalue": 9.280266986504422e-05,
+      "oracle_position_norm_m": 6.238826890276388e-06,
+      "oracle_velocity_norm_mps": 1.383393464265002e-10,
+      "oracle_quaternion_error": 0.0,
+      "aided_position_norm_m": 3.4746039824118816e-07,
+      "aided_velocity_norm_mps": 1.3636572651420504e-07,
+      "yaw_sigma_deg": 0.018492906980517674,
+      "elapsed_s": 154.51540655200006
+    }
+  ],
+  "artifact_id": "700634d938a845ae0171b8aa0409f580bf3658f8fdd8ff3fc9672f63b1fb39e1"
+}

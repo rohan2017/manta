@@ -17,9 +17,9 @@ import casadi as ca
 import numpy as np
 
 from manta import IMUPreintegrator
-from manta.estimation.imu_preintegrator import frame_preintegrated_packet
 from manta.codegen.numpy._compile import compile_functions
 from manta.estimation import chi2_quantile
+from manta.estimation.imu_preintegrator import frame_preintegrated_packet
 from manta.ir._rotation import quat_to_rotmat
 
 from .earth_ins import SPIN, build, normalized_nees, prior

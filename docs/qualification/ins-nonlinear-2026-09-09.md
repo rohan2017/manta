@@ -43,8 +43,18 @@ ANEES 9.022), prescribed rotation (64 trials, 0.00729° / 0.00628°, ANEES 9.437
 southern latitude -60° with 200 Hz IMU, and the equator with 500 Hz IMU.
 The final 6/12/24-hour numerical check also passes. The wheel builds and an
 extracted-wheel prediction/update smoke test passes with the v2 estimator.
-Final complete-suite validation and matched raw/packet comparison are recorded
-below when complete. Data filenames prefixed `v2-` identify this version.
+The complete suite passes 1305 tests with five skips and the same five existing
+EKF/UKF failures as the recovered baseline. Matched raw/packet heading RMSEs
+differ by 0.022° and reported sigmas by 0.008° after 300 seconds; both joint
+ANEES checks pass. Data filenames prefixed `v2-` identify the accepted chart.
+
+A final optimized-native smoke check exposed cancellation in a one-sample
+conditional covariance. Factoring the joint covariance with the start boundary
+first fixes it without a variance floor. Both `-O1` and `-O3 -march=native`
+parity tests pass. A 300-second mounted one-sample-packet Monte Carlo run under
+the runtime compiler profile also passes (16 trials, ANEES 8.667; heading
+19.00° / 17.90°), as does the repeated 24-hour numerical check. The full compiled
+wheel runtime smoke test passes with `max_instructions=50000`.
 
 This qualifies the synthetic acquisition/model contract, not a particular
 hardware IMU, vehicle mission or Shiver deployment. Nonlinear raw propagation
@@ -141,20 +151,22 @@ and interpreted one-step results agree.
 
 ## Computation
 
-Intel Core Ultra 9 386H, Linux/WSL, generated double-precision C kernels, `-O1`.
-Median of seven batches of 1000 evaluations through a CasADi map loop:
+Final joint-factor version, Intel Core Ultra 9 386H, Linux/WSL, generated
+double-precision C kernels, `-O1`. Median of seven batches of 1000 evaluations through a CasADi map loop:
 
 | Kernel | Linearized | Nonlinear |
 | --- | ---: | ---: |
-| Raw predict | 15.1 microseconds | 89.7 microseconds |
-| Raw DVL update | 11.2 microseconds | 23.6 microseconds |
-| Packet predict | 26.4 microseconds | 151.7 microseconds |
-| Packet DVL update | 16.9 microseconds | 29.4 microseconds |
+| Raw predict | 14.1 microseconds | 74.6 microseconds |
+| Raw DVL update | 11.6 microseconds | 18.3 microseconds |
+| Packet predict | 31.1 microseconds | 140.8 microseconds |
+| Packet DVL update | 17.8 microseconds | 26.6 microseconds |
 
 The nonlinear predictor uses 43 sigma points for this raw model and 61 for the
 packet model. The nonlinear packet covariance has 18 state coordinates versus
 15 physical coordinates plus three Schmidt cross columns in the old path.
-These timings exclude compilation, prior initialization, packet construction,
+At 10 packet predictions and 10 DVL updates per second, the nonlinear kernels
+consume about 1.7 ms of CPU time per second on this host. These timings exclude
+compilation, prior initialization, packet construction,
 Python validation and I/O. They are not embedded-target timing qualification.
 
 ## Reproduction
@@ -163,9 +175,11 @@ Run from this checkout with its package on `PYTHONPATH` and the Manta Python
 environment. Keep `XDG_CACHE_HOME` in a durable workspace directory.
 
 ```sh
-python -m examples.qualification.earth_ins_split --covariance nonlinear --mounted --gyro-density .001 --bias-sigma .001 --seed 19273 --seeds 64 --output noisy.json
-python -m examples.qualification.earth_ins_split --covariance nonlinear --mounted --bias-sigma 1e-5 --seed 190447 --seeds 256 --output weak.json
+python -m examples.qualification.earth_ins_split --covariance nonlinear --mounted --gyro-density .001 --bias-sigma .001 --seed 104729 --seeds 128 --output noisy.json
+python -m examples.qualification.earth_ins_split --covariance nonlinear --mounted --bias-sigma 1e-5 --seed 104729 --seeds 256 --output weak.json
 python -m examples.qualification.earth_ins_long --output long.json
+python -m examples.qualification.earth_ins_native_packet --output native-single.json
+python -m examples.qualification.earth_ins_verify docs/qualification/data/ins-nonlinear-2026-09-09
 python -m examples.qualification.earth_ins_covariance_benchmark --output benchmark.json
 pytest tests/test_ins_nonlinear.py tests/test_ins_navigation_frame.py tests/test_imu_preintegrator.py tests/test_filter_runtime.py
 ```
@@ -173,6 +187,23 @@ pytest tests/test_ins_nonlinear.py tests/test_ins_navigation_frame.py tests/test
 Detailed data, including failed trials, are in
 [data/ins-nonlinear-2026-09-09](data/ins-nonlinear-2026-09-09).
 The full recovered-baseline suite and the first nonlinear checkpoint have the
-same five pre-existing failures (EKF/UKF consistency/tracking tests); the boundary/arithmetic checkpoint (`fa017e7`) passes 1303 tests, with five
-skips and exactly those same five existing failures. No new suite failures
-were introduced. The targeted nonlinear/Earth contracts pass 79 tests.
+same five pre-existing failures (EKF/UKF consistency/tracking tests). The final
+version passes 1305 tests, with five skips and exactly those same five existing
+failures. No new suite failures were introduced. Its 17 nonlinear covariance
+contract tests include prior moments, branch rejection, static Schmidt
+uncertainty, shared-boundary estimation and both native optimization profiles.
+
+## Durable source and merge boundary
+
+The v2 covariance implementation is `ce015bb`; the optimized conditional-factor
+refinement is `7c0cefd`. Raw data and final provenance are committed here.
+The original Manta branches `main` and `feature/leviathan-contact` were both at
+`4b52e95`; neither contained a separate recoverable version of the lost `/tmp`
+repository. The earlier installation-uncertainty refactor is already in that
+baseline.
+
+`6c3df65` records the user's pre-existing dirty Manta workspace. Review the
+feature as `git diff 6c3df65..fix/ins-gyrocompass` so that snapshot is not confused
+with INS changes. Shiver integration and artifact regeneration remain a
+separate merge step. The new covariance mode is opt-in; the legacy default has
+not been silently changed.

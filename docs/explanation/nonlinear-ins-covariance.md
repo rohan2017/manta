@@ -82,6 +82,45 @@ mapped chart state. Initial Schmidt variables are independent of that prior.
 Restoring a checkpoint restores its already-mapped state, covariance, nuisance
 cross covariance, and time directly; it does not map the prior a second time.
 
+## Native execution and integration
+
+For a world containing `craft.imu` and independent DVL aiding:
+
+```python
+ins = INS(world, imu="craft.imu", sensors=["dvl.velocity"],
+          navigation_frame=frame, propagation="preintegrated",
+          covariance="nonlinear")
+runtime = TargetNumpy(ins, compile=True, max_instructions=50000)
+runtime.reset(state=initial_state, P=physical_prior_covariance)
+```
+
+The larger instruction limit is explicit because nonlinear kernels exceed the
+backend's default 3000-instruction cold-build guard. The tested full NumPy
+native build uses its default `-O3 -march=native` profile. For an `-O1` hot
+subset, construct `TargetNumpy(ins)` and use its public `compile_functions`
+method with selected predict/update entry names and the same size limit.
+Generated C++ does not use that NumPy size gate; both optimization profiles
+are covered by the runtime parity tests.
+
+Condition packet noise by factoring the joint `[start, delta, end]` covariance
+with `start` first. Its trailing factor is the conditional residual root.
+Explicit subtraction followed by normalization of the conditional block can
+amplify FMA roundoff in one-sample packets. The joint factor supports
+zero conditional directions without adding a variance floor.
+
+When publishing a body-rate estimate from the nonlinear packet filter, include
+the estimated endpoint error as well as gyro bias:
+
+```text
+relative_body_rate = R_body_from_imu @ (end_gyro - gyro_bias + end_sigma * eta)
+                     - R_nav_from_body.T @ frame.angular_velocity
+```
+
+Here `eta` is the `gyro_boundary_error_state` named in artifact metadata.
+The framer must continue with the same physical endpoint sample after a
+checkpoint restore; the filter checkpoint contains its estimated error, while
+the acquisition/replay layer owns the actual sample and packet boundaries.
+
 ## Interpretation and scope
 
 Score joint errors with `spec.boxminus_sym(truth, estimate)`. Finite boxminus
@@ -91,7 +130,10 @@ and applying the same chi-square gate does not preserve that test's assumptions.
 The qualification also reports physical heading and bias errors separately.
 
 This remains a local Gaussian approximation. Relative swing has a singularity
-at 180 degrees, and twist has an angular branch cut. It is not a global
+at 180 degrees, and twist has an angular branch cut. Prior and prediction
+quadrature reject points crossing those branches by producing nonfinite
+outputs. NumPy rejects those atomically; native hosts must check finiteness.
+It is not a global
 multi-hypothesis attitude estimator. Linear observability and sigma-horizon
 utilities remain local analyses, not certificates of nonlinear consistency.
 
@@ -104,9 +146,9 @@ propagation.
 
 Prediction uses augmented unscented quadrature; measurement updates still use
 Jacobians and the Joseph/Schmidt recursion, followed by the coupled reset.
-This is a hybrid, not the package's conventional `UKF` transform. The initial
-native benchmark measured approximately six times the prediction cost and
-four times the predict-plus-update cost of linearized INS. See the qualification
+This is a hybrid, not the package's conventional `UKF` transform. The final
+native benchmark measured approximately five times the prediction cost and
+3.5–4 times the predict-plus-update cost of linearized INS. See the qualification
 report for timings, model, hardware, exclusions and reproducible commands.
 
 No Shiver artifact, wire adapter, or deployed estimator has been changed.
