@@ -188,7 +188,10 @@ def test_schmidt_cross_covariance_uses_same_full_reset(ins):
 
 @pytest.mark.cpp
 @pytest.mark.parametrize("propagation", ["raw", "preintegrated"])
-def test_nonlinear_numpy_cpp_prior_predict_update_and_checkpoint(propagation, tmp_path):
+@pytest.mark.parametrize("compiler_flags", [["-O1"], ["-O3", "-march=native"]])
+def test_nonlinear_numpy_cpp_prior_predict_update_and_checkpoint(
+    propagation, compiler_flags, tmp_path
+):
     ins = build(
         covariance="nonlinear",
         propagation=propagation,
@@ -280,10 +283,17 @@ int main() {
         + "    return 0;\n}\n"
     )
     for cmd in (
-        [cc, "-O1", "-c", str(generated.kernels_c), "-o", str(tmp_path / "kernels.o")],
+        [
+            cc,
+            *compiler_flags,
+            "-c",
+            str(generated.kernels_c),
+            "-o",
+            str(tmp_path / "kernels.o"),
+        ],
         [
             cxx,
-            "-O1",
+            *compiler_flags,
             "-std=c++17",
             f"-I{eigen}",
             f"-I{tmp_path}",

@@ -593,6 +593,7 @@ class _INSSystem:
         boundary_end_G = ca.MX.zeros(n_tan, 3)
         boundary_conditional_gain = ca.MX.zeros(12, 3)
         boundary_conditional_covariance = ca.MX.zeros(12, 12)
+        boundary_joint_covariance = ca.MX.zeros(15, 15)
         boundary_start_total_G = ca.MX.zeros(n_tan, 3)
         boundary_end_residual_cross = ca.MX.zeros(n_tan, 3)
         if self.propagation == "preintegrated":
@@ -638,6 +639,10 @@ class _INSSystem:
             joint_delta_end = ca.vertcat(
                 ca.horzcat(packet_covariance, packet_delta_end_cross),
                 ca.horzcat(packet_delta_end_cross.T, ca.MX.eye(3)),
+            )
+            boundary_joint_covariance = ca.vertcat(
+                ca.horzcat(ca.MX.eye(3), boundary_conditional_gain.T),
+                ca.horzcat(boundary_conditional_gain, joint_delta_end),
             )
             boundary_conditional_covariance = symmetrize(
                 joint_delta_end
@@ -732,6 +737,7 @@ class _INSSystem:
             "boundary_conditional_gain_sym": boundary_conditional_gain,
             "boundary_conditional_covariance_sym": (
                 boundary_conditional_covariance),
+            "boundary_joint_covariance_sym": boundary_joint_covariance,
             "boundary_start_total_G_sym": boundary_start_total_G,
             "boundary_end_residual_cross_sym": (
                 boundary_end_residual_cross),
@@ -759,6 +765,7 @@ class _INSSystem:
             "boundary_conditional_gain_sym"]
         self.boundary_conditional_covariance_sym = result[
             "boundary_conditional_covariance_sym"]
+        self.boundary_joint_covariance_sym = result["boundary_joint_covariance_sym"]
         self.boundary_start_total_G_sym = result[
             "boundary_start_total_G_sym"]
         self.boundary_end_residual_cross_sym = result[

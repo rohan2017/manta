@@ -74,7 +74,15 @@ def predict_moments(sys, spec, P, C, *, process_noise=True, extra_Q=None):
     zero_noise = ca.MX.zeros(nn)
     zero_packet = ca.MX.zeros(12)
     points = [(zero_joint, zero_noise, zero_packet)]
-    packet_root = psd_root(sys.boundary_conditional_covariance_sym) if packet else None
+    # Condition by factoring [start, delta, end] jointly, with start first.
+    # Subtracting B B.T and then taking diagonal square roots loses the
+    # unconditional scale: FMA leaves roundoff in an exactly-zero one-sample
+    # conditional block, which residual normalization amplifies. The joint
+    # factor removes roundoff in
+    # correlation units and its trailing block is the conditional root.
+    packet_root = (
+        psd_root(sys.boundary_joint_covariance_sym)[3:, 3:] if packet else None
+    )
     for sign in (1.0, -1.0):
         for i in range(n + nc):
             points.append((sign * spread * root[:, i], zero_noise, zero_packet))
