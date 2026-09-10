@@ -1,0 +1,2061 @@
+[
+  {
+    "module_artifact_id": "595495d539b7d9b1e044452e17edd79328c9062caf99bcb11a2384024fbb5d0b",
+    "heading_sigma_threshold_times_s": {
+      "10": 10.0,
+      "5": null,
+      "1": null
+    },
+    "acceptance_scope": "final-epoch attitude/bias marginal ANEES only; not release",
+    "acceptance": "pass",
+    "attitude_bias_anees_95_percent_bounds": [
+      7.041945711273557,
+      11.194604888387575
+    ],
+    "anis_95_percent_bounds": [
+      1.9221566068358085,
+      4.313911611854125
+    ],
+    "rejected_updates": 0,
+    "latitude": 37.78,
+    "rate": 100,
+    "duration": 60.0,
+    "seeds": 16,
+    "seed": 82719,
+    "spin": 7.2921159e-05,
+    "gyro_density": 0.001,
+    "gyro_bias_prior_sigma": 0.001,
+    "initial_yaw_sigma_deg": 5.0,
+    "error_coordinates": "gravity_aligned_exact_reset",
+    "physical_prior": "Independent SO(3) attitude and additive physical bias samples",
+    "rank": 8,
+    "tangent_dim": 15,
+    "elapsed_s": 11.310166363999997,
+    "file": "aligned-noisy60.json",
+    "final": {
+      "t": 60.0,
+      "yaw_rmse_deg": 5.09277003182531,
+      "yaw_sigma_deg": 6.082828227510716,
+      "heading_coverage": {
+        "1": 0.8125,
+        "2": 1.0,
+        "3": 1.0
+      },
+      "attitude_bias_anees": 9.44136432095286,
+      "dof": 9,
+      "marginal_anees": {
+        "craft.orientation": {
+          "value": 2.6483027719098016,
+          "dof": 3
+        },
+        "craft.imu.gyro_bias": {
+          "value": 2.6232578468844285,
+          "dof": 3
+        },
+        "craft.imu.accel_bias": {
+          "value": 4.422559091391015,
+          "dof": 3
+        }
+      },
+      "anis": 2.2825556180113544,
+      "gyro_bias_rmse_rad_s": 0.0006150897452232331,
+      "covariance_symmetry_error": 0.0,
+      "covariance_min_eigenvalue": 1.9618172449816744e-12
+    }
+  },
+  {
+    "module_artifact_id": "1d12365285d6833755edf57a2718165eefd61c5f4fac7f52d697e208ed03abe3",
+    "heading_sigma_threshold_times_s": {
+      "10": 10.0,
+      "5": 10.0,
+      "1": null
+    },
+    "acceptance_scope": "final-epoch attitude/bias marginal ANEES only; not release",
+    "acceptance": "fail",
+    "attitude_bias_anees_95_percent_bounds": [
+      7.041945711273557,
+      11.194604888387575
+    ],
+    "anis_95_percent_bounds": [
+      1.9221566068358085,
+      4.313911611854125
+    ],
+    "rejected_updates": 0,
+    "latitude": 37.78,
+    "rate": 100,
+    "duration": 60,
+    "seeds": 16,
+    "seed": 82719,
+    "spin": 7.2921159e-05,
+    "gyro_density": 0.001,
+    "gyro_bias_prior_sigma": 0.001,
+    "initial_yaw_sigma_deg": 5.0,
+    "error_coordinates": "augmented_ukf_product_moments",
+    "physical_prior": "Independent SO(3) attitude and additive physical bias samples",
+    "rank": 8,
+    "tangent_dim": 15,
+    "elapsed_s": 28.194024111999852,
+    "file": "augmented-ukf-product-moments-noisy60.json",
+    "final": {
+      "t": 60.0,
+      "yaw_rmse_deg": 6.9983958898799585,
+      "yaw_sigma_deg": 2.375081132205924,
+      "heading_coverage": {
+        "1": 0.3125,
+        "2": 0.5625,
+        "3": 0.75
+      },
+      "attitude_bias_anees": 18.413797196699697,
+      "dof": 9,
+      "marginal_anees": {
+        "craft.orientation": {
+          "value": 10.67413825940829,
+          "dof": 3
+        },
+        "craft.imu.gyro_bias": {
+          "value": 2.9647177517610115,
+          "dof": 3
+        },
+        "craft.imu.accel_bias": {
+          "value": 2.812852141998495,
+          "dof": 3
+        }
+      },
+      "anis": 2.2823404259015345,
+      "gyro_bias_rmse_rad_s": 0.0005904491884716953,
+      "covariance_symmetry_error": 0.0,
+      "covariance_min_eigenvalue": 1.9644949237075435e-12
+    }
+  },
+  {
+    "module_artifact_id": "bbeea89689930fcff034a1b359e19060af34de99a48641227d5e5ec05fb4ae12",
+    "heading_sigma_threshold_times_s": {
+      "10": 10.0,
+      "5": 10.0,
+      "1": null
+    },
+    "acceptance_scope": "final-epoch attitude/bias marginal ANEES only; not release",
+    "acceptance": "fail",
+    "attitude_bias_anees_95_percent_bounds": [
+      7.041945711273557,
+      11.194604888387575
+    ],
+    "anis_95_percent_bounds": [
+      1.9221566068358085,
+      4.313911611854125
+    ],
+    "rejected_updates": 0,
+    "latitude": 37.78,
+    "rate": 100,
+    "duration": 60,
+    "seeds": 16,
+    "seed": 82719,
+    "spin": 7.2921159e-05,
+    "gyro_density": 0.001,
+    "gyro_bias_prior_sigma": 0.001,
+    "initial_yaw_sigma_deg": 5.0,
+    "error_coordinates": "augmented_ukf_product",
+    "physical_prior": "Independent SO(3) attitude and additive physical bias samples",
+    "rank": 8,
+    "tangent_dim": 15,
+    "elapsed_s": 18.886497428999974,
+    "file": "augmented-ukf-product-noisy60.json",
+    "final": {
+      "t": 60.0,
+      "yaw_rmse_deg": 6.99792846701729,
+      "yaw_sigma_deg": 2.3751000605805275,
+      "heading_coverage": {
+        "1": 0.3125,
+        "2": 0.5625,
+        "3": 0.75
+      },
+      "attitude_bias_anees": 18.411568856672126,
+      "dof": 9,
+      "marginal_anees": {
+        "craft.orientation": {
+          "value": 10.672969451613362,
+          "dof": 3
+        },
+        "craft.imu.gyro_bias": {
+          "value": 2.9646441954413474,
+          "dof": 3
+        },
+        "craft.imu.accel_bias": {
+          "value": 2.81277492137624,
+          "dof": 3
+        }
+      },
+      "anis": 2.282330300110364,
+      "gyro_bias_rmse_rad_s": 0.0005904508059676991,
+      "covariance_symmetry_error": 0.0,
+      "covariance_min_eigenvalue": 1.9644948706449836e-12
+    }
+  },
+  {
+    "module_artifact_id": "14e15c399f26e31a9605af8447e95ecb1a9cb1f44338eb01da8b9a5a12a82a43",
+    "heading_sigma_threshold_times_s": {
+      "10": 10.0,
+      "5": 10.0,
+      "1": 10.0
+    },
+    "acceptance_scope": "final-epoch attitude/bias marginal ANEES only; not release",
+    "acceptance": "pass",
+    "attitude_bias_anees_95_percent_bounds": [
+      7.041945711273557,
+      11.194604888387575
+    ],
+    "anis_95_percent_bounds": [
+      1.9221566068358085,
+      4.313911611854125
+    ],
+    "rejected_updates": 0,
+    "latitude": 37.78,
+    "rate": 100,
+    "duration": 300,
+    "seeds": 16,
+    "seed": 82719,
+    "spin": 7.2921159e-05,
+    "gyro_density": 1e-07,
+    "gyro_bias_prior_sigma": 1e-08,
+    "initial_yaw_sigma_deg": 5.0,
+    "error_coordinates": "StateSpec product manifold; left attitude error in navigation axes",
+    "rank": 8,
+    "tangent_dim": 15,
+    "elapsed_s": 19.220340537999846,
+    "file": "baseline-calibrated.json",
+    "final": {
+      "t": 300.0,
+      "yaw_rmse_deg": 0.008579973079285009,
+      "yaw_sigma_deg": 0.011668281953537035,
+      "attitude_bias_anees": 9.343774552877106,
+      "dof": 9,
+      "marginal_anees": {
+        "craft.orientation": {
+          "value": 2.664055744735158,
+          "dof": 3
+        },
+        "craft.imu.gyro_bias": {
+          "value": 3.2192580356522105,
+          "dof": 3
+        },
+        "craft.imu.accel_bias": {
+          "value": 3.0869694477980674,
+          "dof": 3
+        }
+      },
+      "anis": 2.4634546413226053,
+      "gyro_bias_rmse_rad_s": 8.910481301986782e-09,
+      "covariance_symmetry_error": 0.0,
+      "covariance_min_eigenvalue": 2.6145913642452463e-17
+    }
+  },
+  {
+    "module_artifact_id": "d2da418e978fba767c92b7d592ae32411602c8166e46e39836a2ca663ac623c1",
+    "heading_sigma_threshold_times_s": {
+      "10": 10.0,
+      "5": 10.0,
+      "1": null
+    },
+    "acceptance_scope": "final-epoch attitude/bias marginal ANEES only; not release",
+    "acceptance": "fail",
+    "attitude_bias_anees_95_percent_bounds": [
+      7.041945711273557,
+      11.194604888387575
+    ],
+    "anis_95_percent_bounds": [
+      1.9221566068358085,
+      4.313911611854125
+    ],
+    "rejected_updates": 0,
+    "latitude": 37.78,
+    "rate": 100,
+    "duration": 300,
+    "seeds": 16,
+    "seed": 94273,
+    "spin": 0.0,
+    "gyro_density": 0.001,
+    "gyro_bias_prior_sigma": 0.001,
+    "initial_yaw_sigma_deg": 5.0,
+    "error_coordinates": "product_manifold",
+    "physical_prior": "Independent SO(3) attitude and additive physical bias samples",
+    "rank": 8,
+    "tangent_dim": 15,
+    "elapsed_s": 13.444973467000182,
+    "file": "baseline-noisy-zero-coverage.json",
+    "final": {
+      "t": 300.0,
+      "yaw_rmse_deg": 26.156612325567007,
+      "yaw_sigma_deg": 1.6436096226757748,
+      "heading_coverage": {
+        "1": 0.125,
+        "2": 0.1875,
+        "3": 0.3125
+      },
+      "attitude_bias_anees": 315.2526127094546,
+      "dof": 9,
+      "marginal_anees": {
+        "craft.orientation": {
+          "value": 253.9235589407544,
+          "dof": 3
+        },
+        "craft.imu.gyro_bias": {
+          "value": 91.60982185059282,
+          "dof": 3
+        },
+        "craft.imu.accel_bias": {
+          "value": 3.8152284927882034,
+          "dof": 3
+        }
+      },
+      "anis": 2.6630322710819856,
+      "gyro_bias_rmse_rad_s": 0.0009180474904250883,
+      "covariance_symmetry_error": 0.0,
+      "covariance_min_eigenvalue": 3.4384538912770813e-13
+    }
+  },
+  {
+    "module_artifact_id": "d2da418e978fba767c92b7d592ae32411602c8166e46e39836a2ca663ac623c1",
+    "heading_sigma_threshold_times_s": {
+      "10": 10.0,
+      "5": 10.0,
+      "1": null
+    },
+    "acceptance_scope": "final-epoch attitude/bias marginal ANEES only; not release",
+    "acceptance": "fail",
+    "attitude_bias_anees_95_percent_bounds": [
+      7.041945711273557,
+      11.194604888387575
+    ],
+    "anis_95_percent_bounds": [
+      1.9221566068358085,
+      4.313911611854125
+    ],
+    "rejected_updates": 0,
+    "latitude": 37.78,
+    "rate": 100,
+    "duration": 300,
+    "seeds": 16,
+    "seed": 82719,
+    "spin": 0.0,
+    "gyro_density": 0.001,
+    "gyro_bias_prior_sigma": 0.001,
+    "initial_yaw_sigma_deg": 5.0,
+    "error_coordinates": "StateSpec product manifold; left attitude error in navigation axes",
+    "rank": 8,
+    "tangent_dim": 15,
+    "elapsed_s": 18.472132110000075,
+    "file": "baseline-noisy-zero.json",
+    "final": {
+      "t": 300.0,
+      "yaw_rmse_deg": 24.980657838894302,
+      "yaw_sigma_deg": 1.6421905983404166,
+      "attitude_bias_anees": 294.0528524012527,
+      "dof": 9,
+      "marginal_anees": {
+        "craft.orientation": {
+          "value": 234.02820817816945,
+          "dof": 3
+        },
+        "craft.imu.gyro_bias": {
+          "value": 68.65686206037739,
+          "dof": 3
+        },
+        "craft.imu.accel_bias": {
+          "value": 4.0713519507331455,
+          "dof": 3
+        }
+      },
+      "anis": 2.4301743475807895,
+      "gyro_bias_rmse_rad_s": 0.0007941745139182701,
+      "covariance_symmetry_error": 0.0,
+      "covariance_min_eigenvalue": 3.4385255614836413e-13
+    }
+  },
+  {
+    "module_artifact_id": "14e15c399f26e31a9605af8447e95ecb1a9cb1f44338eb01da8b9a5a12a82a43",
+    "heading_sigma_threshold_times_s": {
+      "10": 10.0,
+      "5": 10.0,
+      "1": 270.0
+    },
+    "acceptance_scope": "final-epoch attitude/bias marginal ANEES only; not release",
+    "acceptance": "fail",
+    "attitude_bias_anees_95_percent_bounds": [
+      7.041945711273557,
+      11.194604888387575
+    ],
+    "anis_95_percent_bounds": [
+      1.9221566068358085,
+      4.313911611854125
+    ],
+    "rejected_updates": 0,
+    "latitude": 37.78,
+    "rate": 100,
+    "duration": 300,
+    "seeds": 16,
+    "seed": 82719,
+    "spin": 7.2921159e-05,
+    "gyro_density": 1e-07,
+    "gyro_bias_prior_sigma": 1e-05,
+    "initial_yaw_sigma_deg": 5.0,
+    "error_coordinates": "StateSpec product manifold; left attitude error in navigation axes",
+    "rank": 8,
+    "tangent_dim": 15,
+    "elapsed_s": 19.451290020000215,
+    "file": "baseline-weak.json",
+    "final": {
+      "t": 300.0,
+      "yaw_rmse_deg": 4.504743730537833,
+      "yaw_sigma_deg": 0.9790342899790149,
+      "attitude_bias_anees": 1960.0750813797238,
+      "dof": 9,
+      "marginal_anees": {
+        "craft.orientation": {
+          "value": 32.93720889962525,
+          "dof": 3
+        },
+        "craft.imu.gyro_bias": {
+          "value": 1843.2471169830233,
+          "dof": 3
+        },
+        "craft.imu.accel_bias": {
+          "value": 3.065901525934926,
+          "dof": 3
+        }
+      },
+      "anis": 2.466869348581505,
+      "gyro_bias_rmse_rad_s": 2.6838893555260543e-06,
+      "covariance_symmetry_error": 0.0,
+      "covariance_min_eigenvalue": 3.540230555051002e-17
+    }
+  },
+  {
+    "module_artifact_id": "0de7ac42fe0f3b2daa0b99aa6b4417bfc202255c5dc6e55f32a47be35064be77",
+    "heading_sigma_threshold_times_s": {
+      "10": 10.0,
+      "5": 10.0,
+      "1": 10.0
+    },
+    "acceptance_scope": "final-epoch attitude/bias marginal ANEES only; not release",
+    "acceptance": "pass",
+    "attitude_bias_anees_95_percent_bounds": [
+      7.041945711273557,
+      11.194604888387575
+    ],
+    "anis_95_percent_bounds": [
+      1.9221566068358085,
+      4.313911611854125
+    ],
+    "rejected_updates": 0,
+    "latitude": 37.78,
+    "rate": 100,
+    "duration": 300,
+    "seeds": 16,
+    "seed": 82719,
+    "spin": 7.2921159e-05,
+    "gyro_density": 1e-07,
+    "gyro_bias_prior_sigma": 1e-08,
+    "initial_yaw_sigma_deg": 5.0,
+    "error_coordinates": "two_frame_exact_differential_reset",
+    "physical_prior": "Independent SO(3) attitude and additive physical bias samples",
+    "rank": 8,
+    "tangent_dim": 15,
+    "elapsed_s": 25.53485389399998,
+    "file": "geometric-exact-calibrated.json",
+    "final": {
+      "t": 300.0,
+      "yaw_rmse_deg": 0.008558350849516604,
+      "yaw_sigma_deg": 0.011665761869871106,
+      "heading_coverage": {
+        "1": 0.75,
+        "2": 1.0,
+        "3": 1.0
+      },
+      "attitude_bias_anees": 9.303549636661874,
+      "dof": 9,
+      "marginal_anees": {
+        "craft.orientation": {
+          "value": 2.636926163102122,
+          "dof": 3
+        },
+        "craft.imu.gyro_bias": {
+          "value": 3.2069389272725433,
+          "dof": 3
+        },
+        "craft.imu.accel_bias": {
+          "value": 3.0740852833765646,
+          "dof": 3
+        }
+      },
+      "anis": 2.4634525045733024,
+      "gyro_bias_rmse_rad_s": 8.904504000799877e-09,
+      "covariance_symmetry_error": 0.0,
+      "covariance_min_eigenvalue": 2.6141150550987816e-17
+    }
+  },
+  {
+    "module_artifact_id": "1cd6d88ee1c70fa85cfb8027a681d090595d59ce63036d66eac78db03ad85f7c",
+    "heading_sigma_threshold_times_s": {
+      "10": 10.0,
+      "5": 10.0,
+      "1": null
+    },
+    "acceptance_scope": "final-epoch attitude/bias marginal ANEES only; not release",
+    "acceptance": "fail",
+    "attitude_bias_anees_95_percent_bounds": [
+      7.041945711273557,
+      11.194604888387575
+    ],
+    "anis_95_percent_bounds": [
+      1.9221566068358085,
+      4.313911611854125
+    ],
+    "rejected_updates": 0,
+    "latitude": 37.78,
+    "rate": 100,
+    "duration": 300,
+    "seeds": 16,
+    "seed": 82719,
+    "spin": 7.2921159e-05,
+    "gyro_density": 0.001,
+    "gyro_bias_prior_sigma": 0.001,
+    "initial_yaw_sigma_deg": 5.0,
+    "error_coordinates": "two_frame_exact_differential_reset",
+    "physical_prior": "Independent SO(3) attitude and additive physical bias samples",
+    "rank": 8,
+    "tangent_dim": 15,
+    "elapsed_s": 31.58382474400014,
+    "file": "geometric-exact-noisy1.json",
+    "final": {
+      "t": 300.0,
+      "yaw_rmse_deg": 27.640285436756972,
+      "yaw_sigma_deg": 2.6935259604630772,
+      "heading_coverage": {
+        "1": 0.0,
+        "2": 0.0625,
+        "3": 0.25
+      },
+      "attitude_bias_anees": 141.72236713861813,
+      "dof": 9,
+      "marginal_anees": {
+        "craft.orientation": {
+          "value": 107.01547216234668,
+          "dof": 3
+        },
+        "craft.imu.gyro_bias": {
+          "value": 37.41526731553581,
+          "dof": 3
+        },
+        "craft.imu.accel_bias": {
+          "value": 4.884763849230012,
+          "dof": 3
+        }
+      },
+      "anis": 2.43131764501953,
+      "gyro_bias_rmse_rad_s": 0.0008797719571223953,
+      "covariance_symmetry_error": 0.0,
+      "covariance_min_eigenvalue": 3.43799099142741e-13
+    }
+  },
+  {
+    "module_artifact_id": "1cd6d88ee1c70fa85cfb8027a681d090595d59ce63036d66eac78db03ad85f7c",
+    "heading_sigma_threshold_times_s": {
+      "10": 10.0,
+      "5": 10.0,
+      "1": null
+    },
+    "acceptance_scope": "final-epoch attitude/bias marginal ANEES only; not release",
+    "acceptance": "fail",
+    "attitude_bias_anees_95_percent_bounds": [
+      7.041945711273557,
+      11.194604888387575
+    ],
+    "anis_95_percent_bounds": [
+      1.9221566068358085,
+      4.313911611854125
+    ],
+    "rejected_updates": 0,
+    "latitude": 37.78,
+    "rate": 100,
+    "duration": 300,
+    "seeds": 16,
+    "seed": 94273,
+    "spin": 7.2921159e-05,
+    "gyro_density": 0.001,
+    "gyro_bias_prior_sigma": 0.001,
+    "initial_yaw_sigma_deg": 5.0,
+    "error_coordinates": "two_frame_exact_differential_reset",
+    "physical_prior": "Independent SO(3) attitude and additive physical bias samples",
+    "rank": 8,
+    "tangent_dim": 15,
+    "elapsed_s": 31.660289369999873,
+    "file": "geometric-exact-noisy2.json",
+    "final": {
+      "t": 300.0,
+      "yaw_rmse_deg": 28.537062306636585,
+      "yaw_sigma_deg": 2.6906268698944804,
+      "heading_coverage": {
+        "1": 0.1875,
+        "2": 0.25,
+        "3": 0.3125
+      },
+      "attitude_bias_anees": 146.99572385469742,
+      "dof": 9,
+      "marginal_anees": {
+        "craft.orientation": {
+          "value": 113.55000289647663,
+          "dof": 3
+        },
+        "craft.imu.gyro_bias": {
+          "value": 48.357010499869105,
+          "dof": 3
+        },
+        "craft.imu.accel_bias": {
+          "value": 4.238828147811706,
+          "dof": 3
+        }
+      },
+      "anis": 2.662639337827339,
+      "gyro_bias_rmse_rad_s": 0.0010011415805497562,
+      "covariance_symmetry_error": 0.0,
+      "covariance_min_eigenvalue": 3.437960405145259e-13
+    }
+  },
+  {
+    "module_artifact_id": "0de7ac42fe0f3b2daa0b99aa6b4417bfc202255c5dc6e55f32a47be35064be77",
+    "heading_sigma_threshold_times_s": {
+      "10": 10.0,
+      "5": 10.0,
+      "1": null
+    },
+    "acceptance_scope": "final-epoch attitude/bias marginal ANEES only; not release",
+    "acceptance": "pass",
+    "attitude_bias_anees_95_percent_bounds": [
+      7.041945711273557,
+      11.194604888387575
+    ],
+    "anis_95_percent_bounds": [
+      1.9221566068358085,
+      4.313911611854125
+    ],
+    "rejected_updates": 0,
+    "latitude": 37.78,
+    "rate": 100,
+    "duration": 300,
+    "seeds": 16,
+    "seed": 82719,
+    "spin": 7.2921159e-05,
+    "gyro_density": 1e-07,
+    "gyro_bias_prior_sigma": 1e-05,
+    "initial_yaw_sigma_deg": 5.0,
+    "error_coordinates": "two_frame_exact_differential_reset",
+    "physical_prior": "Independent SO(3) attitude and additive physical bias samples",
+    "rank": 8,
+    "tangent_dim": 15,
+    "elapsed_s": 25.777600653000036,
+    "file": "geometric-exact-weak.json",
+    "final": {
+      "t": 300.0,
+      "yaw_rmse_deg": 3.48209783449332,
+      "yaw_sigma_deg": 4.019353771062922,
+      "heading_coverage": {
+        "1": 0.75,
+        "2": 1.0,
+        "3": 1.0
+      },
+      "attitude_bias_anees": 8.559202480096282,
+      "dof": 9,
+      "marginal_anees": {
+        "craft.orientation": {
+          "value": 2.707342076607434,
+          "dof": 3
+        },
+        "craft.imu.gyro_bias": {
+          "value": 2.486872796205261,
+          "dof": 3
+        },
+        "craft.imu.accel_bias": {
+          "value": 3.073827298056564,
+          "dof": 3
+        }
+      },
+      "anis": 2.4653606570963786,
+      "gyro_bias_rmse_rad_s": 2.1106940445316605e-06,
+      "covariance_symmetry_error": 0.0,
+      "covariance_min_eigenvalue": 3.5400757846684374e-17
+    }
+  },
+  {
+    "module_artifact_id": "0de7ac42fe0f3b2daa0b99aa6b4417bfc202255c5dc6e55f32a47be35064be77",
+    "heading_sigma_threshold_times_s": {
+      "10": 10.0,
+      "5": 10.0,
+      "1": null
+    },
+    "acceptance_scope": "final-epoch attitude/bias marginal ANEES only; not release",
+    "acceptance": "pass",
+    "attitude_bias_anees_95_percent_bounds": [
+      7.041945711273557,
+      11.194604888387575
+    ],
+    "anis_95_percent_bounds": [
+      1.9221566068358085,
+      4.313911611854125
+    ],
+    "rejected_updates": 0,
+    "latitude": 37.78,
+    "rate": 100,
+    "duration": 60.0,
+    "seeds": 16,
+    "seed": 82719,
+    "spin": 7.2921159e-05,
+    "gyro_density": 1e-07,
+    "gyro_bias_prior_sigma": 1e-05,
+    "initial_yaw_sigma_deg": 5.0,
+    "error_coordinates": "two_frame_exact_differential_reset",
+    "physical_prior": "Independent SO(3) attitude and additive physical bias samples",
+    "rank": 8,
+    "tangent_dim": 15,
+    "elapsed_s": 11.538935048999974,
+    "file": "geometric-exact-weak60.json",
+    "final": {
+      "t": 60.0,
+      "yaw_rmse_deg": 3.743479143074656,
+      "yaw_sigma_deg": 4.226806275511313,
+      "heading_coverage": {
+        "1": 0.75,
+        "2": 1.0,
+        "3": 1.0
+      },
+      "attitude_bias_anees": 9.07714005368091,
+      "dof": 9,
+      "marginal_anees": {
+        "craft.orientation": {
+          "value": 2.4609881334702006,
+          "dof": 3
+        },
+        "craft.imu.gyro_bias": {
+          "value": 3.1332766439599586,
+          "dof": 3
+        },
+        "craft.imu.accel_bias": {
+          "value": 2.586866591389022,
+          "dof": 3
+        }
+      },
+      "anis": 2.1458836931831096,
+      "gyro_bias_rmse_rad_s": 6.288556873700367e-06,
+      "covariance_symmetry_error": 0.0,
+      "covariance_min_eigenvalue": 2.3532811440669097e-16
+    }
+  },
+  {
+    "module_artifact_id": "d95714921dded54c2d939ba50a2f21451b87b0eefc92609c9df2f4bcde259eb8",
+    "heading_sigma_threshold_times_s": {
+      "10": 10.0,
+      "5": null,
+      "1": null
+    },
+    "acceptance_scope": "final-epoch attitude/bias marginal ANEES only; not release",
+    "acceptance": "fail",
+    "attitude_bias_anees_95_percent_bounds": [
+      7.041945711273557,
+      11.194604888387575
+    ],
+    "anis_95_percent_bounds": [
+      1.9221566068358085,
+      4.313911611854125
+    ],
+    "rejected_updates": 0,
+    "latitude": 37.78,
+    "rate": 100,
+    "duration": 300,
+    "seeds": 16,
+    "seed": 82719,
+    "spin": 7.2921159e-05,
+    "gyro_density": 0.001,
+    "gyro_bias_prior_sigma": 0.001,
+    "initial_yaw_sigma_deg": 5.0,
+    "error_coordinates": "swing_twist_gravity_bias_exact_reset",
+    "physical_prior": "Independent SO(3) attitude and additive physical bias samples",
+    "rank": 8,
+    "tangent_dim": 15,
+    "elapsed_s": 34.13051378099999,
+    "file": "gravity-bias-noisy300.json",
+    "final": {
+      "t": 300.0,
+      "yaw_rmse_deg": 18.42558943951831,
+      "yaw_sigma_deg": 17.832616841421423,
+      "heading_coverage": {
+        "1": 0.75,
+        "2": 0.875,
+        "3": 1.0
+      },
+      "attitude_bias_anees": 21.52792694572246,
+      "dof": 9,
+      "marginal_anees": {
+        "craft.orientation": {
+          "value": 2.747316746742209,
+          "dof": 3
+        },
+        "craft.imu.gyro_bias": {
+          "value": 2.6526294743280174,
+          "dof": 3
+        },
+        "craft.imu.accel_bias": {
+          "value": 16.615380804338184,
+          "dof": 3
+        }
+      },
+      "anis": 2.4311285710359796,
+      "gyro_bias_rmse_rad_s": 0.0006037130711924187,
+      "covariance_symmetry_error": 0.0,
+      "covariance_min_eigenvalue": 3.4408281915968174e-13
+    }
+  },
+  {
+    "module_artifact_id": "dc7e5aa0fea553e4a86b05c73a22407089cbd10957b0b3a15d0ee6093692ca29",
+    "heading_sigma_threshold_times_s": {
+      "10": 10.0,
+      "5": 10.0,
+      "1": null
+    },
+    "acceptance_scope": "final-epoch attitude/bias marginal ANEES only; not release",
+    "acceptance": "fail",
+    "attitude_bias_anees_95_percent_bounds": [
+      7.041945711273557,
+      11.194604888387575
+    ],
+    "anis_95_percent_bounds": [
+      1.9221566068358085,
+      4.313911611854125
+    ],
+    "rejected_updates": 0,
+    "latitude": 37.78,
+    "rate": 100,
+    "duration": 300,
+    "seeds": 16,
+    "seed": 82719,
+    "spin": 7.2921159e-05,
+    "gyro_density": 0.001,
+    "gyro_bias_prior_sigma": 0.001,
+    "initial_yaw_sigma_deg": 5.0,
+    "error_coordinates": "semidirect_exact_differential_reset",
+    "physical_prior": "Independent SO(3) attitude and additive physical bias samples",
+    "rank": 8,
+    "tangent_dim": 15,
+    "elapsed_s": 56.21469986500006,
+    "file": "semidirect-exact-noisy.json",
+    "final": {
+      "t": 300.0,
+      "yaw_rmse_deg": 27.616043058430318,
+      "yaw_sigma_deg": 2.6941162303975488,
+      "heading_coverage": {
+        "1": 0.0,
+        "2": 0.0625,
+        "3": 0.25
+      },
+      "attitude_bias_anees": 147.48838865911605,
+      "dof": 9,
+      "marginal_anees": {
+        "craft.orientation": {
+          "value": 106.78296084576542,
+          "dof": 3
+        },
+        "craft.imu.gyro_bias": {
+          "value": 38.537545781151316,
+          "dof": 3
+        },
+        "craft.imu.accel_bias": {
+          "value": 3.4055587444705013,
+          "dof": 3
+        }
+      },
+      "anis": 2.4301362318605806,
+      "gyro_bias_rmse_rad_s": 0.000879478417937127,
+      "covariance_symmetry_error": 0.0,
+      "covariance_min_eigenvalue": 3.437870942119196e-13
+    }
+  },
+  {
+    "module_artifact_id": "ffafd89858b0390b166b18167d87e8bc545c47ebf81cb170d05cefb8360ea00a",
+    "heading_sigma_threshold_times_s": {
+      "10": 10.0,
+      "5": 10.0,
+      "1": null
+    },
+    "acceptance_scope": "final-epoch attitude/bias marginal ANEES only; not release",
+    "acceptance": "pass",
+    "attitude_bias_anees_95_percent_bounds": [
+      7.041945711273557,
+      11.194604888387575
+    ],
+    "anis_95_percent_bounds": [
+      1.9221566068358085,
+      4.313911611854125
+    ],
+    "rejected_updates": 0,
+    "latitude": 37.78,
+    "rate": 100,
+    "duration": 300,
+    "seeds": 16,
+    "seed": 82719,
+    "spin": 7.2921159e-05,
+    "gyro_density": 1e-07,
+    "gyro_bias_prior_sigma": 1e-05,
+    "initial_yaw_sigma_deg": 5.0,
+    "error_coordinates": "semidirect_exact_differential_reset",
+    "physical_prior": "Independent SO(3) attitude and additive physical bias samples",
+    "rank": 8,
+    "tangent_dim": 15,
+    "elapsed_s": 56.26896783699999,
+    "file": "semidirect-exact-weak.json",
+    "final": {
+      "t": 300.0,
+      "yaw_rmse_deg": 3.4814510833531824,
+      "yaw_sigma_deg": 4.01935442750167,
+      "heading_coverage": {
+        "1": 0.75,
+        "2": 1.0,
+        "3": 1.0
+      },
+      "attitude_bias_anees": 8.558655928480784,
+      "dof": 9,
+      "marginal_anees": {
+        "craft.orientation": {
+          "value": 2.7070480381032174,
+          "dof": 3
+        },
+        "craft.imu.gyro_bias": {
+          "value": 2.4865592843428796,
+          "dof": 3
+        },
+        "craft.imu.accel_bias": {
+          "value": 3.073623220326067,
+          "dof": 3
+        }
+      },
+      "anis": 2.4653612429812224,
+      "gyro_bias_rmse_rad_s": 2.1103295945838606e-06,
+      "covariance_symmetry_error": 0.0,
+      "covariance_min_eigenvalue": 3.540076142389496e-17
+    }
+  },
+  {
+    "module_artifact_id": "548a1bdb75d90fcea988621bc246413a18b32d0f44989319bba05c5d03d4a4e8",
+    "heading_sigma_threshold_times_s": {
+      "10": 10.0,
+      "5": 10.0,
+      "1": 10.0
+    },
+    "acceptance_scope": "final-epoch attitude/bias marginal ANEES only; not release",
+    "acceptance": "pass",
+    "attitude_bias_anees_95_percent_bounds": [
+      7.041945711273557,
+      11.194604888387575
+    ],
+    "anis_95_percent_bounds": [
+      1.9221566068358085,
+      4.313911611854125
+    ],
+    "rejected_updates": 0,
+    "latitude": 37.78,
+    "rate": 100,
+    "duration": 300,
+    "seeds": 16,
+    "seed": 82719,
+    "spin": 7.2921159e-05,
+    "gyro_density": 1e-07,
+    "gyro_bias_prior_sigma": 1e-08,
+    "initial_yaw_sigma_deg": 5.0,
+    "error_coordinates": "semidirect_exact_differential_reset",
+    "physical_prior": "Independent SO(3) attitude and additive physical bias samples",
+    "rank": 8,
+    "tangent_dim": 15,
+    "elapsed_s": 56.12299141599988,
+    "file": "semidirect-midpoint-calibrated.json",
+    "final": {
+      "t": 300.0,
+      "yaw_rmse_deg": 0.008545525940736813,
+      "yaw_sigma_deg": 0.011663861264006412,
+      "heading_coverage": {
+        "1": 0.75,
+        "2": 1.0,
+        "3": 1.0
+      },
+      "attitude_bias_anees": 9.297167415976315,
+      "dof": 9,
+      "marginal_anees": {
+        "craft.orientation": {
+          "value": 2.63481947978948,
+          "dof": 3
+        },
+        "craft.imu.gyro_bias": {
+          "value": 3.2047829399173717,
+          "dof": 3
+        },
+        "craft.imu.accel_bias": {
+          "value": 3.0733365826250516,
+          "dof": 3
+        }
+      },
+      "anis": 2.4634681334921225,
+      "gyro_bias_rmse_rad_s": 8.904037910346359e-09,
+      "covariance_symmetry_error": 0.0,
+      "covariance_min_eigenvalue": 2.614421925541746e-17
+    }
+  },
+  {
+    "module_artifact_id": "3ee0b7d357f662d835a760eedf4f63916f62a7795843b652793dfa16c82f6b7d",
+    "heading_sigma_threshold_times_s": {
+      "10": 10.0,
+      "5": 10.0,
+      "1": 300.0
+    },
+    "acceptance_scope": "final-epoch attitude/bias marginal ANEES only; not release",
+    "acceptance": "fail",
+    "attitude_bias_anees_95_percent_bounds": [
+      7.041945711273557,
+      11.194604888387575
+    ],
+    "anis_95_percent_bounds": [
+      1.9221566068358085,
+      4.313911611854125
+    ],
+    "rejected_updates": 0,
+    "latitude": 37.78,
+    "rate": 100,
+    "duration": 300,
+    "seeds": 16,
+    "seed": 82719,
+    "spin": 7.2921159e-05,
+    "gyro_density": 0.001,
+    "gyro_bias_prior_sigma": 0.001,
+    "initial_yaw_sigma_deg": 5.0,
+    "error_coordinates": "semidirect_exact_differential_reset",
+    "physical_prior": "Independent SO(3) attitude and additive physical bias samples",
+    "rank": 8,
+    "tangent_dim": 15,
+    "elapsed_s": 56.386871789,
+    "file": "semidirect-midpoint-noisy.json",
+    "final": {
+      "t": 300.0,
+      "yaw_rmse_deg": 18.60801585469891,
+      "yaw_sigma_deg": 0.9939883651876039,
+      "heading_coverage": {
+        "1": 0.0625,
+        "2": 0.0625,
+        "3": 0.3125
+      },
+      "attitude_bias_anees": 404.58645960682907,
+      "dof": 9,
+      "marginal_anees": {
+        "craft.orientation": {
+          "value": 352.01981207819813,
+          "dof": 3
+        },
+        "craft.imu.gyro_bias": {
+          "value": 91.93097137847828,
+          "dof": 3
+        },
+        "craft.imu.accel_bias": {
+          "value": 2.483345811604311,
+          "dof": 3
+        }
+      },
+      "anis": 2.4296375620767483,
+      "gyro_bias_rmse_rad_s": 0.000611389890047685,
+      "covariance_symmetry_error": 0.0,
+      "covariance_min_eigenvalue": 3.4378387549107275e-13
+    }
+  },
+  {
+    "module_artifact_id": "548a1bdb75d90fcea988621bc246413a18b32d0f44989319bba05c5d03d4a4e8",
+    "heading_sigma_threshold_times_s": {
+      "10": 10.0,
+      "5": 10.0,
+      "1": 70.0
+    },
+    "acceptance_scope": "final-epoch attitude/bias marginal ANEES only; not release",
+    "acceptance": "fail",
+    "attitude_bias_anees_95_percent_bounds": [
+      7.041945711273557,
+      11.194604888387575
+    ],
+    "anis_95_percent_bounds": [
+      1.9221566068358085,
+      4.313911611854125
+    ],
+    "rejected_updates": 0,
+    "latitude": 37.78,
+    "rate": 100,
+    "duration": 300,
+    "seeds": 16,
+    "seed": 82719,
+    "spin": 7.2921159e-05,
+    "gyro_density": 1e-07,
+    "gyro_bias_prior_sigma": 1e-05,
+    "initial_yaw_sigma_deg": 5.0,
+    "error_coordinates": "semidirect_exact_differential_reset",
+    "physical_prior": "Independent SO(3) attitude and additive physical bias samples",
+    "rank": 8,
+    "tangent_dim": 15,
+    "elapsed_s": 56.06367761999991,
+    "file": "semidirect-midpoint-weak.json",
+    "final": {
+      "t": 300.0,
+      "yaw_rmse_deg": 3.1951187161402683,
+      "yaw_sigma_deg": 0.4654917043074161,
+      "heading_coverage": {
+        "1": 0.0625,
+        "2": 0.1875,
+        "3": 0.3125
+      },
+      "attitude_bias_anees": 54.997145918277624,
+      "dof": 9,
+      "marginal_anees": {
+        "craft.orientation": {
+          "value": 49.05701599572812,
+          "dof": 3
+        },
+        "craft.imu.gyro_bias": {
+          "value": 48.98589618734118,
+          "dof": 3
+        },
+        "craft.imu.accel_bias": {
+          "value": 3.0732352579690576,
+          "dof": 3
+        }
+      },
+      "anis": 2.465311621461252,
+      "gyro_bias_rmse_rad_s": 1.9529446150824363e-06,
+      "covariance_symmetry_error": 0.0,
+      "covariance_min_eigenvalue": 3.540199894595453e-17
+    }
+  },
+  {
+    "module_artifact_id": "0dd665dacb9d8880bbf0a46549a5240faff5132d87aed89c2285340559c60381",
+    "heading_sigma_threshold_times_s": {
+      "10": 10.0,
+      "5": 10.0,
+      "1": 10.0
+    },
+    "acceptance_scope": "final-epoch attitude/bias marginal ANEES only; not release",
+    "acceptance": "pass",
+    "attitude_bias_anees_95_percent_bounds": [
+      7.041945711273557,
+      11.194604888387575
+    ],
+    "anis_95_percent_bounds": [
+      1.9221566068358085,
+      4.313911611854125
+    ],
+    "rejected_updates": 0,
+    "latitude": 37.78,
+    "rate": 100,
+    "duration": 300,
+    "seeds": 16,
+    "seed": 82719,
+    "spin": 7.2921159e-05,
+    "gyro_density": 1e-07,
+    "gyro_bias_prior_sigma": 1e-08,
+    "initial_yaw_sigma_deg": 5.0,
+    "error_coordinates": "swing_twist_body_velocity_bias_exact_reset",
+    "physical_prior": "Independent SO(3) attitude and additive physical bias samples",
+    "rank": 8,
+    "tangent_dim": 15,
+    "elapsed_s": 33.733419290000256,
+    "file": "swing-calibrated300.json",
+    "final": {
+      "t": 300.0,
+      "yaw_rmse_deg": 0.008557234435040468,
+      "yaw_sigma_deg": 0.011665687079769954,
+      "heading_coverage": {
+        "1": 0.75,
+        "2": 1.0,
+        "3": 1.0
+      },
+      "attitude_bias_anees": 9.304801162778457,
+      "dof": 9,
+      "marginal_anees": {
+        "craft.orientation": {
+          "value": 2.6200933668919095,
+          "dof": 3
+        },
+        "craft.imu.gyro_bias": {
+          "value": 3.225497028645667,
+          "dof": 3
+        },
+        "craft.imu.accel_bias": {
+          "value": 3.0635619652141317,
+          "dof": 3
+        }
+      },
+      "anis": 2.463427491344927,
+      "gyro_bias_rmse_rad_s": 8.914507663877416e-09,
+      "covariance_symmetry_error": 0.0,
+      "covariance_min_eigenvalue": 2.61413083484524e-17
+    }
+  },
+  {
+    "module_artifact_id": "75b6ef3dd7e38f1b89398020ea1e613a320926b1a4663edf4adf3fdb82a6ea04",
+    "heading_sigma_threshold_times_s": {
+      "10": 10.0,
+      "5": null,
+      "1": null
+    },
+    "acceptance_scope": "final-epoch attitude/bias marginal ANEES only; not release",
+    "acceptance": "fail",
+    "attitude_bias_anees_95_percent_bounds": [
+      7.041945711273557,
+      11.194604888387575
+    ],
+    "anis_95_percent_bounds": [
+      1.9221566068358085,
+      4.313911611854125
+    ],
+    "rejected_updates": 0,
+    "latitude": 37.78,
+    "rate": 100,
+    "duration": 300,
+    "seeds": 16,
+    "seed": 94273,
+    "spin": 7.2921159e-05,
+    "gyro_density": 0.001,
+    "gyro_bias_prior_sigma": 0.001,
+    "initial_yaw_sigma_deg": 5.0,
+    "error_coordinates": "swing_twist_body_velocity_bias_exact_reset",
+    "physical_prior": "Independent SO(3) attitude and additive physical bias samples",
+    "rank": 8,
+    "tangent_dim": 15,
+    "elapsed_s": 28.1650544109998,
+    "file": "swing-noisy300-seed2.json",
+    "final": {
+      "t": 300.0,
+      "yaw_rmse_deg": 22.871425774645008,
+      "yaw_sigma_deg": 17.786171330964606,
+      "heading_coverage": {
+        "1": 0.5625,
+        "2": 0.8125,
+        "3": 1.0
+      },
+      "attitude_bias_anees": 23.114023775592997,
+      "dof": 9,
+      "marginal_anees": {
+        "craft.orientation": {
+          "value": 3.4608117204174826,
+          "dof": 3
+        },
+        "craft.imu.gyro_bias": {
+          "value": 4.262008320197694,
+          "dof": 3
+        },
+        "craft.imu.accel_bias": {
+          "value": 15.832200204351459,
+          "dof": 3
+        }
+      },
+      "anis": 2.6625288821859376,
+      "gyro_bias_rmse_rad_s": 0.0007589660545908164,
+      "covariance_symmetry_error": 0.0,
+      "covariance_min_eigenvalue": 3.440926269456761e-13
+    }
+  },
+  {
+    "module_artifact_id": "75b6ef3dd7e38f1b89398020ea1e613a320926b1a4663edf4adf3fdb82a6ea04",
+    "heading_sigma_threshold_times_s": {
+      "10": 10.0,
+      "5": null,
+      "1": null
+    },
+    "acceptance_scope": "final-epoch attitude/bias marginal ANEES only; not release",
+    "acceptance": "fail",
+    "attitude_bias_anees_95_percent_bounds": [
+      7.041945711273557,
+      11.194604888387575
+    ],
+    "anis_95_percent_bounds": [
+      1.9221566068358085,
+      4.313911611854125
+    ],
+    "rejected_updates": 0,
+    "latitude": 37.78,
+    "rate": 100,
+    "duration": 300,
+    "seeds": 16,
+    "seed": 82719,
+    "spin": 7.2921159e-05,
+    "gyro_density": 0.001,
+    "gyro_bias_prior_sigma": 0.001,
+    "initial_yaw_sigma_deg": 5.0,
+    "error_coordinates": "swing_twist_body_velocity_bias_exact_reset",
+    "physical_prior": "Independent SO(3) attitude and additive physical bias samples",
+    "rank": 8,
+    "tangent_dim": 15,
+    "elapsed_s": 27.908457938000083,
+    "file": "swing-noisy300.json",
+    "final": {
+      "t": 300.0,
+      "yaw_rmse_deg": 18.419886282251714,
+      "yaw_sigma_deg": 17.832616464725934,
+      "heading_coverage": {
+        "1": 0.75,
+        "2": 0.875,
+        "3": 1.0
+      },
+      "attitude_bias_anees": 21.589467177686068,
+      "dof": 9,
+      "marginal_anees": {
+        "craft.orientation": {
+          "value": 2.746786728984498,
+          "dof": 3
+        },
+        "craft.imu.gyro_bias": {
+          "value": 2.65199961264938,
+          "dof": 3
+        },
+        "craft.imu.accel_bias": {
+          "value": 16.676540444573078,
+          "dof": 3
+        }
+      },
+      "anis": 2.431157499510364,
+      "gyro_bias_rmse_rad_s": 0.0006035544690451082,
+      "covariance_symmetry_error": 0.0,
+      "covariance_min_eigenvalue": 3.4410013211728685e-13
+    }
+  },
+  {
+    "module_artifact_id": "75b6ef3dd7e38f1b89398020ea1e613a320926b1a4663edf4adf3fdb82a6ea04",
+    "heading_sigma_threshold_times_s": {
+      "10": 10.0,
+      "5": null,
+      "1": null
+    },
+    "acceptance_scope": "final-epoch attitude/bias marginal ANEES only; not release",
+    "acceptance": "pass",
+    "attitude_bias_anees_95_percent_bounds": [
+      7.041945711273557,
+      11.194604888387575
+    ],
+    "anis_95_percent_bounds": [
+      1.9221566068358085,
+      4.313911611854125
+    ],
+    "rejected_updates": 0,
+    "latitude": 37.78,
+    "rate": 100,
+    "duration": 60.0,
+    "seeds": 16,
+    "seed": 82719,
+    "spin": 7.2921159e-05,
+    "gyro_density": 0.001,
+    "gyro_bias_prior_sigma": 0.001,
+    "initial_yaw_sigma_deg": 5.0,
+    "error_coordinates": "swing_twist_body_velocity_bias_exact_reset",
+    "physical_prior": "Independent SO(3) attitude and additive physical bias samples",
+    "rank": 8,
+    "tangent_dim": 15,
+    "elapsed_s": 11.676644254000166,
+    "file": "swing-noisy60.json",
+    "final": {
+      "t": 60.0,
+      "yaw_rmse_deg": 5.199984842469923,
+      "yaw_sigma_deg": 6.06573377290221,
+      "heading_coverage": {
+        "1": 0.6875,
+        "2": 1.0,
+        "3": 1.0
+      },
+      "attitude_bias_anees": 9.49994048477129,
+      "dof": 9,
+      "marginal_anees": {
+        "craft.orientation": {
+          "value": 2.681724463127945,
+          "dof": 3
+        },
+        "craft.imu.gyro_bias": {
+          "value": 2.6365658635561524,
+          "dof": 3
+        },
+        "craft.imu.accel_bias": {
+          "value": 4.422212215567049,
+          "dof": 3
+        }
+      },
+      "anis": 2.2825692681839205,
+      "gyro_bias_rmse_rad_s": 0.0006177723917341406,
+      "covariance_symmetry_error": 0.0,
+      "covariance_min_eigenvalue": 1.9618172512788772e-12
+    }
+  },
+  {
+    "module_artifact_id": "be570a7396c8409f7320078b3c3599d33f84a19625b64f916c7984cec8ef551c",
+    "heading_sigma_threshold_times_s": {
+      "10": 10.0,
+      "5": 10.0,
+      "1": 10.0
+    },
+    "acceptance_scope": "final-epoch attitude/bias marginal ANEES only; not release",
+    "acceptance": "pass",
+    "attitude_bias_anees_95_percent_bounds": [
+      7.041945711273557,
+      11.194604888387575
+    ],
+    "anis_95_percent_bounds": [
+      1.9221566068358085,
+      4.313911611854125
+    ],
+    "rejected_updates": 0,
+    "latitude": 37.78,
+    "rate": 100,
+    "duration": 300.0,
+    "seeds": 16,
+    "seed": 82719,
+    "spin": 7.2921159e-05,
+    "motion": false,
+    "gyro_density": 1e-07,
+    "gyro_bias_prior_sigma": 1e-08,
+    "initial_yaw_sigma_deg": 5.0,
+    "error_coordinates": "augmented_ukf_aligned_differential",
+    "physical_prior": "Independent SO(3) attitude and additive physical bias samples",
+    "rank": 8,
+    "tangent_dim": 15,
+    "elapsed_s": 73.12368326199976,
+    "file": "swing-ukf-calibrated300.json",
+    "final": {
+      "t": 300.0,
+      "yaw_rmse_deg": 0.00856128204581733,
+      "yaw_sigma_deg": 0.011665563778906686,
+      "heading_coverage": {
+        "1": 0.75,
+        "2": 1.0,
+        "3": 1.0
+      },
+      "attitude_bias_anees": 9.297501244103064,
+      "dof": 9,
+      "marginal_anees": {
+        "craft.orientation": {
+          "value": 2.627792713375621,
+          "dof": 3
+        },
+        "craft.imu.gyro_bias": {
+          "value": 3.2075405144105,
+          "dof": 3
+        },
+        "craft.imu.accel_bias": {
+          "value": 3.070286593658286,
+          "dof": 3
+        }
+      },
+      "anis": 2.4633535987727404,
+      "gyro_bias_rmse_rad_s": 8.905354537844683e-09,
+      "accel_bias_mean_error_m_s2": [
+        -1.18591467934228e-06,
+        1.2226420479155e-07,
+        -9.184514986448402e-08
+      ],
+      "accel_bias_rms_error_m_s2": [
+        7.840696576739357e-06,
+        1.1526378249914364e-05,
+        6.344536284992158e-07
+      ],
+      "accel_bias_rms_sigma_m_s2": [
+        9.994903795794337e-06,
+        9.994638855375458e-06,
+        5.969265512855702e-07
+      ],
+      "covariance_symmetry_error": 0.0,
+      "covariance_min_eigenvalue": 2.613979806753443e-17
+    }
+  },
+  {
+    "module_artifact_id": "b3ff0e9bfdbb945b6eb972046b9625a56a5a01411c036d02effbc7eace04e2dd",
+    "heading_sigma_threshold_times_s": {
+      "10": 10.0,
+      "5": null,
+      "1": null
+    },
+    "acceptance_scope": "final-epoch attitude/bias marginal ANEES only; not release",
+    "acceptance": "pass",
+    "attitude_bias_anees_95_percent_bounds": [
+      7.041945711273557,
+      11.194604888387575
+    ],
+    "anis_95_percent_bounds": [
+      1.9221566068358085,
+      4.313911611854125
+    ],
+    "rejected_updates": 0,
+    "latitude": 37.78,
+    "rate": 100,
+    "duration": 300.0,
+    "seeds": 16,
+    "seed": 82719,
+    "spin": 7.2921159e-05,
+    "gyro_density": 0.001,
+    "gyro_bias_prior_sigma": 0.001,
+    "initial_yaw_sigma_deg": 5.0,
+    "error_coordinates": "augmented_ukf_aligned_moments",
+    "physical_prior": "Independent SO(3) attitude and additive physical bias samples",
+    "rank": 8,
+    "tangent_dim": 15,
+    "elapsed_s": 87.33613769000021,
+    "file": "swing-ukf-moments300.json",
+    "final": {
+      "t": 300.0,
+      "yaw_rmse_deg": 18.43587426414836,
+      "yaw_sigma_deg": 17.86318038528785,
+      "heading_coverage": {
+        "1": 0.75,
+        "2": 0.875,
+        "3": 1.0
+      },
+      "attitude_bias_anees": 9.822241583104116,
+      "dof": 9,
+      "marginal_anees": {
+        "craft.orientation": {
+          "value": 2.7446656296145155,
+          "dof": 3
+        },
+        "craft.imu.gyro_bias": {
+          "value": 2.6599518514912877,
+          "dof": 3
+        },
+        "craft.imu.accel_bias": {
+          "value": 4.89957065547874,
+          "dof": 3
+        }
+      },
+      "anis": 2.43121077743136,
+      "gyro_bias_rmse_rad_s": 0.0006041856604477214,
+      "accel_bias_mean_error_m_s2": [
+        -1.342713250022998e-06,
+        -3.705614524442654e-07,
+        -7.87627954753755e-07
+      ],
+      "accel_bias_rms_error_m_s2": [
+        7.95188008723608e-06,
+        1.1810940711286924e-05,
+        1.0016017160443337e-06
+      ],
+      "accel_bias_rms_sigma_m_s2": [
+        9.957327853619185e-06,
+        9.95179885021661e-06,
+        6.096127156615945e-07
+      ],
+      "covariance_symmetry_error": 0.0,
+      "covariance_min_eigenvalue": 3.448665630181067e-13
+    }
+  },
+  {
+    "module_artifact_id": "938cd1b9bace858653d4299c522ed877a56aad68ee42c004c0f6ce39e596dc0c",
+    "heading_sigma_threshold_times_s": {
+      "10": 10.0,
+      "5": null,
+      "1": null
+    },
+    "acceptance_scope": "final-epoch attitude/bias marginal ANEES only; not release",
+    "acceptance": "pass",
+    "attitude_bias_anees_95_percent_bounds": [
+      7.041945711273557,
+      11.194604888387575
+    ],
+    "anis_95_percent_bounds": [
+      1.9221566068358085,
+      4.313911611854125
+    ],
+    "rejected_updates": 0,
+    "latitude": 37.78,
+    "rate": 100,
+    "duration": 300.0,
+    "seeds": 16,
+    "seed": 82719,
+    "spin": 7.2921159e-05,
+    "motion": true,
+    "gyro_density": 0.001,
+    "gyro_bias_prior_sigma": 0.001,
+    "initial_yaw_sigma_deg": 5.0,
+    "error_coordinates": "augmented_ukf_aligned_differential",
+    "physical_prior": "Independent SO(3) attitude and additive physical bias samples",
+    "rank": 8,
+    "tangent_dim": 15,
+    "elapsed_s": 84.47949803500023,
+    "file": "swing-ukf-motion300.json",
+    "final": {
+      "t": 300.0,
+      "yaw_rmse_deg": 5.452179075352749,
+      "yaw_sigma_deg": 5.932024218357762,
+      "heading_coverage": {
+        "1": 0.625,
+        "2": 1.0,
+        "3": 1.0
+      },
+      "attitude_bias_anees": 9.472979731168003,
+      "dof": 9,
+      "marginal_anees": {
+        "craft.orientation": {
+          "value": 2.5119534887585497,
+          "dof": 3
+        },
+        "craft.imu.gyro_bias": {
+          "value": 2.7645131204868587,
+          "dof": 3
+        },
+        "craft.imu.accel_bias": {
+          "value": 4.3876697812449486,
+          "dof": 3
+        }
+      },
+      "anis": 2.3994059410496513,
+      "gyro_bias_rmse_rad_s": 0.0001280848954969243,
+      "accel_bias_mean_error_m_s2": [
+        -4.973622673189953e-07,
+        -3.685679388404116e-07,
+        -8.111120747754325e-07
+      ],
+      "accel_bias_rms_error_m_s2": [
+        2.732092102049363e-06,
+        2.780090738947465e-06,
+        1.0524840843635217e-06
+      ],
+      "accel_bias_rms_sigma_m_s2": [
+        3.1041748641506437e-06,
+        3.02620149829868e-06,
+        6.386652185598581e-07
+      ],
+      "covariance_symmetry_error": 0.0,
+      "covariance_min_eigenvalue": 3.7960975830504697e-13
+    }
+  },
+  {
+    "module_artifact_id": "be570a7396c8409f7320078b3c3599d33f84a19625b64f916c7984cec8ef551c",
+    "heading_sigma_threshold_times_s": {
+      "10": 10.0,
+      "5": 10.0,
+      "1": null
+    },
+    "acceptance_scope": "final-epoch attitude/bias marginal ANEES only; not release",
+    "acceptance": "pass",
+    "attitude_bias_anees_95_percent_bounds": [
+      7.041945711273557,
+      11.194604888387575
+    ],
+    "anis_95_percent_bounds": [
+      1.9221566068358085,
+      4.313911611854125
+    ],
+    "rejected_updates": 0,
+    "latitude": 37.78,
+    "rate": 100,
+    "duration": 300.0,
+    "seeds": 16,
+    "seed": 82719,
+    "spin": 7.2921159e-05,
+    "motion": false,
+    "gyro_density": 1e-07,
+    "gyro_bias_prior_sigma": 1e-05,
+    "initial_yaw_sigma_deg": 5.0,
+    "error_coordinates": "augmented_ukf_aligned_differential",
+    "physical_prior": "Independent SO(3) attitude and additive physical bias samples",
+    "rank": 8,
+    "tangent_dim": 15,
+    "elapsed_s": 74.79973079299998,
+    "file": "swing-ukf-weak300.json",
+    "final": {
+      "t": 300.0,
+      "yaw_rmse_deg": 4.14105277035569,
+      "yaw_sigma_deg": 3.745624667391899,
+      "heading_coverage": {
+        "1": 0.6875,
+        "2": 0.8125,
+        "3": 1.0
+      },
+      "attitude_bias_anees": 9.5425526573203,
+      "dof": 9,
+      "marginal_anees": {
+        "craft.orientation": {
+          "value": 3.2115790853783235,
+          "dof": 3
+        },
+        "craft.imu.gyro_bias": {
+          "value": 3.2096704758203183,
+          "dof": 3
+        },
+        "craft.imu.accel_bias": {
+          "value": 3.0688545240666936,
+          "dof": 3
+        }
+      },
+      "anis": 2.464573437049524,
+      "gyro_bias_rmse_rad_s": 2.48457829850029e-06,
+      "accel_bias_mean_error_m_s2": [
+        -1.2652840034009156e-06,
+        5.36248037292639e-08,
+        -9.171486499834581e-08
+      ],
+      "accel_bias_rms_error_m_s2": [
+        7.77844251749052e-06,
+        1.1557402360167241e-05,
+        6.34487040300601e-07
+      ],
+      "accel_bias_rms_sigma_m_s2": [
+        9.994699122278213e-06,
+        9.993190979809196e-06,
+        5.969266069751372e-07
+      ],
+      "covariance_symmetry_error": 0.0,
+      "covariance_min_eigenvalue": 3.540119248512172e-17
+    }
+  },
+  {
+    "module_artifact_id": "938cd1b9bace858653d4299c522ed877a56aad68ee42c004c0f6ce39e596dc0c",
+    "heading_sigma_threshold_times_s": {
+      "10": 10.0,
+      "5": null,
+      "1": null
+    },
+    "acceptance_scope": "final-epoch attitude/bias marginal ANEES only; not release",
+    "acceptance": "fail",
+    "attitude_bias_anees_95_percent_bounds": [
+      7.041945711273557,
+      11.194604888387575
+    ],
+    "anis_95_percent_bounds": [
+      1.9221566068358085,
+      4.313911611854125
+    ],
+    "rejected_updates": 0,
+    "latitude": 37.78,
+    "rate": 100,
+    "duration": 300.0,
+    "seeds": 16,
+    "seed": 94273,
+    "spin": 7.2921159e-05,
+    "gyro_density": 0.001,
+    "gyro_bias_prior_sigma": 0.001,
+    "initial_yaw_sigma_deg": 5.0,
+    "error_coordinates": "augmented_ukf_aligned_differential",
+    "physical_prior": "Independent SO(3) attitude and additive physical bias samples",
+    "rank": 8,
+    "tangent_dim": 15,
+    "elapsed_s": 67.07052496400001,
+    "file": "swing-ukf300-seed2.json",
+    "final": {
+      "t": 300.0,
+      "yaw_rmse_deg": 22.75133797298519,
+      "yaw_sigma_deg": 17.83889557574018,
+      "heading_coverage": {
+        "1": 0.5625,
+        "2": 0.8125,
+        "3": 1.0
+      },
+      "attitude_bias_anees": 11.588580502661724,
+      "dof": 9,
+      "marginal_anees": {
+        "craft.orientation": {
+          "value": 3.434851398021402,
+          "dof": 3
+        },
+        "craft.imu.gyro_bias": {
+          "value": 4.222654831680538,
+          "dof": 3
+        },
+        "craft.imu.accel_bias": {
+          "value": 4.339254857267747,
+          "dof": 3
+        }
+      },
+      "anis": 2.6625602823438967,
+      "gyro_bias_rmse_rad_s": 0.0007560350744673288,
+      "covariance_symmetry_error": 0.0,
+      "covariance_min_eigenvalue": 3.448590864382074e-13
+    }
+  },
+  {
+    "module_artifact_id": "938cd1b9bace858653d4299c522ed877a56aad68ee42c004c0f6ce39e596dc0c",
+    "heading_sigma_threshold_times_s": {
+      "10": 10.0,
+      "5": null,
+      "1": null
+    },
+    "acceptance_scope": "final-epoch attitude/bias marginal ANEES only; not release",
+    "acceptance": "pass",
+    "attitude_bias_anees_95_percent_bounds": [
+      7.041945711273557,
+      11.194604888387575
+    ],
+    "anis_95_percent_bounds": [
+      1.9221566068358085,
+      4.313911611854125
+    ],
+    "rejected_updates": 0,
+    "latitude": 37.78,
+    "rate": 100,
+    "duration": 300.0,
+    "seeds": 16,
+    "seed": 104729,
+    "spin": 7.2921159e-05,
+    "gyro_density": 0.001,
+    "gyro_bias_prior_sigma": 0.001,
+    "initial_yaw_sigma_deg": 5.0,
+    "error_coordinates": "augmented_ukf_aligned_differential",
+    "physical_prior": "Independent SO(3) attitude and additive physical bias samples",
+    "rank": 8,
+    "tangent_dim": 15,
+    "elapsed_s": 68.56273746099987,
+    "file": "swing-ukf300-seed3.json",
+    "final": {
+      "t": 300.0,
+      "yaw_rmse_deg": 21.15081621801445,
+      "yaw_sigma_deg": 17.865214631581832,
+      "heading_coverage": {
+        "1": 0.625,
+        "2": 0.9375,
+        "3": 1.0
+      },
+      "attitude_bias_anees": 10.108434470462218,
+      "dof": 9,
+      "marginal_anees": {
+        "craft.orientation": {
+          "value": 3.0947187331455055,
+          "dof": 3
+        },
+        "craft.imu.gyro_bias": {
+          "value": 3.93749747719509,
+          "dof": 3
+        },
+        "craft.imu.accel_bias": {
+          "value": 3.8580485036667005,
+          "dof": 3
+        }
+      },
+      "anis": 3.8549232743662794,
+      "gyro_bias_rmse_rad_s": 0.0006714690609779272,
+      "accel_bias_mean_error_m_s2": [
+        -7.395580383583854e-07,
+        1.6384889973808716e-06,
+        -4.529033178867925e-07
+      ],
+      "accel_bias_rms_error_m_s2": [
+        9.370498534495849e-06,
+        9.345797637576822e-06,
+        8.706395730556754e-07
+      ],
+      "accel_bias_rms_sigma_m_s2": [
+        9.941166569650087e-06,
+        9.949767016871586e-06,
+        6.068916780710929e-07
+      ],
+      "covariance_symmetry_error": 0.0,
+      "covariance_min_eigenvalue": 3.4486414345837675e-13
+    }
+  },
+  {
+    "module_artifact_id": "938cd1b9bace858653d4299c522ed877a56aad68ee42c004c0f6ce39e596dc0c",
+    "heading_sigma_threshold_times_s": {
+      "10": 10.0,
+      "5": null,
+      "1": null
+    },
+    "acceptance_scope": "final-epoch attitude/bias marginal ANEES only; not release",
+    "acceptance": "pass",
+    "attitude_bias_anees_95_percent_bounds": [
+      7.041945711273557,
+      11.194604888387575
+    ],
+    "anis_95_percent_bounds": [
+      1.9221566068358085,
+      4.313911611854125
+    ],
+    "rejected_updates": 0,
+    "latitude": 37.78,
+    "rate": 100,
+    "duration": 300.0,
+    "seeds": 16,
+    "seed": 130363,
+    "spin": 7.2921159e-05,
+    "gyro_density": 0.001,
+    "gyro_bias_prior_sigma": 0.001,
+    "initial_yaw_sigma_deg": 5.0,
+    "error_coordinates": "augmented_ukf_aligned_differential",
+    "physical_prior": "Independent SO(3) attitude and additive physical bias samples",
+    "rank": 8,
+    "tangent_dim": 15,
+    "elapsed_s": 68.45482308100009,
+    "file": "swing-ukf300-seed4.json",
+    "final": {
+      "t": 300.0,
+      "yaw_rmse_deg": 23.649822332773827,
+      "yaw_sigma_deg": 17.873611065305177,
+      "heading_coverage": {
+        "1": 0.5625,
+        "2": 0.8125,
+        "3": 1.0
+      },
+      "attitude_bias_anees": 9.783474255076216,
+      "dof": 9,
+      "marginal_anees": {
+        "craft.orientation": {
+          "value": 3.1053873117715325,
+          "dof": 3
+        },
+        "craft.imu.gyro_bias": {
+          "value": 4.168170493643533,
+          "dof": 3
+        },
+        "craft.imu.accel_bias": {
+          "value": 3.5693082520263903,
+          "dof": 3
+        }
+      },
+      "anis": 2.7794890997387984,
+      "gyro_bias_rmse_rad_s": 0.000754806005964256,
+      "accel_bias_mean_error_m_s2": [
+        2.591203477361198e-07,
+        2.563227754114595e-06,
+        -5.565383503735444e-07
+      ],
+      "accel_bias_rms_error_m_s2": [
+        6.410583251304579e-06,
+        9.700388514191647e-06,
+        8.690355128076219e-07
+      ],
+      "accel_bias_rms_sigma_m_s2": [
+        9.942596662082911e-06,
+        9.949464765121961e-06,
+        6.109118926448189e-07
+      ],
+      "covariance_symmetry_error": 0.0,
+      "covariance_min_eigenvalue": 3.448710556542396e-13
+    }
+  },
+  {
+    "module_artifact_id": "938cd1b9bace858653d4299c522ed877a56aad68ee42c004c0f6ce39e596dc0c",
+    "heading_sigma_threshold_times_s": {
+      "10": 10.0,
+      "5": null,
+      "1": null
+    },
+    "acceptance_scope": "final-epoch attitude/bias marginal ANEES only; not release",
+    "acceptance": "pass",
+    "attitude_bias_anees_95_percent_bounds": [
+      7.041945711273557,
+      11.194604888387575
+    ],
+    "anis_95_percent_bounds": [
+      1.9221566068358085,
+      4.313911611854125
+    ],
+    "rejected_updates": 0,
+    "latitude": 37.78,
+    "rate": 100,
+    "duration": 300.0,
+    "seeds": 16,
+    "seed": 82719,
+    "spin": 7.2921159e-05,
+    "gyro_density": 0.001,
+    "gyro_bias_prior_sigma": 0.001,
+    "initial_yaw_sigma_deg": 5.0,
+    "error_coordinates": "augmented_ukf_aligned_differential",
+    "physical_prior": "Independent SO(3) attitude and additive physical bias samples",
+    "rank": 8,
+    "tangent_dim": 15,
+    "elapsed_s": 69.14172937400008,
+    "file": "swing-ukf300.json",
+    "final": {
+      "t": 300.0,
+      "yaw_rmse_deg": 18.435716893248983,
+      "yaw_sigma_deg": 17.863020541117038,
+      "heading_coverage": {
+        "1": 0.75,
+        "2": 0.875,
+        "3": 1.0
+      },
+      "attitude_bias_anees": 9.821420993662622,
+      "dof": 9,
+      "marginal_anees": {
+        "craft.orientation": {
+          "value": 2.7446990376340406,
+          "dof": 3
+        },
+        "craft.imu.gyro_bias": {
+          "value": 2.659283153014897,
+          "dof": 3
+        },
+        "craft.imu.accel_bias": {
+          "value": 4.899464761005348,
+          "dof": 3
+        }
+      },
+      "anis": 2.4312129403156484,
+      "gyro_bias_rmse_rad_s": 0.000604198866449073,
+      "covariance_symmetry_error": 0.0,
+      "covariance_min_eigenvalue": 3.448665621198932e-13
+    }
+  },
+  {
+    "module_artifact_id": "0dd665dacb9d8880bbf0a46549a5240faff5132d87aed89c2285340559c60381",
+    "heading_sigma_threshold_times_s": {
+      "10": 10.0,
+      "5": 10.0,
+      "1": null
+    },
+    "acceptance_scope": "final-epoch attitude/bias marginal ANEES only; not release",
+    "acceptance": "pass",
+    "attitude_bias_anees_95_percent_bounds": [
+      7.041945711273557,
+      11.194604888387575
+    ],
+    "anis_95_percent_bounds": [
+      1.9221566068358085,
+      4.313911611854125
+    ],
+    "rejected_updates": 0,
+    "latitude": 37.78,
+    "rate": 100,
+    "duration": 300,
+    "seeds": 16,
+    "seed": 82719,
+    "spin": 7.2921159e-05,
+    "gyro_density": 1e-07,
+    "gyro_bias_prior_sigma": 1e-05,
+    "initial_yaw_sigma_deg": 5.0,
+    "error_coordinates": "swing_twist_body_velocity_bias_exact_reset",
+    "physical_prior": "Independent SO(3) attitude and additive physical bias samples",
+    "rank": 8,
+    "tangent_dim": 15,
+    "elapsed_s": 33.972136583000065,
+    "file": "swing-weak300.json",
+    "final": {
+      "t": 300.0,
+      "yaw_rmse_deg": 4.161849242527519,
+      "yaw_sigma_deg": 3.770736681571282,
+      "heading_coverage": {
+        "1": 0.625,
+        "2": 0.8125,
+        "3": 1.0
+      },
+      "attitude_bias_anees": 9.507509136217957,
+      "dof": 9,
+      "marginal_anees": {
+        "craft.orientation": {
+          "value": 3.1987890371200782,
+          "dof": 3
+        },
+        "craft.imu.gyro_bias": {
+          "value": 3.1650909079656406,
+          "dof": 3
+        },
+        "craft.imu.accel_bias": {
+          "value": 3.067781547759842,
+          "dof": 3
+        }
+      },
+      "anis": 2.4646263355617055,
+      "gyro_bias_rmse_rad_s": 2.495608998015966e-06,
+      "covariance_symmetry_error": 0.0,
+      "covariance_min_eigenvalue": 3.540128751320152e-17
+    }
+  }
+]

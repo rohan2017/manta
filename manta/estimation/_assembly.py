@@ -307,6 +307,8 @@ def emit_filter_module(sys, spec: StateSpec, *, name: str, x0: np.ndarray,
         "tracked": tuple(slot.name for slot in spec.slots),
         "inputs": tuple(sys.input_names),
         "sensors": tuple(sys.sensors),
+        **({"navigation_frame": sys.navigation_frame.metadata()}
+           if getattr(sys, "navigation_frame", None) is not None else {}),
     })
     metadata["nis_gates"] = MappingProxyType(dict(gates))
     metadata["consider_parameters"] = tuple(

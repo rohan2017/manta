@@ -1,0 +1,8 @@
+tests/test_ukf.py:232: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_gauss_markov.py::test_filters_track_a_gauss_markov_drift[EKF]
+FAILED tests/test_gauss_markov.py::test_filters_track_a_gauss_markov_drift[UKF]
+FAILED tests/test_consistency.py::test_observable_subspace_isolates_modeling_from_observability
+FAILED tests/test_rw_bias.py::test_ekf_estimates_rw_bias_from_gyro_readings
+FAILED tests/test_ukf.py::test_ukf_attitude_matches_ekf - assert 0.0001120933...
+5 failed, 1305 passed, 5 skipped in 139.05s (0:02:19)

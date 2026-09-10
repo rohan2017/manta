@@ -20,6 +20,13 @@ state from vehicle dynamics. There is no angular-velocity estimate and no gyro
 or torque-model residual. The state contains navigation, selected IMU bias,
 and structurally relevant disturbance slots.
 
+For a fixed planet-attached navigation frame, INS now accepts explicit
+`NavigationFrame` kinematics. This is a mechanics-only draft: calibrated
+synthetic gyrocompassing works, but weak-bias statistical qualification fails.
+See [Earth-relative INS](earth-relative-ins.md) for equations, packet schema 2,
+and the release limitations. The existing model-driven EKF gyrocompass example
+is separate evidence and does not qualify this strapdown filter.
+
 ## INS force disturbance observer
 
 Add a colocated [`ModelForce`][manta.parts.ModelForce] pseudo-part to expose

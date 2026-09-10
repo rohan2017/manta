@@ -96,7 +96,11 @@ def _so3_reset_jacobian(rotation, *, symbolic: bool):
     return eye + a * K + b * (K @ K)
 
 
-def _reset_jacobian(spec: StateSpec, correction: ca.MX) -> ca.MX:
+def _reset_jacobian(spec: StateSpec, correction: ca.MX, x=None) -> ca.MX:
+    if hasattr(spec, "exact_reset"):
+        if x is None:
+            raise ValueError("coupled covariance reset requires the pre-injection state")
+        return spec.exact_reset(x, correction)
     reset = ca.MX.eye(spec.tangent_dim)
     for slot in spec.slots:
         if slot.manifold.kind != "quat":
@@ -109,7 +113,11 @@ def _reset_jacobian(spec: StateSpec, correction: ca.MX) -> ca.MX:
     return reset
 
 
-def _reset_jacobian_np(spec: StateSpec, correction: np.ndarray) -> np.ndarray:
+def _reset_jacobian_np(spec: StateSpec, correction: np.ndarray, x=None) -> np.ndarray:
+    if hasattr(spec, "exact_reset"):
+        if x is None:
+            raise ValueError("coupled covariance reset requires the pre-injection state")
+        return np.asarray(spec.exact_reset(x, correction))
     reset = np.eye(spec.tangent_dim)
     for slot in spec.slots:
         if slot.manifold.kind != "quat":
@@ -145,7 +153,7 @@ def joseph_update(x: ca.MX, P: ca.MX, h: ca.MX, H: ca.MX, R: ca.MX,
     x_new = spec.boxplus_sym(x, correction)
     IKH = ca.MX.eye(P.size1()) - K @ H
     P_linear = symmetrize(IKH @ P @ IKH.T + K @ R @ K.T)
-    reset = _reset_jacobian(spec, correction)
+    reset = _reset_jacobian(spec, correction, x)
     P_new = symmetrize(reset @ P_linear @ reset.T)
     return x_new, P_new, nu, S
 
@@ -186,7 +194,7 @@ def schmidt_update(
     )
     correction = K @ nu
     x_new = spec.boxplus_sym(x, correction)
-    reset = _reset_jacobian(spec, correction)
+    reset = _reset_jacobian(spec, correction, x)
     return (
         x_new,
         symmetrize(reset @ P_new_joint[:n, :n] @ reset.T),
@@ -249,7 +257,7 @@ def joseph_update_np(P: np.ndarray, H: np.ndarray, R: np.ndarray, *,
         correction = K @ nu
         x_new = boxplus(x, correction)
         if spec is not None:
-            reset = _reset_jacobian_np(spec, correction)
+            reset = _reset_jacobian_np(spec, correction, x)
             P_new = symmetrize(reset @ P_new @ reset.T)
     return x_new, P_new, nu, S
 

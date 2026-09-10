@@ -1,0 +1,42 @@
+{
+  "host": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+  "machine": "x86_64",
+  "repetitions": 1000,
+  "scope": "native double-precision kernels, O1, CasADi map loop; excludes compilation, Python runtime validation, framing and I/O",
+  "rows": [
+    {
+      "propagation": "raw",
+      "covariance": "linearized",
+      "state_dimension": 15,
+      "compile_or_cache_load_s": 0.08032246800030407,
+      "predict_median_us": 14.454779999141465,
+      "update_median_us": 11.661553000521963
+    },
+    {
+      "propagation": "raw",
+      "covariance": "finite_chart_analytic_prediction",
+      "state_dimension": 15,
+      "compile_or_cache_load_s": 6.1360553720005555,
+      "predict_median_us": 16.69443900027545,
+      "update_median_us": 23.53631799996947
+    },
+    {
+      "propagation": "preintegrated",
+      "covariance": "linearized",
+      "state_dimension": 15,
+      "compile_or_cache_load_s": 0.09577487100068538,
+      "predict_median_us": 29.660098000022117,
+      "update_median_us": 18.920374001027085
+    },
+    {
+      "propagation": "preintegrated",
+      "covariance": "finite_chart_analytic_prediction",
+      "state_dimension": 18,
+      "compile_or_cache_load_s": 22.30873346000044,
+      "predict_median_us": 155.15577800033498,
+      "update_median_us": 26.6538780015253
+    }
+  ],
+  "prediction_ablation": "first_order_prediction_with_v2_prior_and_reset",
+  "release_qualified": false
+}

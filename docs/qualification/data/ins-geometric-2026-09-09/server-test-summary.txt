@@ -1,0 +1,8 @@
+                "environment, or GravityField.none() to model zero-g on "
+                "purpose; an absent field is not an implicit weightless world.")
+E           ValueError: World 'world' declares no gravity. Add GravityField(g=(0, 0, -9.81)) (or a planet) for a real environment, or GravityField.none() to model zero-g on purpose; an absent field is not an implicit weightless world.
+
+manta/world.py:110: ValueError
+=========================== short test summary info ============================
+FAILED server/mako/test_smoke.py::test_noise_slot_expects_pre_scaled_draws - ...
+1 failed, 8 passed in 6.61s

@@ -1,0 +1,176 @@
+{
+  "scope": "paired development comparison, not new held-out release qualification",
+  "baseline_commit": "ed86f36",
+  "checks": [
+    {
+      "report": "analytic-calibrated16.json",
+      "metric": "attitude_bias_anees",
+      "value": 7.425814343952892,
+      "bounds": [
+        7.041945711273557,
+        11.194604888387575
+      ],
+      "passes": true
+    },
+    {
+      "report": "analytic-calibrated16.json",
+      "metric": "physical_heading_anees",
+      "value": 0.41902002727663545,
+      "bounds": [
+        0.4317290220935628,
+        1.802834420212797
+      ],
+      "passes": false
+    },
+    {
+      "report": "analytic-calibrated16.json",
+      "metric": "attitude_bias_boundary_anees",
+      "value": 9.930508569422122,
+      "bounds": [
+        9.720038526874283,
+        14.51657170294451
+      ],
+      "passes": true
+    },
+    {
+      "report": "analytic-calibrated64.json",
+      "metric": "attitude_bias_anees",
+      "value": 9.513262682573743,
+      "bounds": [
+        7.990479696783882,
+        10.068702565043756
+      ],
+      "passes": true
+    },
+    {
+      "report": "analytic-calibrated64.json",
+      "metric": "physical_heading_anees",
+      "value": 1.1671723436781978,
+      "bounds": [
+        0.6839992597276423,
+        1.3750632969765226
+      ],
+      "passes": true
+    },
+    {
+      "report": "analytic-calibrated64.json",
+      "metric": "attitude_bias_boundary_anees",
+      "value": 12.221833699078108,
+      "bounds": [
+        10.829639150968099,
+        13.229546813543077
+      ],
+      "passes": true
+    },
+    {
+      "report": "linear-calibrated64.json",
+      "metric": "attitude_bias_anees",
+      "value": 9.59022194227401,
+      "bounds": [
+        7.990479696783882,
+        10.068702565043756
+      ],
+      "passes": true
+    },
+    {
+      "report": "linear-calibrated64.json",
+      "metric": "physical_heading_anees",
+      "value": 1.1921265178680185,
+      "bounds": [
+        0.6839992597276423,
+        1.3750632969765226
+      ],
+      "passes": true
+    },
+    {
+      "report": "analytic-weak16.json",
+      "metric": "attitude_bias_anees",
+      "value": 7.750032835747915,
+      "bounds": [
+        7.041945711273557,
+        11.194604888387575
+      ],
+      "passes": true
+    },
+    {
+      "report": "analytic-weak16.json",
+      "metric": "physical_heading_anees",
+      "value": 0.649711238290638,
+      "bounds": [
+        0.4317290220935628,
+        1.802834420212797
+      ],
+      "passes": true
+    },
+    {
+      "report": "analytic-weak16.json",
+      "metric": "attitude_bias_boundary_anees",
+      "value": 10.25472707556925,
+      "bounds": [
+        9.720038526874283,
+        14.51657170294451
+      ],
+      "passes": true
+    },
+    {
+      "report": "analytic-weak256.json",
+      "metric": "attitude_bias_anees",
+      "value": 9.150710407812813,
+      "bounds": [
+        8.487724811191853,
+        9.527073529552844
+      ],
+      "passes": true
+    },
+    {
+      "report": "analytic-weak256.json",
+      "metric": "physical_heading_anees",
+      "value": 1.004708741634878,
+      "bounds": [
+        0.8342760452578426,
+        1.18051488321174
+      ],
+      "passes": true
+    },
+    {
+      "report": "analytic-weak256.json",
+      "metric": "attitude_bias_boundary_anees",
+      "value": 12.3136470557512,
+      "bounds": [
+        11.40731960075175,
+        12.607478971033332
+      ],
+      "passes": true
+    },
+    {
+      "report": "analytic-noisy128.json",
+      "metric": "attitude_bias_anees",
+      "value": 187.37102318652558,
+      "bounds": [
+        8.279922837398724,
+        9.749671995048699
+      ],
+      "passes": false
+    },
+    {
+      "report": "analytic-noisy128.json",
+      "metric": "physical_heading_anees",
+      "value": 0.7008364502251839,
+      "bounds": [
+        0.7701218522849307,
+        1.2594432388576637
+      ],
+      "passes": false
+    },
+    {
+      "report": "analytic-noisy128.json",
+      "metric": "attitude_bias_boundary_anees",
+      "value": 191.6690781813831,
+      "bounds": [
+        11.166205507998376,
+        12.86339024911375
+      ],
+      "passes": false
+    }
+  ]
+}
