@@ -48,7 +48,8 @@ import numpy as np
 from ._assembly import (
     _controls_at,
     _resolve_estimator,
-    estimator_inputs,
+    estimator_interval_inputs,
+    estimator_observation_inputs,
     resolve_sensor_set,
 )
 
@@ -199,6 +200,15 @@ class NEESReport:
                       trajectories, which bounds within-run time correlation).
         consistent — True iff `lower ≤ anees ≤ upper`.
         runs, samples — ensemble size and total NEES samples averaged.
+        tangent_rmse — componentwise RMS estimation error in the evaluated
+                       tangent space (or the supplied observable basis).
+        full_tangent_rmse — componentwise RMS error in the filter's complete
+                       tangent state, retained when NEES is projected.
+        full_marginal_nes — mean `e_i^2 / P_ii` for each complete-state
+                       component. This is diagnostic only (cross-covariance
+                       means the components do not sum to full NEES).
+        sensor_updates, sensor_rejections, sensor_mean_nis — measurement-fold
+                       diagnostics accumulated across the ensemble.
     """
 
     dof: int
@@ -207,6 +217,12 @@ class NEESReport:
     upper: float
     runs: int
     samples: int
+    tangent_rmse: tuple[float, ...]
+    full_tangent_rmse: tuple[float, ...]
+    full_marginal_nes: tuple[float, ...]
+    sensor_updates: dict[str, int]
+    sensor_rejections: dict[str, int]
+    sensor_mean_nis: dict[str, float]
 
     @property
     def consistent(self) -> bool:
@@ -235,7 +251,9 @@ def nees(world, *, dt: float, steps: int,
          P0: np.ndarray | None = None, Q: np.ndarray | None = None,
          observable_basis: np.ndarray | None = None,
          runs: int = 20, seed: int = 0, warmup: int | None = None,
-         alpha: float = 0.05, estimator=None) -> NEESReport:
+         alpha: float = 0.05, estimator=None,
+         truth_world_factory: Callable[[int], object] | None = None,
+         progress: Callable[[int, int], None] | None = None) -> NEESReport:
     """Monte-Carlo NEES consistency check for a filter over `world`.
 
     Each run jitters the truth with the model's process noise (a
@@ -270,6 +288,15 @@ def nees(world, *, dt: float, steps: int,
                    `EKF`). Consistency of a UKF's covariance is exactly
                    the case worth auditing — its sigma-point moments are
                    not the EKF's Jacobian push.
+        truth_world_factory — optional ``run_index -> World`` factory for an
+                   outer ensemble of static model realizations. The returned
+                   world supplies simulation truth only; ``world`` still
+                   defines the default estimator unless ``estimator`` is
+                   supplied. This is the appropriate boundary for calibration
+                   or manufacturing uncertainty that stays correlated for an
+                   entire run, rather than white measurement noise.
+        progress — optional callback invoked after each independent run as
+                   ``progress(completed, runs)``.
     """
     import casadi as ca
 
@@ -277,7 +304,7 @@ def nees(world, *, dt: float, steps: int,
     from ..sim import Sim
 
     ekf_ir = _resolve_estimator(world, estimator)
-    sim_ir = Sim(world)
+    sim_ir = None if truth_world_factory is not None else Sim(world)
     spec = ekf_ir.spec
     n = spec.tangent_dim
     if warmup is None:
@@ -303,9 +330,20 @@ def nees(world, *, dt: float, steps: int,
         return spec.pack_projected(world_rt.state)
 
     nees_samples: list[float] = []
+    squared_error_samples: list[np.ndarray] = []
+    full_squared_error_samples: list[np.ndarray] = []
+    full_marginal_nes_samples: list[np.ndarray] = []
+    sensor_updates = {full: 0 for full in names}
+    sensor_rejections = {full: 0 for full in names}
+    sensor_nis: dict[str, list[float]] = {full: [] for full in names}
     for r in range(runs):
         rng = np.random.default_rng(seed + r)
-        sim = TargetNumpy(sim_ir)
+        run_sim_ir = (
+            Sim(truth_world_factory(r))
+            if truth_world_factory is not None
+            else sim_ir
+        )
+        sim = TargetNumpy(run_sim_ir)
         sim.attach_driver(NoiseDriver(seed=seed + 1000 + r))
         ekf = TargetNumpy(ekf_ir)
         # Truth starts at the world's initial state; the estimate is drawn
@@ -317,32 +355,107 @@ def nees(world, *, dt: float, steps: int,
         rates = {full: sim.module.port(full).rate for full in names}
         last_fold = {full: None for full in names}
 
-        for i in range(steps):
+        preintegrated = bool(
+            ekf_ir.module().metadata.get("preintegration_input_map")
+        )
+        prediction_names = tuple(
+            ekf_ir.module().metadata.get("prediction_inputs", ())
+        )
+        sources = ekf_ir.module().metadata.get("measurement_sources", {})
+        previous_prediction_readings = None
+        previous_control = None
+
+        # Preintegration needs two timestamped IMU boundaries for each
+        # interval.  The simulation oracle emits interval-start readings, so
+        # one look-ahead plant tick supplies the right endpoint without
+        # relabeling the left sample as ``end_gyro``.  Raw/EKF paths retain
+        # their ordinary one-tick update-then-predict loop.
+        loop_steps = steps + 1 if preintegrated else steps
+        for i in range(loop_steps):
             t = i * dt
             u = _controls_at(control, t)
+            truth_at_epoch = truth_vec(sim)
             sim.step(dt, u=u)
-            estimator_u = estimator_inputs(
-                ekf_ir, u, reading=sim.reading, dt=dt)
-            sources = ekf_ir.module().metadata.get("measurement_sources", {})
-            for full in names:
-                rate = rates[full]
-                previous = last_fold[full]
-                if (rate is None or previous is None
-                        or t - previous >= 1.0 / rate - 1e-9):
-                    source = sources.get(full, full)
-                    ekf.update(full, sim.reading(source), u=estimator_u, t=t)
-                    last_fold[full] = t
-            ekf.predict(dt, u=estimator_u, t=t)
+            current_prediction_readings = {
+                name: np.asarray(sim.reading(name), dtype=float).copy()
+                for name in prediction_names
+                if name in {getattr(ekf_ir.sys, "accel_input", None),
+                            getattr(ekf_ir.sys, "gyro_input", None)}
+            }
+            update_u = estimator_observation_inputs(
+                ekf_ir, u, reading=sim.reading
+            )
+
+            if preintegrated and previous_prediction_readings is not None:
+                estimator_u = estimator_interval_inputs(
+                    ekf_ir,
+                    previous_control,
+                    start_reading=previous_prediction_readings,
+                    end_reading=current_prediction_readings,
+                    dt=dt,
+                )
+                interval = i - 1
+                ekf.predict(dt, u=estimator_u, t=interval * dt)
+                if interval >= warmup:
+                    e = np.asarray(
+                        boxminus(truth_at_epoch, ekf.x)
+                    ).reshape(-1)
+                    P = ekf.P
+                    full_squared_error_samples.append(np.square(e))
+                    full_marginal_nes_samples.append(
+                        np.square(e) / np.maximum(np.diag(P), 1e-300)
+                    )
+                    if observable_basis is not None:
+                        e = observable_basis.T @ e
+                        P = observable_basis.T @ P @ observable_basis
+                    squared_error_samples.append(np.square(e))
+                    try:
+                        nees_samples.append(float(e @ np.linalg.solve(P, e)))
+                    except np.linalg.LinAlgError:
+                        nees_samples.append(float(e @ np.linalg.pinv(P) @ e))
+
+            # The final look-ahead sample closes the last interval but does
+            # not begin another requested interval, so it is not an extra
+            # ordinary measurement fold.
+            if not preintegrated or i < steps:
+                for full in names:
+                    rate = rates[full]
+                    previous = last_fold[full]
+                    if (rate is None or previous is None
+                            or t - previous >= 1.0 / rate - 1e-9):
+                        source = sources.get(full, full)
+                        update = ekf.update(
+                            full, sim.reading(source), u=update_u, t=t
+                        )
+                        sensor_updates[full] += 1
+                        sensor_rejections[full] += int(not update.accepted)
+                        sensor_nis[full].append(float(update.nis))
+                        last_fold[full] = t
+
+            if preintegrated:
+                previous_prediction_readings = current_prediction_readings
+                previous_control = u
+                continue
+
+            ekf.predict(dt, u=update_u, t=t)
             if i >= warmup:
                 e = np.asarray(boxminus(truth_vec(sim), ekf.x)).reshape(-1)
                 P = ekf.P
+                full_squared_error_samples.append(np.square(e))
+                full_marginal_nes_samples.append(
+                    np.square(e) / np.maximum(np.diag(P), 1e-300)
+                )
                 if observable_basis is not None:
                     e = observable_basis.T @ e
                     P = observable_basis.T @ P @ observable_basis
+                squared_error_samples.append(np.square(e))
                 try:
                     nees_samples.append(float(e @ np.linalg.solve(P, e)))
                 except np.linalg.LinAlgError:
                     nees_samples.append(float(e @ np.linalg.pinv(P) @ e))
+
+        if progress is not None:
+            progress(r + 1, runs)
 
     dof = n if observable_basis is None else observable_basis.shape[1]
     anees = float(np.mean(nees_samples))
@@ -351,5 +464,24 @@ def nees(world, *, dt: float, steps: int,
     k = runs * dof
     lower = chi2_quantile(k, alpha / 2) / runs
     upper = chi2_quantile(k, 1 - alpha / 2) / runs
-    return NEESReport(dof=dof, anees=anees, lower=lower, upper=upper,
-                      runs=runs, samples=len(nees_samples))
+    tangent_rmse = tuple(float(value) for value in np.sqrt(
+        np.mean(np.asarray(squared_error_samples), axis=0)
+    ))
+    full_tangent_rmse = tuple(float(value) for value in np.sqrt(
+        np.mean(np.asarray(full_squared_error_samples), axis=0)
+    ))
+    full_marginal_nes = tuple(float(value) for value in np.mean(
+        np.asarray(full_marginal_nes_samples), axis=0
+    ))
+    return NEESReport(
+        dof=dof, anees=anees, lower=lower, upper=upper,
+        runs=runs, samples=len(nees_samples), tangent_rmse=tangent_rmse,
+        full_tangent_rmse=full_tangent_rmse,
+        full_marginal_nes=full_marginal_nes,
+        sensor_updates=sensor_updates,
+        sensor_rejections=sensor_rejections,
+        sensor_mean_nis={
+            full: float(np.mean(values))
+            for full, values in sensor_nis.items()
+        },
+    )

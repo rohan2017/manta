@@ -44,6 +44,7 @@ import copy
 from types import MappingProxyType
 from typing import Any
 
+import casadi as ca
 import numpy as np
 
 from ..ir._names import resolve_suffix
@@ -156,6 +157,7 @@ class LinearizedSystem:
         engine = TickLinearizer(self._cf, self.input_names,
                                 self.noise_specs, discretization,
                                 param_specs=self.param_specs)
+        self._engine = engine
 
         chosen_sensors = self._choose_sensors(sensors, track, track_mode)
 
@@ -191,6 +193,43 @@ class LinearizedSystem:
         self.L_fn = d["L_fn"]
         self.blocks = d["blocks"]
 
+    def inline_simulation_expressions(
+        self, names: list[str] | tuple[str, ...]
+    ) -> tuple[ca.MX, dict[str, ca.MX]]:
+        """Open next-state and selected measurement expressions together.
+
+        The ordinary linearization expressions intentionally retain the
+        compiled world tick as one call node. A scheduled simulation sensor
+        needs the opposite artifact: only its own dependency subgraph, with
+        the tick opened before CasADi prunes unused state, controls, fields,
+        and other sensors. This method is invoked once while constructing a
+        dependency-scheduled simulator Module, never in the runtime loop.
+        Returning state and measurements from the same opened call preserves
+        their common subexpressions, which is essential for plant-coupled
+        observations such as specific force.
+        """
+        requested = tuple(names)
+        unknown = sorted(set(requested) - set(self.sensors))
+        if unknown:
+            raise KeyError(f"unknown sensor output(s) {unknown}")
+        outputs = self._engine._tick_outputs(
+            self.spec,
+            self.x_sym,
+            self.frozen,
+            self.u_sym,
+            self.dt_sym,
+            self.t_sym,
+            self.n_sym,
+            p_sym=self.p_sym,
+            inline=True,
+        )
+        x_new = self._engine._gather_state(self.spec, outputs)
+        sensors = {
+            full: ca.reshape(outputs[full], self.sensors[full].dim, 1)
+            for full in requested
+        }
+        return x_new, sensors
+
     # ------------------------------------------------------------------
     # Construction passes
     # ------------------------------------------------------------------
@@ -200,23 +239,44 @@ class LinearizedSystem:
         """Verify per-part `requires_fields` / `requires_planet` against
         the world's registry — every transform passes through here."""
         for craft in world.crafts:
+            visible_fields = (*world.fields, *world.fields_for_craft(craft))
+            from ..fields import PlanetBindingField
+            bindings = [
+                field for field in visible_fields
+                if isinstance(field, PlanetBindingField)
+            ]
+            if bindings and all(
+                    registered is not bindings[0].planet
+                    for registered in world.planets):
+                raise ValueError(
+                    f"World '{world.name}': craft {craft.name!r} is bound "
+                    f"to unregistered planet {bindings[0].planet.name!r}; "
+                    "call add_planet before constructing a transform.")
             for part in craft.parts:
                 for req_cls in getattr(type(part), "requires_fields", []):
                     if not any(isinstance(f, req_cls)
-                               for f in world.fields):
+                               for f in visible_fields):
                         raise ValueError(
                             f"World '{world.name}': part "
                             f"{type(part).__name__}('{part.name}') requires "
-                            f"a registered {req_cls.__name__} but none is "
-                            f"attached to this world.")
+                            f"a visible {req_cls.__name__} but none is "
+                            f"attached to this craft or world.")
                 req_planet = getattr(type(part), "requires_planet", None)
-                if req_planet is not None and not any(
-                        isinstance(p, req_planet) for p in world._planets):
-                    raise ValueError(
-                        f"World '{world.name}': part "
-                        f"{type(part).__name__}('{part.name}') requires a "
-                        f"{req_planet.__name__} planet but none is "
-                        f"registered with this world.")
+                if req_planet is not None:
+                    if not bindings:
+                        raise ValueError(
+                            f"World '{world.name}': part "
+                            f"{type(part).__name__}('{part.name}') requires a "
+                            f"bound {req_planet.__name__} planet but craft "
+                            f"{craft.name!r} has no planet binding.")
+                    if not isinstance(bindings[0].planet, req_planet):
+                        raise ValueError(
+                            f"World '{world.name}': part "
+                            f"{type(part).__name__}('{part.name}') requires a "
+                            f"bound {req_planet.__name__} planet but craft "
+                            f"{craft.name!r} is bound to "
+                            f"{type(bindings[0].planet).__name__}"
+                            f"({bindings[0].planet.name!r}).")
 
     def _resolve_parameters(self, parameters) -> set[str]:
         """Resolve requested tunable-parameter names (full or suffix)
@@ -259,6 +319,8 @@ class LinearizedSystem:
         self._cf = compiled.casadi_function
         self.tick = compiled
         self.sample_rates = getattr(compiled, "sample_rates", {})
+        self.plant_coupled_outputs = frozenset(
+            getattr(compiled, "plant_coupled_outputs", ()))
 
         sig = walk_tick_signature(self._cf, world, self.full_spec)
         self._sig = sig

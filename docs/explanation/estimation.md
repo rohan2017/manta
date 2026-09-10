@@ -132,9 +132,14 @@ pre = TargetNumpy(IMUPreintegrator(
 ins = TargetNumpy(INS(world, imu="imu", sensors=[...],
                       propagation="preintegrated"))
 
-for accel, gyro, sample_dt in high_rate_samples:
-    packet = pre.step(sample_dt, accel=accel, gyro=gyro,
+left = next(high_rate_samples)
+for right in high_rate_samples:
+    packet = pre.step(right.t - left.t,
+                      accel=left.accel, gyro=left.gyro,
                       accel_bias=bias_ref_a, gyro_bias=bias_ref_g)
+    packet = frame_preintegrated_packet(
+        packet, end_accel=right.accel, end_gyro=right.gyro)
+    left = right
 
 packet_u = ins.preintegrated_inputs(packet, u=actuator_commands)
 ins.predict_preintegrated(packet, u=actuator_commands)
@@ -151,6 +156,30 @@ ordinary `ModelForce` measurement source. Packet covariance is intrinsic and
 is added in both automatic-Q and explicit-Q prediction; the latter overrides
 only the separate model/bias process covariance.
 
+The packet supplements its 9×9 marginal delta covariance with a factored joint
+boundary contract: delta/start and delta/end cross-covariances, start/end
+correlation, and the physical gyro sigma at each boundary. The lower-rate INS
+conditions the packet innovation on the carried start-boundary error, then
+carries the new endpoint as a three-dimensional dynamic Schmidt nuisance. This
+preserves correlation through both prediction and same-epoch measurements;
+the endpoint noise cannot be counted independently as both integrated rotation
+and lever-arm velocity.
+
+`frame_preintegrated_packet` is part of correctness, not dictionary
+convenience. The recurrence readout's end gyro is its final integrated
+left-held sample. Replacing it with a fresh right-boundary sample makes the
+delta/end and start/end correlations zero, which the helper records together
+with the new sample. A variable-rate producer must also provide that endpoint's
+three-axis gyro sigma. Packet sequence and timestamp continuity remain the
+transport framer's responsibility.
+
+An observation marks an interval boundary; it is not an interval by itself.
+The first observation initializes the left boundary, and each subsequent
+observation closes one interval. Relabeling the held left gyro as the right
+endpoint omits `(omega_end - omega_start) x lever` during angular acceleration.
+That is a structural velocity error—it does not disappear when the timestep is
+reduced. Shiver's timestamped runtime owns this one-sample boundary buffer.
+
 The packet spans an interval, so predict it first and then fold endpoint
 measurements. This differs from the raw sample loop's update-at-interval-start
 convention. The packet carries no absolute timestamps — transport framing owns
@@ -165,11 +194,33 @@ mis-scaled one; the NumPy runtime names the mismatch before the kernel runs,
 and the generated `Inputs` header documents the invariant on the `duration`
 field.
 
+Accepted static-mount posteriors enter EKF and INS as Schmidt (consider)
+parameters. A part receives a six-dimensional tangent covariance ordered as
+parent-frame translation followed by the left-trivialized SO(3) mount error.
+Manta applies its square root to a unit-covariance nuisance and differentiates
+the actual mounted kinematics, so no sensor-family-specific lever-arm formula
+is involved.
+
+The accepted mount transform remains the fixed nominal mean and its posterior
+covariance remains a fixed artifact constant. The filter propagates only the
+navigation-to-mount cross-covariance and sets the mount Kalman gain to zero.
+Consequently repeated observations retain the fact that every ping shares the
+same installation error; they cannot average it away as independent white
+noise. `update_with_R` replaces device-reportable white noise while the
+Schmidt innovation still includes the static mount posterior. UKF construction
+currently refuses an active static posterior rather than silently reverting to
+per-update marginalization; its nonlinear consider-state recursion is not yet
+implemented.
+
 `IMUPreintegrator` and the packet-consuming INS are independent Modules. Lower
 the recurrence to an MCU with `TargetCpp`, and lower or run the main filter on
-the companion computer through any filter backend. The packet matrices use
-column-major CasADi/Eigen flattening. Transport framing still owns timestamps,
-sequence numbers, health/saturation flags, calibration identity, and CRC.
+the companion computer through any filter backend. CasADi emits the numerical
+recurrence as C; Manta's current held-state convenience wrapper is C++/Eigen.
+That separation allows a firmware-specific fixed-array wrapper to call the same
+C kernel without embedding the main filter or Python runtime. Packet matrices
+use column-major CasADi/Eigen flattening. Transport framing still owns
+timestamps, sequence numbers, health/saturation flags, calibration identity,
+and CRC; zenoh-pico belongs above this numerical packet ABI.
 
 ## Model-derived filters
 
@@ -184,6 +235,8 @@ sequence numbers, health/saturation flags, calibration identity, and CRC.
   `F` — the correlated error is filter state in EKF, UKF, and INS alike.
 - **Auto-assembled R** — per-sensor measurement covariance from the noise
   channels feeding each `Output`.
+- **Static calibration covariance** — calibration-nuisance channels are
+  excluded from R and carried by the Schmidt cross-covariance in EKF/INS.
 - **Auto-built state spec** — walking every craft + disturbance to lay out
   the estimated slots.
 - **The update/predict surface** — you own the loop. A measurement sampled
@@ -225,14 +278,15 @@ leaves both `x` and `P` bit-for-bit unchanged. Manta reports the result; policy
 for repeated rejection or sensor health belongs in Shiver.
 
 The model-derived covariance remains the default. A driver with a trustworthy
-per-sample covariance may override it:
+per-sample covariance may replace the model's overrideable device-noise term:
 
 ```python
 result = runtime.update("gps.position", position, R=receiver_covariance)
 ```
 
 `R` must have the sensor's exact square shape, be finite, symmetric, and
-positive definite. The override travels through a typed
+positive definite. Non-overrideable calibration uncertainty remains additive.
+The supplied covariance travels through a typed
 `update_with_R_<sensor>` Module entry point and therefore exists in generated
 C++ as well as NumPy; it is not NumPy-only post-processing.
 

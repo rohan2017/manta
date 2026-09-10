@@ -16,6 +16,18 @@ packet.  ``covariance`` is the 9x9 covariance of ``[dtheta, dv, dp]`` and
 ``bias_jacobian`` is the 9x6 derivative with respect to
 ``[d gyro_bias, d accel_bias]``.  Both matrices are flattened in CasADi/Eigen
 column-major order.
+
+The packet also carries the joint covariance between its delta and its two
+gyro boundaries in standardized coordinates.  That information is required
+when an IMU is displaced from the craft origin: the same noisy boundary gyro
+both participates in preintegration and removes the rigid-body lever velocity.
+A 9x9 delta covariance alone loses that correlation and can be severely
+overconfident.  Each recurrence input is the left-held sample for its interval.
+The recurrence's end boundary is therefore its last integrated sample.  A
+timestamp-aware packet framer which replaces ``end_gyro`` with the following,
+independently observed sample must also zero the corresponding delta/end and
+start/end correlations. Shiver's preintegrated runtime owns that boundary
+buffer.
 """
 
 from __future__ import annotations
@@ -35,6 +47,11 @@ PACKET_FIELDS = (
     "delta_velocity",
     "delta_position",
     "covariance",
+    "delta_start_gyro_cross_covariance",
+    "delta_end_gyro_cross_covariance",
+    "start_end_gyro_correlation",
+    "start_gyro_noise_sigma",
+    "end_gyro_noise_sigma",
     "bias_jacobian",
     "gyro_bias_reference",
     "accel_bias_reference",
@@ -56,13 +73,22 @@ def _single_sample_kernel(accel_density: float, gyro_density: float):
 
 
 def _single_sample_packet(*, accel, gyro, dt: float,
+                          end_accel=None, end_gyro=None,
                           accel_noise_sigma: float,
                           gyro_noise_sigma: float) -> dict[str, object]:
-    """Build the one-sample packet used by truth-backed analysis tools.
+    """Build one left-held interval for truth-backed analysis tools.
 
     IMU Part white-noise sigmas are per tick, while ``IMUPreintegrator``
     accepts densities. Multiplication by ``sqrt(dt)`` makes the integrated
     packet covariance identical to raw INS for this sample interval.
+
+    ``accel``/``gyro`` are the sample held over the interval.  A displaced
+    IMU additionally requires the independently sampled right-endpoint gyro
+    to remove endpoint lever velocity.  Callers which have that look-ahead
+    pass it as ``end_gyro`` (and ``end_accel`` for endpoint model aiding).
+    Falling back to the held sample preserves the legacy helper behavior for
+    colocated IMUs and constant angular rate, but is not exact under angular
+    acceleration at a nonzero lever arm.
     """
     accel_density = float(accel_noise_sigma) * math.sqrt(float(dt))
     gyro_density = float(gyro_noise_sigma) * math.sqrt(float(dt))
@@ -78,7 +104,66 @@ def _single_sample_packet(*, accel, gyro, dt: float,
         value = flat[off:off + port.dim].copy()
         packet[port.name] = float(value[0]) if port.dim == 1 else value
         off += port.dim
+    if end_accel is not None or end_gyro is not None:
+        if end_accel is None or end_gyro is None:
+            raise ValueError(
+                "an independent preintegration endpoint requires both "
+                "end_accel and end_gyro")
+        packet = frame_preintegrated_packet(
+            packet, end_accel=end_accel, end_gyro=end_gyro)
     return packet
+
+
+def frame_preintegrated_packet(
+    packet: dict[str, object],
+    *,
+    end_accel,
+    end_gyro,
+    end_gyro_noise_sigma=None,
+) -> dict[str, object]:
+    """Attach a fresh, independent right IMU boundary to a packet.
+
+    ``IMUPreintegrator.step`` consumes left-held intervals, so its immediate
+    readout describes the last *integrated* gyro as the recurrence end. A
+    deployable packet spanning ``[t0, t1]`` instead needs the fresh IMU sample
+    acquired at ``t1``. This helper changes the samples and, inseparably, the
+    joint covariance contract: the new endpoint is independent of the delta
+    and start boundary.
+
+    At a fixed IMU cadence the recurrence's last per-sample gyro sigma is also
+    the endpoint sigma. A variable-rate framer must pass the endpoint's
+    three-axis ``end_gyro_noise_sigma`` explicitly.
+    """
+    out = dict(packet)
+    missing = [name for name in PACKET_FIELDS if name not in out]
+    if missing:
+        raise KeyError(f"preintegration packet is missing {missing}")
+
+    def vector3(value, *, name: str, nonnegative: bool = False):
+        array = np.asarray(value, dtype=float).reshape(-1)
+        if array.shape != (3,) or not np.isfinite(array).all():
+            raise ValueError(f"{name} must contain three finite values")
+        if nonnegative and np.any(array < 0.0):
+            raise ValueError(f"{name} must be nonnegative")
+        return array.copy()
+
+    out["end_accel"] = vector3(end_accel, name="end_accel")
+    out["end_gyro"] = vector3(end_gyro, name="end_gyro")
+    if end_gyro_noise_sigma is not None:
+        out["end_gyro_noise_sigma"] = vector3(
+            end_gyro_noise_sigma,
+            name="end_gyro_noise_sigma",
+            nonnegative=True,
+        )
+    else:
+        out["end_gyro_noise_sigma"] = vector3(
+            out["end_gyro_noise_sigma"],
+            name="end_gyro_noise_sigma",
+            nonnegative=True,
+        )
+    out["delta_end_gyro_cross_covariance"] = np.zeros(27)
+    out["start_end_gyro_correlation"] = np.zeros(9)
+    return out
 
 
 def _finite_nonnegative(value: float, *, name: str) -> float:
@@ -131,6 +216,8 @@ class IMUPreintegrator(RecurrenceBlock):
             dv = x["delta_velocity"]
             dp = x["delta_position"]
             covariance = ca.reshape(x["covariance"], 9, 9)
+            delta_start_cross = ca.reshape(
+                x["delta_start_gyro_cross_covariance"], 9, 3)
             bias_jacobian = ca.reshape(x["bias_jacobian"], 9, 6)
             first = x["sample_count"] < 0.5
 
@@ -193,6 +280,24 @@ class IMUPreintegrator(RecurrenceBlock):
             C_next = A @ covariance @ A.T + G @ G.T
             C_next = 0.5 * (C_next + C_next.T)
 
+            # Retain the correlations which a lower-rate filter cannot
+            # reconstruct from C_next.  The boundary coordinates are unit
+            # normal variables; the matching physical rate sigmas travel in
+            # the packet.  On the first step the start and recurrence-end
+            # gyro are the same sample.  On later steps the recurrence-end
+            # is the current, independent sample.
+            G_gyro = G[:, 0:3]
+            delta_start_cross_next = (
+                A @ delta_start_cross
+                + ca.if_else(first, G_gyro, ca.MX.zeros(9, 3))
+            )
+            delta_end_cross_next = G_gyro
+            start_end_correlation_next = ca.if_else(
+                first, ca.MX.eye(3), ca.MX.zeros(3, 3))
+            gyro_sample_sigma = ca.repmat(sigma_g / sqrt_dt, 3, 1)
+            start_gyro_sigma_next = ca.if_else(
+                first, gyro_sample_sigma, x["start_gyro_noise_sigma"])
+
             start_accel = ca.if_else(first, u["accel"], x["start_accel"])
             start_gyro = ca.if_else(first, u["gyro"], x["start_gyro"])
             nxt = {
@@ -200,6 +305,14 @@ class IMUPreintegrator(RecurrenceBlock):
                 "delta_velocity": dv_next,
                 "delta_position": dp_next,
                 "covariance": ca.reshape(C_next, 81, 1),
+                "delta_start_gyro_cross_covariance": ca.reshape(
+                    delta_start_cross_next, 27, 1),
+                "delta_end_gyro_cross_covariance": ca.reshape(
+                    delta_end_cross_next, 27, 1),
+                "start_end_gyro_correlation": ca.reshape(
+                    start_end_correlation_next, 9, 1),
+                "start_gyro_noise_sigma": start_gyro_sigma_next,
+                "end_gyro_noise_sigma": gyro_sample_sigma,
                 "bias_jacobian": ca.reshape(J_next, 54, 1),
                 "gyro_bias_reference": gyro_bias_ref,
                 "accel_bias_reference": accel_bias_ref,
@@ -220,6 +333,11 @@ class IMUPreintegrator(RecurrenceBlock):
                 ("delta_velocity", R3Manifold()),
                 ("delta_position", R3Manifold()),
                 ("covariance", RnManifold(81)),
+                ("delta_start_gyro_cross_covariance", RnManifold(27)),
+                ("delta_end_gyro_cross_covariance", RnManifold(27)),
+                ("start_end_gyro_correlation", RnManifold(9)),
+                ("start_gyro_noise_sigma", R3Manifold()),
+                ("end_gyro_noise_sigma", R3Manifold()),
                 ("bias_jacobian", RnManifold(54)),
                 ("gyro_bias_reference", R3Manifold()),
                 ("accel_bias_reference", R3Manifold()),
@@ -237,6 +355,11 @@ class IMUPreintegrator(RecurrenceBlock):
                 ("delta_velocity", 3),
                 ("delta_position", 3),
                 ("covariance", 81),
+                ("delta_start_gyro_cross_covariance", 27),
+                ("delta_end_gyro_cross_covariance", 27),
+                ("start_end_gyro_correlation", 9),
+                ("start_gyro_noise_sigma", 3),
+                ("end_gyro_noise_sigma", 3),
                 ("bias_jacobian", 54),
                 ("gyro_bias_reference", 3),
                 ("accel_bias_reference", 3),
@@ -252,6 +375,11 @@ class IMUPreintegrator(RecurrenceBlock):
                 "delta_velocity": zero3,
                 "delta_position": zero3,
                 "covariance": np.zeros(81),
+                "delta_start_gyro_cross_covariance": np.zeros(27),
+                "delta_end_gyro_cross_covariance": np.zeros(27),
+                "start_end_gyro_correlation": np.zeros(9),
+                "start_gyro_noise_sigma": zero3,
+                "end_gyro_noise_sigma": zero3,
                 "bias_jacobian": np.zeros(54),
                 "gyro_bias_reference": zero3,
                 "accel_bias_reference": zero3,
@@ -269,3 +397,6 @@ class IMUPreintegrator(RecurrenceBlock):
         return ("<IMUPreintegrator "
                 f"accel_noise_density={self.accel_noise_density} "
                 f"gyro_noise_density={self.gyro_noise_density}>")
+
+
+__all__ = ["PACKET_FIELDS", "IMUPreintegrator", "frame_preintegrated_packet"]

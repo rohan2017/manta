@@ -67,7 +67,7 @@ ekf = TargetNumpy(EKF(w))
 sim.state["drone"]["t.throttle"] = 1.5 * 9.81       # hover
 for t in np.arange(0, 3, 0.005):
     sim.step(0.005, t=t)                            # advance truth
-    reading = sim.outputs()                         # sensor readings, this step
+    reading = sim.outputs()                         # latest sensor acquisitions
     ekf.update("imu.gyro", reading["drone"]["imu.gyro"], t=t)
     ekf.update("gps.position", reading["drone"]["gps.position"], t=t)
     ekf.predict(dt=0.005, t=t, u={"t.throttle": 1.5 * 9.81})
@@ -186,9 +186,9 @@ estimable through the EKF.
 
 - Holds a planet-fixed frame (axis + rotation rate) and provides
   symbolic + numpy transforms between PlanetFrame and WorldFrame.
-- Has a reference shape — sphere or oblate spheroid. `Earth` is the
-  WGS-84 ellipsoid with geodetic up/altitude and lat/lon/alt helpers
-  (`ecef_from_geodetic`, `geodetic_from_ecef`, `scene_at_geodetic`).
+- May have a Cartesian reference shape used by physical fields and contact.
+  The base planet contract does not make latitude/longitude a plant state;
+  datum/geodesy conversion belongs in a planet-specific device adapter.
 - Auto-registers standing disturbances on the world's shared fields
   (Earth: point-mass + J2 gravity, ocean + ISA atmosphere split at the
   ellipsoid via `PlanetFrameFluid`, the sea surface as a collision
@@ -199,6 +199,37 @@ estimable through the EKF.
 
 Multiple planets in one world are supported. Each planet's
 disturbances superpose into the shared fields.
+
+A craft that contains a planet-dependent part must bind the exact planet
+instance when it enters the world:
+
+```python
+world.add_planet(earth)
+world.add_craft(vehicle, planet=earth)
+```
+
+The craft-scoped `PlanetBindingField` is compile-time reference context, not
+a physical field gate. `PlanetPositionSensor` reports planet-centred,
+planet-fixed Cartesian position and `BottomVelocitySensor` reports mount-point
+velocity relative to a stationary bottom in that planet frame. GNSS geodesy,
+DVL beam/raycast behavior, and lock decisions remain device-model concerns.
+
+### Sensor acquisition and simulation kernels
+
+An Output rate is an acquisition contract. `Sim(world).module()` opens the
+world graph once, keeps command/dt-dependent observations such as specific
+force in the plant kernel, groups independent rate-limited observations by
+cadence, and emits a separate kernel per group. `NumpySim` calls a group only
+when due, holds its latest values, checkpoints the acquisition deadlines, and
+draws its white noise only on acquisition. There is no `due` branch inside the
+symbolic plant graph.
+
+`Sim(world).inline_module()` is the explicit alternative: every Output stays
+in the plant step and is evaluated every tick. Use it for smooth batched/JAX
+rollouts, or when profiling shows that the outputs are cheap truths and a
+higher-level device simulator already owns the expensive cadence. Input rates
+remain transport annotations because any command that affects force or state
+must still be available to every integration step.
 
 ### EKF
 
@@ -288,9 +319,15 @@ pre = TargetNumpy(IMUPreintegrator(
 ))
 ins = TargetNumpy(INS(world, imu="imu", propagation="preintegrated"))
 
-for accel, gyro, sample_dt in high_rate_samples:
-    packet = pre.step(sample_dt, accel=accel, gyro=gyro,
+left = next(high_rate_samples)
+for right in high_rate_samples:
+    packet = pre.step(right.t - left.t, accel=left.accel, gyro=left.gyro,
                       accel_bias=bias_ref_a, gyro_bias=bias_ref_g)
+    # The integrated sample is the interval's left hold. Lever velocity and
+    # endpoint model aiding require the separately observed right boundary.
+    packet["end_accel"] = right.accel
+    packet["end_gyro"] = right.gyro
+    left = right
 
 ins.predict_preintegrated(packet, u=actuator_commands)
 pre.reset()  # begin the next packet at one fixed bias reference

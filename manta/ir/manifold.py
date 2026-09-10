@@ -405,7 +405,19 @@ class SO3Manifold(Manifold):
         return np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
 
     def ir_input(self, name, *, default_frame=None):
-        return Quat[self.from_frame, self.to_frame].input(name)
+        # Generic SO(3) parameters (notably Part.mount_orientation) are
+        # declared before a concrete graph frame exists.  At the compile
+        # boundary both ends live in the caller's frame vocabulary, just as
+        # an unframed R3 parameter consumes ``default_frame``.  Explicitly
+        # framed SO(3) state continues to retain its declared dual frames.
+        from_frame = self.from_frame or default_frame
+        to_frame = self.to_frame or default_frame
+        if from_frame is None or to_frame is None:
+            raise TypeError(
+                "SO3Manifold.ir_input needs explicit from/to frames or a "
+                "default_frame"
+            )
+        return Quat[from_frame, to_frame].input(name)
 
     def ir_zero(self, *, default_frame=None):
         # `Quat.identity` is the single spelling of the identity rotation —

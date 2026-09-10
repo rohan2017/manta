@@ -36,6 +36,7 @@ from .._declarations import (
     Parameter,
     PartUpdate,
     RandomWalkNoise,
+    State,
     WhiteNoise,
 )
 from ..base import Part, PartRole
@@ -96,3 +97,20 @@ class IMU(Part):
             },
             rates={"gyro": self.rate, "accel": self.rate},
         )
+
+
+class ConstantBiasIMU(IMU):
+    """IMU whose gyro and accelerometer biases are estimated constants.
+
+    Use this when startup bias uncertainty is characterized but bias drift is
+    not.  The bias slots are retained with zero process noise, so aiding can
+    estimate them without inventing a random walk.  Once Allan-variance data
+    supports drift densities, use :class:`IMU` with non-zero
+    ``*_bias_sigma`` instead.
+
+    This remains an ``IMU`` subtype, preserving the strapdown, preintegration,
+    and rigid-mount contracts.
+    """
+
+    gyro_bias = State((0.0, 0.0, 0.0), manifold="R3", frame=PartFrame)
+    accel_bias = State((0.0, 0.0, 0.0), manifold="R3", frame=PartFrame)

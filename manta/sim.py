@@ -1,15 +1,26 @@
 """Sim — the forward-dynamics transform of a World.
 
 `Sim(world)` validates the model and linearizes the compiled world tick
-(via `LinearizedSystem`); it emits two structurally different Modules,
+(via `LinearizedSystem`); it emits three structurally different Modules,
 chosen HERE, at IR construction — lowering just lowers:
 
-* ``module()`` — the **oracle** (simulation truth): one `step` entry,
-  the full forward tick — it advances the state AND returns every
-  sensor reading, all from one noise draw (so a driven run's state and
-  readings share the same realization; pass zeros for a noiseless oracle)::
+* ``module()`` — the **scheduled oracle** (simulation truth): one plant
+  `step` plus a separate kernel for each rate-limited acquisition group. The
+  runtime calls only due measurement kernels and holds their last values.
+  Measurements without a declared rate remain in `step`::
 
-      step(x; u, noise, dt, t) -> x', readings…
+      step(x; u, noise, dt, t) -> x', per_tick_readings…
+      sample_group_<n>(x; u, noise, dt, t) -> readings…
+
+  This is a dependency partition, not a symbolic ``if due`` inside one
+  monolithic graph: a measurement-only subgraph cannot consume plant-tick
+  compute when it is not acquired.
+
+* ``inline_module()`` — the **inline oracle**: one `step` returns every
+  reading every tick. This is the explicit smooth/batched artifact for
+  callers such as differentiable rollouts that own their own sampling::
+
+      step(x; u, noise, dt, t) -> x', all_readings…
 
 * ``deploy_module()`` — the **deploy** shape (what runs on a robot
   against real sensors): noiseless forward map, per-sensor measurement
@@ -134,11 +145,52 @@ class Sim:
                                  for p in sys.param_specs))
 
     def module(self) -> Module:
-        """The **oracle** Module (simulation truth): one `step` entry —
-        the full forward tick, one live noise draw → state + readings."""
+        """The scheduled simulation-truth Module.
+
+        Measurements with the same declared positive rate are emitted as one
+        ``sample_group_*`` entry and omitted from the plant ``step`` outputs.
+        Backends can therefore schedule the kernel without evaluating its
+        symbolic dependencies on every physics tick. Measurements with no
+        rate remain inline and are evaluated every tick.
+        """
+        return self._oracle_module(schedule_rate_limited=True)
+
+    def inline_module(self) -> Module:
+        """The all-inline simulation oracle for smooth/batched callers.
+
+        Every measurement is returned by ``step`` regardless of declared
+        rate. Rate metadata remains present, but this artifact deliberately
+        performs no acquisition scheduling.
+        """
+        return self._oracle_module(schedule_rate_limited=False)
+
+    def _oracle_module(self, *, schedule_rate_limited: bool) -> Module:
         sys = self._sys
         x_field, u_port, dtp, tp, meas_ports = self._module_scaffold()
         sensor_fulls = list(sys.sensors)
+        rate_limited = [
+            full for full in sensor_fulls
+            if schedule_rate_limited and sys.sample_rates.get(full) is not None
+        ]
+        opened_x = sys.x_new_noisy
+        opened_sensors = {
+            full: sys.sensors[full].h_noisy_sym for full in sensor_fulls
+        }
+        plant_coupled = []
+        scheduled = []
+        if rate_limited:
+            opened_x, opened_sensors = sys.inline_simulation_expressions(
+                sensor_fulls)
+            # The world compiler marks readings that consume its body/joint
+            # acceleration placeholders. Specific force is the canonical
+            # example: it must share the plant solve even on an unactuated
+            # craft. Other observations are independent acquisition kernels.
+            for full in rate_limited:
+                if full in sys.plant_coupled_outputs:
+                    plant_coupled.append(full)
+                else:
+                    scheduled.append(full)
+        inline = [full for full in sensor_fulls if full not in scheduled]
         noise_port = Port(
             "noise", Role.NOISE, (sys.n_noise,),
             fields=tuple(PortField(c.full, c.dim, 0.0, sigma=c.sigma)
@@ -151,27 +203,84 @@ class Sim:
             eargs.append(PortRef("params"))
         kargs += [sys.dt_sym, sys.t_sym]; kargn += ["dt", "t"]
         eargs += [PortRef("dt"), PortRef("t")]
-        step_fn = ca.Function(
+        functions = {}
+        entries = []
+        noise_offsets = []
+        noise_offset = 0
+        for channel in sys.noise_specs:
+            noise_offsets.append((channel, noise_offset))
+            noise_offset += channel.dim
+
+        def noise_dependencies(expressions) -> tuple[str, ...]:
+            if not noise_offsets:
+                return ()
+            pattern = np.asarray(ca.DM(
+                ca.jacobian(ca.vertcat(*expressions), sys.n_sym).sparsity()
+            ), dtype=bool).any(axis=0)
+            return tuple(
+                channel.full
+                for channel, offset in noise_offsets
+                if pattern[offset:offset + channel.dim].any()
+            )
+
+        noise_contract = []
+        step_expressions = [opened_x] + [opened_sensors[f] for f in inline]
+        functions["step"] = ca.Function(
             "step", kargs,
-            [sys.x_new_noisy] + [
-                ca.reshape(sys.sensors[f].h_noisy_sym,
-                           sys.sensors[f].dim, 1) for f in sensor_fulls],
+            [opened_x] + [
+                ca.reshape(opened_sensors[f], sys.sensors[f].dim, 1)
+                for f in inline],
             kargn,
-            ["x_new"] + [entry_ident(f) for f in sensor_fulls])
+            ["x_new"] + [entry_ident(f) for f in inline])
+        entries.append(EntryPoint(
+            "step", "step", tuple(eargs),
+            writes=("x",), returns=tuple(inline)))
+        noise_contract.append(("step", noise_dependencies(step_expressions)))
+        schedule_contract = []
+        groups: dict[float, list[str]] = {}
+        for full in scheduled:
+            groups.setdefault(float(sys.sample_rates[full]), []).append(full)
+        for group_index, (rate, fulls) in enumerate(groups.items()):
+            method = f"sample_group_{group_index}"
+            expressions = [opened_sensors[full] for full in fulls]
+            selected = [
+                (arg, name, ref)
+                for arg, name, ref in zip(kargs, kargn, eargs, strict=True)
+                if any(ca.depends_on(expression, arg)
+                       for expression in expressions)
+            ]
+            functions[method] = ca.Function(
+                method,
+                [arg for arg, _name, _ref in selected],
+                expressions,
+                [name for _arg, name, _ref in selected],
+                [entry_ident(full) for full in fulls])
+            entries.append(EntryPoint(
+                method, method,
+                tuple(ref for _arg, _name, ref in selected),
+                returns=tuple(fulls)))
+            schedule_contract.append((method, rate, tuple(fulls)))
+            noise_contract.append((method, noise_dependencies(expressions)))
         ports = [u_port, noise_port, dtp, tp, *meas_ports]
         if p_port is not None:
             ports.insert(2, p_port)
         return Module(
             name=self.world.name, state=StateLayout((x_field,)),
             ports=tuple(ports),
-            functions={"step": step_fn},
-            entry_points=(EntryPoint(
-                "step", "step", tuple(eargs),
-                writes=("x",), returns=tuple(sensor_fulls)),),
+            functions=functions,
+            entry_points=tuple(entries),
             kind=ModuleKind.SIMULATOR,
             hosting=Hosting.THREADED,
             metadata=self.model.transform_metadata({
                 "transform": "simulator",
+                "sensor_scheduling": (
+                    "dependency" if schedule_rate_limited else "inline"
+                ),
+                "scheduled_measurement_groups": tuple(schedule_contract),
+                "plant_coupled_measurements": tuple(plant_coupled),
+                "noise_dependencies": (
+                    tuple(noise_contract) if schedule_rate_limited else None
+                ),
                 "discretization": sys.discretization,
                 "parameters": tuple(p.full for p in sys.param_specs),
             }))

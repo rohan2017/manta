@@ -38,6 +38,8 @@ class NoiseChannel:
     name:  str        # the driver-input sub-name
     dim:   int        # signal dimension
     sigma: float      # per-channel std-dev (read from the owner)
+    covariance_overrideable: bool = True
+    static_parameter: bool = False
 
 
 @dataclass(frozen=True)
@@ -177,7 +179,9 @@ def walk_tick_signature(cf, world, spec) -> TickSignature:
         noise.append(NoiseChannel(
             full=name, owner=owner, name=sub,
             dim=ndecl.signal_manifold.ambient_dim,
-            sigma=float(getattr(owner, f"{nname}_sigma"))))
+            sigma=float(getattr(owner, f"{nname}_sigma")),
+            covariance_overrideable=bool(ndecl.covariance_overrideable),
+            static_parameter=bool(ndecl.static_parameter)))
 
     sensors: list[SensorOutput] = []
     for craft in world.crafts:

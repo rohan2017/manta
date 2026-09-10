@@ -9,16 +9,24 @@ import pytest
 
 from manta import (
     INS,
+    Craft,
     IMUPreintegrator,
     NoiseFit,
     Prior,
+    Sim,
     TargetCpp,
     TargetNumpy,
     Window,
+    World,
+    frame_preintegrated_packet,
 )
 from manta.estimation import nees, observability_trajectory
+from manta.estimation._assembly import estimator_inputs
+from manta.estimation.imu_preintegrator import _single_sample_packet
 from manta.estimation.ins import PREINTEGRATION_DURATION_DOC
+from manta.fields import GravityField
 from manta.ir._rotation import quat_mul_np, so3_exp_np
+from manta.parts import IMU, Mass, Thruster
 from tests.test_ins import _ins, _world
 
 
@@ -49,6 +57,12 @@ def test_packet_contract_and_reset():
     assert packet["duration"] == pytest.approx(0.002)
     assert packet["sample_count"] == 1
     assert packet["covariance"].shape == (81,)
+    assert packet["delta_start_gyro_cross_covariance"].shape == (27,)
+    assert packet["delta_end_gyro_cross_covariance"].shape == (27,)
+    np.testing.assert_allclose(
+        np.reshape(packet["start_end_gyro_correlation"], (3, 3), order="F"),
+        np.eye(3),
+    )
     assert packet["bias_jacobian"].shape == (54,)
     np.testing.assert_allclose(packet["gyro_bias_reference"], (.01, .02, .03))
     runtime.reset()
@@ -72,6 +86,34 @@ def test_ordered_so3_products_preserve_coning():
                                atol=1e-13)
     # Averaging these samples erases the non-commutative residual rotation.
     assert np.linalg.norm(packet["delta_orientation"][1:]) > 1e-4
+
+
+def test_fresh_endpoint_framing_updates_joint_covariance_atomically():
+    recurrence_packet = TargetNumpy(IMUPreintegrator(
+        gyro_noise_density=3e-4)).step(
+            0.002,
+            accel=(0.0, 0.0, 9.81),
+            gyro=(0.1, -0.2, 0.3),
+            accel_bias=(0.0, 0.0, 0.0),
+            gyro_bias=(0.0, 0.0, 0.0),
+        )
+    assert np.linalg.norm(
+        recurrence_packet["delta_end_gyro_cross_covariance"]) > 0.0
+    framed = frame_preintegrated_packet(
+        recurrence_packet,
+        end_accel=(0.4, 0.5, 9.7),
+        end_gyro=(0.2, -0.1, 0.4),
+        end_gyro_noise_sigma=(0.006, 0.007, 0.008),
+    )
+    np.testing.assert_array_equal(
+        framed["delta_end_gyro_cross_covariance"], np.zeros(27))
+    np.testing.assert_array_equal(
+        framed["start_end_gyro_correlation"], np.zeros(9))
+    np.testing.assert_allclose(
+        framed["end_gyro_noise_sigma"], (0.006, 0.007, 0.008))
+    # Framing owns a new packet and cannot corrupt a recurrence checkpoint.
+    assert np.linalg.norm(
+        recurrence_packet["delta_end_gyro_cross_covariance"]) > 0.0
 
 
 def test_preintegrated_ins_matches_high_rate_raw_ins():
@@ -108,6 +150,83 @@ def test_preintegrated_ins_retains_nonzero_imu_lever_arm():
     # not an omitted 0.9 m/s^2 centripetal acceleration at the craft origin.
     assert np.linalg.norm(state["position"]) < 1e-5
     assert np.linalg.norm(state["velocity"]) < 2e-4
+
+
+def test_preintegrated_ins_uses_true_endpoint_gyro_during_angular_acceleration():
+    """Packet boundaries, not held samples, define lever-arm velocity."""
+    craft = Craft("vehicle")
+    craft.add(Mass("body", mass=20.0, moi=(1.0, 2.0, 3.0)))
+    craft.add(Thruster(
+        "turn", force=(0.0, 1.0, 0.0), mount_offset=(1.0, 0.0, 0.0)
+    ))
+    craft.add(IMU(
+        "imu",
+        mount_offset=(0.625, 0.0, 0.0),
+        accel_noise_sigma=0.01,
+        gyro_noise_sigma=0.001,
+    ))
+    world = World("preintegrated_dynamic_lever").add_field(
+        GravityField(g=(0.0, 0.0, -9.81))
+    )
+    world.add_craft(craft)
+    sim = TargetNumpy(Sim(world))
+    runtime = TargetNumpy(INS(
+        world,
+        imu="vehicle.imu",
+        sensors=[],
+        propagation="preintegrated",
+    ))
+    assert runtime.module.metadata[
+        "preintegration_boundary_covariance_qualified"
+    ]
+    assert runtime.module.metadata[
+        "preintegration_boundary_covariance_model"
+    ] == "dynamic_schmidt_joint_packet"
+    preintegrator = TargetNumpy(IMUPreintegrator())
+    dt = 0.004
+    control = {"turn.throttle": 10.0}
+    previous = None
+    for index in range(51):
+        truth_at_epoch = {
+            name: np.asarray(value, dtype=float).copy()
+            for name, value in sim.state["vehicle"].items()
+            if name in {"position", "orientation", "velocity"}
+        }
+        sim.step(dt, t=index * dt, u=control)
+        current = {
+            "accel": np.asarray(sim.reading("vehicle.imu.accel"), dtype=float),
+            "gyro": np.asarray(sim.reading("vehicle.imu.gyro"), dtype=float),
+        }
+        if previous is not None:
+            packet = dict(preintegrator.step(
+                dt,
+                t=(index - 1) * dt,
+                accel=previous["accel"],
+                gyro=previous["gyro"],
+                accel_bias=np.zeros(3),
+                gyro_bias=np.zeros(3),
+            ))
+            packet["end_accel"] = current["accel"]
+            packet["end_gyro"] = current["gyro"]
+            runtime.predict_preintegrated(
+                packet, t=(index - 1) * dt, u=control
+            )
+            estimate = runtime.state_dict()["vehicle"]
+            np.testing.assert_allclose(
+                estimate["orientation"], truth_at_epoch["orientation"],
+                atol=2e-10,
+            )
+            # The plant's left-endpoint attitude step and continuous sensor
+            # acceleration differ at O(dt), but the omitted endpoint lever
+            # velocity (0.42 m/s in this fixture) must not survive.
+            np.testing.assert_allclose(
+                estimate["velocity"], truth_at_epoch["velocity"], atol=2e-3
+            )
+            np.testing.assert_allclose(
+                estimate["position"], truth_at_epoch["position"], atol=2e-3
+            )
+            preintegrator.reset()
+        previous = current
 
 
 def test_packet_bias_jacobian_corrects_at_filter_bias():
@@ -166,6 +285,48 @@ def test_packet_covariance_is_psd_and_enters_ins_covariance():
     assert np.trace(runtime.P[np.ix_(indices, indices)]) > 0.0
 
 
+def test_displaced_imu_packet_retains_boundary_gyro_covariance():
+    """The packet/filter joint covariance must include both lever endpoints."""
+    world = _world(lever=(0.625, 0.0, 0.0))
+    ins = INS(world, imu="craft.imu", sensors=[],
+              propagation="preintegrated")
+    runtime = TargetNumpy(ins)
+    n = runtime.P.shape[0]
+    runtime.reset(P=np.zeros((n, n)))
+    packet = _single_sample_packet(
+        accel=(0.0, 0.0, 9.81),
+        gyro=(0.0, 0.0, 0.0),
+        end_accel=(0.0, 0.0, 9.81),
+        end_gyro=(0.0, 0.0, 0.0),
+        dt=0.005,
+        accel_noise_sigma=0.01,
+        gyro_noise_sigma=0.001,
+    )
+    runtime.predict_preintegrated(packet, Q=np.zeros((n, n)))
+    velocity = runtime._spec.slot("craft.velocity")
+    diagonal = np.diag(runtime.P)[
+        velocity.tangent_offset:
+        velocity.tangent_offset + velocity.tangent_dim
+    ]
+    accel_variance = (0.01 * 0.005) ** 2
+    endpoint_lever_variance = 2.0 * (0.625 * 0.001) ** 2
+    np.testing.assert_allclose(
+        diagonal,
+        (accel_variance,
+         accel_variance + endpoint_lever_variance,
+         accel_variance + endpoint_lever_variance),
+        rtol=2e-5,
+        atol=1e-15,
+    )
+    assert runtime.P_consider is not None
+    # The newly carried boundary must remain correlated with lateral craft
+    # velocity for the next packet and any same-epoch DVL update.
+    assert np.linalg.norm(runtime.P_consider[
+        velocity.tangent_offset:
+        velocity.tangent_offset + velocity.tangent_dim, :
+    ]) > 0.0
+
+
 def test_preintegrated_runtime_rejects_incomplete_packet_and_collisions():
     runtime = TargetNumpy(_preintegrated_ins())
     with pytest.raises(KeyError, match="duration"):
@@ -189,6 +350,17 @@ def test_truth_backed_analysis_tools_adapt_raw_samples_to_packets():
     assert consistent.samples == 2
 
 
+def test_one_sample_truth_adapter_refuses_fake_preintegration_endpoint():
+    ins = _preintegrated_ins()
+    with pytest.raises(ValueError, match="cannot define both boundaries"):
+        estimator_inputs(
+            ins,
+            {},
+            reading=lambda _name: np.zeros(3),
+            dt=0.02,
+        )
+
+
 def test_noisefit_accepts_recorded_preintegration_packet_traces():
     world = _world()
     ins = _preintegrated_ins(world)
@@ -206,7 +378,7 @@ def test_noisefit_accepts_recorded_preintegration_packet_traces():
         full: np.tile(np.atleast_1d(packet[short]), (K, 1))
         for short, full in ins.preintegration_input_map.items()
     }
-    _x0, U, Z, count = fit._window_arrays(
+    _x0, U, Z, _mask, count = fit._window_arrays(
         Window(x0={}, z=traces, dt=.02))
     assert count == K
     assert U.shape == (sum(field.dim for field in ins.sys.input_fields), K)
@@ -301,11 +473,15 @@ def test_packet_duration_is_a_kernel_input_checked_against_dt():
     u = ins.sys.resolve_u(runtime.preintegrated_inputs(packet))
     predict = ins.module().functions["predict"]
     x0, P0 = runtime.x.copy(), runtime.P.copy()
-    consistent, _ = predict(x0, P0, u, packet["duration"], 0.0)
+    C0 = runtime.P_consider
+    assert C0 is not None
+    consistent, _, _ = predict(
+        x0, P0, C0, u, packet["duration"], 0.0)
     assert np.all(np.isfinite(np.asarray(consistent)))
     # The kernel itself (hence every generated backend) refuses a dt that is
     # not the packet span: the navigation state is poisoned, not mis-scaled.
-    poisoned, _ = predict(x0, P0, u, 0.5 * packet["duration"], 0.0)
+    poisoned, _, _ = predict(
+        x0, P0, C0, u, 0.5 * packet["duration"], 0.0)
     assert not np.any(np.isfinite(np.asarray(poisoned)[:10]))
     # The NumPy runtime names the mismatch before running the kernel.
     with pytest.raises(ValueError, match="differs from the preintegrated "

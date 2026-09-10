@@ -51,6 +51,77 @@ def lin_cov(L, Sigma, dim: int):
     return L @ Sigma @ L.T
 
 
+def _skew(vector, *, symbolic: bool):
+    zero = ca.MX(0.0) if symbolic else 0.0
+    x, y, z = vector[0], vector[1], vector[2]
+    rows = (
+        (zero, -z, y),
+        (z, zero, -x),
+        (-y, x, zero),
+    )
+    return ca.vertcat(*(ca.horzcat(*row) for row in rows)) \
+        if symbolic else np.asarray(rows, dtype=float)
+
+
+def _so3_reset_jacobian(rotation, *, symbolic: bool):
+    """Left Jacobian transporting a left-SO(3) error after injection.
+
+    For ``q+ = Exp(d) q``, a posterior residual expressed about the old
+    nominal maps as ``Log(Exp(d + e) Exp(-d)) = J_l(d)e + O(e²)``.  Keeping
+    the pre-injection covariance without this basis change is only valid for
+    infinitesimal corrections.
+    """
+    theta2 = (ca.dot(rotation, rotation) if symbolic
+              else float(np.dot(rotation, rotation)))
+    K = _skew(rotation, symbolic=symbolic)
+    eye = ca.MX.eye(3) if symbolic else np.eye(3)
+    if symbolic:
+        theta = ca.sqrt(theta2 + 1e-30)
+        a_regular = (1.0 - ca.cos(theta)) / (theta2 + 1e-30)
+        b_regular = (theta - ca.sin(theta)) / (theta * theta2 + 1e-30)
+        a = ca.if_else(theta2 < 1e-8,
+                       0.5 - theta2 / 24.0 + theta2 * theta2 / 720.0,
+                       a_regular)
+        b = ca.if_else(theta2 < 1e-8,
+                       1.0 / 6.0 - theta2 / 120.0
+                       + theta2 * theta2 / 5040.0,
+                       b_regular)
+    elif theta2 < 1e-8:
+        a = 0.5 - theta2 / 24.0 + theta2 * theta2 / 720.0
+        b = 1.0 / 6.0 - theta2 / 120.0 + theta2 * theta2 / 5040.0
+    else:
+        theta = math.sqrt(theta2)
+        a = (1.0 - math.cos(theta)) / theta2
+        b = (theta - math.sin(theta)) / (theta * theta2)
+    return eye + a * K + b * (K @ K)
+
+
+def _reset_jacobian(spec: StateSpec, correction: ca.MX) -> ca.MX:
+    reset = ca.MX.eye(spec.tangent_dim)
+    for slot in spec.slots:
+        if slot.manifold.kind != "quat":
+            continue
+        start = slot.tangent_offset
+        stop = start + slot.tangent_dim
+        reset[start:stop, start:stop] = _so3_reset_jacobian(
+            correction[start:stop], symbolic=True
+        )
+    return reset
+
+
+def _reset_jacobian_np(spec: StateSpec, correction: np.ndarray) -> np.ndarray:
+    reset = np.eye(spec.tangent_dim)
+    for slot in spec.slots:
+        if slot.manifold.kind != "quat":
+            continue
+        start = slot.tangent_offset
+        stop = start + slot.tangent_dim
+        reset[start:stop, start:stop] = _so3_reset_jacobian(
+            correction[start:stop], symbolic=False
+        )
+    return reset
+
+
 def joseph_update(x: ca.MX, P: ca.MX, h: ca.MX, H: ca.MX, R: ca.MX,
                   z: ca.MX, spec: StateSpec
                   ) -> tuple[ca.MX, ca.MX, ca.MX, ca.MX]:
@@ -60,7 +131,8 @@ def joseph_update(x: ca.MX, P: ca.MX, h: ca.MX, H: ca.MX, R: ca.MX,
         S  = H P Hᵀ + R
         K  = P Hᵀ S⁻¹                          (ldl solve — S is SPD)
         x⁺ = x ⊞ K ν                           (manifold boxplus)
-        P⁺ = (I−KH) P (I−KH)ᵀ + K R Kᵀ         (Joseph form), re-symmetrized
+        P* = (I−KH) P (I−KH)ᵀ + K R Kᵀ         (Joseph form)
+        P⁺ = J_reset P* J_resetᵀ                 (new manifold tangent basis)
 
     Returns `(x_new, P_new, nu, S)` — ν and S so likelihood-style callers
     (NoiseFit) can build their innovation NLL without recomputing the
@@ -69,25 +141,103 @@ def joseph_update(x: ca.MX, P: ca.MX, h: ca.MX, H: ca.MX, R: ca.MX,
     nu = z - h
     S = H @ P @ H.T + R
     K = spd_solve(S, (P @ H.T).T).T            # P Hᵀ S⁻¹ (S SPD)
-    x_new = spec.boxplus_sym(x, K @ nu)
+    correction = K @ nu
+    x_new = spec.boxplus_sym(x, correction)
     IKH = ca.MX.eye(P.size1()) - K @ H
-    P_new = symmetrize(IKH @ P @ IKH.T + K @ R @ K.T)
+    P_linear = symmetrize(IKH @ P @ IKH.T + K @ R @ K.T)
+    reset = _reset_jacobian(spec, correction)
+    P_new = symmetrize(reset @ P_linear @ reset.T)
     return x_new, P_new, nu, S
+
+
+def schmidt_update(
+    x: ca.MX,
+    P: ca.MX,
+    P_consider: ca.MX,
+    consider_covariance: ca.MX,
+    h: ca.MX,
+    H: ca.MX,
+    H_consider: ca.MX,
+    R: ca.MX,
+    z: ca.MX,
+    spec: StateSpec,
+) -> tuple[ca.MX, ca.MX, ca.MX, ca.MX, ca.MX]:
+    """Schmidt update for a fixed-mean static nuisance parameter.
+
+    Only the active navigation state receives a Kalman correction. The static
+    nuisance covariance is fixed, while ``P_consider`` preserves its temporal
+    correlation with navigation error across all subsequent observations.
+    """
+    n = P.size1()
+    m = consider_covariance.size1()
+    P_joint = ca.vertcat(
+        ca.horzcat(P, P_consider),
+        ca.horzcat(P_consider.T, consider_covariance),
+    )
+    H_joint = ca.horzcat(H, H_consider)
+    cross = P @ H.T + P_consider @ H_consider.T
+    nu = z - h
+    S = H_joint @ P_joint @ H_joint.T + R
+    K = spd_solve(S, cross.T).T
+    K_joint = ca.vertcat(K, ca.MX.zeros(m, z.numel()))
+    IKH = ca.MX.eye(n + m) - K_joint @ H_joint
+    P_new_joint = symmetrize(
+        IKH @ P_joint @ IKH.T + K_joint @ R @ K_joint.T
+    )
+    correction = K @ nu
+    x_new = spec.boxplus_sym(x, correction)
+    reset = _reset_jacobian(spec, correction)
+    return (
+        x_new,
+        symmetrize(reset @ P_new_joint[:n, :n] @ reset.T),
+        reset @ P_new_joint[:n, n:],
+        nu,
+        S,
+    )
+
+
+def schmidt_update_np(
+    P: np.ndarray,
+    P_consider: np.ndarray,
+    consider_covariance: np.ndarray,
+    H: np.ndarray,
+    H_consider: np.ndarray,
+    R: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Numeric covariance-only twin of :func:`schmidt_update`."""
+    n, m = P_consider.shape
+    P_joint = np.block([
+        [P, P_consider],
+        [P_consider.T, consider_covariance],
+    ])
+    H_joint = np.hstack((H, H_consider))
+    cross = P @ H.T + P_consider @ H_consider.T
+    S = H_joint @ P_joint @ H_joint.T + R
+    K = np.linalg.solve(S, cross.T).T
+    K_joint = np.vstack((K, np.zeros((m, H.shape[0]))))
+    IKH = np.eye(n + m) - K_joint @ H_joint
+    P_new_joint = symmetrize(
+        IKH @ P_joint @ IKH.T + K_joint @ R @ K_joint.T
+    )
+    return P_new_joint[:n, :n], P_new_joint[:n, n:], S
 
 
 def joseph_update_np(P: np.ndarray, H: np.ndarray, R: np.ndarray, *,
                      x: np.ndarray | None = None,
                      z: np.ndarray | None = None,
                      h: np.ndarray | None = None,
-                     boxplus: Callable | None = None
+                     boxplus: Callable | None = None,
+                     spec: StateSpec | None = None,
                      ) -> tuple:
     """Numeric twin of `joseph_update`.
 
     Always folds the covariance (`S = HPHᵀ+R`, `K = PHᵀS⁻¹`, Joseph `P⁺`,
     re-symmetrized). It also updates the state when `x`/`z`/`h`/`boxplus`
-    are supplied; a covariance-only horizon (`sigma_horizon`) passes just
-    `P, H, R`. Returns `(x_new, P_new, nu, S)` with `x_new`/`nu` left `None`
-    in the covariance-only case.
+    are supplied; passing ``spec`` additionally transports that covariance
+    into the post-injection manifold tangent basis. A covariance-only horizon
+    (``sigma_horizon``) passes just ``P, H, R``. Returns
+    ``(x_new, P_new, nu, S)`` with ``x_new``/``nu`` left ``None`` in the
+    covariance-only case.
     """
     S = H @ P @ H.T + R
     K = np.linalg.solve(S, H @ P).T            # P Hᵀ S⁻¹ (S SPD)
@@ -96,7 +246,11 @@ def joseph_update_np(P: np.ndarray, H: np.ndarray, R: np.ndarray, *,
     x_new = nu = None
     if x is not None:
         nu = z - h
-        x_new = boxplus(x, K @ nu)
+        correction = K @ nu
+        x_new = boxplus(x, correction)
+        if spec is not None:
+            reset = _reset_jacobian_np(spec, correction)
+            P_new = symmetrize(reset @ P_new @ reset.T)
     return x_new, P_new, nu, S
 
 

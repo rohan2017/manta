@@ -21,6 +21,12 @@ controls + measurements to recover physical parameters.
   physical bounds.
 - Running `Fit(world, parameters={...})`, reading `FitResult.converged`
   and the recovered values.
+- Observing long solves through `Fit.solve(progress=...)`. Each
+  [`FitProgress`][manta.FitProgress] carries the retained-best ambient
+  parameter values with ties resolved. Atomically checkpoint those values;
+  returning `False` requests an orderly stop at that iteration boundary.
+  `compute_posterior=False` avoids building the full residual Jacobian until
+  the parameter solve is worth diagnosing.
 - Fitting the **noise model** instead with [`NoiseFit`][manta.NoiseFit]
   (innovation-NLL σ) — and why σ can't be L2-fit.
 - Pitfalls: whiten sensors before fitting; `OP_OUTPUT` must snapshot.
@@ -48,6 +54,27 @@ print(evidence.summary())
 model = nresult.derive(evidence=evidence)     # ModelArtifact, hashed with it
 ```
 
+For an interruptible exploratory fit:
+
+```python
+def checkpoint(update):
+    write_atomically(update.values, update.best_objective)
+    print(update.iteration, update.best_objective)
+    return not operator_requested_stop()
+
+result = Fit(world, parameters={...}).solve(
+    training,
+    progress=checkpoint,
+    compute_posterior=False,
+)
+```
+
+The callback runs after every accepted IPOPT iteration, including iteration
+zero. `values` is the best finite iterate seen so far, so an interrupted
+process leaves a usable incumbent rather than only the most recent trial.
+Run a later diagnostic pass with `compute_posterior=True` when posterior
+contraction is required for acceptance.
+
 [`FitEvidence`][manta.FitEvidence] records, per residual axis, the held-out
 mean residual (bias) with its standard error, the white per-sample floor,
 and the fitted process-noise model: a Gauss–Markov `tau`/`sigma` when the
@@ -60,13 +87,46 @@ loops but yields a visibly unaccepted revision; a model-aided
 [`INS`][manta.INS] refuses a [`ModelForce`][manta.parts.ModelForce] built
 without accepted evidence.
 
-## Initial-state and control defaults
+## Initial states, asynchronous observations, and control defaults
 
-The fit's decision vector contains **only the promoted parameters** —
-each window's initial state is a fixed constant of the problem. The
-predicted trajectory is the oracle `step` kernel folded from `x0` over
-the recorded controls, so any error in `x0` is misattributed to the
-parameters being fitted.
+By default, each window's initial state is fixed. For a real log, mark the
+uncertain slots with `x0_sigma`; Manta then adds a window-local tangent-space
+multiple-shooting variable around that explicit `x0` prior mean:
+
+```python
+window = Window(
+    x0=seeded_state,
+    x0_sigma={
+        "mako.velocity": (0.2, 0.2, 0.2),       # m/s
+        "mako.orientation": (0.03, 0.03, 0.06), # rotation vector, rad
+    },
+    u=controls,
+    z=measurements,
+    z_mask=availability,
+    dt=plant_dt,
+)
+```
+
+The initial-state delta appears in `result.summary()` and
+`result.window_initial_state_deltas`; it never appears in the fitted model
+artifact. SO(3) uses a three-component rotation-vector perturbation, not four
+independent quaternion components. Use a covariance-derived sigma: an
+arbitrary loose prior can let a window absorb physical model error into its
+initial condition.
+
+`z_mask` maps sensor names to boolean `(K,)` availability arrays. A false row
+is only a storage placeholder: `Fit` does not score it and `NoiseFit` skips the
+Kalman measurement update while still running the process transition at the
+base `dt`. This permits GPS, DVL, pressure, and IMU traces to share one window
+without fabricating repeated measurements. Prediction inputs needed by an
+estimator transition cannot be masked.
+
+When composing separately sourced datasets, `Fit.solve(...,
+window_weights=[...])` applies one positive scalar to each complete window's
+data term. Normalize real and synthetic groups independently in the caller
+(for example, real weights summing to 0.7 and synthetic weights summing to
+0.3); do not let the amount of cheaply generated synthetic data decide its
+authority. Priors are applied once and are not multiplied by window weight.
 
 Manta permits partial `x0` and `u` mappings for exploratory and sparse-log
 workflows. Missing fields use the model's initial state or declared control
@@ -77,24 +137,15 @@ data whenever it exists. `dt` and `t0` are always concrete Window values and
 already participate directly in the window digest, so they are not default-fill
 records.
 
-Where to get a trustworthy `x0`:
+Where to get the `x0` prior mean:
 
 - **Synthetic recoverability runs** — capture `sim.state` from the
   truth sim; it is exact.
 - **Real logs** — seed each window from the estimator's output
-  (`ekf.state_dict()` at the window start). This is approximate: the
-  estimate's own error leaks into the fit, so prefer short windows
-  started at low-dynamics moments (hover, steady cruise) where the
-  estimator is well-converged, and weight sensors accordingly.
-
-The principled fix is **multiple shooting**: promote each window's
-initial state (or a subset of its slots) into the decision vector,
-priored by the estimator's covariance. The NLP plumbing (`_FitBlock`,
-bounds, priors, IPOPT) already supports extra decision blocks — the
-per-window `x0` blocks and their manifold handling (orientation slots
-box⊕ on SO(3)) are simply **not built yet**. Until then, treat a fit
-whose windows have doubtful initial states with suspicion — check
-`result.summary()`'s posterior σ before trusting recovered values.
+  (`ekf.state_dict()` at the window start), and copy the relevant estimator
+  covariance into `x0_sigma`. Prefer short windows so one local initial-state
+  correction cannot disguise sustained model mismatch. Check both physical
+  and window-local posterior contraction before trusting recovered values.
 
 ## Source material
 

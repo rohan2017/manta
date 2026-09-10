@@ -57,6 +57,7 @@ def _real_float_vector(value, *, who: str) -> np.ndarray:
 
 
 _FLOAT = np.dtype(float)
+_EMPTY_VECTOR = np.zeros(0, dtype=float)
 
 
 def pack_fields(fields, source, *, default=0.0, required: bool = False,
@@ -124,47 +125,68 @@ def unpack_fields(fields, vec) -> dict[str, Any]:
 
 @dataclass
 class _DenseEvaluationBuffer:
-    """Reusable native buffers for one dense CasADi function.
+    """Reusable native buffers for a CasADi function with dense inputs.
 
     CasADi's ordinary Python call path materializes one ``DM`` object per
     output and then converts every object back to NumPy. A simulation oracle
     can expose hundreds of sensor ports from one plant tick, making that
     language-boundary bookkeeping more expensive than the compiled dynamics.
-    ``FunctionBuffer`` writes those same dense outputs directly into one owned
-    NumPy allocation. The runtime remains the owner of typed validation and
-    scattering; only the transport across the native boundary changes.
+    ``FunctionBuffer`` writes native nonzeros into one allocation. Dense
+    outputs take the zero-scatter fast path; structurally sparse outputs are
+    expanded using their immutable CasADi sparsity maps. The runtime remains
+    the owner of typed validation and scattering; only transport across the
+    native boundary changes.
     """
 
     memory: Any
     evaluate: Any
     result: np.ndarray
+    native_offsets: np.ndarray
     offsets: np.ndarray
+    scatter_indices: tuple[np.ndarray | None, ...]
 
 
 def _dense_evaluation_buffer(function: Any) -> _DenseEvaluationBuffer | None:
-    """Build a direct buffer when every CasADi input/output is dense.
+    """Build a direct buffer when every CasADi input is dense.
 
-    Sparse matrices need their sparsity pattern expanded before they match a
-    Module port's dense shape, so the generic ``DM`` path remains authoritative
-    for them. Truth-plant ticks are dense and take this measured hot path.
+    FunctionBuffer exposes only stored nonzeros for a sparse output. The
+    precomputed column-major scatter map expands those into the Module port's
+    dense shape without constructing CasADi ``DM`` objects on every call.
     """
     if any(
         function.nnz_in(index) != function.numel_in(index)
         for index in range(function.n_in())
-    ) or any(
-        function.nnz_out(index) != function.numel_out(index)
-        for index in range(function.n_out())
     ):
         return None
     memory, evaluate = function.buffer()
+    native_sizes = tuple(
+        int(function.nnz_out(index)) for index in range(function.n_out())
+    )
     sizes = tuple(
         int(function.numel_out(index)) for index in range(function.n_out())
     )
+    native_offsets = np.cumsum((0, *native_sizes), dtype=np.int64)
     offsets = np.cumsum((0, *sizes), dtype=np.int64)
-    result = np.empty(int(offsets[-1]), dtype=float)
-    for index, (start, end) in enumerate(pairwise(offsets)):
+    result = np.empty(int(native_offsets[-1]), dtype=float)
+    scatter_indices: list[np.ndarray | None] = []
+    for index, (start, end) in enumerate(pairwise(native_offsets)):
         memory.set_res(index, memoryview(result[start:end]))
-    return _DenseEvaluationBuffer(memory, evaluate, result, offsets)
+        if native_sizes[index] == sizes[index]:
+            scatter_indices.append(None)
+            continue
+        rows, columns = function.sparsity_out(index).get_triplet()
+        scatter_indices.append(
+            np.asarray(rows, dtype=np.int64)
+            + np.asarray(columns, dtype=np.int64) * function.size1_out(index)
+        )
+    return _DenseEvaluationBuffer(
+        memory,
+        evaluate,
+        result,
+        native_offsets,
+        offsets,
+        tuple(scatter_indices),
+    )
 
 
 @dataclass(frozen=True)
@@ -212,6 +234,15 @@ class NumpyRuntime:
         # per call was most of a simulator tick for wide truth plants.
         self._entry_plans: dict[str, _EntryPlan] = {}
         self._input_name_list = [f.name for f in self._u_fields()]
+        # Most estimator calls carry no vehicle control. Packing immutable
+        # Module defaults used to resolve suffixes, allocate arrays, and
+        # revalidate the same declaration on every predict/update. Keep one
+        # pristine vector for internal read-only kernel calls; the public
+        # ``build_u`` API still returns owned storage.
+        self._default_u_vector = pack_fields(
+            self._u_fields(), {}, default=lambda f: f.default, who="build_u"
+        )
+        self._state_revision = 0
 
         self._t = 0.0
 
@@ -318,7 +349,7 @@ class NumpyRuntime:
         plan = self._entry_plan(ep)
         args = resolve_args(m, ep, values,
                             state_lookup=lambda n: self._state[n],
-                            param_default=self.param_vector)
+                            param_default=self._kernel_param_vector)
         fn = self._functions[ep.fn]
         buffer_key = id(fn)
         if buffer_key not in self._evaluation_buffers:
@@ -368,9 +399,25 @@ class NumpyRuntime:
                 raise ValueError(
                     f"{who}: kernel {ep.fn!r} produced non-finite values"
                 )
-            # One owned allocation for this call's outputs; the buffer is
-            # reused by the next evaluate(), so results must not alias it.
-            owned = evaluation.result.copy()
+            # One owned allocation for this call's outputs; the native buffer
+            # is reused by the next evaluate(), so results must not alias it.
+            if all(index is None for index in evaluation.scatter_indices):
+                owned = evaluation.result.copy()
+            else:
+                owned = np.zeros(int(evaluation.offsets[-1]), dtype=float)
+                for output, scatter in enumerate(evaluation.scatter_indices):
+                    native_start = int(evaluation.native_offsets[output])
+                    native_end = int(evaluation.native_offsets[output + 1])
+                    dense_start = int(evaluation.offsets[output])
+                    dense_end = int(evaluation.offsets[output + 1])
+                    if scatter is None:
+                        owned[dense_start:dense_end] = evaluation.result[
+                            native_start:native_end
+                        ]
+                    else:
+                        owned[dense_start + scatter] = evaluation.result[
+                            native_start:native_end
+                        ]
             outs = [
                 owned[start:end]
                 for start, end in pairwise(evaluation.offsets)
@@ -407,6 +454,8 @@ class NumpyRuntime:
                          else a.reshape(-1))
         self._validate_staged_state(staged_state)
         self._state.update(staged_state)
+        if staged_state:
+            self._state_revision += 1
         return ret
 
     def _validate_staged_state(self, state: dict[str, np.ndarray]) -> None:
@@ -423,12 +472,23 @@ class NumpyRuntime:
     def build_u(self, u: dict[str, Any] | None) -> np.ndarray:
         """Resolve a `{name: value}` dict (full or suffix names) to the
         flat control vector over the Module's declared defaults."""
+        if not u:
+            return self._default_u_vector.copy()
         names = self._input_names()
         source = {resolve_suffix(k, names, label="input",
                                  who=type(self).__name__): v
                   for k, v in (u or {}).items()}
         return pack_fields(self._u_fields(), source,
                            default=lambda f: f.default, who="build_u")
+
+    def _kernel_u(self, u: dict[str, Any] | None) -> np.ndarray:
+        """Read-only packed controls for one immediate kernel call."""
+        return self._default_u_vector if not u else self.build_u(u)
+
+    @property
+    def state_revision(self) -> int:
+        """Monotonic revision for consumers caching state projections."""
+        return self._state_revision
 
     # ---- promoted parameters (PARAMETER port) --------------------------
 
@@ -456,17 +516,20 @@ class NumpyRuntime:
     def param_vector(self) -> np.ndarray:
         """The flat promoted-parameter vector: declared defaults merged
         with `set_parameters` overrides, in port-field order."""
+        return self._kernel_param_vector().copy()
+
+    def _kernel_param_vector(self) -> np.ndarray:
+        """Read-only promoted parameters for one immediate kernel call."""
         port = self._param_port
         if port is None:
-            return np.zeros(0)
+            return _EMPTY_VECTOR
         cached = self._param_vector_cache
         if cached is None:
             cached = pack_fields(port.fields, self._param_overrides,
                                  default=lambda f: f.default,
                                  who="param_vector")
             self._param_vector_cache = cached
-        # Callers may mutate the vector they receive; the cache stays pristine.
-        return cached.copy()
+        return cached
 
     @property
     def spec(self):

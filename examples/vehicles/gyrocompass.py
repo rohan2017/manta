@@ -46,8 +46,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from manta import Craft, EKF, NoiseDriver, Sim, TargetNumpy, World
-from manta.parts import DragSurface, IMU, Mass, PointBuoy, ProcessNoise
+from manta import EKF, Craft, NoiseDriver, Sim, TargetNumpy, World
+from manta.parts import IMU, DragSurface, Mass, PointBuoy, ProcessNoise
 from manta.planets import Earth, SeaWaves
 
 from .._control import Pacer, common_args
@@ -87,7 +87,16 @@ def build_world(heading_deg: float):
     earth = Earth(waves=SeaWaves(amplitude=0.0, wavelength=12.0),
                   surface_smoothing=0.3)
     w = World().add_planet(earth)
-    scene = earth.scene_at_geodetic(np.degrees(LAT), 0.0)
+    # This example stays Cartesian: construct the WGS-84 ellipsoid point
+    # directly instead of making the plant own a latitude/datum conversion.
+    e2 = earth.FLATTENING * (2.0 - earth.FLATTENING)
+    radius = earth.R_EQ / np.sqrt(1.0 - e2 * np.sin(LAT) ** 2)
+    anchor = (
+        radius * np.cos(LAT),
+        0.0,
+        radius * (1.0 - e2) * np.sin(LAT),
+    )
+    scene = earth.scene_at(anchor)
     # `scene.at_rest` rigidly attaches the buoy to the spinning Earth: it
     # derives the co-orbit velocity (Ω×r, so the buoy is at rest in the sea —
     # no current) AND the body spin rate (so the IMU senses Ω). `heading`
@@ -104,7 +113,7 @@ def main() -> None:
     dt = 0.02
     duration = args.duration or 300.0
 
-    w, c, earth, scene = build_world(args.heading)
+    w, c, _earth, scene = build_world(args.heading)
     sim = TargetNumpy(Sim(w))
     sim.attach_driver(NoiseDriver(seed=1))
 

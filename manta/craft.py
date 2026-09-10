@@ -218,11 +218,12 @@ class TickContext:
 
     def _iter_fields(self):
         """Yield every field visible to this tick. World-attached fields
-        come first; per-tick fields (set when there is no world) come
-        next. Either source can satisfy a `field(cls)` lookup."""
+        and craft-scoped compile-time fields can both satisfy a lookup.
+        Scoped fields come first because they carry the exact binding for
+        this craft rather than a world-wide physical value."""
+        yield from self._fields
         if self._world is not None:
             yield from self._world.fields
-        yield from self._fields
 
     def has_field(self, cls: type) -> bool:
         """True iff a field of type `cls` (or a subclass) is registered

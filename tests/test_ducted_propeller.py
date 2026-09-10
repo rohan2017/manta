@@ -2,10 +2,10 @@
 
 import numpy as np
 import pytest
-
-from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import FluidField, GravityField
 from manta.parts import DuctedPropeller, Mass
+
+from manta import Craft, Sim, TargetNumpy, World
 
 
 def _run(*, velocity=(0.0, 0.0, 0.0), command=100.0,
@@ -30,6 +30,32 @@ def test_static_point_reproduces_bollard_thrust_and_torque():
     assert output["prop.thrust"] == pytest.approx(100.0, rel=1e-5)
     assert output["prop.reaction_torque"] == pytest.approx(20.0, rel=1e-5)
     assert output["prop.advance_fraction"] == pytest.approx(0.0, abs=0.01)
+
+
+def test_command_scale_calibrates_static_thrust_and_torque():
+    output = _run(command_scale=0.8)
+    assert output["prop.thrust"] == pytest.approx(80.0, rel=1e-5)
+    assert output["prop.reaction_torque"] == pytest.approx(16.0, rel=1e-5)
+
+
+def test_command_scale_is_promotable():
+    prop = DuctedPropeller(
+        "prop", max_static_thrust=100.0, max_static_torque=20.0,
+        diameter=0.2, zero_thrust_advance_speed=2.0,
+    )
+    craft = Craft("boat")
+    craft.add(Mass("mass", mass=100.0))
+    craft.add(prop)
+    world = (
+        World()
+        .add_field(GravityField(g=(0.0, 0.0, 0.0)))
+        .add_field(FluidField().add_uniform(density=1025.0))
+    )
+    world.add_craft(craft)
+    sim = TargetNumpy(Sim(world, parameters=["prop.command_scale"]))
+    sim.set_parameters({"prop.command_scale": 0.75})
+    sim.step(1e-4, u={"prop.thrust_command": 100.0})
+    assert sim.outputs()["boat"]["prop.thrust"] == pytest.approx(75.0)
 
 
 def test_axial_advance_unloads_torque_faster_than_thrust():
@@ -95,6 +121,7 @@ def test_default_advance_speed_is_the_ideal_static_far_wake():
         {"diameter": 0.0},
         {"reaction_sign": 0},
         {"torque_unload_exponent": 0.0},
+        {"command_scale": 0.0},
     ],
 )
 def test_invalid_calibration_is_rejected(kwargs):

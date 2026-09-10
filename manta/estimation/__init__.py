@@ -20,7 +20,7 @@ The state-layout types (`StateSpec`, `StateSlot`, `SlotSet`, …) live in
 from .consistency import NEESReport, chi2_gate, chi2_quantile, nees
 from .ekf import EKF, measurement_component, measurement_slot
 from .imu_integrator import IMUIntegrator
-from .imu_preintegrator import IMUPreintegrator
+from .imu_preintegrator import IMUPreintegrator, frame_preintegrated_packet
 from .madgwick import Madgwick
 from .mahony import Mahony
 from .observability import (
@@ -45,6 +45,7 @@ __all__ = [
     "SigmaHorizonReport",
     "chi2_gate",
     "chi2_quantile",
+    "frame_preintegrated_packet",
     "measurement_component",
     "measurement_slot",
     "nees",

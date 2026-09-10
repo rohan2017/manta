@@ -61,11 +61,20 @@ from ._assembly import (
     _controls_at,
     _resolve_estimator,
     _resolve_ir,
-    estimator_inputs,
+    consider_dimension,
+    estimator_interval_inputs,
+    estimator_observation_inputs,
     resolve_sensor_set,
+    sensor_consider_jacobian,
     sensor_R_expr,
 )
-from ._kalman import joseph_update_np, lin_cov, symmetrize, zero_R_message
+from ._kalman import (
+    joseph_update_np,
+    lin_cov,
+    schmidt_update_np,
+    symmetrize,
+    zero_R_message,
+)
 
 
 @dataclass
@@ -170,14 +179,17 @@ def observability(ekf, *, state=None, inputs=None, sensors=None,
     return _report_from_O(_local_O(ir, x, u, dt, t, pairs, n), spec, names, rtol)
 
 
-def _local_O(ir, x, u, dt, t, pairs, n) -> np.ndarray:
+def _local_O(
+    ir, x, u, dt, t, pairs, n, *, measurement_u=None
+) -> np.ndarray:
     """Local discrete observability matrix at one point: `[H; H·F; …;
     H·F^(n-1)]`. `F^p` stays bounded (F ≈ I + A·dt), so this is well
     conditioned — unlike `H·F^k` propagated from a trajectory start."""
     F = np.asarray(ir.sys.F_fn(x, u, dt, t), dtype=float).reshape(n, n)
     # H at dt=0: a measurement is dt-independent, the convention the filters
     # bake in (`prepared_sensors`) and `sigma_horizon` follows.
-    H = np.vstack([np.asarray(h(x, u, 0.0, t), dtype=float).reshape(-1, n)
+    h_u = u if measurement_u is None else measurement_u
+    H = np.vstack([np.asarray(h(x, h_u, 0.0, t), dtype=float).reshape(-1, n)
                    for h, _ in pairs])
     blocks, Fp = [], np.eye(n)
     for _ in range(n):
@@ -255,19 +267,61 @@ def observability_trajectory(world, *, dt: float, steps: int,
 
     every = max(1, steps // max(1, samples))
     blocks = []
-    for i in range(steps):
+    metadata = ekf_ir.module().metadata
+    packet_map = dict(metadata.get("preintegration_input_map", {}))
+    prediction_names = {
+        packet_map[name] for name in ("end_accel", "end_gyro")
+    } if packet_map else set(metadata.get("prediction_inputs", ()))
+    previous_x = None
+    previous_control = None
+    previous_prediction_readings = None
+    previous_measurement_u = None
+    for i in range(steps + 1 if packet_map else steps):
         t = i * dt
         u_dict = _controls_at(control, t)
         x_before = truth_vec()
         sim.step(dt, u=u_dict)
-        estimator_u = estimator_inputs(
-            ekf_ir, u_dict, reading=sim.reading, dt=dt)
-        if i % every == 0:
+        measurement_u = estimator_observation_inputs(
+            ekf_ir, u_dict, reading=sim.reading)
+        current_prediction_readings = {
+            name: np.asarray(sim.reading(name), dtype=float).copy()
+            for name in prediction_names
+        }
+        if packet_map and previous_prediction_readings is not None:
+            interval = i - 1
+            estimator_u = estimator_interval_inputs(
+                ekf_ir,
+                previous_control,
+                start_reading=previous_prediction_readings,
+                end_reading=current_prediction_readings,
+                dt=dt,
+            )
+            if interval % every == 0:
+                blocks.append(_local_O(
+                    ekf_ir,
+                    previous_x,
+                    ekf_ir.sys.resolve_u(
+                        estimator_u, who="observability_trajectory"
+                    ),
+                    dt,
+                    t - dt,
+                    pairs,
+                    n,
+                    measurement_u=ekf_ir.sys.resolve_u(
+                        previous_measurement_u,
+                        who="observability_trajectory measurement",
+                    ),
+                ))
+        elif not packet_map and i % every == 0:
             blocks.append(_local_O(
                 ekf_ir, x_before,
-                ekf_ir.sys.resolve_u(estimator_u,
+                ekf_ir.sys.resolve_u(measurement_u,
                                      who="observability_trajectory"),
                 dt, t, pairs, n))
+        previous_x = x_before
+        previous_control = u_dict
+        previous_prediction_readings = current_prediction_readings
+        previous_measurement_u = measurement_u
     return _report_from_O(np.vstack(blocks), spec, names, rtol)
 
 
@@ -384,6 +438,9 @@ def sigma_horizon(ekf, *, horizon: float, dt: float = 0.02,
     sys = ir.sys
     spec = ir.spec
     n = spec.tangent_dim
+    n_consider = consider_dimension(sys)
+    P_consider = np.zeros((n, n_consider))
+    consider_covariance = np.eye(n_consider)
     steps = max(1, round(horizon / dt))
 
     # --- P0: scalar | diag vector | full matrix --------------------------
@@ -403,15 +460,20 @@ def sigma_horizon(ekf, *, horizon: float, dt: float = 0.02,
 
     # --- per-sensor H/R/rate ---------------------------------------------
     x_s, u_s, dt_s, t_s = sys.x_sym, sys.u_sym, sys.dt_sym, sys.t_sym
-    chosen = []                                  # (full, dim, H_fn, R_fn, period)
+    chosen = []
     for H_fn, full in _select_sensors(ir, sensors, who="sigma_horizon"):
         s = sys.sensors[full]
         R_expr = sensor_R_expr(sys, s)
         R_fn = ca.Function(f"R_{entry_ident(full)}",
                            [x_s, u_s, t_s], [R_expr])
+        G_fn = ca.Function(
+            f"G_consider_{entry_ident(full)}",
+            [x_s, u_s, t_s],
+            [sensor_consider_jacobian(sys, s)],
+        )
         rate = sys.sample_rates.get(full)
         period = max(1, round(1.0 / (rate * dt))) if rate else 1
-        chosen.append((full, s.dim, H_fn, R_fn, period))
+        chosen.append((full, s.dim, H_fn, G_fn, R_fn, period))
     names = [full for full, *_ in chosen]
 
     # --- Q: model auto L Σ Lᵀ unless overridden ---------------------------
@@ -454,21 +516,33 @@ def sigma_horizon(ekf, *, horizon: float, dt: float = 0.02,
             Qk = (Q_const if Q_fn is None else
                   np.asarray(Q_fn(x, u_vec, dt, t), float).reshape(n, n))
             HRs = []
-            for full, dim, H_fn, R_fn, period in chosen:
+            for full, dim, H_fn, G_fn, R_fn, period in chosen:
                 H = np.asarray(H_fn(x, u_vec, 0.0, t), float).reshape(dim, n)
+                G = np.asarray(G_fn(x, u_vec, t), float).reshape(
+                    dim, n_consider
+                )
                 R = np.asarray(R_fn(x, u_vec, t), float).reshape(dim, dim)
                 if not np.any(np.abs(R) > 0):
                     # Same failure `require_active_R` refuses at filter
                     # construction, reached here when a state-dependent R
                     # vanishes mid-recursion — so it says the same thing.
                     raise ValueError(zero_R_message(full, "sigma_horizon"))
-                HRs.append((H, R, period))
+                HRs.append((H, G, R, period))
         x = np.asarray(sys.predict_fn(x, u_vec, dt, t), float).reshape(-1)
         P = F @ P @ F.T + Qk
-        for H, R, period in HRs:
+        if n_consider:
+            P_consider = F @ P_consider
+        for H, G, R, period in HRs:
             if i % period:
                 continue
-            _, P, _, _ = joseph_update_np(P, H, R)   # covariance-only fold
+            if n_consider:
+                P, P_consider, _ = schmidt_update_np(
+                    P, P_consider, consider_covariance, H, G, R
+                )
+            else:
+                _, P, _, _ = joseph_update_np(
+                    P, H, R
+                )  # covariance-only fold
         P = symmetrize(P)
         if (i + 1) % rec_every == 0 or i == steps - 1:
             record_point(t0 + (i + 1) * dt)

@@ -66,6 +66,7 @@ from ..ir._rotation import (
     quat_mul,
     quat_to_rotmat,
     rotate_vec_by_quat,
+    so3_exp,
 )
 from ..ir.frames import CraftFrame, ParentFrame, PartFrame, WorldFrame
 from ..parts._trace import is_promoted
@@ -349,6 +350,14 @@ def _compute_child_state(parent_state: KinematicState, parent_part, child,
     mount_offset = (tr_attr._mx if is_promoted(tr_attr)
                     else ca.MX(list(tr_attr)))
 
+    mount_error = None
+    if float(child.mount_uncertainty_sigma) > 0.0:
+        factor = ca.DM(
+            np.asarray(child.mount_uncertainty_sqrt, dtype=float).reshape(6, 6)
+        )
+        mount_error = factor @ child.mount_uncertainty._mx
+        mount_offset = mount_offset + mount_error[:3]
+
     # ----- body-frame position composition ------------------------------
     # r_child_in_craft = r_parent_out_in_craft
     #                    + R_craft_from_parent_output · mount_offset.
@@ -362,11 +371,23 @@ def _compute_child_state(parent_state: KinematicState, parent_part, child,
     # parent output axes). Identity for almost every part, so the fast
     # path skips the compose entirely rather than multiplying by I on
     # every part of every tick.
-    if child.mounted_upright:
+    mount_orientation = child.mount_orientation
+    # A numerically upright declaration may still be a live promoted SO(3)
+    # parameter. In that case the optimizer, not the nominal value, decides
+    # whether the mount is upright and the rotation must remain in the graph.
+    if (
+        child.mounted_upright
+        and not is_promoted(mount_orientation)
+        and mount_error is None
+    ):
         R_craft_from_input = parent_state.R_craft_from_output
         q_world_from_input = parent_state.q_world_from_output
     else:
-        q_mount = _attr_quat(child.mount_orientation)
+        q_mount = _attr_quat(mount_orientation)
+        if mount_error is not None:
+            # Match SO3Manifold.boxplus exactly: the fit posterior is in the
+            # same left-trivialized tangent used by its mount parameter.
+            q_mount = quat_mul(so3_exp(mount_error[3:]), q_mount)
         R_craft_from_input = (parent_state.R_craft_from_output
                               @ quat_to_rotmat(q_mount))
         q_world_from_input = quat_mul(

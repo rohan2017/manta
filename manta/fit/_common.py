@@ -23,11 +23,14 @@ class _BestIterate(ca.Callback):
     """Retain the lowest finite objective IPOPT has actually accepted."""
 
     def __init__(self, nx: int, initial_x: np.ndarray,
-                 initial_objective: float) -> None:
+                 initial_objective: float, progress=None) -> None:
         ca.Callback.__init__(self)
         self.nx = int(nx)
         self.best_x = np.asarray(initial_x, dtype=float).ravel().copy()
         self.best_objective = float(initial_objective)
+        self.initial_objective = float(initial_objective)
+        self.progress = progress
+        self.iteration = 0
         self.construct(f"best_iterate_{next(_CALLBACK_IDS)}")
 
     def get_n_in(self):
@@ -53,10 +56,23 @@ class _BestIterate(ca.Callback):
     def eval(self, args):
         values = {ca.nlpsol_out(i): args[i] for i in range(len(args))}
         objective = float(values["f"])
+        current_x = np.asarray(values["x"], dtype=float).ravel().copy()
         if np.isfinite(objective) and objective < self.best_objective:
             self.best_objective = objective
-            self.best_x = np.asarray(values["x"], dtype=float).ravel().copy()
-        return [0]
+            self.best_x = current_x.copy()
+        stop = False
+        if self.progress is not None:
+            keep_going = self.progress(
+                self.iteration,
+                current_x,
+                objective,
+                self.best_x.copy(),
+                self.best_objective,
+                self.initial_objective,
+            )
+            stop = keep_going is not None and not bool(keep_going)
+        self.iteration += 1
+        return [int(stop)]
 
 
 @dataclass(frozen=True)
@@ -153,6 +169,31 @@ class Free:
 
 
 @dataclass(frozen=True)
+class GaussianTangentPrior:
+    """Sparse Gaussian prior over a linear combination of fit tangents.
+
+    ``terms`` maps fitted parameter names to scalar, diagonal-vector, or full
+    matrix coefficients. The residual is evaluated in each parameter's
+    decision tangent about its ordinary :class:`Prior` mean::
+
+        (sum(A_i @ (v_i - vbar_i)) - mean) / sigma
+
+    This is suitable for local calibration relationships such as two mounts
+    sharing a tightly known relative translation or rotation, including SO(3)
+    parameters. It retains one latent value per parameter, so redundant graph
+    edges cannot create independent, cycle-inconsistent transform estimates.
+
+    ``sigma`` is scalar or per residual component. ``mean`` defaults to zero,
+    meaning that the declared relative relationship is the prior mean.
+    """
+
+    terms: dict[str, object]
+    sigma: float | tuple
+    mean: float | tuple = 0.0
+    name: str | None = None
+
+
+@dataclass(frozen=True)
 class Window:
     """One fitting window: a short recorded rollout.
 
@@ -161,6 +202,13 @@ class Window:
              `{craft: {slot: value}}`). Slots omitted fall back to the
              world's initial state and are recorded as `FitDefaultFill`
              provenance.
+        x0_sigma — optional per-slot tangent-space standard deviations for
+             multiple shooting. A named slot must be explicitly present in
+             `x0`; its value is the prior mean and the fitter optimizes a
+             manifold-aware initial perturbation for that window. Scalars are
+             broadcast across the slot tangent dimension. An SO(3) value is
+             therefore a three-component rotation-vector sigma, never a
+             four-component quaternion sigma.
         u  — recorded controls: `{input name/suffix: scalar | (K,)}`.
              A scalar is held for the whole window; inputs omitted hold
              their model default and are recorded as `FitDefaultFill`
@@ -179,6 +227,10 @@ class Window:
              (the step taken FROM state k). For `Fit`, only sensors
              present here enter the loss; for `NoiseFit`, every chosen
              sensor needs a trace.
+        z_mask — optional explicit availability masks for multi-rate
+             observations. Each key names a trace in `z` and carries a
+             boolean `(K,)` array; only true rows enter the fit. Values at
+             false rows are storage placeholders and are never observations.
         dt — fixed step, seconds.
         t0 — world-clock time of x0.
 
@@ -187,10 +239,12 @@ class Window:
     substitutions for omitted ``x0`` and ``u`` fields.
     """
     x0: dict
+    x0_sigma: dict = field(default_factory=dict)
     u: dict = field(default_factory=dict)
     x: dict = field(default_factory=dict)
     x_scale: dict = field(default_factory=dict)
     z: dict = field(default_factory=dict)
+    z_mask: dict = field(default_factory=dict)
     dt: float = 0.01
     t0: float = 0.0
 
@@ -370,6 +424,18 @@ def prior_penalty(v: ca.MX, blocks: list, *, weight: float = 1.0) -> ca.MX:
     return term
 
 
+def prior_residuals(v: ca.MX, blocks: list) -> list[ca.MX]:
+    """Whitened residual form of :func:`prior_penalty`."""
+    result = []
+    for block in blocks:
+        for index in np.flatnonzero(np.isfinite(block.sigma)):
+            result.append(
+                (v[block.offset + index] - float(block.prior_mean[index]))
+                / float(block.sigma[index])
+            )
+    return result
+
+
 def expand_or_none(fn: ca.Function):
     """`fn.expand()`, or None when the graph cannot lower to SX (a
     Linsol-bearing joint-space solve). The fitters route every hot
@@ -384,7 +450,7 @@ def expand_or_none(fn: ca.Function):
 def solve_blocks_nlp(name: str, x: ca.MX, loss: ca.MX, blocks: list, *,
                      verbose: bool, ipopt_options: dict | None,
                      initial: np.ndarray | None = None,
-                     retain_best: bool = False):
+                     retain_best: bool = False, progress=None):
     """Build the fitters' shared IPOPT solver, seed it from the blocks'
     `init`, apply their box bounds, and solve. Returns
     `(x_opt, objective, stats, expanded)`.
@@ -422,14 +488,17 @@ def solve_blocks_nlp(name: str, x: ca.MX, loss: ca.MX, blocks: list, *,
     x0 = (np.concatenate([b.init for b in blocks]) if initial is None
           else np.asarray(initial, dtype=float).ravel())
     callback = None
-    if retain_best:
+    if retain_best or progress is not None:
         if "iteration_callback" in opts:
             raise ValueError(
-                "retain_best cannot be combined with iteration_callback")
+                "retain_best/progress cannot be combined with "
+                "iteration_callback")
         initial_fn = ca.Function(
             f"{name}_initial_objective", [nlp["x"]], [nlp["f"]])
         initial_objective = float(ca.DM(initial_fn(x0)))
-        callback = _BestIterate(x0.size, x0, initial_objective)
+        callback = _BestIterate(
+            x0.size, x0, initial_objective, progress=progress
+        )
         opts["iteration_callback"] = callback
     solver = ca.nlpsol(name, "ipopt", nlp, opts)
     sol = solver(x0=x0,
@@ -437,20 +506,209 @@ def solve_blocks_nlp(name: str, x: ca.MX, loss: ca.MX, blocks: list, *,
                  ubx=np.concatenate([b.upper for b in blocks]))
     solution_x = np.asarray(sol["x"]).ravel()
     solution_f = float(sol["f"])
-    if callback is not None and callback.best_objective < solution_f:
+    if (retain_best and callback is not None
+            and callback.best_objective < solution_f):
         solution_x = callback.best_x
         solution_f = callback.best_objective
     return solution_x, solution_f, solver.stats(), expanded
 
 
+def solve_blocks_least_squares(
+    name: str,
+    x: ca.MX,
+    residual: ca.MX,
+    blocks: list,
+    *,
+    initial: np.ndarray | None = None,
+    progress=None,
+    options: dict | None = None,
+):
+    """Bounded damped Gauss-Newton solve without symbolic second derivatives.
+
+    Windowed plant fits are sums of squared residuals. Building IPOPT's exact
+    Hessian differentiates the entire unrolled plant twice and can require
+    several times more memory than the first-order graph. This solver instead
+    evaluates the residual Jacobian and solves a damped normal equation. It is
+    intentionally small and dependency-free; Manta does not acquire SciPy.
+    """
+    opts = {
+        "max_iterations": 200,
+        "gradient_tolerance": 1e-5,
+        "step_tolerance": 1e-8,
+        "objective_tolerance": 1e-10,
+        "initial_damping": 1e-3,
+        "max_line_search": 16,
+    }
+    opts.update(options or {})
+    max_iterations = int(opts["max_iterations"])
+    if max_iterations < 0:
+        raise ValueError("Gauss-Newton max_iterations must be non-negative")
+    for key in (
+        "gradient_tolerance",
+        "step_tolerance",
+        "objective_tolerance",
+        "initial_damping",
+    ):
+        if not np.isfinite(opts[key]) or float(opts[key]) <= 0.0:
+            raise ValueError(f"Gauss-Newton {key} must be positive and finite")
+
+    residual_fn = ca.Function(f"{name}_residual", [x], [residual])
+    expanded_fn = expand_or_none(residual_fn)
+    expanded = expanded_fn is not None
+    if expanded_fn is not None:
+        decision = ca.SX.sym("decision", x.numel())
+        expression = expanded_fn(decision)
+    else:
+        decision = x
+        expression = residual
+    evaluation = ca.Function(
+        f"{name}_residual_jacobian",
+        [decision],
+        [expression, ca.jacobian(expression, decision)],
+    )
+
+    value = (
+        np.concatenate([block.init for block in blocks])
+        if initial is None
+        else np.asarray(initial, dtype=float).ravel().copy()
+    )
+    lower = np.concatenate([block.lower for block in blocks])
+    upper = np.concatenate([block.upper for block in blocks])
+    if value.shape != lower.shape or np.any(value < lower) or np.any(value > upper):
+        raise ValueError("Gauss-Newton initial value violates decision bounds")
+
+    def evaluate(at: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
+        raw_residual, raw_jacobian = evaluation(at)
+        vector = np.asarray(raw_residual, dtype=float).ravel()
+        jacobian = np.asarray(raw_jacobian, dtype=float)
+        objective = float(vector @ vector)
+        if not (
+            np.isfinite(objective)
+            and np.all(np.isfinite(vector))
+            and np.all(np.isfinite(jacobian))
+        ):
+            raise FloatingPointError("non-finite Gauss-Newton residual/Jacobian")
+        return vector, jacobian, objective
+
+    vector, jacobian, objective = evaluate(value)
+    initial_objective = objective
+    best_value = value.copy()
+    best_objective = objective
+    damping = float(opts["initial_damping"])
+    history = [objective]
+    gradient_history = []
+    step_history = []
+    status = "Maximum_Iterations_Exceeded"
+    success = False
+    prior_objective = objective
+
+    for iteration in range(max_iterations + 1):
+        gradient = jacobian.T @ vector
+        diagonal = np.sum(np.square(jacobian), axis=0)
+        column_scale = np.sqrt(np.maximum(diagonal, 1e-24))
+        scaled_gradient = float(np.max(np.abs(gradient) / column_scale))
+        gradient_history.append(scaled_gradient)
+        if progress is not None:
+            keep_going = progress(
+                iteration,
+                value.copy(),
+                objective,
+                best_value.copy(),
+                best_objective,
+                initial_objective,
+            )
+            if keep_going is not None and not bool(keep_going):
+                status = "User_Requested_Stop"
+                break
+        if scaled_gradient <= float(opts["gradient_tolerance"]):
+            status = "Solve_Succeeded"
+            success = True
+            break
+        if iteration == max_iterations:
+            break
+
+        normal = jacobian.T @ jacobian
+        regularizer = np.maximum(np.diag(normal), 1e-12)
+        try:
+            step = np.linalg.solve(
+                normal + damping * np.diag(regularizer), -gradient
+            )
+        except np.linalg.LinAlgError:
+            step = np.linalg.lstsq(
+                normal + damping * np.diag(regularizer),
+                -gradient,
+                rcond=1e-12,
+            )[0]
+        scaled_step = float(np.max(np.abs(step) * column_scale))
+        step_history.append(scaled_step)
+
+        accepted = False
+        alpha = 1.0
+        candidate = value
+        candidate_data = None
+        for _attempt in range(int(opts["max_line_search"])):
+            candidate = np.clip(value + alpha * step, lower, upper)
+            if np.array_equal(candidate, value):
+                alpha *= 0.5
+                continue
+            try:
+                trial = evaluate(candidate)
+            except FloatingPointError:
+                alpha *= 0.5
+                continue
+            if trial[2] < objective:
+                candidate_data = trial
+                accepted = True
+                break
+            alpha *= 0.5
+        if accepted and candidate_data is not None:
+            value = candidate
+            vector, jacobian, objective = candidate_data
+            if objective < best_objective:
+                best_value = value.copy()
+                best_objective = objective
+            relative_change = abs(prior_objective - objective) / max(
+                1.0, abs(prior_objective)
+            )
+            prior_objective = objective
+            damping = max(1e-12, damping * 0.3)
+            history.append(objective)
+            if (
+                scaled_step <= float(opts["step_tolerance"])
+                and relative_change <= float(opts["objective_tolerance"])
+            ):
+                status = "Solve_Succeeded"
+                success = True
+                break
+        else:
+            damping = min(1e12, damping * 10.0)
+            history.append(objective)
+
+    stats = {
+        "success": success,
+        "return_status": status,
+        "iter_count": len(gradient_history) - 1,
+        "iterations": {
+            "obj": history,
+            "inf_du": gradient_history,
+            "d_norm": step_history,
+        },
+        "solver": "damped_gauss_newton",
+        "final_scaled_gradient": gradient_history[-1],
+        "final_damping": damping,
+    }
+    return best_value, best_objective, stats, expanded
+
+
 def solver_converged(stats: dict, *, who: str) -> bool:
-    """Did IPOPT actually converge? Warns (`RuntimeWarning`) when it did
+    """Did the selected solver converge? Warns (`RuntimeWarning`) when it did
     not — the values at a failed solve's final iterate are suspect, but
     they are still returned for inspection."""
     ok = bool(stats.get("success", False))
     if not ok:
+        solver = str(stats.get("solver", "IPOPT"))
         warnings.warn(
-            f"{who}: IPOPT did NOT converge (return_status="
+            f"{who}: {solver} did NOT converge (return_status="
             f"{stats.get('return_status', 'unknown')!r}) — the fitted "
             f"values and posterior diagnostics are suspect.",
             RuntimeWarning, stacklevel=3)
@@ -595,6 +853,40 @@ def resolve_state_traces(x: dict, spec, *, who: str):
                 f"{who}: x[{key!r}] trace length {a.shape[0]} != {K}.")
         traces[full] = a
     return traces, K
+
+
+def resolve_trace_masks(
+    masks: dict,
+    traces: dict[str, np.ndarray],
+    available_names: list[str],
+    K: int,
+    *,
+    who: str,
+) -> dict[str, np.ndarray]:
+    """Resolve explicit boolean observation masks for already-bound traces."""
+    resolved: dict[str, np.ndarray] = {
+        full: np.ones(K, dtype=bool) for full in traces
+    }
+    seen: set[str] = set()
+    for key, value in masks.items():
+        full = resolve_suffix(
+            key, available_names, label="sensor mask", who=who
+        )
+        if full not in traces:
+            raise ValueError(
+                f"{who}: z_mask[{key!r}] names a sensor with no z trace"
+            )
+        if full in seen:
+            raise ValueError(f"{who}: duplicate mask for sensor {full!r}")
+        mask = np.asarray(value)
+        if mask.dtype != np.dtype(bool) or mask.shape != (K,):
+            raise ValueError(
+                f"{who}: z_mask[{key!r}] must be a boolean ({K},) array, "
+                f"got dtype={mask.dtype} shape={mask.shape}"
+            )
+        resolved[full] = mask.copy()
+        seen.add(full)
+    return resolved
 
 
 def format_table(rows: list) -> str:

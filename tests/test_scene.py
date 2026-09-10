@@ -89,7 +89,17 @@ def test_scene_world_pose_matches_origin_and_basis():
     north."""
     lat = np.radians(45.0)
     earth = Earth()
-    anchor = tuple(earth.ecef_from_geodetic(45.0, 0.0, 0.0))
+    # Cartesian point on the WGS-84 ellipsoid at 45 degrees normal latitude.
+    f = earth.FLATTENING
+    a = earth.R_EQ
+    lat = np.radians(45.0)
+    e2 = f * (2.0 - f)
+    n = a / np.sqrt(1.0 - e2 * np.sin(lat) ** 2)
+    anchor = (
+        n * np.cos(lat),
+        0.0,
+        n * (1.0 - e2) * np.sin(lat),
+    )
     scene = earth.scene_at(anchor)
     origin, q = scene.world_pose(0.0)
     np.testing.assert_allclose(origin, anchor, atol=1e-6)

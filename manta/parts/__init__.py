@@ -45,6 +45,7 @@ from .attachment.trajectory_endpoint import (
 )
 from .base import CompositePart, Part, PartRole, RootPart
 from .disturbance.constant_wrench import ConstantWrench
+from .disturbance.external_wrench import ExternalWrench
 from .disturbance.process_noise import ProcessNoise
 from .disturbance.wrench_process_noise import WrenchProcessNoise
 from .electrical import (
@@ -75,11 +76,14 @@ from .field_source import (
 )
 from .sensor.antenna import Antenna
 from .sensor.barometer import Barometer
+from .sensor.bottom_velocity_sensor import BottomVelocitySensor
 from .sensor.camera import BBoxCamera, CentroidCamera, ProjectiveCamera
+from .sensor.component_position_sensor import ComponentPositionSensor
 from .sensor.heading_sensor import HeadingSensor
-from .sensor.imu import IMU
+from .sensor.imu import ConstantBiasIMU, IMU
 from .sensor.magnetometer import Magnetometer
 from .sensor.model_force import ModelForce
+from .sensor.planet_position_sensor import PlanetPositionSensor
 from .sensor.position_sensor import PositionSensor
 from .sensor.velocity_sensor import VelocitySensor
 from .structure.collider import Collider
@@ -90,12 +94,15 @@ from .thermal.thermal_mass import ThermalMass
 
 __all__ = [
     "IMU",
+    "ConstantBiasIMU",
+    "ComponentPositionSensor",
     "AddedMass",
     "Aerofoil",
     "Antenna",
     "ArticulatedJoint",
     "BBoxCamera",
     "Barometer",
+    "BottomVelocitySensor",
     "CentroidCamera",
     "Collider",
     "CompositePart",
@@ -103,6 +110,7 @@ __all__ = [
     "ConstantPowerElectronicsLoad",
     "ConstantPowerLoad",
     "ConstantWrench",
+    "ExternalWrench",
     "Contactor",
     "ControlSurface",
     "DCConverter",
@@ -136,6 +144,7 @@ __all__ = [
     "Part",
     "PartRole",
     "PartUpdate",
+    "PlanetPositionSensor",
     "PointBuoy",
     "PositionSensor",
     "PoweredControlSurface",
