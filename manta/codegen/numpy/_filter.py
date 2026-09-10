@@ -17,13 +17,26 @@ from ...ir.module import entry_ident
 from ._runtime import NumpyRuntime
 
 _LOG = logging.getLogger(__name__)
+_FLOAT_EPS = np.finfo(float).eps
+
+
+def _finite_covariance_is_symmetric(matrix: np.ndarray) -> bool:
+    """The existing allclose tolerance for already finite square float data.
+
+    Shape, dtype and finiteness are checked by the caller. Avoid repeating
+    NumPy's general broadcasting, coercion and nonfinite handling on every
+    covariance fold. Keep the elementwise relative tolerance (including its
+    transpose direction), rather than substituting a matrix-norm tolerance.
+    """
+    return bool((np.abs(matrix - matrix.T)
+                 <= 1e-12 + 1e-10 * np.abs(matrix.T)).all())
 
 
 def _psd_roundoff_tolerance(matrix: np.ndarray) -> float:
     """Legacy absolute floor plus a scale-aware eigensolver error bound."""
     dimension = matrix.shape[0]
     scale = max(1.0, float(np.linalg.norm(matrix, ord=np.inf)))
-    return max(1e-12, 64.0 * np.finfo(float).eps * dimension * scale)
+    return max(1e-12, 64.0 * _FLOAT_EPS * dimension * scale)
 
 
 @dataclass(frozen=True)
@@ -466,7 +479,7 @@ class NumpyFilter(NumpyRuntime):
                 f"{(dim, dim)}")
         if not np.all(np.isfinite(R)):
             raise ValueError(f"update {full}: R contains non-finite values")
-        if not np.allclose(R, R.T, rtol=1e-10, atol=1e-12):
+        if not _finite_covariance_is_symmetric(R):
             raise ValueError(f"update {full}: R must be symmetric")
         try:
             np.linalg.cholesky(R)
@@ -477,6 +490,14 @@ class NumpyFilter(NumpyRuntime):
 
     def _validate_covariance(self, value, *, who: str,
                              positive_definite: bool, dim: int | None = None) -> np.ndarray:
+        """Validate and own a covariance supplied across a runtime boundary."""
+        return self._check_covariance(
+            value, who=who, positive_definite=positive_definite, dim=dim
+        ).copy()
+
+    def _check_covariance(self, value, *, who: str,
+                          positive_definite: bool, dim: int | None = None) -> np.ndarray:
+        """Check covariance invariants without copying already owned state."""
         dim = self._spec.tangent_dim if dim is None else dim
         matrix = np.asarray(value)
         if matrix.dtype.kind not in "iuf":
@@ -487,7 +508,7 @@ class NumpyFilter(NumpyRuntime):
                 f"{who}: shape {matrix.shape} doesn't match {(dim, dim)}")
         if not np.all(np.isfinite(matrix)):
             raise ValueError(f"{who}: contains non-finite values")
-        if not np.allclose(matrix, matrix.T, rtol=1e-10, atol=1e-12):
+        if not _finite_covariance_is_symmetric(matrix):
             raise ValueError(f"{who}: must be symmetric")
         eigen_min = float(np.linalg.eigvalsh(matrix).min())
         psd_tolerance = _psd_roundoff_tolerance(matrix)
@@ -501,13 +522,13 @@ class NumpyFilter(NumpyRuntime):
                 f"(minimum eigenvalue {eigen_min:.17g}, "
                 f"roundoff tolerance {psd_tolerance:.17g})"
             )
-        return matrix.copy()
+        return matrix
 
     def _validate_staged_state(self, state: dict[str, np.ndarray]) -> None:
         if "x" in state and not np.all(np.isfinite(state["x"])):
             raise ValueError("filter state x contains non-finite values")
         if "P" in state:
-            self._validate_covariance(
+            self._check_covariance(
                 state["P"], who="filter state P", positive_definite=False)
         if "P_consider" in state:
             cross = np.asarray(state["P_consider"], dtype=float)

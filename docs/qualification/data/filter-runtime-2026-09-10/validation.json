@@ -1,0 +1,26 @@
+{
+  "full_suite": {
+    "passed": 1355,
+    "skipped": 5,
+    "failed": 6
+  },
+  "baseline_failed_cases_rerun": 6,
+  "failure_nodes": [
+    "server/mako/test_smoke.py::test_noise_slot_expects_pre_scaled_draws",
+    "tests/test_consistency.py::test_observable_subspace_isolates_modeling_from_observability",
+    "tests/test_gauss_markov.py::test_filters_track_a_gauss_markov_drift[EKF]",
+    "tests/test_gauss_markov.py::test_filters_track_a_gauss_markov_drift[UKF]",
+    "tests/test_rw_bias.py::test_ekf_estimates_rw_bias_from_gyro_readings",
+    "tests/test_ukf.py::test_ukf_attitude_matches_ekf"
+  ],
+  "filter_and_replay_passed": 87,
+  "symmetry_comparison_cases": 4000,
+  "symmetry_comparison_mismatches": 0,
+  "baseline_tree": "24eb5790018addb3bee4e9992f466980f93f1102",
+  "baseline_failure_error_lines_identical_except_object_addresses": true,
+  "shiver_navigation_integration_passed": 41,
+  "changed_files_ruff": "pass",
+  "whole_repository_preexisting_ruff_findings": 9,
+  "wheel_and_sdist_build": "pass",
+  "built_wheel_import_and_ekf_smoke": "pass"
+}

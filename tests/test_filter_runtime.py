@@ -336,6 +336,68 @@ def test_per_sample_R_override_is_typed_validated_and_effective(estimator):
         low.update("gps.position", z, R=np.zeros((3, 3)))
 
 
+@pytest.mark.parametrize("operation", ("reset", "update"))
+@pytest.mark.parametrize("scale", (0.0, 1e-8, 1.0, 1e8))
+@pytest.mark.parametrize("within_tolerance", (True, False))
+def test_covariance_symmetry_tolerance_is_elementwise(
+    operation, scale, within_tolerance
+):
+    filt = TargetNumpy(_ekf())
+    before = filt.checkpoint()
+    dim = before.P.shape[0] if operation == "reset" else 3
+    matrix = np.eye(dim) * max(1.0, 2 * scale)
+    # An unrelated large variance must not hide an asymmetric pair. The
+    # absolute floor also permits roundoff on nominally zero correlations.
+    matrix[-1, -1] = 1e12
+    matrix[0, 1] = scale
+    matrix[1, 0] = scale + (0.5 if within_tolerance else 2.0) * (
+        1e-12 + 1e-10 * scale
+    )
+
+    def apply():
+        if operation == "reset":
+            filt.reset(P=matrix)
+        else:
+            filt.update("gps.position", [0.0, 0.0, 5.0], R=matrix)
+
+    if within_tolerance:
+        apply()
+    else:
+        with pytest.raises(ValueError, match="symmetric"):
+            apply()
+        np.testing.assert_array_equal(filt.x, before.x)
+        np.testing.assert_array_equal(filt.P, before.P)
+        assert filt.time == before.time
+
+
+@pytest.mark.parametrize("bad", (np.nan, np.inf, -np.inf))
+@pytest.mark.parametrize("operation", ("reset", "update"))
+def test_nonfinite_covariance_rejection_is_atomic(operation, bad):
+    filt = TargetNumpy(_ekf())
+    before = filt.checkpoint()
+    dim = before.P.shape[0] if operation == "reset" else 3
+    matrix = np.eye(dim)
+    matrix[0, 0] = bad
+    with pytest.raises(ValueError, match="non-finite"):
+        if operation == "reset":
+            filt.reset(P=matrix)
+        else:
+            filt.update("gps.position", [0.0, 0.0, 5.0], R=matrix)
+    np.testing.assert_array_equal(filt.x, before.x)
+    np.testing.assert_array_equal(filt.P, before.P)
+    assert filt.time == before.time
+
+
+@pytest.mark.parametrize("estimator", ESTIMATORS)
+def test_reset_covariance_remains_owned(estimator):
+    filt = TargetNumpy(estimator())
+    supplied = filt.P
+    filt.reset(P=supplied)
+    expected = filt.P
+    supplied[:] = np.nan
+    np.testing.assert_array_equal(filt.P, expected)
+
+
 @pytest.mark.parametrize("estimator", (_ekf, _ins_raw, _ins_preintegrated))
 def test_schmidt_mount_posterior_is_retained_with_per_sample_R(estimator):
     baseline_transform = estimator()
