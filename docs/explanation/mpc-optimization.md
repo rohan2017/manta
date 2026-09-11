@@ -47,6 +47,10 @@ unchanged; ordinary rigid-body models retain the expanded default.
 Matrix graphs are opened before state selection and common expressions are
 eliminated before export. On the provisional articulated carrier this reduced
 generated horizon code from 222 MB to 27 MB without changing integration.
+Factoring one integration stage and one derivative direction into reusable
+functions reduced it further to 3.5 MB. The matrix path deliberately bounds
+derivative batches at one direction: this avoids a giant unrolled derivative
+function while preserving the complete tangent Jacobian.
 
 `compile_optimization` explicitly selects `startup` (O0), `balanced` (O1), or
 the default `runtime` (O3/native). Large matrix graphs can exceed the compiler

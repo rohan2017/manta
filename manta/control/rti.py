@@ -504,30 +504,39 @@ class MPC:
         n_noise = step.size_in(2)[0]
         zero_noise = ca.MX.zeros(n_noise)
         dt_sub = self.dt / substeps
+        stage = None
+        if inline_dynamics:
+            stage_t = ca.MX.sym("mpc_stage_t")
+            stage_state = step.call(
+                [x, full_u, zero_noise, dt_sub, stage_t], True, False)[0]
+            # Keep one integration stage and one derivative direction as
+            # reusable functions. Unrolling every tangent direction over all
+            # substeps makes a single enormous C function on articulated hulls.
+            stage = ca.Function("mpc_integrator_stage", [x, u, stage_t],
+                [ca.cse(stage_state)], {"never_inline": True, "max_num_dir": 1,
+                                       "der_options": {"cse": True}})
 
         def advance(state: Any, controls: Any) -> Any:
             current = state
+            all_controls = ca.MX(ca.DM(defaults))
+            for local, absolute in enumerate(controlled_indices):
+                all_controls[absolute] = controls[local]
             for index in range(substeps):
-                if inline_dynamics:
-                    result = step.call([current, controls, zero_noise, dt_sub,
-                                        index * dt_sub], True, False)
-                    current = result[0]
+                if stage is not None:
+                    current = stage(current, controls, index * dt_sub)
                 else:
-                    result = step(current, controls, zero_noise, dt_sub,
+                    result = step(current, all_controls, zero_noise, dt_sub,
                                   index * dt_sub)
                     current = result[0] if isinstance(result, tuple) else result
             return current
 
-        x_next = advance(x, full_u)
+        x_next = advance(x, u)
         if inline_dynamics:
             x_next = ca.cse(x_next)
         f = ca.Function("mpc_dynamics", [x, u], [x_next])
         dx = ca.MX.sym("mpc_dx", self.ndx)
         du = ca.MX.sym("mpc_du", self.nu)
-        perturbed_full_u = ca.MX(full_u)
-        for local, absolute in enumerate(controlled_indices):
-            perturbed_full_u[absolute] = u[local] + du[local]
-        perturbed_next = advance(self.spec.boxplus_sym(x, dx), perturbed_full_u)
+        perturbed_next = advance(self.spec.boxplus_sym(x, dx), u + du)
         error_next = self.spec.boxminus_sym(perturbed_next, x_next)
         zeros_x = ca.MX.zeros(self.ndx)
         zeros_u = ca.MX.zeros(self.nu)
