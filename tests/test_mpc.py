@@ -108,6 +108,52 @@ def test_sparse_structure_scales_linearly_and_uses_tangent_state():
     assert a_long < 2.2*a_short
 
 
+def test_selected_propulsion_preserves_auxiliary_force_in_predicted_dynamics():
+    from manta.parts.disturbance.external_wrench import ExternalWrench
+
+    world, bounds = _world()
+    world.crafts[0].add(ExternalWrench("auxiliary", fy=4.0))
+    mpc = MPC(world, u_bounds=bounds, inputs=("prop.throttle",), horizon=4, dt=.1)
+    result = mpc.tick(None, _reference(4))
+    assert mpc.input_names == ("tug.prop.throttle",)
+    assert set(result.controls) == {"tug.prop.throttle"}
+    # An ordinary simulation integrates the same nonzero default load. This
+    # checks the retained physical effect, not only the reduced input count.
+    sim = TargetNumpy(Sim(world))
+    for _ in range(2):
+        sim.step(.05, u=result.controls)
+    predicted = mpc.spec.unpack(result.nominal_states[1])
+    np.testing.assert_allclose(predicted["tug.position"], sim.state["tug"]["position"], atol=1e-8)
+    assert predicted["tug.position"][1] > 0
+
+
+@pytest.mark.parametrize("inputs,controlled,message", [
+    (("a.prop.throttle", "a.prop.throttle"), ("a",), "duplicates"),
+    (("b.prop.throttle",), ("a",), "no inputs"),
+    (("a.prop.throttle", "b.prop.throttle"), ("a",), "uncontrolled crafts"),
+])
+def test_mpc_rejects_inconsistent_input_selection(inputs, controlled, message):
+    world, bounds = _world(("a", "b"))
+    with pytest.raises(ValueError, match=message):
+        MPC(world, u_bounds=bounds, inputs=inputs, controlled=controlled, horizon=3)
+
+
+def test_mx_articulated_dynamics_keep_joint_state_with_selected_propulsion():
+    from manta.parts import PrismaticJoint
+
+    world, bounds = _world()
+    joint = PrismaticJoint("gantry", axis=(0, 1, 0), mode="saturating",
+                           stall_force=20, damping=2)
+    joint.add(Mass("payload", mass=1, moi=(.1, .1, .1)))
+    world.crafts[0].add(joint)
+    mpc = MPC(world, u_bounds=bounds, inputs=("prop.throttle",),
+              expand_dynamics=False, horizon=3, dt=.1)
+    result = mpc.tick(None, _reference(3))
+    assert set(result.controls) == {"tug.prop.throttle"}
+    assert "tug.gantry.displacement" in {s.name for s in mpc.spec.slots}
+    assert np.isfinite(result.nominal_states).all()
+
+
 def test_one_rti_tick_obeys_bounds_and_shifts_a_finite_plan():
     world, bounds = _world()
     mpc = MPC(world, u_bounds=bounds, horizon=8, dt=.1)

@@ -30,6 +30,21 @@ Shiver concerns. Manta owns the generic optimizer and vehicle mathematics.
 
 ## Current implementation
 
+`MPC(inputs=("craft.prop.throttle", ...))` explicitly selects the command
+ports owned by this controller. Omitted ports retain their declared defaults
+inside prediction; their forces, articulated states and coupled dynamics
+remain present. `controlled` selects craft ownership within that input set.
+Omitting `inputs` preserves the original all-inputs behavior. Unknown,
+ambiguous, repeated, or explicitly selected inputs on uncontrolled craft are
+rejected. This supports hull propulsion alongside auxiliary mechanisms; it
+does not authorize the hull MPC to command a gantry or external load port.
+
+Articulated dynamics containing a QR linear solve require
+`expand_dynamics=False`: CasADi's QR solver has no scalar SX evaluation.
+This explicit option retains the differentiable MX graph, including joint
+states and reactions. It leaves the objective, integration and constraints
+unchanged; ordinary rigid-body models retain the expanded default.
+
 Manta currently runs one tangent-space, direct-multiple-shooting RTI update per
 control tick. It shifts the nonlinear actuator plan, rolls out and linearizes
 the complete reduced world, assembles one sparse QP, solves it through either

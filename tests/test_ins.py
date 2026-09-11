@@ -113,6 +113,26 @@ def test_ins_state_has_navigation_biases_but_no_angular_velocity():
         "craft.imu.accel", "craft.imu.gyro")
 
 
+def test_ins_excluded_input_remains_at_declared_default_in_measurement_model():
+    from manta.parts.disturbance.external_wrench import ExternalWrench
+
+    world = _world()
+    world.crafts[0].add(ExternalWrench("auxiliary", fx=4.0))
+    # The caller chooses no live model controls. A nonzero frozen force must
+    # still contribute to the model-force observation, not disappear or become
+    # an unhandled tick argument when INS replaces the navigation recurrence.
+    ins = INS(world, imu="craft.imu", inputs=[],
+              sensors=["craft.model_force.specific_force"])
+    assert ins.sys.model_input_names == []
+    x = ins.module().state.field("x").init
+    observe = ca.Function("frozen_input_observation",
+        [ins.sys.x_sym, ins.sys.u_sym, ins.sys.dt_sym, ins.sys.t_sym],
+        [ins.sys.sensors["craft.model_force.specific_force"].h_sym])
+    observation = np.asarray(observe(
+        x, ins.sys.u_defaults, 0.0, 0.0), dtype=float).reshape(-1)
+    assert observation[0] == pytest.approx(2.0)
+
+
 def test_model_force_residual_directly_observes_accel_bias():
     ins = _ins(_world())
     x0 = ins.module().state.field("x").init

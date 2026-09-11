@@ -261,6 +261,9 @@ class MPC:
     ``controlled`` defaults to every craft with at least one input.  Inputs on
     other crafts remain at their declared defaults while their states and all
     inter-craft couplings remain part of the predicted world dynamics.
+    ``inputs`` can select a subset of a craft's input ports (full names or
+    unambiguous suffixes), for example propulsion while auxiliary mechanisms
+    retain their declared defaults. The default selects every input.
     """
 
     formulation = "sparse_direct_multiple_shooting_rti"
@@ -271,6 +274,8 @@ class MPC:
         *,
         u_bounds: Mapping[str, tuple[float, float]],
         controlled: Sequence[str] | None = None,
+        inputs: Sequence[str] | None = None,
+        expand_dynamics: bool = True,
         horizon: int = 100,
         dt: float = 0.1,
         substeps: int = 2,
@@ -309,7 +314,14 @@ class MPC:
         self.world = sim_transform.world
         self.model = sim_transform.model
         sim_module = sim_transform.module()
-        step = sim_module.functions["step"].expand()
+        if type(expand_dynamics) is not bool:
+            raise TypeError("expand_dynamics must be bool")
+        # Articulated plants use a symbolic linear solve whose QR plugin has
+        # no SX evaluation. Retain the MX function graph when explicitly
+        # requested; this changes symbolic assembly, not the plant recurrence.
+        step = sim_module.functions["step"]
+        if expand_dynamics:
+            step = step.expand()
         self.spec = sim_module.state.fields[0].spec
         if self.spec is None:
             raise RuntimeError("MPC requires a manifold state specification")
@@ -323,9 +335,18 @@ class MPC:
         if not craft_names:
             raise ValueError("MPC world has no crafts")
 
+        from ..ir._names import resolve_suffix
+
+        chosen_inputs = set(all_input_names)
+        if inputs is not None:
+            resolved = [resolve_suffix(name, list(all_input_names), label="input",
+                                       who="MPC") for name in inputs]
+            if len(set(resolved)) != len(resolved):
+                raise ValueError("MPC input selection contains duplicates")
+            chosen_inputs = set(resolved)
         inputs_by_craft = {
             craft: tuple(i for i, name in enumerate(all_input_names)
-                         if name.startswith(craft + "."))
+                         if name.startswith(craft + ".") and name in chosen_inputs)
             for craft in craft_names
         }
         selected = tuple(controlled) if controlled is not None else tuple(
@@ -340,6 +361,11 @@ class MPC:
         without_inputs = [craft for craft in selected if not inputs_by_craft[craft]]
         if without_inputs:
             raise ValueError(f"controlled craft(s) have no inputs: {without_inputs}")
+        if inputs is not None:
+            excluded = sorted(name for name in chosen_inputs
+                              if name.split(".", 1)[0] not in selected)
+            if excluded:
+                raise ValueError(f"selected inputs belong to uncontrolled crafts: {excluded}")
 
         controlled_indices = tuple(
             index for craft in selected for index in inputs_by_craft[craft])

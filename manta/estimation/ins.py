@@ -147,6 +147,13 @@ class _INSSystem:
         self._sig = base._sig
         self.model_input_names = list(base.input_names)
         self.model_input_defaults = dict(base.input_defaults)
+        # LinearizedSystem freezes excluded controls at their declared input
+        # defaults. They are not state slots, so freeze_complement below cannot
+        # reconstruct them when INS builds its own strapdown recurrence.
+        self._frozen_model_inputs = {
+            name: base.frozen[name]
+            for name in base.input_defaults if name not in base.input_names
+        }
 
         source_world = (source.world_copy() if hasattr(source, "world_copy")
                         else source)
@@ -386,7 +393,8 @@ class _INSSystem:
                                 self.noise_specs, "exact")
         ref = flatten_nested(self.world._initial_state_dict())
         frozen_base = freeze_complement(self.full_spec,
-                                        {s.name for s in spec.slots}, ref)
+                                        {s.name for s in spec.slots}, ref,
+                                        into=dict(self._frozen_model_inputs))
         omega_name = f"{self.craft_name}.angular_velocity"
         p_name = f"{self.craft_name}.position"
         q_name = f"{self.craft_name}.orientation"
