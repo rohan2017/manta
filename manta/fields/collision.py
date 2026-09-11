@@ -7,6 +7,10 @@ giving the **outward penetration vector** at the query point:
   * Otherwise, a vector along the obstacle's outward normal whose
     magnitude equals the penetration depth.
 
+For numeric inter-body contact outside the symbolic plant, see
+``manta.contact``: its paired external wrenches have a different coupling
+contract from this spatial obstacle field.
+
 The natural use is a `Collider` Part: it queries the field at its
 mount point and applies a spring (+ optional damper) force scaled by
 the penetration vector. The Collider lives in parts/structure/.

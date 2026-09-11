@@ -5,6 +5,11 @@ This represents cylinders, annular collars and tapered sockets without mesh
 faceting. Contact geometry is evaluated outside the smooth vehicle kernel;
 apply the returned equal/opposite loads through mounted ExternalWrench parts.
 No capture, command, vehicle, or transport policy lives here.
+
+Use this boundary for numeric inter-body contact and equal/opposite external
+wrenches. ``manta.fields.CollisionField`` instead represents symbolic spatial
+obstacles inside a differentiable plant. Their evaluation and coupling contracts
+are distinct; applications choose according to the model they need.
 """
 
 from __future__ import annotations

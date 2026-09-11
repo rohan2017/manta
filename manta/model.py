@@ -82,7 +82,11 @@ def canonical_derivation_bytes(derivation: Mapping[str, Any]) -> bytes:
 
 @dataclass(frozen=True)
 class ModelValidationReport:
-    """Structural checks completed before a transform may use a model."""
+    """Certificate of structural checks completed before using a model.
+
+    Validation failures raise before this report is constructed; ``valid`` is
+    consequently always true. This is not a container for failed validation.
+    """
 
     checks: tuple[str, ...]
     craft_names: tuple[str, ...]
