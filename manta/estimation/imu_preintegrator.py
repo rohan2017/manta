@@ -17,7 +17,7 @@ packet.  ``covariance`` is the 9x9 covariance of ``[dtheta, dv, dp]`` and
 ``[d gyro_bias, d accel_bias]``.  Both matrices are flattened in CasADi/Eigen
 column-major order. These equations describe inertial/non-rotating axes;
 a planet-attached INS applies the companion-side navigation-frame correction.
-Packet schema 2 additionally carries velocity/position sampling-time moments
+Packet schema 3 carries velocity/position sampling-time moments
 (order zero through three), allowing that correction to preserve the actual
 left-held quadrature without teaching this recurrence about the planet.
 
@@ -47,7 +47,7 @@ from ..ir._rotation import quat_conj, quat_mul, so3_exp, so3_log
 from ..ir.manifold import R3Manifold, RnManifold, ScalarManifold, SO3Manifold
 from ..recurrence import RecurrenceBlock
 
-PREINTEGRATION_PACKET_SCHEMA = 2
+PREINTEGRATION_PACKET_SCHEMA = 3
 
 PACKET_FIELDS = (
     "delta_orientation",
@@ -62,7 +62,6 @@ PACKET_FIELDS = (
     "bias_jacobian",
     "gyro_bias_reference",
     "accel_bias_reference",
-    "start_accel",
     "start_gyro",
     "end_accel",
     "end_gyro",
@@ -81,8 +80,7 @@ def _single_sample_kernel(accel_density: float, gyro_density: float):
     return block.update_fn, block.x0.copy(), tuple(block.outputs)
 
 
-def _single_sample_packet(*, accel, gyro, dt: float,
-                          end_accel=None, end_gyro=None,
+def _single_sample_packet(*, accel, gyro, end_accel, end_gyro, dt: float,
                           accel_noise_sigma: float,
                           gyro_noise_sigma: float) -> dict[str, object]:
     """Build one left-held interval for truth-backed analysis tools.
@@ -91,13 +89,9 @@ def _single_sample_packet(*, accel, gyro, dt: float,
     accepts densities. Multiplication by ``sqrt(dt)`` makes the integrated
     packet covariance identical to raw INS for this sample interval.
 
-    ``accel``/``gyro`` are the sample held over the interval.  A displaced
-    IMU additionally requires the independently sampled right-endpoint gyro
-    to remove endpoint lever velocity.  Callers which have that look-ahead
-    pass it as ``end_gyro`` (and ``end_accel`` for endpoint model aiding).
-    Falling back to the held sample preserves the legacy helper behavior for
-    colocated IMUs and constant angular rate, but is not exact under angular
-    acceleration at a nonzero lever arm.
+    ``accel``/``gyro`` are the sample held over the interval. ``end_accel`` and
+    ``end_gyro`` are the independently sampled right boundary. Requiring both
+    prevents a single sample from being labeled as two physical observations.
     """
     accel_density = float(accel_noise_sigma) * math.sqrt(float(dt))
     gyro_density = float(gyro_noise_sigma) * math.sqrt(float(dt))
@@ -113,14 +107,9 @@ def _single_sample_packet(*, accel, gyro, dt: float,
         value = flat[off:off + port.dim].copy()
         packet[port.name] = float(value[0]) if port.dim == 1 else value
         off += port.dim
-    if end_accel is not None or end_gyro is not None:
-        if end_accel is None or end_gyro is None:
-            raise ValueError(
-                "an independent preintegration endpoint requires both "
-                "end_accel and end_gyro")
-        packet = frame_preintegrated_packet(
-            packet, end_accel=end_accel, end_gyro=end_gyro)
-    return packet
+    return frame_preintegrated_packet(
+        packet, end_accel=end_accel, end_gyro=end_gyro
+    )
 
 
 def frame_preintegrated_packet(
@@ -307,7 +296,6 @@ class IMUPreintegrator(RecurrenceBlock):
             start_gyro_sigma_next = ca.if_else(
                 first, gyro_sample_sigma, x["start_gyro_noise_sigma"])
 
-            start_accel = ca.if_else(first, u["accel"], x["start_accel"])
             start_gyro = ca.if_else(first, u["gyro"], x["start_gyro"])
             # Deterministic left-hold quadrature, independent of the planet.
             # V[j] = sum h*t_left**j;
@@ -335,7 +323,6 @@ class IMUPreintegrator(RecurrenceBlock):
                 "bias_jacobian": ca.reshape(J_next, 54, 1),
                 "gyro_bias_reference": gyro_bias_ref,
                 "accel_bias_reference": accel_bias_ref,
-                "start_accel": start_accel,
                 "start_gyro": start_gyro,
                 "end_accel": u["accel"],
                 "end_gyro": u["gyro"],
@@ -362,7 +349,6 @@ class IMUPreintegrator(RecurrenceBlock):
                 ("bias_jacobian", RnManifold(54)),
                 ("gyro_bias_reference", R3Manifold()),
                 ("accel_bias_reference", R3Manifold()),
-                ("start_accel", R3Manifold()),
                 ("start_gyro", R3Manifold()),
                 ("end_accel", R3Manifold()),
                 ("end_gyro", R3Manifold()),
@@ -386,7 +372,6 @@ class IMUPreintegrator(RecurrenceBlock):
                 ("bias_jacobian", 54),
                 ("gyro_bias_reference", 3),
                 ("accel_bias_reference", 3),
-                ("start_accel", 3),
                 ("start_gyro", 3),
                 ("end_accel", 3),
                 ("end_gyro", 3),
@@ -408,7 +393,6 @@ class IMUPreintegrator(RecurrenceBlock):
                 "bias_jacobian": np.zeros(54),
                 "gyro_bias_reference": zero3,
                 "accel_bias_reference": zero3,
-                "start_accel": zero3,
                 "start_gyro": zero3,
                 "end_accel": zero3,
                 "end_gyro": zero3,

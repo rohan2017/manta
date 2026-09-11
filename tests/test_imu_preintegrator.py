@@ -22,7 +22,11 @@ from manta import (
 )
 from manta.estimation import nees, observability_trajectory
 from manta.estimation._assembly import estimator_inputs
-from manta.estimation.imu_preintegrator import _single_sample_packet
+from manta.estimation.imu_preintegrator import (
+    PACKET_FIELDS,
+    PREINTEGRATION_PACKET_SCHEMA,
+    _single_sample_packet,
+)
 from manta.estimation.ins import PREINTEGRATION_DURATION_DOC
 from manta.fields import GravityField
 from manta.ir._rotation import quat_mul_np, so3_exp_np
@@ -56,6 +60,9 @@ def test_packet_contract_and_reset():
         accel_bias=(0.1, 0.2, 0.3), gyro_bias=(0.01, 0.02, 0.03))
     assert packet["duration"] == pytest.approx(0.002)
     assert packet["sample_count"] == 1
+    assert PREINTEGRATION_PACKET_SCHEMA == 3
+    assert "start_accel" not in PACKET_FIELDS
+    assert "start_accel" not in packet
     assert packet["covariance"].shape == (81,)
     assert packet["delta_start_gyro_cross_covariance"].shape == (27,)
     assert packet["delta_end_gyro_cross_covariance"].shape == (27,)

@@ -51,6 +51,7 @@ from ._evidence import (
 )
 from ._map import Fit, FitPosteriorProgress, FitProgress, FitResult
 from ._nll import NoiseFit, NoiseFitProgress, NoiseFitResult
+from ._nnls import NnlsConvergenceError, nnls_from_normal_equations
 from ._report import FitDerivationReport
 from ._residuals import ResidualStatistics, bartlett_hac_residual_statistics
 
@@ -71,6 +72,7 @@ __all__ = [
     "Free",
     "GaussianTangentPrior",
     "HeldOutWindow",
+    "NnlsConvergenceError",
     "NoiseFit",
     "NoiseFitProgress",
     "NoiseFitResult",
@@ -82,5 +84,6 @@ __all__ = [
     "bartlett_hac_residual_statistics",
     "held_out_evidence",
     "hold_out",
+    "nnls_from_normal_equations",
     "window_digest",
 ]
