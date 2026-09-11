@@ -131,12 +131,12 @@ def TargetNumpy(
 
     `compile=True` builds the kernel's CasADi functions with optimized native
     code (O1 by default for full-simulation graphs, `-O3 -march=native` for
-    other runtime models). A caller may explicitly select O0, O1, or O2 for a
-    simulation whose compile/runtime tradeoff and cold-build ceiling are
-    scenario-specific. It
+    other runtime models). Each artifact caller may explicitly select a
+    startup/balanced/runtime profile or O0/O1/O2 according to its own
+    compile/runtime tradeoff and cold-build ceiling. It
     calls them as externals instead of interpreting the MX graph. Results are
-    cached on disk; the default cold-build deadline is five minutes, and a
-    simulation caller may replace or disable that deadline. It raises
+    cached on disk; the default cold-build deadline is five minutes, and the
+    artifact caller may replace or disable that deadline. It raises
     `CompilationError` if an external cannot be produced; explicit native
     execution never silently becomes interpretation. Pair with `NumpySim`'s
     `step_n` to fold substeps for a further amortization.
@@ -152,20 +152,19 @@ def TargetNumpy(
     if (
         optimization is not None
         or compile_timeout_s != DEFAULT_COMPILATION_TIMEOUT_S
-    ):
-        if not compile:
-            raise ValueError(
-                "optimization and compile_timeout_s require compile=True"
-            )
-        if m.kind is not ModuleKind.SIMULATOR:
-            raise ValueError(
-                "explicit TargetNumpy compilation policy is only for simulation"
-            )
+    ) and not compile:
+        raise ValueError(
+            "optimization and compile_timeout_s require compile=True"
+        )
     if max_instructions != DEFAULT_MAX_INSTRUCTIONS and not compile:
         raise ValueError("max_instructions requires compile=True")
     validate_max_instructions(max_instructions)
-    if optimization is not None and optimization not in {"O0", "O1", "O2"}:
-        raise ValueError("simulation optimization must be O0, O1, or O2")
+    if optimization is not None and optimization not in {
+        "startup", "balanced", "runtime", "O0", "O1", "O2"
+    }:
+        raise ValueError(
+            "optimization must be startup/balanced/runtime or O0/O1/O2"
+        )
     runtime = _select_view(m)(m)
     return (
         runtime._enable_compile(

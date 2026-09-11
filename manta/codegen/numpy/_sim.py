@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any
 
@@ -16,6 +17,8 @@ from ...ir.state_spec import flatten_nested
 from ..target import for_role
 from ._noise import NoiseCheckpoint, NoiseDriver
 from ._runtime import NumpyRuntime, _split, finite_array, pack_fields
+
+_STEPN_CACHE_SIZE = 8
 
 
 @dataclass(frozen=True)
@@ -122,7 +125,7 @@ class NumpySim(NumpyRuntime):
         self._driver: NoiseDriver | None = None
         self._outputs: dict[str, dict[str, Any]] = {}
         self._sim_state: dict | None = None
-        self._stepn_cache: dict[int, Any] = {}   # n → folded step kernel
+        self._stepn_cache: OrderedDict[int, Any] = OrderedDict()
         self._coupled_models: list[Any] = []
         profile = module.metadata.get("transform_profile", {})
         raw_noise_dependencies = profile.get("noise_dependencies")
@@ -548,12 +551,18 @@ class NumpySim(NumpyRuntime):
         return self._sim_state
 
     def _step_n_fn(self, n: int):
-        if n not in self._stepn_cache:
+        fn = self._stepn_cache.get(n)
+        if fn is None:
             # accumulate output 0 (x_new) -> input 0 (x); u/noise/dt/t are
             # per-substep parameters.
-            self._stepn_cache[n] = self._functions["step"].mapaccum(
+            fn = self._functions["step"].mapaccum(
                 f"step_x{n}", n, [0], [0])
-        return self._stepn_cache[n]
+            self._stepn_cache[n] = fn
+            while len(self._stepn_cache) > _STEPN_CACHE_SIZE:
+                self._stepn_cache.popitem(last=False)
+        else:
+            self._stepn_cache.move_to_end(n)
+        return fn
 
     def _advance_n(self, state: dict, dt: float, n: int, t: float,
                    u: dict[str, Any] | None = None) -> dict:

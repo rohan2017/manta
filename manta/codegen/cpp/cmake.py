@@ -88,8 +88,10 @@ endif()
 
 # Suppress benign warnings on the CasADi-emitted C kernel — it includes
 # unused-parameter style code that's hostile to -Wall by default.
-set_source_files_properties(
-    {basename}_kernels.c
-    PROPERTIES COMPILE_OPTIONS "-Wno-unused-parameter;-Wno-unused-variable;-Wno-missing-field-initializers"
-)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    set_source_files_properties(
+        {basename}_kernels.c
+        PROPERTIES COMPILE_OPTIONS "-Wno-unused-parameter;-Wno-unused-variable;-Wno-missing-field-initializers"
+    )
+endif()
 """

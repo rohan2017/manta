@@ -13,6 +13,7 @@ specialized runtime directly.
     `recurrence` block (no world needed), lowered by the same backends.
 """
 
+from .errors import MpcNumericalError
 from .lqr import LQR, LQRSolution
 from .pid import PID
 from .rti import (
@@ -32,4 +33,5 @@ __all__ = [
     "MPCReference",
     "MPCResult",
     "MPCTimings",
+    "MpcNumericalError",
 ]

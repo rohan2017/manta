@@ -42,6 +42,10 @@ class ResidualStatistics:
     covariance: using it as independent per-step noise reproduces the
     asymptotic integrated-error growth of the observed correlated sequence.
     Bias remains separate and is never folded into zero-mean covariance.
+    Raw minimum eigenvalues and correction norm/count fields expose any
+    roundoff-scale PSD projection. Materially indefinite estimates are
+    refused. ``effective_sample_size_unclipped`` preserves the estimate before
+    the public effective sample size is bounded to ``[1, samples]``.
     """
 
     bias: NDArray[np.float64]
@@ -53,6 +57,13 @@ class ResidualStatistics:
     samples: int
     windows: int
     effective_sample_size: NDArray[np.float64]
+    effective_sample_size_unclipped: NDArray[np.float64]
+    instantaneous_raw_min_eigenvalue: float
+    instantaneous_psd_correction_norm: float
+    instantaneous_psd_correction_count: int
+    white_equivalent_raw_min_eigenvalue: float
+    white_equivalent_psd_correction_norm: float
+    white_equivalent_psd_correction_count: int
 
     def __post_init__(self) -> None:
         bias = _owned_vector(self.bias, name="ResidualStatistics.bias")
@@ -70,6 +81,42 @@ class ResidualStatistics:
             raise ValueError("ResidualStatistics.effective_sample_size must "
                              "match bias and be >= 1")
         object.__setattr__(self, "effective_sample_size", effective)
+        effective_unclipped = _owned_vector(
+            self.effective_sample_size_unclipped,
+            name="ResidualStatistics.effective_sample_size_unclipped",
+        )
+        if effective_unclipped.shape != bias.shape \
+                or np.any(effective_unclipped < 0.0):
+            raise ValueError(
+                "ResidualStatistics.effective_sample_size_unclipped must "
+                "match bias and be non-negative"
+            )
+        object.__setattr__(
+            self, "effective_sample_size_unclipped", effective_unclipped
+        )
+        for name in (
+            "instantaneous_raw_min_eigenvalue",
+            "instantaneous_psd_correction_norm",
+            "white_equivalent_raw_min_eigenvalue",
+            "white_equivalent_psd_correction_norm",
+        ):
+            value = float(getattr(self, name))
+            if not math.isfinite(value):
+                raise ValueError(f"ResidualStatistics.{name} must be finite")
+            if name.endswith("correction_norm") and value < 0.0:
+                raise ValueError(
+                    f"ResidualStatistics.{name} must be non-negative"
+                )
+            object.__setattr__(self, name, value)
+        for name in (
+            "instantaneous_psd_correction_count",
+            "white_equivalent_psd_correction_count",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(
+                    f"ResidualStatistics.{name} must be a non-negative integer"
+                )
         dt = float(self.reference_dt_s)
         horizon = float(self.correlation_horizon_s)
         if not math.isfinite(dt) or dt <= 0.0:
@@ -98,12 +145,24 @@ class ResidualStatistics:
         return self.white_equivalent_covariance
 
 
-def _positive_semidefinite(matrix: NDArray[np.float64]
-                           ) -> NDArray[np.float64]:
+def _positive_semidefinite(
+    matrix: NDArray[np.float64], *, name: str,
+) -> tuple[NDArray[np.float64], float, float, int]:
     symmetric = 0.5 * (matrix + matrix.T)
     eigenvalues, eigenvectors = np.linalg.eigh(symmetric)
+    minimum = float(np.min(eigenvalues))
+    scale = float(np.linalg.norm(symmetric, ord=np.inf))
+    tolerance = 64.0 * np.finfo(float).eps * matrix.shape[0] * scale
+    if minimum < -tolerance:
+        raise ValueError(
+            f"{name} is materially indefinite: minimum eigenvalue "
+            f"{minimum:.17g} is below numerical tolerance {-tolerance:.17g}"
+        )
+    correction_count = int(np.count_nonzero(eigenvalues < 0.0))
     result = (eigenvectors * np.maximum(eigenvalues, 0.0)) @ eigenvectors.T
-    return np.asarray(0.5 * (result + result.T), dtype=float)
+    result = np.asarray(0.5 * (result + result.T), dtype=float)
+    correction_norm = float(np.linalg.norm(result - symmetric, ord="fro"))
+    return result, minimum, correction_norm, correction_count
 
 
 def bartlett_hac_residual_statistics(
@@ -164,18 +223,32 @@ def bartlett_hac_residual_statistics(
         weight = 1.0 - lag / (lag_steps + 1.0)
         long_run += weight * (cross + cross.T)
 
-    instantaneous = _positive_semidefinite(instantaneous)
-    long_run = _positive_semidefinite(long_run)
+    (
+        instantaneous,
+        instantaneous_minimum,
+        instantaneous_correction_norm,
+        instantaneous_correction_count,
+    ) = _positive_semidefinite(
+        instantaneous, name="instantaneous residual covariance"
+    )
+    (
+        long_run,
+        long_run_minimum,
+        long_run_correction_norm,
+        long_run_correction_count,
+    ) = _positive_semidefinite(
+        long_run, name="Bartlett-HAC residual covariance"
+    )
     instantaneous_diagonal = np.diag(instantaneous)
     long_run_diagonal = np.diag(long_run)
-    effective = np.full(int(dimension), float(sample_count))
+    effective_unclipped = np.full(int(dimension), float(sample_count))
     np.divide(
         sample_count * instantaneous_diagonal,
         long_run_diagonal,
-        out=effective,
+        out=effective_unclipped,
         where=long_run_diagonal > np.finfo(float).tiny,
     )
-    effective = np.clip(effective, 1.0, float(sample_count))
+    effective = np.clip(effective_unclipped, 1.0, float(sample_count))
     return ResidualStatistics(
         bias=bias,
         instantaneous_covariance=instantaneous,
@@ -186,6 +259,13 @@ def bartlett_hac_residual_statistics(
         samples=sample_count,
         windows=len(normalized),
         effective_sample_size=effective,
+        effective_sample_size_unclipped=effective_unclipped,
+        instantaneous_raw_min_eigenvalue=instantaneous_minimum,
+        instantaneous_psd_correction_norm=instantaneous_correction_norm,
+        instantaneous_psd_correction_count=instantaneous_correction_count,
+        white_equivalent_raw_min_eigenvalue=long_run_minimum,
+        white_equivalent_psd_correction_norm=long_run_correction_norm,
+        white_equivalent_psd_correction_count=long_run_correction_count,
     )
 
 

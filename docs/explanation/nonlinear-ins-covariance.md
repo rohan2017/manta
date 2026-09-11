@@ -108,8 +108,9 @@ runtime.reset(state=initial_state, P=physical_prior_covariance)
 The larger instruction limit is explicit because nonlinear kernels exceed the
 backend's default 3000-instruction cold-build guard. The tested full NumPy
 native build uses its default `-O3 -march=native` profile. For an `-O1` hot
-subset, construct `TargetNumpy(ins)` and use its public `compile_functions`
-method with selected predict/update entry names and the same size limit.
+subset, construct `TargetNumpy(ins)`, use its public `compile_functions`
+method for selected prediction kernels, and use `compile_sensor_updates` with
+semantic sensor names for correction kernels. Apply the same size limit.
 Generated C++ does not use that NumPy size gate; both optimization profiles
 are covered by the runtime parity tests.
 

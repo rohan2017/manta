@@ -25,6 +25,8 @@ import casadi as ca
 import numpy as np
 import numpy.typing as npt
 
+from .errors import MpcNumericalError
+
 FloatArray = npt.NDArray[np.float64]
 
 
@@ -207,7 +209,11 @@ class MPCTimings:
 
 @dataclass(frozen=True)
 class MPCResult:
-    """One RTI update and its inspectable warm trajectory."""
+    """One RTI update and its inspectable warm trajectory.
+
+    ``timings`` contains nonsemantic wall-clock diagnostics for profiling;
+    it is not part of controller behavior or deterministic result identity.
+    """
 
     controls: Mapping[str, float]
     control_vector: FloatArray
@@ -990,7 +996,19 @@ class MPC:
             if candidate.shape != self._U.shape or not np.all(np.isfinite(candidate)):
                 raise ValueError(
                     f"reset controls must be finite with shape {self._U.shape}")
-            self._U[:] = np.clip(candidate, self.u_lo, self.u_hi)
+            outside = np.argwhere(
+                (candidate < self.u_lo[None, :])
+                | (candidate > self.u_hi[None, :])
+            )
+            if outside.size:
+                stage, control = (int(value) for value in outside[0])
+                raise ValueError(
+                    "reset controls must satisfy actuator bounds; "
+                    f"stage {stage}, input {self.input_names[control]!r} has "
+                    f"{candidate[stage, control]:.17g} outside "
+                    f"[{self.u_lo[control]:.17g}, {self.u_hi[control]:.17g}]"
+                )
+            self._U[:] = candidate
         self._last_u.fill(0.0)
         self._qp_x.fill(0.0)
         self._qp_lam_x.fill(0.0)
@@ -1488,7 +1506,7 @@ class MPC:
                         f"equality={native.equality_residual:.3g}, "
                         f"inequality={native.inequality_residual:.3g}, "
                         f"complementarity={native.complementarity_residual:.3g})")
-                raise RuntimeError(
+                raise MpcNumericalError(
                     f"MPC RTI QP failed: {status}{residual_detail}")
             qp_step = native.x
             if self.qp_backend == "osqp":
@@ -1525,7 +1543,7 @@ class MPC:
             status = str(stats.get("return_status", "unknown"))
             if not (bool(stats.get("success", False))
                     or status.lower().startswith("solved")):
-                raise RuntimeError(f"MPC RTI QP failed: {status}")
+                raise MpcNumericalError(f"MPC RTI QP failed: {status}")
             qp_step = np.asarray(result["x"], dtype=float).reshape(-1)
             next_lam_x = np.asarray(
                 result["lam_x"], dtype=float).reshape(-1).copy()
@@ -1543,10 +1561,10 @@ class MPC:
             qp_rho_estimate = math.nan
         solved_at = time.perf_counter_ns()
         if not np.all(np.isfinite(qp_step)):
-            raise RuntimeError("MPC RTI QP returned a nonfinite step")
+            raise MpcNumericalError("MPC RTI QP returned a nonfinite step")
         if (not np.all(np.isfinite(next_lam_x))
                 or not np.all(np.isfinite(next_lam_a))):
-            raise RuntimeError("MPC RTI QP returned nonfinite dual state")
+            raise MpcNumericalError("MPC RTI QP returned nonfinite dual state")
         normalized_delta_u = qp_step[
             self._control_offset:self._slack_offset].reshape(
                 self.horizon, self.nu)
@@ -1569,17 +1587,21 @@ class MPC:
         if (not np.all(np.isfinite(accepted_controls))
                 or not np.all(np.isfinite(accepted_states))
                 or not np.all(np.isfinite(accepted_body_left))):
-            raise RuntimeError("MPC accepted rollout contains nonfinite values")
+            raise MpcNumericalError(
+                "MPC accepted rollout contains nonfinite values"
+            )
         peak_bank, bank_violation = self._bank_metrics(accepted_body_left)
         attitude_constraint_violation = (
             self._attitude_constraint_violation(accepted_states, ref))
         if not all(math.isfinite(float(v)) for v in (
                 qp_cost, peak_bank, bank_violation,
                 attitude_constraint_violation)):
-            raise RuntimeError("MPC solve produced nonfinite cost or diagnostics")
+            raise MpcNumericalError(
+                "MPC solve produced nonfinite cost or diagnostics"
+            )
         command = accepted_controls[0].copy()
         if not np.all(np.isfinite(command)):
-            raise RuntimeError("MPC command contains nonfinite values")
+            raise MpcNumericalError("MPC command contains nonfinite values")
         # Commit the complete warm state only after the solve and accepted
         # rollout have passed every validation above.
         self._qp_x[:] = qp_step

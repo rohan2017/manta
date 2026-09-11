@@ -25,7 +25,9 @@ class NoiseDriver:
     deploy target.
     """
 
-    def __init__(self, seed: int | None = None) -> None:
+    def __init__(self, seed: int) -> None:
+        if isinstance(seed, bool) or not isinstance(seed, int):
+            raise TypeError("NoiseDriver seed must be an explicit integer")
         self._seed = seed
         self._rng = np.random.default_rng(seed)
         self._channels: list[tuple[str, int, float]] = []

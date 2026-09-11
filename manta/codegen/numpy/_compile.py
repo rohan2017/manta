@@ -107,11 +107,23 @@ def cpu_identity() -> str:
     except OSError:
         identity = ""
     if not identity:
-        identity = platform.processor() or platform.machine()
+        processor = platform.processor().strip()
+        machine = platform.machine().strip()
+        generic = {
+            "x86", "x86_64", "amd64", "i386", "i686", "arm", "arm64",
+            "aarch64", "ppc64", "ppc64le", "riscv64",
+        }
+        if processor and (
+            processor.lower() not in generic
+            and processor.lower() != machine.lower()
+        ):
+            identity = processor
     if not identity:
         raise CompilationError(
             "cannot identify the host CPU for a -march=native build: "
-            "/proc/cpuinfo is unavailable and platform.processor() is empty"
+            "/proc/cpuinfo is unavailable and platform.processor() does not "
+            "identify a CPU microarchitecture; use a portable optimization "
+            "profile on this host"
         )
     return identity
 

@@ -43,6 +43,7 @@ def test_target_cpp_custom_basename(tmp_path: Path):
     assert result.kernels_c.name == "my_robot_kernels.c"
     assert result.wrapper_hpp.name == "my_robot.hpp"
     cmake_text = result.cmakelists.read_text()
+    assert 'if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")' in cmake_text
     assert "my_robot_kernels.c" in cmake_text
     assert "my_robot.cpp" in cmake_text
 

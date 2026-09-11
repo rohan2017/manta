@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping
+from collections import OrderedDict
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import casadi as ca
 import numpy as np
@@ -14,10 +15,16 @@ from ..._validation import require_finite, require_positive
 from ...estimation._kalman import joseph_update_np
 from ...ir._names import resolve_suffix
 from ...ir.module import entry_ident
+from ._compile import (
+    DEFAULT_COMPILATION_TIMEOUT_S,
+    DEFAULT_MAX_INSTRUCTIONS,
+    Optimization,
+)
 from ._runtime import NumpyRuntime
 
 _LOG = logging.getLogger(__name__)
 _FLOAT_EPS = np.finfo(float).eps
+_CUSTOM_MEASUREMENT_CACHE_SIZE = 32
 
 
 def _finite_covariance_is_symmetric(matrix: np.ndarray) -> bool:
@@ -122,7 +129,7 @@ class NumpyFilter(NumpyRuntime):
     def __init__(self, module) -> None:
         super().__init__(module)
         self._Q: np.ndarray | None = None        # default process noise
-        self._custom_h_cache: dict = {}          # h_sym -> (h_fn, H_fn)
+        self._custom_h_cache: OrderedDict = OrderedDict()
         rho_warning = module.metadata.get("rho_warning")
         for sensor, rho in module.metadata.get("rho_by_sensor", {}).items():
             if rho_warning is not None and rho > rho_warning:
@@ -564,6 +571,7 @@ class NumpyFilter(NumpyRuntime):
         except TypeError:                        # unhashable callable
             cached = None
         if cached is not None:
+            self._custom_h_cache.move_to_end(h_sym)
             return cached
         spec = self._spec
         x_sym = ca.MX.sym("x", spec.ambient_dim, 1)
@@ -578,9 +586,52 @@ class NumpyFilter(NumpyRuntime):
                ca.Function("H", [x_sym], [H_sym]))
         try:
             self._custom_h_cache[h_sym] = fns
+            self._custom_h_cache.move_to_end(h_sym)
+            while len(self._custom_h_cache) > _CUSTOM_MEASUREMENT_CACHE_SIZE:
+                self._custom_h_cache.popitem(last=False)
         except TypeError:
             pass
         return fns
+
+    def compile_sensor_updates(
+        self,
+        sensor_names: Iterable[str],
+        *,
+        covariance: Literal["model", "per_sample"] = "model",
+        optimization: Optimization = "balanced",
+        timeout_s: float = DEFAULT_COMPILATION_TIMEOUT_S,
+        max_instructions: int | None = DEFAULT_MAX_INSTRUCTIONS,
+    ) -> NumpyFilter:
+        """Compile selected sensor-fold kernels through the public filter API.
+
+        ``covariance="model"`` selects the ordinary diagnostic update whose
+        covariance is baked into the estimator. ``"per_sample"`` selects the
+        update entry accepting an ``R=`` override. Sensor names use the same
+        full-name/unambiguous-suffix rules as :meth:`update`; callers never
+        need to construct or depend on generated Module entry names.
+        """
+        if covariance not in {"model", "per_sample"}:
+            raise ValueError("covariance must be 'model' or 'per_sample'")
+        prefix = (
+            "update_diagnostic_" if covariance == "model"
+            else "update_with_R_"
+        )
+        requested = (sensor_names,) if isinstance(sensor_names, str) \
+            else sensor_names
+        full_names = tuple(dict.fromkeys(
+            self._resolve_sensor(name) for name in requested
+        ))
+        function_names = tuple(
+            self.module.entry(prefix + entry_ident(full)).fn
+            for full in full_names
+        )
+        self.compile_functions(
+            function_names,
+            optimization=optimization,
+            timeout_s=timeout_s,
+            max_instructions=max_instructions,
+        )
+        return self
 
     def _update_custom(self, h_sym: Callable, z, R) -> UpdateResult:
         """Joseph update for a caller-supplied `h(x)` — built on the spec's

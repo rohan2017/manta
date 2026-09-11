@@ -70,6 +70,29 @@ def test_toolchain_identity_covers_compiler_abi_and_native_cpu():
     assert native != generic
 
 
+def test_native_cpu_identity_refuses_architecture_only_fallback(monkeypatch):
+    def unavailable(*_args, **_kwargs):
+        raise FileNotFoundError
+
+    monkeypatch.setattr("builtins.open", unavailable)
+    monkeypatch.setattr(_compile.platform, "processor", lambda: "x86_64")
+    monkeypatch.setattr(_compile.platform, "machine", lambda: "x86_64")
+    with pytest.raises(_compile.CompilationError, match="microarchitecture"):
+        _compile.cpu_identity()
+
+
+def test_native_cpu_identity_accepts_specific_processor_fallback(monkeypatch):
+    def unavailable(*_args, **_kwargs):
+        raise FileNotFoundError
+
+    monkeypatch.setattr("builtins.open", unavailable)
+    monkeypatch.setattr(
+        _compile.platform, "processor", lambda: "Intel Core Ultra 9 386H"
+    )
+    monkeypatch.setattr(_compile.platform, "machine", lambda: "x86_64")
+    assert _compile.cpu_identity() == "Intel Core Ultra 9 386H"
+
+
 def test_build_flags_and_link_line_are_part_of_the_key(monkeypatch):
     monkeypatch.setattr(
         _compile, "toolchain_identity",

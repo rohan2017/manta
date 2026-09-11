@@ -10,6 +10,7 @@ from manta import (
     MPC,
     Craft,
     CraftHorizonReference,
+    MpcNumericalError,
     MPCReference,
     Sim,
     TargetNumpy,
@@ -130,6 +131,30 @@ def test_one_rti_tick_obeys_bounds_and_shifts_a_finite_plan():
     np.testing.assert_array_equal(mpc._qp_x, 0.0)
     np.testing.assert_array_equal(mpc._qp_lam_x, 0.0)
     np.testing.assert_array_equal(mpc._qp_lam_a, 0.0)
+
+
+def test_reset_refuses_out_of_bound_warm_controls():
+    world, bounds = _world()
+    mpc = MPC(world, u_bounds=bounds, horizon=4, dt=.1)
+    with pytest.raises(ValueError, match="stage 2.*prop.throttle.*outside"):
+        mpc.reset(np.array([[0.0], [0.5], [1.01], [-0.5]]))
+    np.testing.assert_array_equal(mpc._U, 0.0)
+
+
+def test_failed_qp_raises_typed_retryable_numerical_error():
+    world, bounds = _world()
+    mpc = MPC(world, u_bounds=bounds, horizon=4, dt=.1)
+
+    class FailedSolver:
+        def __call__(self, **_kwargs):
+            return {}
+
+        def stats(self):
+            return {"success": False, "return_status": "maximum iterations"}
+
+    mpc._qp = FailedSolver()
+    with pytest.raises(MpcNumericalError, match="maximum iterations"):
+        mpc.tick(None, _reference(4))
 
 
 def test_warm_start_advances_by_controller_time_not_a_whole_node():

@@ -15,6 +15,7 @@ import pytest
 
 from manta import (
     DEFAULT_MAX_INSTRUCTIONS,
+    EKF,
     CompilationError,
     Craft,
     Sim,
@@ -134,11 +135,29 @@ def test_simulation_accepts_an_explicit_optimization_level(
     assert selected == [optimization]
 
 
-def test_explicit_optimization_requires_a_compiled_simulation():
+def test_explicit_optimization_requires_a_compiled_runtime():
     with pytest.raises(ValueError, match="compile=True"):
         TargetNumpy(Sim(_world()), optimization="O1")
-    with pytest.raises(ValueError, match="O0, O1, or O2"):
+    with pytest.raises(ValueError, match="startup/balanced/runtime"):
         TargetNumpy(Sim(_world()), compile=True, optimization="O3")
+
+
+def test_filter_accepts_independent_full_artifact_compile_policy(monkeypatch):
+    selected = []
+
+    def record(functions, **options):
+        selected.append((options["optimization"], options["timeout_s"]))
+        return functions
+
+    monkeypatch.setattr(
+        "manta.codegen.numpy._runtime._compiled_functions", record
+    )
+    runtime = TargetNumpy(
+        EKF(_world()), compile=True, optimization="startup",
+        compile_timeout_s=17.0,
+    )
+    assert runtime.module.kind.value == "filter"
+    assert selected == [("startup", 17.0)]
 
 
 @pytest.mark.parametrize("timeout_s", [600.0, None])

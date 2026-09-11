@@ -53,6 +53,44 @@ from ._assembly import (
     resolve_sensor_set,
 )
 
+
+def _strict_nees_sample(
+    error: np.ndarray,
+    covariance: np.ndarray,
+    *,
+    run: int,
+    step: int,
+    labels: list[str] | None,
+) -> float:
+    """Evaluate one NEES sample only on a nonsingular covariance space."""
+    matrix = np.asarray(covariance, dtype=float)
+    if not np.all(np.isfinite(matrix)):
+        raise ValueError(
+            f"nees: covariance is non-finite at run {run}, step {step}"
+        )
+    symmetric = 0.5 * (matrix + matrix.T)
+    eigenvalues, eigenvectors = np.linalg.eigh(symmetric)
+    minimum_index = int(np.argmin(eigenvalues))
+    minimum = float(eigenvalues[minimum_index])
+    try:
+        np.linalg.cholesky(symmetric)
+    except np.linalg.LinAlgError as exc:
+        direction = np.abs(eigenvectors[:, minimum_index])
+        implicated_indices = np.flatnonzero(
+            direction >= 0.25 * float(np.max(direction))
+        )
+        implicated = (
+            sorted({labels[index] for index in implicated_indices})
+            if labels is not None
+            else [f"observable_basis[{index}]" for index in implicated_indices]
+        )
+        raise ValueError(
+            "nees: covariance must be positive definite on the evaluated "
+            f"subspace at run {run}, step {step}; minimum eigenvalue "
+            f"{minimum:.17g}, implicated coordinates {implicated}"
+        ) from exc
+    return float(error @ np.linalg.solve(symmetric, error))
+
 # The heavier manta imports are deferred into `nees()` to avoid an import
 # cycle (estimation → consistency → codegen.numpy → estimation);
 # `_assembly` is a leaf of this package and safe at module scope.
@@ -307,6 +345,12 @@ def nees(world, *, dt: float, steps: int,
     sim_ir = None if truth_world_factory is not None else Sim(world)
     spec = ekf_ir.spec
     n = spec.tangent_dim
+    tangent_labels = [""] * n
+    for slot in spec.slots:
+        for index in range(
+            slot.tangent_offset, slot.tangent_offset + slot.tangent_dim
+        ):
+            tangent_labels[index] = slot.name
     if warmup is None:
         warmup = steps // 5
     if P0 is None:
@@ -402,17 +446,22 @@ def nees(world, *, dt: float, steps: int,
                     ).reshape(-1)
                     P = ekf.P
                     full_squared_error_samples.append(np.square(e))
-                    full_marginal_nes_samples.append(
-                        np.square(e) / np.maximum(np.diag(P), 1e-300)
+                    full_nees = _strict_nees_sample(
+                        e, P, run=r, step=interval, labels=tangent_labels
                     )
-                    if observable_basis is not None:
+                    full_marginal_nes_samples.append(
+                        np.square(e) / np.diag(P)
+                    )
+                    if observable_basis is None:
+                        sample_nees = full_nees
+                    else:
                         e = observable_basis.T @ e
                         P = observable_basis.T @ P @ observable_basis
+                        sample_nees = _strict_nees_sample(
+                            e, P, run=r, step=interval, labels=None,
+                        )
                     squared_error_samples.append(np.square(e))
-                    try:
-                        nees_samples.append(float(e @ np.linalg.solve(P, e)))
-                    except np.linalg.LinAlgError:
-                        nees_samples.append(float(e @ np.linalg.pinv(P) @ e))
+                    nees_samples.append(sample_nees)
 
             # The final look-ahead sample closes the last interval but does
             # not begin another requested interval, so it is not an extra
@@ -442,17 +491,22 @@ def nees(world, *, dt: float, steps: int,
                 e = np.asarray(boxminus(truth_vec(sim), ekf.x)).reshape(-1)
                 P = ekf.P
                 full_squared_error_samples.append(np.square(e))
-                full_marginal_nes_samples.append(
-                    np.square(e) / np.maximum(np.diag(P), 1e-300)
+                full_nees = _strict_nees_sample(
+                    e, P, run=r, step=i, labels=tangent_labels
                 )
-                if observable_basis is not None:
+                full_marginal_nes_samples.append(
+                    np.square(e) / np.diag(P)
+                )
+                if observable_basis is None:
+                    sample_nees = full_nees
+                else:
                     e = observable_basis.T @ e
                     P = observable_basis.T @ P @ observable_basis
+                    sample_nees = _strict_nees_sample(
+                        e, P, run=r, step=i, labels=None,
+                    )
                 squared_error_samples.append(np.square(e))
-                try:
-                    nees_samples.append(float(e @ np.linalg.solve(P, e)))
-                except np.linalg.LinAlgError:
-                    nees_samples.append(float(e @ np.linalg.pinv(P) @ e))
+                nees_samples.append(sample_nees)
 
         if progress is not None:
             progress(r + 1, runs)

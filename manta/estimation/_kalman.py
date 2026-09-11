@@ -449,10 +449,13 @@ def ut_update(x: ca.MX, P: ca.MX, deltas: list[ca.MX],
     S = S + R
     K = spd_solve(S, C.T).T                     # C S⁻¹ (S SPD)
     nu = z - z_pred
-    x_new = spec.boxplus_sym(x, K @ nu)
+    correction = K @ nu
+    x_new = spec.boxplus_sym(x, correction)
     d_upd = [deltas[i] - K @ dz[i] for i in range(len(dz))]
     P_new = w_c[0] * (d_upd[0] @ d_upd[0].T)
     for i in range(1, len(d_upd)):
         P_new = P_new + w_c[i] * (d_upd[i] @ d_upd[i].T)
     P_new = symmetrize(P_new + K @ R @ K.T)
+    reset = _reset_jacobian(spec, correction, x)
+    P_new = symmetrize(reset @ P_new @ reset.T)
     return x_new, P_new, nu, S

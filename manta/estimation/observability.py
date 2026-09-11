@@ -405,7 +405,10 @@ def sigma_horizon(ekf, *, horizon: float, dt: float = 0.02,
     recording each slot's worst-direction σ. Slow channels the rank test
     misses — heading from the Earth rate (gyrocompassing), drag-coupled
     biases — show up as σ trajectories with their convergence time
-    readable directly.
+    readable directly. Preintegrated INS is explicitly unsupported because a
+    correct recursion also needs nominal packets, packet covariance, and
+    carried boundary cross-covariance; a raw-process-Q approximation would
+    report optimistic sigma.
 
     Args:
         ekf      — an `EKF`, `UKF`, or `INS` transform. For INS, `control`
@@ -436,6 +439,12 @@ def sigma_horizon(ekf, *, horizon: float, dt: float = 0.02,
 
     ir = _resolve_ir(ekf)
     sys = ir.sys
+    if ir.module().metadata.get("propagation") == "preintegrated":
+        raise NotImplementedError(
+            "sigma_horizon does not support preintegrated INS: its covariance "
+            "recursion requires nominal packets, packet covariance, and "
+            "carried boundary cross-covariance"
+        )
     spec = ir.spec
     n = spec.tangent_dim
     n_consider = consider_dimension(sys)

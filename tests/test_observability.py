@@ -177,6 +177,15 @@ def test_sigma_horizon_report_shapes_and_summary():
     assert "σ-horizon" in text and "sub.orientation" in text
 
 
+def test_sigma_horizon_refuses_incomplete_preintegrated_covariance_math():
+    from tests.test_imu_preintegrator import _preintegrated_ins
+
+    with pytest.raises(
+        NotImplementedError, match="packet covariance.*boundary cross-covariance"
+    ):
+        _preintegrated_ins().sigma_horizon(horizon=1.0)
+
+
 def test_trajectory_observability_reveals_heading_through_motion():
     """Single-point observability says heading is unobservable from
     GPS+DVL+gyro at rest; over a moving trajectory the DVL/GPS pairing

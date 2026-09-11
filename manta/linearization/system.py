@@ -436,11 +436,16 @@ class LinearizedSystem:
 def freeze_complement(full_spec, kept, init_flat: dict,
                       into: dict | None = None) -> dict:
     """Freeze every full-spec slot NOT in `kept` at its `init_flat` value
-    (zeros if absent), as a flat numpy column."""
+    as a flat numpy column. A missing initial value is an invalid model and
+    is refused rather than silently replacing physical state with zeros."""
     frozen = into if into is not None else {}
     for s in full_spec.slots:
         if s.name not in kept:
-            val = init_flat.get(s.name, np.zeros(s.ambient_dim))
+            if s.name not in init_flat:
+                raise KeyError(
+                    f"freeze_complement: initial state is missing slot {s.name!r}"
+                )
+            val = init_flat[s.name]
             frozen[s.name] = np.atleast_1d(
                 np.asarray(val, dtype=float)).reshape(-1)
     return frozen

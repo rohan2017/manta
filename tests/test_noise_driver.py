@@ -9,6 +9,7 @@ size R/Q.
 """
 
 import numpy as np
+import pytest
 
 from manta import Craft, NoiseDriver, Sim, TargetNumpy, World
 from manta.fields import GravityField
@@ -91,6 +92,13 @@ def test_seed_is_reproducible():
 
     np.testing.assert_array_equal(first_reading(11), first_reading(11))
     assert not np.allclose(first_reading(11), first_reading(12))
+
+
+def test_noise_driver_requires_an_explicit_integer_seed():
+    with pytest.raises(TypeError, match="explicit integer"):
+        NoiseDriver(None)
+    with pytest.raises(TypeError, match="explicit integer"):
+        NoiseDriver(True)
 
 
 def test_driver_reset_replays_stream():

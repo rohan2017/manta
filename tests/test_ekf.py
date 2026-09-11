@@ -6,12 +6,13 @@ KF math.
 import math
 
 import numpy as np
+import pytest
 
 from manta import Sim, TargetNumpy, World, state_spec_from_craft
 from manta.craft import Craft
 from manta.estimation import EKF, measurement_component, measurement_slot
 from manta.fields import GravityField
-from manta.parts import Mass
+from manta.parts import Mass, PositionSensor
 
 # ---------------------------------------------------------------------------
 # StateSpec layout sanity
@@ -67,6 +68,69 @@ def test_state_spec_pack_unpack_roundtrip():
     back = spec.unpack(flat)
     for k, v in state.items():
         assert np.allclose(back[k], v)
+
+
+def test_freeze_complement_refuses_missing_initial_slot():
+    from manta.linearization.system import freeze_complement
+
+    c = Craft("missing_init")
+    c.add(Mass("body", mass=1.0))
+    spec = state_spec_from_craft(c)
+    with pytest.raises(KeyError, match="missing slot 'orientation'"):
+        freeze_complement(
+            spec, {"position"},
+            {"velocity": np.zeros(3), "angular_velocity": np.zeros(3)},
+        )
+
+
+def test_custom_measurement_cache_is_bounded_and_reuses_stable_callable():
+    c = Craft("custom_cache")
+    c.add(Mass("body", mass=1.0))
+    w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
+    w.add_craft(c)
+    runtime = TargetNumpy(EKF(w))
+    stable = lambda x: x[0]
+    first = runtime._custom_h_fns(stable)
+    assert runtime._custom_h_fns(stable) is first
+    callables = [lambda x, index=index: x[index % x.numel()] for index in range(40)]
+    for measurement in callables:
+        runtime._custom_h_fns(measurement)
+    assert len(runtime._custom_h_cache) == 32
+    assert stable not in runtime._custom_h_cache
+
+
+def test_compile_sensor_updates_hides_generated_entry_names(monkeypatch):
+    c = Craft("sensor_compile")
+    c.add(Mass("body", mass=1.0))
+    c.add(PositionSensor("gps", position_noise_sigma=0.1))
+    w = World().add_field(GravityField(g=(0.0, 0.0, 0.0)))
+    w.add_craft(c)
+    runtime = TargetNumpy(EKF(w))
+    captured = []
+
+    def record(names, **options):
+        captured.append((tuple(names), options))
+        return runtime
+
+    monkeypatch.setattr(runtime, "compile_functions", record)
+    returned = runtime.compile_sensor_updates(
+        ["gps.position"], covariance="per_sample",
+        optimization="runtime", timeout_s=11.0, max_instructions=900,
+    )
+    entry = runtime.module.entry("update_with_R_sensor_compile_gps_position")
+    assert returned is runtime
+    assert captured == [((entry.fn,), {
+        "optimization": "runtime", "timeout_s": 11.0,
+        "max_instructions": 900,
+    })]
+    with pytest.raises(ValueError, match="covariance"):
+        runtime.compile_sensor_updates(["gps.position"], covariance="mystery")
+    captured.clear()
+    runtime.compile_sensor_updates("gps.position")
+    model_entry = runtime.module.entry(
+        "update_diagnostic_sensor_compile_gps_position"
+    )
+    assert captured[0][0] == (model_entry.fn,)
 
 
 # ---------------------------------------------------------------------------

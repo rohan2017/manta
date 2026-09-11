@@ -12,10 +12,22 @@ import pytest
 
 from manta import Craft, World
 from manta.estimation import nees
+from manta.estimation.consistency import _strict_nees_sample
 from manta.fields import GravityField
 from manta.parts import IMU, Mass, PositionSensor, Thruster
 
 M, G = 1.0, 9.81
+
+
+def test_nees_refuses_singular_evaluated_covariance_with_context():
+    with pytest.raises(
+        ValueError,
+        match=r"run 2, step 7.*minimum eigenvalue 0.*c\.orientation",
+    ):
+        _strict_nees_sample(
+            np.ones(2), np.diag([1.0, 0.0]), run=2, step=7,
+            labels=["c.position", "c.orientation"],
+        )
 
 
 def _hover_world():

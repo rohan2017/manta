@@ -13,6 +13,8 @@ on Port `Role` and State-field kind, exactly like every other backend.
 
 from __future__ import annotations
 
+import numpy as np
+
 from ...ir.module import Role
 
 
@@ -25,12 +27,8 @@ def _fields(port):
 
 def _num(v):
     """A JSON-safe scalar/vector default (numpy → list/float)."""
-    try:
-        import numpy as np
-        if isinstance(v, np.ndarray):
-            return [float(x) for x in v.ravel()]
-    except ImportError:                       # pragma: no cover
-        pass
+    if isinstance(v, np.ndarray):
+        return [float(x) for x in v.ravel()]
     if isinstance(v, (list, tuple)):
         return [float(x) for x in v]
     return float(v)

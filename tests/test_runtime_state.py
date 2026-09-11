@@ -109,3 +109,13 @@ def test_step_n_zero_returns_state():
     out = sim.step_n(0.01, 0)
     assert out is not None
     assert out["d"]["position"][2] == 10.0
+
+
+def test_step_n_kernel_cache_is_bounded_and_lru():
+    sim = TargetNumpy(Sim(_world()))
+    for count in range(2, 12):
+        sim._step_n_fn(count)
+    assert tuple(sim._stepn_cache) == tuple(range(4, 12))
+    sim._step_n_fn(4)
+    sim._step_n_fn(12)
+    assert tuple(sim._stepn_cache) == (*range(5, 12), 4, 12)[-8:]

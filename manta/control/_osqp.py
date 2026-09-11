@@ -21,6 +21,7 @@ import numpy as np
 import numpy.typing as npt
 
 from ..codegen.numpy._compile import CompilationError, build_native_library
+from .errors import MpcNumericalError
 
 FloatArray = npt.NDArray[np.float64]
 IntArray = npt.NDArray[np.int64]
@@ -335,7 +336,7 @@ class NativeOSQP:
             self._handle, Px, Ax, q, lower, upper, x0, y0,
             ctypes.byref(update_seconds), ctypes.byref(solve_seconds)))
         if _is_bridge_failure(status_value):
-            raise RuntimeError(
+            raise MpcNumericalError(
                 f"native OSQP bridge update failed with {status_value}")
         x, y = np.empty(self.n), np.empty(self.m)
         cost, iterations = ctypes.c_double(), ctypes.c_longlong()

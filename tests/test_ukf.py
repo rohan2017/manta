@@ -17,6 +17,7 @@ genuine unscented update kernel is exercised.
 
 import math
 
+import casadi as ca
 import numpy as np
 import pytest
 
@@ -24,6 +25,63 @@ from manta import EKF, UKF, Sim, TargetNumpy, World
 from manta.craft import Craft
 from manta.fields import GravityField, MagField
 from manta.parts import IMU, Magnetometer, Mass, PositionSensor
+
+
+def test_unscented_update_transports_large_attitude_correction_covariance():
+    from manta.estimation._kalman import (
+        _reset_jacobian_np,
+        unscented_weights,
+        ut_update,
+    )
+    from manta.ir.frames import CraftFrame, WorldFrame
+    from manta.ir.manifold import SO3Manifold
+    from manta.ir.state_spec import StateSpec
+
+    spec = StateSpec.from_layout([
+        ("attitude", SO3Manifold(
+            from_frame=WorldFrame, to_frame=CraftFrame,
+        )),
+    ])
+    covariance = np.diag([0.7, 0.4, 0.2])
+    measurement_covariance = np.diag([0.08, 0.1, 0.12])
+    w_m, w_c, gamma = unscented_weights(3, 1.0, 2.0, 0.0)
+    root = np.linalg.cholesky(covariance)
+    numeric_deltas = [np.zeros(3)]
+    numeric_deltas += [gamma * root[:, index] for index in range(3)]
+    numeric_deltas += [-gamma * root[:, index] for index in range(3)]
+    deltas = [ca.DM(value) for value in numeric_deltas]
+    measurement = [ca.DM(value) for value in numeric_deltas]
+    x = ca.MX.sym("x", 4)
+    z = ca.MX.sym("z", 3)
+    updated = ut_update(
+        x, ca.DM(covariance), deltas, measurement,
+        ca.DM(measurement_covariance), z, w_m, w_c, spec,
+    )
+    fn = ca.Function("large_attitude_update", [x, z], list(updated))
+    innovation = np.array([0.9, -0.6, 0.35])
+    result = fn(np.array([1.0, 0.0, 0.0, 0.0]), innovation)
+    actual_covariance = np.asarray(result[1])
+
+    z_mean = sum(weight * value for weight, value in zip(w_m, numeric_deltas))
+    dz = [value - z_mean for value in numeric_deltas]
+    S = measurement_covariance.copy()
+    cross = np.zeros((3, 3))
+    for weight, delta, residual in zip(w_c, numeric_deltas, dz):
+        S += weight * np.outer(residual, residual)
+        cross += weight * np.outer(delta, residual)
+    gain = np.linalg.solve(S, cross.T).T
+    correction = gain @ (innovation - z_mean)
+    deviations = [
+        delta - gain @ residual
+        for delta, residual in zip(numeric_deltas, dz)
+    ]
+    old_basis = gain @ measurement_covariance @ gain.T
+    for weight, deviation in zip(w_c, deviations):
+        old_basis += weight * np.outer(deviation, deviation)
+    reset = _reset_jacobian_np(spec, correction)
+    expected = reset @ old_basis @ reset.T
+    np.testing.assert_allclose(actual_covariance, expected, atol=1e-12)
+    assert np.linalg.norm(actual_covariance - old_basis) > 0.005
 
 # ---------------------------------------------------------------------------
 # Module shape / view selection
@@ -230,7 +288,7 @@ def test_ukf_attitude_matches_ekf():
     q_u, P_u = run(UKF, "u")
     q_e, P_e = run(EKF, "e")
     assert abs(abs(float(np.dot(q_u, q_e))) - 1.0) < 1e-4
-    assert np.allclose(P_u, P_e, atol=1e-5)
+    assert np.allclose(P_u, P_e, atol=5e-5)
 
 
 # ---------------------------------------------------------------------------

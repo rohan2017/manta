@@ -291,11 +291,22 @@ per-sample covariance may replace the model's overrideable device-noise term:
 result = runtime.update("gps.position", position, R=receiver_covariance)
 ```
 
+Compile selected per-sample-covariance folds by their semantic sensor names:
+
+```python
+runtime.compile_sensor_updates(
+    ["imu.gyro", "gps.position"],
+    covariance="per_sample",
+    optimization="runtime",
+)
+```
+
 `R` must have the sensor's exact square shape, be finite, symmetric, and
 positive definite. Non-overrideable calibration uncertainty remains additive.
 The supplied covariance travels through a typed
-`update_with_R_<sensor>` Module entry point and therefore exists in generated
-C++ as well as NumPy; it is not NumPy-only post-processing.
+Module entry point and therefore exists in generated C++ as well as NumPy;
+generated entry names are an internal ABI hidden by
+`compile_sensor_updates`.
 
 ## Checkpoint and restore
 

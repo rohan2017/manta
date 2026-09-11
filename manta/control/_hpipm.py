@@ -22,6 +22,7 @@ import numpy as np
 import numpy.typing as npt
 
 from ..codegen.numpy._compile import CompilationError, build_native_library
+from .errors import MpcNumericalError
 
 FloatArray = npt.NDArray[np.float64]
 
@@ -667,7 +668,7 @@ class NativeHPIPM:
             ctypes.byref(iterations), *(ctypes.byref(v) for v in residuals),
             ctypes.byref(update_seconds), ctypes.byref(solve_seconds)))
         if status_value < 0:
-            raise RuntimeError(
+            raise MpcNumericalError(
                 f"native HPIPM numeric update failed with {status_value}")
         return HPIPMResult(
             x=solution, cost=float(objective.value),
