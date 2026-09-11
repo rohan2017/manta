@@ -100,7 +100,7 @@ class Prior:
                 softly; bounds are walls. In `NoiseFit` they bound σ
                 itself. The declared/starting value must satisfy them.
     """
-    sigma: float | tuple = None
+    sigma: float | tuple | None = None
     mean: float | tuple | None = None
     log: bool = False
     lower: float | tuple | None = None

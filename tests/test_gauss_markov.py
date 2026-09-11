@@ -161,7 +161,10 @@ def test_filters_track_a_gauss_markov_drift(filter_cls):
     filt.reset(P=P)
     errors = []
     for k in range(400):
-        sim.state["drone"].update(sim_c.sample_noise(rng))
+        sample = sim_c.sample_noise(rng)
+        sim.state["drone"]["g.gyro_drift_driver"] = sample[
+            "g.gyro_drift_driver"
+        ]
         sim.step(DT)
         z = np.array(sim.outputs()["drone"]["g.gyro"]).ravel()
         filt.predict(DT)

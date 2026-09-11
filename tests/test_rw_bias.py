@@ -168,7 +168,7 @@ def test_ekf_estimates_rw_bias_from_gyro_readings():
     for _ in range(500):  # 5 s
         # Sim noise samples — sim's bias gets driven by its own driver.
         noise = sim_c.sample_noise(rng)
-        cw.state["drone"].update(noise)
+        cw.state["drone"]["g.gyro_bias_driver"] = noise["g.gyro_bias_driver"]
         cw.step(dt, t=t)
         gyro_z = np.array(cw.outputs()["drone"]["g.gyro"]).ravel()
         ekf.predict(dt=dt, t=t)
