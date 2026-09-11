@@ -6,7 +6,9 @@ wave-radiation model. Components are (amplitude, wavelength, direction_xy, phase
 """
 
 import math
+from collections.abc import Iterable
 from dataclasses import replace
+from typing import TypedDict, Unpack
 
 import casadi as ca
 
@@ -16,8 +18,31 @@ from ..smoothing import smooth_max0
 from .fluid import FlatOcean, below_surface
 
 
+WaveComponent = tuple[float, float, tuple[float, float], float]
+
+
+class _OceanOptions(TypedDict, total=False):
+    """Forwarded FlatOcean inputs; that constructor owns their defaults."""
+
+    density: float
+    surface_z: float
+    surface_pressure: float
+    gravity: float
+    temperature: float
+    viscosity: float
+    velocity: tuple[float, float, float]
+    surface_blend: float
+    name: str | None
+    combining: str | None
+
+
 class WaveOcean(FlatOcean):
-    def __init__(self, *, components=(), **kwargs):
+    def __init__(
+        self,
+        *,
+        components: Iterable[WaveComponent] = (),
+        **kwargs: Unpack[_OceanOptions],
+    ) -> None:
         super().__init__(**kwargs)
         self.components = tuple(components)
         for amplitude, wavelength, direction, phase in self.components:
