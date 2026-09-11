@@ -119,3 +119,75 @@ def test_step_n_kernel_cache_is_bounded_and_lru():
     sim._step_n_fn(4)
     sim._step_n_fn(12)
     assert tuple(sim._stepn_cache) == (*range(5, 12), 4, 12)[-8:]
+
+
+def test_sim_owner_aliases_live_but_slot_arrays_expire_after_step():
+    sim = TargetNumpy(Sim(_world()))
+    sim.step(0.01)
+    owner = sim.state["d"]
+    old_position = owner["position"]
+    old_position[:] = [1, 2, 8]
+    sim.step(0.01)
+    assert sim.state["d"] is owner
+    assert owner["position"][0:2] == pytest.approx([1, 2])
+    old_position[:] = [91, 92, 93]
+    sim.step(0.01)
+    assert owner["position"][0:2] == pytest.approx([1, 2])
+    owner.update(position=np.array([3.0, 4.0, 7.0]))
+    sim.step(0.01)
+    assert owner["position"][0:2] == pytest.approx([3, 4])
+
+
+def test_failed_sim_step_preserves_array_edits_on_retry(monkeypatch):
+    sim = TargetNumpy(Sim(_world()))
+    sim.step(0.01)
+    owner = sim.state["d"]
+    position = owner["position"]
+    original_run = sim._run
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("injected kernel failure")
+    monkeypatch.setattr(sim, "_run", fail)
+    with pytest.raises(RuntimeError, match="injected"):
+        sim.step(0.01)
+    position[:] = [6, 7, 9]
+    monkeypatch.setattr(sim, "_run", original_run)
+    sim.step(0.01)
+    assert owner["position"][0:2] == pytest.approx([6, 7])
+
+
+def test_sim_restore_preserves_owner_alias_and_nested_edit_validation():
+    import copy
+    sim = TargetNumpy(Sim(_world()))
+    sim.step(0.01)
+    owner = sim.state["d"]
+    saved = sim.checkpoint()
+    independent = copy.deepcopy(sim.state)
+    independent["d"]["position"][:] = [5, 6, 7]
+    assert not np.array_equal(independent["d"]["position"], owner["position"])
+    sim.step_n(0.01, 3)
+    sim.restore(saved)
+    assert sim.state["d"] is owner
+    assert sim.checkpoint() == saved
+    owner.pop("position")
+    with pytest.raises((KeyError, ValueError), match="position"):
+        sim.step(0.01)
+    owner.setdefault("position", np.array([2.0, 3.0, 4.0]))
+    sim.step(0.01)
+    owner |= {"position": np.array([8.0, 9.0, 10.0])}
+    sim.step(0.01)
+    assert owner["position"][0:2] == pytest.approx([8, 9])
+    owner["position"][0] = float("nan")
+    with pytest.raises(ValueError, match="non-finite"):
+        sim.step(0.01)
+
+
+def test_augmented_nested_dictionary_update_keeps_owner_alias():
+    sim = TargetNumpy(Sim(_world()))
+    sim.step(0.01)
+    owner = sim.state["d"]
+    sim.state["d"] |= {"position": np.array([4.0, 5.0, 6.0])}
+    assert sim.state["d"] is owner
+    sim.step(0.01)
+    assert owner["position"][0:2] == pytest.approx([4, 5])
+    sim.state |= {}
+    assert sim.state["d"] is owner

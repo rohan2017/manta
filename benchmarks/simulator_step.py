@@ -6,7 +6,7 @@ Run from the repository root:
 
 Construction and native compilation are deliberately outside the timed
 region. The workload is a wide truth plant — one craft with many sensor
-ports — stepped at a fixed dt with a fresh noise draw each tick, which
+ports — stepped at a fixed dt with deterministic zero noise, which
 exercises the runtime's argument gather, kernel call, and output scatter
 rather than the compiled dynamics alone. This is the shape of a Shiver
 fleet-simulation tick, where that Python glue, not the kernel, bounded the

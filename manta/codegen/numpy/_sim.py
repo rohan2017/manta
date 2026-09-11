@@ -17,6 +17,7 @@ from ...ir.state_spec import flatten_nested
 from ..target import for_role
 from ._noise import NoiseCheckpoint, NoiseDriver
 from ._runtime import NumpyRuntime, _split, finite_array, pack_fields
+from ._sim_state import PackedSimState
 
 _STEPN_CACHE_SIZE = 8
 
@@ -124,7 +125,7 @@ class NumpySim(NumpyRuntime):
         super().__init__(module)
         self._driver: NoiseDriver | None = None
         self._outputs: dict[str, dict[str, Any]] = {}
-        self._sim_state: dict | None = None
+        self._sim_state: PackedSimState | None = None
         self._stepn_cache: OrderedDict[int, Any] = OrderedDict()
         self._coupled_models: list[Any] = []
         profile = module.metadata.get("transform_profile", {})
@@ -182,7 +183,7 @@ class NumpySim(NumpyRuntime):
         return nested
 
     @property
-    def state(self) -> dict[str, dict[str, Any]]:
+    def state(self) -> PackedSimState:
         """The held nested state (lazy-seeded; mutate in place to set
         commands or override slots).
 
@@ -193,7 +194,8 @@ class NumpySim(NumpyRuntime):
         array. Unknown keys are rejected at the next `step()` (a typo'd
         slot would otherwise be a silent no-op)."""
         if self._sim_state is None:
-            self._sim_state = self.initial_state()
+            self._sim_state = PackedSimState(
+                self._spec, self._check_state_keys, self.initial_state())
         return self._sim_state
 
     @state.setter
@@ -203,6 +205,8 @@ class NumpySim(NumpyRuntime):
                 f"{type(self).__name__}.state: expected a nested "
                 f"{{owner: {{slot: value}}}} dict, got "
                 f"{type(value).__name__}")
+        if value is self._sim_state:
+            return
         flat = flatten_nested(value)
         missing = [s.name for s in self._spec.slots if s.name not in flat]
         if missing:
@@ -212,7 +216,7 @@ class NumpySim(NumpyRuntime):
                 f"state — mutate `sim.state[owner][slot]` to override "
                 f"individual slots.")
         self._check_state_keys(flat)
-        self._sim_state = value
+        self._sim_state = PackedSimState(self._spec, self._check_state_keys, value)
 
     @property
     def time(self) -> float:
@@ -268,13 +272,15 @@ class NumpySim(NumpyRuntime):
             t0 + dt, name="NumpySim.step resulting time"))
         if not self._coupled_models:
             noise_before = self._driver.checkpoint() if self._driver else None
-            x_before = self._state["x"].copy()
+            x_storage_before = self._state["x"]
+            x_before = x_storage_before.copy()
             try:
                 self._sim_state = self._advance(
                     self.state, dt, t0, u,
                     reset_schedule=schedule_resync)
             except Exception:
-                self._state["x"] = x_before
+                x_storage_before[:] = x_before
+                self._state["x"] = x_storage_before
                 if self._driver is not None and noise_before is not None:
                     self._driver.restore(noise_before)
                 raise
@@ -367,7 +373,8 @@ class NumpySim(NumpyRuntime):
         if self._driver is not None:
             self._driver.restore(checkpoint.noise)
         if self._sim_state is None:
-            self._sim_state = next_state
+            self._sim_state = PackedSimState(
+                self._spec, self._check_state_keys, next_state)
         else:
             for owner in tuple(self._sim_state):
                 if owner not in next_state:
@@ -441,12 +448,11 @@ class NumpySim(NumpyRuntime):
         return pack_fields(fields, named, default=lambda f: f.default,
                            who="step")
 
-    def _advance(self, state: dict, dt: float, t: float,
+    def _advance(self, state: PackedSimState, dt: float, t: float,
                  u: dict[str, Any] | None = None, *,
                  reset_schedule: bool = False) -> dict:
-        flat = flatten_nested(state)
-        self._check_state_keys(flat)
-        self._state["x"] = self._spec.pack_projected(flat)
+        flat, packed = state.prepare(self._state["x"])
+        self._state["x"] = packed
         u = self._pack_u(flat, u)
         due, next_sample = self._due_measurements(
             t, reset=reset_schedule)
@@ -496,16 +502,15 @@ class NumpySim(NumpyRuntime):
                 staged[method] = deadline
         return due, staged
 
-    def _commit_step(self, prev_state: dict, readings: dict) -> dict:
-        """Write the freshly packed `self._state['x']` back into `prev_state`
+    def _commit_step(self, prev_state: PackedSimState, readings: dict) -> PackedSimState:
+        """Bind `prev_state` to the new authoritative `self._state['x']` vector
         IN PLACE — manifold slots get this step's values; input-only entries
         (commands, noise placeholders — sensor readings deliberately stay OUT
         of the state dict) are untouched. Mutating in place keeps every dict
         reference a caller may hold (`st = sim.state['craft']`) live across
         steps. Fresh readings are merged into `self._outputs`; rate-limited
         readings not sampled on this step retain their previous value."""
-        for owner, slots in self._spec.to_nested(self._state["x"]).items():
-            prev_state.setdefault(owner, {}).update(slots)
+        prev_state.bind(self._state["x"])
         for full, reading in readings.items():
             owner, slot = _split(full)
             self._outputs.setdefault(owner, {})[slot] = reading
@@ -564,11 +569,10 @@ class NumpySim(NumpyRuntime):
             self._stepn_cache.move_to_end(n)
         return fn
 
-    def _advance_n(self, state: dict, dt: float, n: int, t: float,
+    def _advance_n(self, state: PackedSimState, dt: float, n: int, t: float,
                    u: dict[str, Any] | None = None) -> dict:
-        flat = flatten_nested(state)
-        self._check_state_keys(flat)
-        x0 = np.asarray(self._spec.pack_projected(flat),
+        flat, packed = state.prepare(self._state["x"])
+        x0 = np.asarray(packed,
                         dtype=float).reshape(-1, 1)
         u = self._pack_u(flat, u)
         noise = self._noise_vec(flat)

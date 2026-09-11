@@ -1,0 +1,94 @@
+{
+  "1": {
+    "pairs": [
+      {
+        "baseline_us": 51.0270808,
+        "packed_us": 30.874016
+      },
+      {
+        "baseline_us": 46.8196666,
+        "packed_us": 31.5167336
+      },
+      {
+        "baseline_us": 46.0607998,
+        "packed_us": 26.982902600000003
+      },
+      {
+        "baseline_us": 42.9675902,
+        "packed_us": 27.4433324
+      },
+      {
+        "baseline_us": 43.7573854,
+        "packed_us": 26.6452398
+      },
+      {
+        "baseline_us": 45.442652800000005,
+        "packed_us": 26.6711106
+      },
+      {
+        "baseline_us": 53.3653492,
+        "packed_us": 30.550862799999997
+      }
+    ],
+    "median_baseline_us": 46.0607998,
+    "median_packed_us": 27.4433324,
+    "reduction_percent": 40.41933158095097,
+    "traced_memory": {
+      "baseline": {
+        "retained_bytes": 1952,
+        "peak_bytes": 6650
+      },
+      "packed": {
+        "retained_bytes": 1784,
+        "peak_bytes": 5666
+      }
+    },
+    "exact_checkpoint_parity": true
+  },
+  "8": {
+    "pairs": [
+      {
+        "baseline_us": 81.66041220000001,
+        "packed_us": 60.804547400000004
+      },
+      {
+        "baseline_us": 82.541481,
+        "packed_us": 62.9676302
+      },
+      {
+        "baseline_us": 83.43288899999999,
+        "packed_us": 64.0000826
+      },
+      {
+        "baseline_us": 81.947817,
+        "packed_us": 69.65400079999999
+      },
+      {
+        "baseline_us": 77.6852176,
+        "packed_us": 59.570673199999995
+      },
+      {
+        "baseline_us": 77.34982679999999,
+        "packed_us": 60.7908752
+      },
+      {
+        "baseline_us": 77.6080394,
+        "packed_us": 67.4192736
+      }
+    ],
+    "median_baseline_us": 81.66041220000001,
+    "median_packed_us": 62.9676302,
+    "reduction_percent": 22.890873920913183,
+    "traced_memory": {
+      "baseline": {
+        "retained_bytes": 5760,
+        "peak_bytes": 23785
+      },
+      "packed": {
+        "retained_bytes": 5592,
+        "peak_bytes": 20386
+      }
+    },
+    "exact_checkpoint_parity": true
+  }
+}
