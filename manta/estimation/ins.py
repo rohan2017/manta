@@ -467,8 +467,12 @@ class _INSSystem:
 
             frozen = dict(frozen_base)
             frozen[omega_name] = omega_body
+            # Expose expressions so unused plant dynamics can disappear after
+            # state closure. An opaque multi-output tick call otherwise drags
+            # all hull/joint dynamics into even a GPS-only strapdown predictor
+            # (187 MB versus 0.62 MB generated C on an articulated carrier).
             outs = engine._tick_outputs(
-                spec, xv, frozen, model_u, dt, t, nv)
+                spec, xv, frozen, model_u, dt, t, nv, inline=True)
 
             gravity_origin = self._gravity(p, t)
             if self.propagation == "raw":

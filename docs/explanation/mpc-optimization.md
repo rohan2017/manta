@@ -44,6 +44,17 @@ Articulated dynamics containing a QR linear solve require
 This explicit option retains the differentiable MX graph, including joint
 states and reactions. It leaves the objective, integration and constraints
 unchanged; ordinary rigid-body models retain the expanded default.
+Matrix graphs are opened before state selection and common expressions are
+eliminated before export. On the provisional articulated carrier this reduced
+generated horizon code from 222 MB to 27 MB without changing integration.
+
+`compile_optimization` explicitly selects `startup` (O0), `balanced` (O1), or
+the default `runtime` (O3/native). Large matrix graphs can exceed the compiler
+deadline under O3 even after symbolic reduction; O0 keeps those same dynamics
+available as native kernels. A build failure remains a failure, and never
+implicitly selects another profile. The articulated regression compares both
+interpreted and native O0 predictions to ordinary simulation, including the
+reaction to a nonzero auxiliary joint force.
 
 Manta currently runs one tangent-space, direct-multiple-shooting RTI update per
 control tick. It shifts the nonlinear actuator plan, rolls out and linearizes

@@ -287,11 +287,14 @@ class MPC:
         bank_slack_weight: float = 1e4,
         trust_region: float = 0.5,
         compile: bool = False,
+        compile_optimization: str = "runtime",
         qp_backend: str = "osqp",
         qp_options: Mapping[str, Any] | None = None,
     ) -> None:
         if horizon < 2 or dt <= 0.0 or substeps < 1:
             raise ValueError("MPC requires horizon >= 2, dt > 0, substeps >= 1")
+        if compile_optimization not in {"startup", "balanced", "runtime"}:
+            raise ValueError("unknown MPC compilation optimization profile")
         nonnegative = {
             "control_rate_weight": control_rate_weight,
             "effort_weight": effort_weight,
@@ -322,6 +325,15 @@ class MPC:
         step = sim_module.functions["step"]
         if expand_dynamics:
             step = step.expand()
+        else:
+            # Open the compiled tick before selecting its state output. The
+            # scheduled Sim wrapper may otherwise retain an opaque multi-output
+            # plant call, including outputs irrelevant to this controller.
+            system = sim_transform.sys
+            opened_state, _ = system.inline_simulation_expressions([])
+            step = ca.Function("mpc_plant_step",
+                [system.x_sym, system.u_sym, system.n_sym,
+                 system.dt_sym, system.t_sym], [opened_state])
         self.spec = sim_module.state.fields[0].spec
         if self.spec is None:
             raise RuntimeError("MPC requires a manifold state specification")
@@ -407,7 +419,8 @@ class MPC:
         self.qp_options = dict(qp_options or {})
 
         self._f, self._fj = self._build_dynamics(
-            step, all_defaults, controlled_indices, int(substeps))
+            step, all_defaults, controlled_indices, int(substeps),
+            inline_dynamics=not expand_dynamics)
         self._rollout_kernel = self._f.mapaccum(
             "mpc_rollout", self.horizon, {"base": 10})
         self._rollout_linearize_kernel = self._fj.mapaccum(
@@ -430,7 +443,7 @@ class MPC:
                  "rollout_linearize": self._rollout_linearize_kernel,
                  "accepted_rollout": self._accepted_rollout_kernel},
                 max_instructions=None,
-                optimization="runtime",
+                optimization=compile_optimization,
                 timeout_s=DEFAULT_COMPILATION_TIMEOUT_S,
             )
             self._attitude_map = compiled["attitude_horizon"]
@@ -481,6 +494,7 @@ class MPC:
     def _build_dynamics(
         self, step: ca.Function, defaults: FloatArray,
         controlled_indices: tuple[int, ...], substeps: int,
+        *, inline_dynamics: bool = False,
     ) -> tuple[ca.Function, ca.Function]:
         x = ca.MX.sym("mpc_x", self.nx)
         u = ca.MX.sym("mpc_u", self.nu)
@@ -494,12 +508,19 @@ class MPC:
         def advance(state: Any, controls: Any) -> Any:
             current = state
             for index in range(substeps):
-                result = step(current, controls, zero_noise, dt_sub,
-                              index * dt_sub)
-                current = result[0] if isinstance(result, tuple) else result
+                if inline_dynamics:
+                    result = step.call([current, controls, zero_noise, dt_sub,
+                                        index * dt_sub], True, False)
+                    current = result[0]
+                else:
+                    result = step(current, controls, zero_noise, dt_sub,
+                                  index * dt_sub)
+                    current = result[0] if isinstance(result, tuple) else result
             return current
 
         x_next = advance(x, full_u)
+        if inline_dynamics:
+            x_next = ca.cse(x_next)
         f = ca.Function("mpc_dynamics", [x, u], [x_next])
         dx = ca.MX.sym("mpc_dx", self.ndx)
         du = ca.MX.sym("mpc_du", self.nu)
@@ -514,7 +535,8 @@ class MPC:
         A = ca.substitute(A, du, zeros_u)
         B = ca.substitute(ca.jacobian(error_next, du), dx, zeros_x)
         B = ca.substitute(B, du, zeros_u)
-        fj = ca.Function("mpc_jacobian", [x, u], [x_next, A, B])
+        outputs = ca.cse([x_next, A, B]) if inline_dynamics else [x_next, A, B]
+        fj = ca.Function("mpc_jacobian", [x, u], outputs)
         return f, fj
 
     def _build_feature_function(self) -> ca.Function:

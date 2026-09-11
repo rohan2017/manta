@@ -138,20 +138,30 @@ def test_mpc_rejects_inconsistent_input_selection(inputs, controlled, message):
         MPC(world, u_bounds=bounds, inputs=inputs, controlled=controlled, horizon=3)
 
 
-def test_mx_articulated_dynamics_keep_joint_state_with_selected_propulsion():
+@pytest.mark.parametrize("compiled", [False, True])
+def test_mx_articulated_dynamics_keep_joint_state_with_selected_propulsion(compiled):
     from manta.parts import PrismaticJoint
 
     world, bounds = _world()
     joint = PrismaticJoint("gantry", axis=(0, 1, 0), mode="saturating",
-                           stall_force=20, damping=2)
+                           stall_force=20, damping=2, force_cmd=5)
     joint.add(Mass("payload", mass=1, moi=(.1, .1, .1)))
     world.crafts[0].add(joint)
     mpc = MPC(world, u_bounds=bounds, inputs=("prop.throttle",),
-              expand_dynamics=False, horizon=3, dt=.1)
+              expand_dynamics=False, horizon=3, dt=.1, compile=compiled,
+              compile_optimization="startup")
     result = mpc.tick(None, _reference(3))
     assert set(result.controls) == {"tug.prop.throttle"}
     assert "tug.gantry.displacement" in {s.name for s in mpc.spec.slots}
     assert np.isfinite(result.nominal_states).all()
+    sim = TargetNumpy(Sim(world))
+    for _ in range(2):
+        sim.step(.05, u=result.controls)
+    predicted = mpc.spec.unpack(result.nominal_states[1])
+    for name in ("position", "velocity", "gantry.displacement", "gantry.rate"):
+        np.testing.assert_allclose(predicted[f"tug.{name}"],
+                                   sim.state["tug"][name], atol=1e-8)
+    assert predicted["tug.gantry.displacement"] > 0
 
 
 def test_one_rti_tick_obeys_bounds_and_shifts_a_finite_plan():

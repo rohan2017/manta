@@ -133,6 +133,36 @@ def test_ins_excluded_input_remains_at_declared_default_in_measurement_model():
     assert observation[0] == pytest.approx(2.0)
 
 
+def test_preintegrated_gps_predictor_does_not_export_unused_joint_dynamics(tmp_path):
+    from manta.parts import PositionSensor, PrismaticJoint
+
+    sizes = {}
+    for name, articulated in (("plain", False), ("joint", True)):
+        craft = Craft("craft")
+        craft.add(Mass("body", mass=10, moi=(1, 2, 3)))
+        craft.add(IMU("imu", mount_offset=(.1, .2, .3),
+                      accel_noise_sigma=.01, gyro_noise_sigma=.001,
+                      accel_bias_sigma=1e-4, gyro_bias_sigma=1e-5))
+        craft.add(PositionSensor("gps", position_noise_sigma=.02))
+        if articulated:
+            joint = PrismaticJoint("gantry", axis=(0, 1, 0),
+                                   mode="saturating", stall_force=20, damping=2)
+            joint.add(Mass("payload", mass=2, moi=(.1, .2, .3)))
+            craft.add(joint)
+        world = World().add_field(GravityField(g=(0, 0, -9.81)))
+        world.add_craft(craft)
+        ins = INS(world, imu="imu", sensors=["gps.position"], inputs=[],
+                  propagation="preintegrated")
+        assert not any("gantry" in slot.name for slot in ins.spec.slots)
+        codegen = ca.CodeGenerator(f"{name}.c")
+        codegen.add(ins.module().functions["predict"])
+        codegen.generate(str(tmp_path) + "/")
+        sizes[name] = (tmp_path / f"{name}.c").stat().st_size
+    # A mechanically unrelated appendage cannot make the exported navigation
+    # predictor carry the entire plant tick and all of its derivative helpers.
+    assert sizes["joint"] <= sizes["plain"] * 1.05 + 1024
+
+
 def test_model_force_residual_directly_observes_accel_bias():
     ins = _ins(_world())
     x0 = ins.module().state.field("x").init
