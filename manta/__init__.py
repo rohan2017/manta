@@ -100,6 +100,7 @@ from .estimation.imu_preintegrator import (
     frame_preintegrated_packet,
 )
 from .estimation.ins import INS
+from .estimation.imu_packets import compose_preintegrated_packets
 from .estimation.madgwick import Madgwick
 from .estimation.mahony import Mahony
 from .estimation.navigation_frame import NavigationFrame
@@ -216,6 +217,7 @@ __all__ = [
     "bartlett_hac_residual_statistics",
     "compile_functions",
     "frame_preintegrated_packet",
+    "compose_preintegrated_packets",
     "held_out_evidence",
     "hold_out",
     "ir",

@@ -21,6 +21,7 @@ from .consistency import NEESReport, chi2_gate, chi2_quantile, nees
 from .ekf import EKF, measurement_component, measurement_slot
 from .imu_integrator import IMUIntegrator
 from .imu_preintegrator import IMUPreintegrator, frame_preintegrated_packet
+from .imu_packets import compose_preintegrated_packets
 from .madgwick import Madgwick
 from .mahony import Mahony
 from .navigation_frame import NavigationFrame
@@ -48,6 +49,7 @@ __all__ = [
     "chi2_gate",
     "chi2_quantile",
     "frame_preintegrated_packet",
+    "compose_preintegrated_packets",
     "measurement_component",
     "measurement_slot",
     "nees",
