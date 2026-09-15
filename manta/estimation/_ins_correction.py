@@ -108,12 +108,22 @@ def conditional_statistics(mean, covariance, projection, evaluate):
     return h_mean, cross_h, symmetrize(covariance_h), (deltas, values, wm, wc, remaining)
 
 
-def conditional_update(x, P, R, z, spec, evaluate, *, axes):
+def _projection(n, axes, projection):
+    if (axes is None) == (projection is None):
+        raise ValueError("supply either conditional axes or a linear projection")
+    if axes is not None:
+        if len(set(axes)) != len(axes) or any(i < 0 or i >= n for i in axes):
+            raise ValueError("conditional axes must be unique valid state coordinates")
+        return ca.DM.eye(n)[list(axes), :]
+    if projection.size2() != n or not 1 <= projection.size1() <= n:
+        raise ValueError("invalid conditional linear projection")
+    return projection
+
+
+def conditional_update(x, P, R, z, spec, evaluate, *, axes=None, projection=None):
     """Conditional statistical update; full joint covariance and exact reset."""
     n = P.size1()
-    if len(set(axes)) != len(axes) or any(i < 0 or i >= n for i in axes):
-        raise ValueError("conditional axes must be unique valid state coordinates")
-    projection = ca.DM.eye(n)[list(axes), :]
+    projection = _projection(n, axes, projection)
     h, cross, variance, details = conditional_statistics(ca.MX.zeros(n), P, projection, evaluate)
     nu, S = z-h, variance+R
     K = spd_solve(S, cross.T).T
@@ -128,7 +138,7 @@ def conditional_update(x, P, R, z, spec, evaluate, *, axes):
     return spec.boxplus_sym(x, delta), symmetrize(reset@posterior@reset.T), nu, S
 
 
-def posterior_linearized_update(x, P, R, z, spec, evaluate, *, axes,
+def posterior_linearized_update(x, P, R, z, spec, evaluate, *, axes=None, projection=None,
                                 iterations=3, damping=.5):
     """Damped iterated posterior statistical linearization in a fixed chart.
 
@@ -144,10 +154,9 @@ def posterior_linearized_update(x, P, R, z, spec, evaluate, *, axes,
     if iterations < 1 or not 0 < damping <= 1:
         raise ValueError("invalid posterior iteration settings")
     n = P.size1()
-    if len(set(axes)) != len(axes) or any(i < 0 or i >= n for i in axes):
-        raise ValueError("conditional axes must be unique valid state coordinates")
+    projection = _projection(n, axes, projection)
     root = psd_root(P)
-    projection = root[list(axes), :]
+    projection = projection@root
     mean, covariance = ca.MX.zeros(n), ca.MX.eye(n)
 
     def latent_evaluate(value):
