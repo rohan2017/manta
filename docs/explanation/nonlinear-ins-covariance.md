@@ -16,6 +16,12 @@ measured scope, independent trials and retained earlier failures.
 The newer failures above limit that earlier evidence; passing its selected
 cohorts was not a guarantee over every calibration and initialization case.
 
+For local-current and other tracked world-frame vector states, the
+[v3 extension](../qualification/ins-local-current-2026-09-15.md) applies the
+navigation-vector retraction to those states too. This preserves the finite
+heading/relative-velocity relation used by force aiding. Models without additional
+world-frame vectors retain the v2 chart.
+
 `INS(..., covariance="nonlinear")` selects a gravity-referenced finite error
 model and nonlinear uncertainty propagation. `covariance="linearized"` retains
 the existing implementation for compatibility. This option changes covariance

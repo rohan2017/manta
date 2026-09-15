@@ -23,6 +23,11 @@ A physical Gaussian prior must be mapped into these coordinates. Covariance
 and error scoring refer to boxminus(truth, estimate), which is not generally
 antisymmetric. These are local coordinates: the swing/twist decomposition is
 singular at a 180-degree relative swing and has the usual angular branch cut.
+
+World-frame R3 field states share the navigation-vector retraction, including
+local water velocity. This preserves the finite yaw/relative-velocity relation
+used by force observations. Such augmented charts carry the v3 identifier;
+the existing position/velocity/bias-only chart retains its v2 identity.
 """
 
 from functools import cached_property
@@ -31,6 +36,8 @@ import casadi as ca
 import numpy as np
 
 from ..ir._rotation import quat_conj, quat_mul, quat_to_rotmat, so3_exp, so3_log
+from ..ir.frames import WorldFrame
+from ..ir.manifold import R3Manifold
 from ..ir.state_spec import StateSpec
 
 
@@ -73,6 +80,21 @@ class INSStateSpec(StateSpec):
         self.navigation_vectors = tuple(
             self.slot(f"{craft}.{name}") for name in ("position", "velocity")
         )
+        navigation_names = {slot.name for slot in self.navigation_vectors}
+        field_vectors = tuple(
+            slot for slot in product.slots
+            if isinstance(slot.manifold, R3Manifold)
+            and slot.manifold.frame is WorldFrame
+            and slot.name not in navigation_names
+        )
+        if field_vectors:
+            # A world-frame field vector, such as water velocity, must use
+            # the same finite rotation as craft velocity. Otherwise even
+            # linear drag in body-relative velocity gains a curved heading
+            # residual that repeated Jacobian corrections mistake for
+            # information. Select by declared frame, never by sensor/name.
+            self.navigation_vectors += field_vectors
+            self.error_model = "gravity_and_earth_referenced_swing_twist_v3"
         self.biases = tuple(
             self.slot(f"{imu}.{name}")
             for name in ("gyro_bias", "accel_bias")

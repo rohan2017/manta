@@ -9,7 +9,7 @@ from manta import INS, Craft, NavigationFrame, Sim, TargetNumpy, World
 from tests.test_ins import _evidence
 
 
-def world(sigma=0.0, *, drag_force=(-1., -2., -3.)):
+def world(sigma=0.0, *, drag_force=(-1., -2., -3.), current_name="local_current"):
     craft = Craft("craft")
     craft.add(Mass("mass", mass=1, moi=(1, 1, 1)))
     craft.add(DragSurface("drag", force=drag_force))
@@ -20,7 +20,7 @@ def world(sigma=0.0, *, drag_force=(-1., -2., -3.)):
     w = (
         World()
         .add_field(GravityField(g=(0, 0, -9.81)))
-        .add_field(FluidField(density=1).add(LocalCurrent(sigma=sigma)))
+        .add_field(FluidField(density=1).add(LocalCurrent(name=current_name, sigma=sigma)))
     )
     w.add_craft(craft)
     return w
@@ -205,3 +205,70 @@ def test_current_with_negligible_drag_sensitivity_keeps_its_uncertainty():
     np.testing.assert_allclose(
         runtime.P[o : o + 3, o : o + 3], np.eye(3) * 0.041, atol=1e-12
     )
+
+
+@pytest.mark.parametrize("covariance", ["geometric", "nonlinear"])
+@pytest.mark.parametrize("current_name", ["local_current", "flow"])
+def test_finite_yaw_force_correction_retains_relative_velocity_affinity(
+    covariance, current_name
+):
+    """Linear drag must remain affine when yaw and both velocities vary.
+
+    An additive current alongside a finitely rotated vehicle velocity loses
+    this property, feeding artificial heading information into repeated aids.
+    """
+    import casadi as ca
+
+    ins = INS(
+        world(current_name=current_name), imu="imu",
+        sensors=["dvl.velocity", "model_force.specific_force"],
+        covariance=covariance,
+    )
+    runtime = TargetNumpy(ins)
+    spec = ins.spec
+    assert ins.module().metadata["error_model"] == "gravity_and_earth_referenced_swing_twist_v3"
+    transported = {slot.name for slot in spec.navigation_vectors}
+    assert f"{current_name}.velocity" in transported
+    assert "craft.imu.gyro_bias" not in transported
+    assert "craft.imu.accel_bias" not in transported
+    x = spec.pack_any({
+        "craft": {"velocity": (0.1, 0.05, 0)},
+        current_name: {"velocity": (0.3, -0.2, 0.05)},
+    }, base=runtime.x)
+    sm = ins.sys.sensors["craft.model_force.specific_force"]
+    h = ca.Function("force", [ins.sys.x_sym, ins.sys.u_sym, ins.sys.dt_sym, ins.sys.t_sym], [sm.h_sym])
+    u = ins.sys.u_defaults
+    for yaw in (-0.3, 0.1, 0.5):
+        delta = np.zeros(spec.tangent_dim)
+        delta[spec.slot("craft.orientation").tangent_offset + 2] = yaw
+        v = spec.slot("craft.velocity").tangent_offset
+        c = spec.slot(f"{current_name}.velocity").tangent_offset
+        delta[v:v + 3] = (0.02, -0.01, 0.03)
+        delta[c:c + 3] = (-0.03, 0.01, -0.02)
+        expected = np.asarray(h(x, u, 0, 0)).ravel() + np.asarray(sm.H_fn(x, u, 0, 0)) @ delta
+        actual = np.asarray(h(spec.boxplus_num(x, delta), u, 0, 0)).ravel()
+        np.testing.assert_allclose(actual, expected, atol=2e-12, rtol=0)
+        np.testing.assert_allclose(
+            np.asarray(spec.boxminus_sym(spec.boxplus_num(x, delta), x)).ravel(),
+            delta, atol=2e-12,
+        )
+
+
+@pytest.mark.parametrize("covariance", ["geometric", "nonlinear"])
+def test_current_physical_prior_maps_mean_with_finite_heading_uncertainty(covariance):
+    ins = INS(world(), imu="imu", sensors=["model_force.specific_force"], covariance=covariance)
+    prior_spec = ins.module().port("prior_x").spec
+    p = np.zeros((prior_spec.tangent_dim, prior_spec.tangent_dim))
+    yaw = prior_spec.slot("craft.orientation").tangent_offset + 2
+    current = prior_spec.slot("local_current.velocity").tangent_offset
+    p[yaw, yaw] = 0.2 ** 2
+    p[current:current + 3, current:current + 3] = np.eye(3) * 0.05 ** 2
+    mean = np.array((0.3, -0.2, 0.05))
+    runtime = TargetNumpy(ins)
+    runtime.reset(state={"local_current": {"velocity": mean}}, P=p)
+    # E[Rot(-yaw)] for zero-mean Gaussian yaw: the native zero-error mean
+    # differs from the physical prior mean, while vertical current is fixed.
+    expected = mean * np.array((np.exp(-0.2 ** 2 / 2), np.exp(-0.2 ** 2 / 2), 1))
+    slot = ins.spec.slot("local_current.velocity")
+    actual = runtime.x[slot.ambient_offset:slot.ambient_offset + 3]
+    np.testing.assert_allclose(actual, expected, atol=2e-11, rtol=0)
