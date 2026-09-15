@@ -131,7 +131,8 @@ class WaveBuffet:
         return self.force + swell_force, self.torque + swell_torque
 
 
-def build_world(*, truth: bool, evidence: FitEvidence | None = None) -> World:
+def build_world(*, truth: bool, evidence: FitEvidence | None = None,
+                local_current: bool = False) -> World:
     """Build detailed truth or its reasonably accurate lumped reduction.
 
     The reduced model mounts a ``ModelForce`` only once ``evidence`` (its
@@ -223,8 +224,12 @@ def build_world(*, truth: bool, evidence: FitEvidence | None = None) -> World:
 
     fluid = FluidField().add_uniform(
         density=RHO_WATER, viscosity=1.35e-3)
-    fluid.add(CraftWindBubble(
-        auv, radius=500.0, sigma=0.035, name="auv_current"))
+    if local_current:
+        from manta.fields import LocalCurrent
+        fluid.add(LocalCurrent(sigma=0.035))
+    else:
+        fluid.add(CraftWindBubble(
+            auv, radius=500.0, sigma=0.035, name="auv_current"))
     world = (World("ins_ekf_ab")
              .add_field(GravityField(g=(0.0, 0.0, -G)))
              .add_field(fluid))
@@ -233,6 +238,7 @@ def build_world(*, truth: bool, evidence: FitEvidence | None = None) -> World:
 
 
 def calibrate_model_force(*, seed: int, dt: float, windows: int = 24,
+                          local_current: bool = False,
                           window_s: float = 2.0,
                           criteria: FitAcceptanceCriteria | None = None
                           ) -> FitEvidence:
@@ -244,9 +250,9 @@ def calibrate_model_force(*, seed: int, dt: float, windows: int = 24,
     on the held-out tail only, against the reduced model's mean prediction
     from each window's true initial state over the recorded commands.
     """
-    truth = TargetNumpy(Sim(build_world(truth=True)))
+    truth = TargetNumpy(Sim(build_world(truth=True, local_current=local_current)))
     truth.attach_driver(NoiseDriver(seed=seed + 2000))
-    reduced = build_world(truth=False)
+    reduced = build_world(truth=False, local_current=local_current)
     template = TargetNumpy(Sim(reduced)).state
     wave = WaveBuffet(seed + 1)
     K = round(window_s / dt)

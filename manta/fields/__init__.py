@@ -60,6 +60,7 @@ from .optical import (
 from .planet_binding import PlanetBindingField
 from .wave_ocean import WaveOcean
 from .wind_bubble import CraftWindBubble
+from .local_current import LocalCurrent
 
 __all__ = [
     "BodyDipoleMag",
@@ -80,6 +81,7 @@ __all__ = [
     "Heightfield",
     "J2Gravity",
     "MagField",
+    "LocalCurrent",
     "OpticalField",
     "PlanetBindingField",
     "PointMassGravity",
