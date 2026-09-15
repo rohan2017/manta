@@ -4,6 +4,7 @@ import casadi as ca
 import numpy as np
 import pytest
 
+from manta.estimation._ins_accel_boundary import condition_start_noise
 from manta.estimation._ins_correction import (
     conditional_statistics,
     conditional_update,
@@ -128,3 +129,18 @@ def test_single_posterior_iteration_is_conditional_statistical_update():
     iterated = kernel(3, h, method="posterior", iterations=4)(*inputs)
     assert np.isfinite(iterated[0]).all()
     assert np.linalg.eigvalsh(np.array(iterated[1])).min() > 0
+
+
+def test_shared_sample_prediction_matches_direct_batch_gaussian_conditioning():
+    # x~N(0,1), a=sigma*eta, eta~N(0,1); z=x+a. The very same a enters
+    # the next inertial prediction y=x-dt*a. Compute Var(y|z) directly from
+    # the *original* joint distribution, independently of sequential filtering.
+    sigma, dt = .5, .1
+    expected = 1+(dt*sigma)**2-(1-dt*sigma**2)**2/(1+sigma**2)
+    H = np.array(((1., sigma),))
+    posterior = np.eye(2)-H.T@H/(1+sigma**2)
+    naive = posterior[0, 0]+(dt*sigma)**2
+    corrected = condition_start_noise(ca.DM([[naive]]), ca.DM([[1.]]),
+                                       ca.DM([[-dt*sigma]]), ca.DM(posterior))
+    assert abs(float(corrected)-expected) < 1e-14
+    assert expected > naive*1.1  # dropping reuse can be overconfident
