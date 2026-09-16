@@ -1,6 +1,6 @@
 import numpy as np
 
-from manta import Craft, EKF, Sim, TargetNumpy, World
+from manta import EKF, Craft, Sim, TargetNumpy, World
 from manta.fields import GravityField
 from manta.parts import ComponentPositionSensor, Mass
 

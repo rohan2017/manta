@@ -80,7 +80,7 @@ from .sensor.bottom_velocity_sensor import BottomVelocitySensor
 from .sensor.camera import BBoxCamera, CentroidCamera, ProjectiveCamera
 from .sensor.component_position_sensor import ComponentPositionSensor
 from .sensor.heading_sensor import HeadingSensor
-from .sensor.imu import ConstantBiasIMU, IMU
+from .sensor.imu import IMU, ConstantBiasIMU
 from .sensor.magnetometer import Magnetometer
 from .sensor.model_force import ModelForce
 from .sensor.planet_position_sensor import PlanetPositionSensor
@@ -94,8 +94,6 @@ from .thermal.thermal_mass import ThermalMass
 
 __all__ = [
     "IMU",
-    "ConstantBiasIMU",
-    "ComponentPositionSensor",
     "AddedMass",
     "Aerofoil",
     "Antenna",
@@ -105,12 +103,13 @@ __all__ = [
     "BottomVelocitySensor",
     "CentroidCamera",
     "Collider",
+    "ComponentPositionSensor",
     "CompositePart",
+    "ConstantBiasIMU",
     "ConstantCurrentLoad",
     "ConstantPowerElectronicsLoad",
     "ConstantPowerLoad",
     "ConstantWrench",
-    "ExternalWrench",
     "Contactor",
     "ControlSurface",
     "DCConverter",
@@ -123,6 +122,7 @@ __all__ = [
     "ElectricalNode",
     "ElectricalPort",
     "ExternalDCSupply",
+    "ExternalWrench",
     "FieldSource",
     "FossenDamping",
     "Fuse",

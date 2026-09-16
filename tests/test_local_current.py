@@ -2,10 +2,10 @@
 
 import numpy as np
 import pytest
-from manta.fields import FluidField, GravityField, LocalCurrent
-from manta.parts import ConstantBiasIMU, DragSurface, Mass, ModelForce, VelocitySensor
 
 from manta import INS, Craft, NavigationFrame, Sim, TargetNumpy, World
+from manta.fields import FluidField, GravityField, LocalCurrent
+from manta.parts import ConstantBiasIMU, DragSurface, Mass, ModelForce, VelocitySensor
 from tests.test_ins import _evidence
 
 
@@ -99,6 +99,7 @@ def test_current_aiding_retains_earth_rate_gyrocompassing(covariance):
     reading; heading comes only from Earth rate and the tight gyro-bias prior.
     """
     import casadi as ca
+
     from manta.ir._rotation import quat_to_rotmat, so3_exp
     from manta.parts import PointBuoy
 

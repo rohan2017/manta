@@ -6,7 +6,9 @@ import numpy as np
 import pytest
 
 from manta import (
-    IMUPreintegrator, TargetNumpy, compose_preintegrated_packets,
+    IMUPreintegrator,
+    TargetNumpy,
+    compose_preintegrated_packets,
     frame_preintegrated_packet,
 )
 from manta.estimation.imu_preintegrator import PACKET_FIELDS
@@ -22,11 +24,18 @@ def _packets():
     full = TargetNumpy(IMUPreintegrator(accel_noise_density=.002, gyro_noise_density=.0002))
     packets = []
     for i, dt in enumerate(dts):
-        args = dict(accel=accel[i], gyro=gyro[i], accel_bias=bias_a, gyro_bias=bias_g)
+        args = {
+            "accel": accel[i], "gyro": gyro[i],
+            "accel_bias": bias_a, "gyro_bias": bias_g,
+        }
         packet = pre.step(float(dt), **args)
         complete = full.step(float(dt), **args)
-        frame = dict(end_accel=accel[i+1], end_gyro=gyro[i+1],
-            end_gyro_noise_sigma=np.full(3, .0002/np.sqrt(dts[min(i+1, len(dts)-1)])))
+        frame = {
+            "end_accel": accel[i+1], "end_gyro": gyro[i+1],
+            "end_gyro_noise_sigma": np.full(
+                3, .0002/np.sqrt(dts[min(i+1, len(dts)-1)])
+            ),
+        }
         packets.append(frame_preintegrated_packet(packet, **frame))
         pre.reset()
     return packets, frame_preintegrated_packet(complete, **frame)

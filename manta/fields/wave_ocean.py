@@ -17,7 +17,6 @@ from ..ir.types import Vec3
 from ..smoothing import smooth_max0
 from .fluid import FlatOcean, below_surface
 
-
 WaveComponent = tuple[float, float, tuple[float, float], float]
 
 

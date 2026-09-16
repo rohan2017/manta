@@ -51,6 +51,7 @@ from .gravity import (
     UniformGravity,
     gravity_at,
 )
+from .local_current import LocalCurrent
 from .mag import BodyDipoleMag, DipoleMag, MagField, UniformMag
 from .optical import (
     BodySemanticEllipsoid,
@@ -60,7 +61,6 @@ from .optical import (
 from .planet_binding import PlanetBindingField
 from .wave_ocean import WaveOcean
 from .wind_bubble import CraftWindBubble
-from .local_current import LocalCurrent
 
 __all__ = [
     "BodyDipoleMag",
@@ -80,8 +80,8 @@ __all__ = [
     "HalfSpace",
     "Heightfield",
     "J2Gravity",
-    "MagField",
     "LocalCurrent",
+    "MagField",
     "OpticalField",
     "PlanetBindingField",
     "PointMassGravity",

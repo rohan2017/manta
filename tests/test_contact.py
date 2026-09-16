@@ -2,12 +2,12 @@
 
 import numpy as np
 import pytest
+
+from manta import Craft, Sim, TargetNumpy, World
 from manta.contact import ContactMaterial, Kinematics, RevolvedSolid, sphere_contact
 from manta.fields import GravityField
 from manta.parts import Mass, PrismaticJoint
 from manta.parts.disturbance.external_wrench import ExternalWrench
-
-from manta import Craft, Sim, TargetNumpy, World
 
 
 @pytest.mark.parametrize(

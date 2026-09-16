@@ -29,7 +29,7 @@ Host: Intel Core Ultra 9 386H, Linux/WSL x86-64, Python 3.12.3,
 NumPy 2.5.1, CasADi 3.7.2. Each run used single-threaded BLAS/OpenMP and the
 same expanded, O1-compiled synthetic 15-state linearized Earth INS fixture.
 
-[`benchmarks/ins_runtime.py`](../../benchmarks/ins_runtime.py) measures seven
+[`benchmarks/ins_runtime.py`](https://github.com/rohan2017/manta/blob/main/benchmarks/ins_runtime.py) measures seven
 batches, each containing 20,000 predictions at a modeled 100 Hz and 2,000 DVL
 updates at 10 Hz, with an explicit per-sample covariance. Construction,
 compilation/cache loading, 1,000 warmup cycles, resets and RSS sampling are

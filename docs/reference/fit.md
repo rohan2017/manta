@@ -10,6 +10,8 @@ for a worked recipe.
 
 ::: manta.FitResult
 
+::: manta.FitProgress
+
 `FitResult.evidence(held_out, sensor=...)` computes the typed held-out
 evidence (below) on windows the fit never saw; `FitResult.derive(evidence=...)`
 returns an immutable `ModelArtifact` with the source revision, objective,

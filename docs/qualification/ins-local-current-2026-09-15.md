@@ -50,4 +50,4 @@ shared by geometric and nonlinear prediction. Retain those failures rather than
 claiming universal statistical acceptance from the current-specific correction.
 
 Detailed profiles, seeds, retained before/after data, limitations and commands
-are in the [Shiver isolated qualification report](../../../shiver/docs/qualification/local-current/isolated/README.md).
+are in the [Shiver isolated qualification report](https://github.com/ulysses-rohan/shiver/blob/master/docs/qualification/local-current/isolated/README.md).

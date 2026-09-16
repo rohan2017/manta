@@ -2,10 +2,10 @@
 
 import numpy as np
 import pytest
-from manta.fields import FluidField, GravityField
-from manta.parts import DragSurface, Mass
 
 from manta import Craft, NoiseDriver, Sim, TargetNumpy, World
+from manta.fields import FluidField, GravityField
+from manta.parts import DragSurface, Mass
 
 
 def test_offset_drag_uses_mount_velocity_not_double_lever_arm():

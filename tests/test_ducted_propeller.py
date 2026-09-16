@@ -2,10 +2,10 @@
 
 import numpy as np
 import pytest
-from manta.fields import FluidField, GravityField
-from manta.parts import DuctedPropeller, Mass
 
 from manta import Craft, Sim, TargetNumpy, World
+from manta.fields import FluidField, GravityField
+from manta.parts import DuctedPropeller, Mass
 
 
 def _run(*, velocity=(0.0, 0.0, 0.0), command=100.0,

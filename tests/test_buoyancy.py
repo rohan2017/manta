@@ -2,6 +2,8 @@
 
 import casadi as ca
 import numpy as np
+
+from manta import Craft, Sim, TargetNumpy, World
 from manta.fields import (
     CurrentFlow,
     FluidField,
@@ -12,8 +14,6 @@ from manta.ir.frames import WorldFrame
 from manta.ir.types import Vec3
 from manta.parts import AddedMass, Mass, PointBuoy
 from manta.planets import Earth
-
-from manta import Craft, Sim, TargetNumpy, World
 
 
 def _eval_fluid_at(field, point_xyz):

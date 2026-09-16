@@ -5,6 +5,7 @@ import math
 import casadi as ca
 import numpy as np
 import pytest
+
 from manta.fields import FlatOcean
 from manta.fields.wave_ocean import WaveOcean
 from manta.ir.frames import WorldFrame

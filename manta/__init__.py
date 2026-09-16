@@ -95,12 +95,12 @@ from .couplings import Coupling
 from .craft import Craft
 from .estimation.ekf import EKF
 from .estimation.imu_integrator import IMUIntegrator
+from .estimation.imu_packets import compose_preintegrated_packets
 from .estimation.imu_preintegrator import (
     IMUPreintegrator,
     frame_preintegrated_packet,
 )
 from .estimation.ins import INS
-from .estimation.imu_packets import compose_preintegrated_packets
 from .estimation.madgwick import Madgwick
 from .estimation.mahony import Mahony
 from .estimation.navigation_frame import NavigationFrame
@@ -216,8 +216,8 @@ __all__ = [
     "__version__",
     "bartlett_hac_residual_statistics",
     "compile_functions",
-    "frame_preintegrated_packet",
     "compose_preintegrated_packets",
+    "frame_preintegrated_packet",
     "held_out_evidence",
     "hold_out",
     "ir",
