@@ -23,6 +23,7 @@ import numpy as np
 import pytest
 
 from manta import Craft, NoiseDriver, Sim, TargetNumpy, World
+from manta.fields import GravityField
 from manta.parts import Mass, PositionSensor
 
 from .builder import analyze, build_bundle, build_world, design_hash, \
@@ -314,7 +315,7 @@ def test_noise_slot_expects_pre_scaled_draws():
     c = Craft("t")
     c.add(Mass("m", mass=1.0, moi=(0.1, 0.1, 0.1)))
     c.add(PositionSensor("gps", position_noise_sigma=sigma))
-    w = World()                       # no gravity → truly static craft
+    w = World().add_field(GravityField.none())  # explicitly static zero-g fixture
     w.add_craft(c, position=(0.0, 0.0, 0.0))
     sim = TargetNumpy(Sim(w))
 
