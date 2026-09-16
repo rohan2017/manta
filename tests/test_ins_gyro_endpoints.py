@@ -5,7 +5,10 @@ from itertools import pairwise
 import numpy as np
 
 from manta import IMUPreintegrator
-from manta.estimation._ins_gyro_endpoints import gyro_endpoint_update
+from manta.estimation._ins_gyro_endpoints import (
+    compose_endpoint_packets,
+    gyro_endpoint_update,
+)
 
 
 def mul(a, b):
@@ -53,6 +56,9 @@ def integrate(raw, h, *, density=.003, accel_density=.01, bias=None):
     for field in block.outputs:
         result[field.name] = x[off:off+field.dim]
         off += field.dim
+    result["end_accel"] = raw[-1, 3:].copy()
+    for name in ("duration", "sample_count"):
+        result[name] = float(result[name][0])
     return result
 
 
@@ -126,3 +132,20 @@ def test_noncommuting_smooth_signal_has_second_order_convergence():
         errors.append(np.linalg.norm(difference(reference(samples(h), h), nominal)[:3]))
     assert 3.95 < errors[0]/errors[1] < 4.05
     assert 3.95 < errors[1]/errors[2] < 4.05
+
+
+def test_packet_composition_and_associativity_match_all_raw_samples():
+    rng = np.random.default_rng(944)
+    raw = rng.normal(size=(41, 6))*.3
+    raw[:, 5] += 9.81
+    whole = integrate(raw, .002)
+    a, b, c = (integrate(raw[lo:hi+1], .002) for lo, hi in ((0, 1), (1, 17), (17, 40)))
+    copies = [{k: np.asarray(v).copy() for k, v in p.items()} for p in (a, b, c)]
+    ab_c = compose_endpoint_packets(compose_endpoint_packets(a, b), c)
+    a_bc = compose_endpoint_packets(a, compose_endpoint_packets(b, c))
+    for key in whole:
+        np.testing.assert_allclose(ab_c[key], whole[key], atol=3e-14, rtol=2e-10, err_msg=key)
+        np.testing.assert_allclose(a_bc[key], whole[key], atol=3e-14, rtol=2e-10, err_msg=key)
+    for actual, before in zip((a, b, c), copies, strict=True):
+        for key in actual:
+            np.testing.assert_array_equal(actual[key], before[key])

@@ -13,6 +13,7 @@ the production independent-endpoint framer/composer MUST NOT frame this output.
 """
 
 import casadi as ca
+import numpy as np
 
 from ..ir._rotation import quat_mul, quat_to_rotmat, so3_exp
 from .imu_preintegrator import _local_error, _normalise
@@ -93,3 +94,45 @@ def gyro_endpoint_update(block):
         for field in block.outputs])
     return ca.Function("gyro_endpoint_preintegration", [x, u, dt, t],
                        [next_state, next_state])
+
+
+def compose_endpoint_packets(left, right):
+    """Compose contiguous endpoint-integrated intervals without outer INS work.
+
+    Start and end are distinct independent acquisitions in each input packet.
+    Their shared middle acquisition induces Cov(delta_left, delta_right).
+    Caller still owns acquisition identities, epochs and non-overlap checks.
+    The independent-endpoint composer supplies unchanged mean/bias/time algebra;
+    the terms below supply the missing joint-noise covariance and terminal cross.
+    """
+    from ..ir._rotation import quat_to_rotmat_np
+    from .imu_packets import compose_preintegrated_packets
+
+    end_cross = []
+    for packet in (left, right):
+        cross = np.asarray(packet["delta_end_gyro_cross_covariance"], dtype=float).reshape(9, 3, order="F")
+        if not np.isfinite(cross).all() or np.any(packet["start_end_gyro_correlation"]):
+            raise ValueError("endpoint composition needs finite cross covariance and distinct independent boundaries")
+        end_cross.append(cross)
+    independent = [{**p, "delta_end_gyro_cross_covariance": np.zeros(27)} for p in (left, right)]
+    combined = compose_preintegrated_packets(*independent)
+    ra, rb = (quat_to_rotmat_np(np.asarray(p["delta_orientation"])) for p in (left, right))
+
+    def skew(v):
+        x, y, z = v
+        return np.array([[0., -z, y], [z, 0., -x], [-y, x, 0.]])
+
+    A, B = np.zeros((9, 9)), np.zeros((9, 9))
+    A[:3, :3] = rb.T
+    A[3:6, :3] = -ra @ skew(right["delta_velocity"])
+    A[3:6, 3:6] = np.eye(3)
+    A[6:9, :3] = -ra @ skew(right["delta_position"])
+    A[6:9, 3:6] = float(right["duration"])*np.eye(3)
+    A[6:9, 6:9] = np.eye(3)
+    B[:3, :3], B[3:6, 3:6], B[6:9, 6:9] = np.eye(3), ra, ra
+    right_start = np.asarray(right["delta_start_gyro_cross_covariance"]).reshape(9, 3, order="F")
+    cross = A @ end_cross[0] @ right_start.T @ B.T
+    covariance = np.asarray(combined["covariance"]).reshape(9, 9, order="F")+cross+cross.T
+    combined["covariance"] = (.5*(covariance+covariance.T)).reshape(-1, order="F")
+    combined["delta_end_gyro_cross_covariance"] = (B @ end_cross[1]).reshape(-1, order="F")
+    return combined
