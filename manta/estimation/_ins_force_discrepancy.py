@@ -71,7 +71,10 @@ def with_force_discrepancy(ir, *, sigma, tau_s, protect_navigation=False):
     for sensor in prepared_sensors(system, base, x0=module.state.field("x").init, who="force-discrepancy research"):
         ident = entry_ident(sensor.full)
         is_force = sensor.full in sources
-        h = ca.substitute(sensor.h, system.x_sym, x[:a])+(x[a:] if is_force else 0)
+        # ModelForce observes specific force in sensor axes. Keep the nuisance
+        # in body axes so attitude excitation can distinguish it from current.
+        discrepancy = ca.DM(system.R_craft_from_sensor).T @ x[a:]
+        h = ca.substitute(sensor.h, system.x_sym, x[:a])+(discrepancy if is_force else 0)
         d = ca.MX.sym("measurement_error", n+3)
         hd = ca.substitute(h, x, spec.boxplus_sym(x, d))
         H = ca.substitute(ca.jacobian(hd, d), d, ca.MX.zeros(n+3))
