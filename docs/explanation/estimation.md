@@ -21,10 +21,14 @@ or torque-model residual. The state contains navigation, selected IMU bias,
 and structurally relevant disturbance slots.
 
 For a fixed planet-attached navigation frame, INS now accepts explicit
-`NavigationFrame` kinematics. This is a mechanics-only draft: calibrated
-synthetic gyrocompassing works, but weak-bias statistical qualification fails.
-See [Earth-relative INS](earth-relative-ins.md) for equations, packet schema 2,
-and the release limitations. The existing model-driven EKF gyrocompass example
+`NavigationFrame` kinematics. `NavigationEnvironment.from_scene` derives a
+matched gravity field and rotation from a planet. The
+[standalone INS guide](../how-to/use-ins.md) covers timestamped acquisitions,
+initialization, gyrocompassing, and optional model aiding without Shiver.
+Calibrated synthetic gyrocompassing works, but broad attitude/bias statistical
+qualification remains incomplete. See [Earth-relative INS](earth-relative-ins.md)
+for equations and [IMU integration](imu-sample-integration.md) for packet schema 4.
+The existing model-driven EKF gyrocompass example
 is separate evidence and does not qualify this strapdown filter.
 
 ## INS force disturbance observer

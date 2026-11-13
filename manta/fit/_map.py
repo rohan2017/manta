@@ -712,6 +712,7 @@ class FitResult:
     def evidence(self, held_out: list[Window], *, sensor: str,
                  criteria: FitAcceptanceCriteria | None = None,
                  lag_count: int = 20,
+                 known_white_sigma: float = 0.,
                  selection: list[Window] = (),
                  configuration_id: str | None = None,
                  channel_contract_id: str | None = None) -> FitEvidence:
@@ -742,7 +743,7 @@ class FitResult:
         )
         return held_out_evidence(
             candidate, held_out, sensor=sensor,
-            criteria=criteria, lag_count=lag_count,
+            criteria=criteria, lag_count=lag_count, known_white_sigma=known_white_sigma,
             training=self._training_digests,
             selection=selection_digests,
             source_model_id=self._source_model_id,

@@ -327,6 +327,9 @@ class NumpyFilter(NumpyRuntime):
         if missing:
             raise KeyError(
                 f"preintegrated_inputs packet is missing {missing}")
+        endpoint = bool(np.asarray(packet.get("accel_endpoint",0)).item())
+        if endpoint != (self.module.metadata.get("accel_integration","left_hold") == "endpoint"):
+            raise ValueError("packet and INS accelerometer integration modes differ")
         merged = dict(u or {})
         input_names = self._input_names()
         occupied = {

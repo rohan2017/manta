@@ -227,9 +227,11 @@ def test_finite_yaw_force_correction_retains_relative_velocity_affinity(
     )
     runtime = TargetNumpy(ins)
     spec = ins.spec
-    assert ins.module().metadata["error_model"] == "gravity_and_earth_referenced_swing_twist_v3"
+    assert ins.module().metadata["error_model"] == "gravity_and_earth_referenced_swing_twist_v4"
     transported = {slot.name for slot in spec.navigation_vectors}
     assert f"{current_name}.velocity" in transported
+    assert "craft.velocity" in transported
+    assert "craft.position" not in transported
     assert "craft.imu.gyro_bias" not in transported
     assert "craft.imu.accel_bias" not in transported
     x = spec.pack_any({

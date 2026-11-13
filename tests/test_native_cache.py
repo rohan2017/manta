@@ -9,9 +9,12 @@ runner, the HPIPM and OSQP bridges) and that the key moves with the toolchain.
 from __future__ import annotations
 
 import re
+import os
 import shutil
+import signal
 import sys
 import sysconfig
+import time
 from pathlib import Path
 
 import casadi as ca
@@ -145,6 +148,48 @@ def test_compiler_errors_name_the_library_and_keep_the_cache_clean(
             "this is not C\n", stem="probe", what="probe",
             compiler_flags=("-O1",), timeout_s=30.0)
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="inspects Linux process state")
+def test_compiler_deadline_terminates_children(monkeypatch, tmp_path):
+    cache, child_pid = tmp_path / "cache", tmp_path / "child.pid"
+    compiler = tmp_path / "cc"
+    compiler.write_text(
+        f"#!{sys.executable}\n"
+        "import subprocess, sys, time\n"
+        "from pathlib import Path\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+        f"Path({str(child_pid)!r}).write_text(str(child.pid))\n"
+        "time.sleep(60)\n")
+    compiler.chmod(0o700)
+    monkeypatch.setattr(_compile, "_cache_dir", lambda: str(cache))
+    monkeypatch.setattr(_compile, "toolchain_identity", lambda *a, **k: b"timeout-probe")
+    started = time.monotonic()
+    try:
+        with pytest.raises(_compile.CompilationError, match="compiler deadline"):
+            _compile.build_native_library(
+                _PROBE_SOURCE, stem="probe", what="probe", compiler_flags=(),
+                timeout_s=1., compiler=str(compiler))
+        assert time.monotonic() - started < 3.
+        pid = int(child_pid.read_text())
+        status = Path(f"/proc/{pid}/stat")
+        def running():
+            try:
+                return status.read_text().split()[2] != "Z"
+            except FileNotFoundError:
+                return False
+        # An orphan zombie can briefly await the OS reaper, but must not run.
+        deadline = time.monotonic() + 1.
+        while running() and time.monotonic() < deadline:
+            time.sleep(.01)
+        assert not running()
+        assert list(cache.iterdir()) == []
+    finally:
+        if child_pid.exists():
+            try:
+                os.kill(int(child_pid.read_text()), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
 
 _NATIVE_SITES = {

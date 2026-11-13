@@ -626,7 +626,7 @@ def hold_out(windows: Sequence[Window], *, fraction: float = 0.3
 # The evidence pipeline
 # ---------------------------------------------------------------------------
 
-def _fit_autocorrelation(rho: np.ndarray) -> tuple[float, float]:
+def _fit_autocorrelation(rho: np.ndarray, max_fraction: float = 1.0) -> tuple[float, float]:
     """Least-squares fit of ``ρ(l) ≈ a·φ^l`` over lags ``l = 1..L``.
     Returns ``(φ, a)`` with ``φ ∈ (0, 1)``, ``a ∈ [0, 1]``. For a given φ
     the optimal ``a`` is closed-form; φ is found by a dense grid and a
@@ -635,7 +635,7 @@ def _fit_autocorrelation(rho: np.ndarray) -> tuple[float, float]:
 
     def solve_a(phi: float) -> float:
         p = phi ** lags
-        return float(np.clip(np.dot(rho, p) / np.dot(p, p), 0.0, 1.0))
+        return float(np.clip(np.dot(rho, p) / np.dot(p, p), 0.0, max_fraction))
 
     def cost(phi: float) -> float:
         p = phi ** lags
@@ -664,7 +664,7 @@ def _fit_autocorrelation(rho: np.ndarray) -> tuple[float, float]:
 
 
 def _axis_evidence(axis: str, segments: list[np.ndarray], *, dt: float,
-                   lag_count: int, chi2_limit: float) -> AxisFitEvidence:
+                   lag_count: int, chi2_limit: float, known_white_sigma: float = 0.) -> AxisFitEvidence:
     """Bias, variance, pooled autocorrelation and the τ/σ² decision for
     one axis from its per-window residual segments."""
     pooled = np.concatenate(segments)
@@ -684,7 +684,10 @@ def _axis_evidence(axis: str, segments: list[np.ndarray], *, dt: float,
         sum(float(np.dot(e[:-lag], e[lag:])) for e in centered) / den
         for lag in range(1, lag_count + 1)])
     rho1 = float(rho[0])
-    phi, a = _fit_autocorrelation(rho)
+    # A known acquisition variance cannot be reassigned to a correlated
+    # dynamics-error state. Constrain the fit; do not fit sensor noise.
+    max_fraction = max(0., 1. - known_white_sigma**2 / var)
+    phi, a = _fit_autocorrelation(rho, max_fraction)
     lags = np.arange(1, lag_count + 1, dtype=float)
     fitted_tau = -dt / math.log(phi)
     # Significance of the correlated component: for white residuals each
@@ -711,11 +714,11 @@ def _axis_evidence(axis: str, segments: list[np.ndarray], *, dt: float,
     if fallback_reason is None:
         white_fraction = max(1.0 - a, white_floor)
         sigma_gm = math.sqrt((1.0 - white_fraction) * var)
-        white = math.sqrt(white_fraction * var)
+        white = max(known_white_sigma, math.sqrt(white_fraction * var))
         model = ProcessNoiseModel("gauss_markov", sigma_gm, fitted_tau)
         model_acf = a * phi ** lags
     else:
-        white = math.sqrt(var)
+        white = max(known_white_sigma, math.sqrt(var))
         model = ProcessNoiseModel("white", white)
         model_acf = np.zeros_like(lags)
     acf_rmse = float(np.sqrt(np.mean((rho - model_acf) ** 2)))
@@ -739,6 +742,7 @@ def _axis_evidence(axis: str, segments: list[np.ndarray], *, dt: float,
 def held_out_evidence(model, windows: Sequence[Window], *, sensor: str,
                       criteria: FitAcceptanceCriteria | None = None,
                       lag_count: int = 20,
+                      known_white_sigma: float = 0.,
                       correlation_confidence: float = 0.99,
                       training: Sequence[str] = (),
                       selection: Sequence[str] = (),
@@ -768,6 +772,9 @@ def held_out_evidence(model, windows: Sequence[Window], *, sensor: str,
                    :class:`FitAcceptanceCriteria`).
         lag_count — autocorrelation lags used for the τ/σ² fit (default
                    20; cover a few correlation times at the sample rate).
+        known_white_sigma — known scalar acquisition-noise sigma, held fixed.
+                   Constrains the correlated-variance fit so it cannot absorb
+                   sensor white noise. Zero preserves the unconstrained fit.
         correlation_confidence — the χ²(2) confidence a Gauss–Markov
                    component must reach over the white model to be kept
                    (default 0.99, a limit of 9.21); below it the axis
@@ -790,6 +797,7 @@ def held_out_evidence(model, windows: Sequence[Window], *, sensor: str,
     from ..estimation.consistency import chi2_quantile
     from ..sim import Sim
 
+    known_white_sigma = _finite(known_white_sigma, name="known_white_sigma", minimum=0.)
     if not windows:
         raise ValueError("held_out_evidence: needs at least one held-out "
                          "Window")
@@ -938,7 +946,7 @@ def held_out_evidence(model, windows: Sequence[Window], *, sensor: str,
     assert observed_stride is not None
     evidence_dt = base_dt * observed_stride
     axes = [_axis_evidence(axis_names[i], segments[i], dt=evidence_dt,
-                           lag_count=lag_count, chi2_limit=chi2_limit)
+                           lag_count=lag_count, chi2_limit=chi2_limit, known_white_sigma=known_white_sigma)
             for i in range(dim)]
     held = HeldOutWindow(window_count=len(windows), sample_count=total,
                          dt=evidence_dt, window_digests=tuple(digests))
@@ -962,7 +970,7 @@ def held_out_evidence(model, windows: Sequence[Window], *, sensor: str,
         source_model_id=source_model_id,
         source_artifact_id=source_artifact_id,
         configuration_id=configuration_id,
-        profile_id=profile_id,
+        profile_id=profile_id + (f";known_white_sigma={known_white_sigma:.17g}" if known_white_sigma else ""),
         training_window_digests=training,
         selection_window_digests=selection,
         acceptance_window_digests=tuple(digests),

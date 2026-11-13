@@ -36,6 +36,24 @@ from manta.parts import IMU, Mass, Thruster
 DT = 0.01
 
 
+def test_known_sensor_white_variance_is_not_fitted_as_model_correlation():
+    from manta.fit._evidence import _axis_evidence
+
+    rng = np.random.default_rng(391)
+    residual = np.zeros(10000)
+    for i in range(1, len(residual)):
+        residual[i] = .95*residual[i-1] + rng.normal(0, .1)
+    # A declared sensor floor constrains how much of this residual variance
+    # can be attributed to correlated dynamics, even with a strongly
+    # correlated record. The sensor parameter itself is never estimated.
+    known_sigma = .3
+    evidence = _axis_evidence("x", [residual], dt=DT, lag_count=20,
+                              chi2_limit=9.21, known_white_sigma=known_sigma)
+    assert evidence.white_sigma >= known_sigma
+    if evidence.noise_model.kind == "gauss_markov":
+        assert evidence.noise_model.sigma**2 <= np.var(residual, ddof=1)-known_sigma**2+1e-12
+
+
 def _axis(name="x", *, bias=0.0, kind="gauss_markov", white=0.05,
           sigma=0.2, tau=0.5, samples=2000, acf_rmse=0.03):
     if kind == "gauss_markov":

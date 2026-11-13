@@ -87,6 +87,7 @@ nav:
       - System identification — drone: tutorials/sysid-drone.md
   - How-to:
       - Overview: how-to/index.md
+      - Use the standalone INS: how-to/use-ins.md
       - Deploy a model to C++: how-to/deploy-cpp.md
       - Run a model in the browser (WASM): how-to/deploy-wasm.md
       - Fit parameters from a log: how-to/fit-parameters.md

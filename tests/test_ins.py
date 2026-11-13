@@ -199,7 +199,7 @@ def test_centripetal_lever_arm_does_not_accelerate_craft_origin():
     np.testing.assert_allclose(state["velocity"], np.zeros(3), atol=1e-8)
 
 
-def test_dynamic_lever_arm_strapdown_matches_exact_plant() -> None:
+def test_dynamic_lever_arm_raw_strapdown_converges_to_plant() -> None:
     """A translating/turning rigid sensor must recover the craft origin."""
     craft = Craft("vehicle")
     craft.add(Mass("body", mass=20.0, moi=(1.0, 2.0, 3.0)))
@@ -223,35 +223,40 @@ def test_dynamic_lever_arm_strapdown_matches_exact_plant() -> None:
         GravityField(g=(0.0, 0.0, -9.81))
     )
     world.add_craft(craft)
-    sim = TargetNumpy(Sim(world))
-    ins = TargetNumpy(INS(
-        world,
-        imu="vehicle.imu",
-        sensors=["vehicle.dvl.velocity"],
-        gates=None,
-    ))
-    for index in range(50):
-        t = index * 0.004
-        control = {"turn.throttle": 10.0}
-        sim.step(0.004, t=t, u=control)
-        inputs = {
-            **control,
-            "vehicle.imu.accel": sim.reading("vehicle.imu.accel"),
-            "vehicle.imu.gyro": sim.reading("vehicle.imu.gyro"),
-        }
-        if index % 50 == 0:
-            ins.update(
-                "vehicle.dvl.velocity",
-                sim.reading("vehicle.dvl.velocity"),
-                t=t,
-                u=inputs,
-            )
-        ins.predict(0.004, t=t, u=inputs)
-    truth = sim.state["vehicle"]
-    estimate = ins.state_dict()["vehicle"]
-    np.testing.assert_allclose(
-        estimate["velocity"], truth["velocity"], atol=1e-5
-    )
+    # The corrected plant integrates midpoint angular rate. Raw INS holds
+    # each left gyro, so demanding exact agreement would reintroduce the
+    # shared integration error. Require convergence over the same 0.2 s.
+    errors = []
+    for dt in (.004, .001):
+        sim = TargetNumpy(Sim(world))
+        ins = TargetNumpy(INS(
+            world,
+            imu="vehicle.imu",
+            sensors=["vehicle.dvl.velocity"],
+            gates=None,
+        ))
+        for index in range(round(.2 / dt)):
+            t = index * dt
+            control = {"turn.throttle": 10.0}
+            sim.step(dt, t=t, u=control)
+            inputs = {
+                **control,
+                "vehicle.imu.accel": sim.reading("vehicle.imu.accel"),
+                "vehicle.imu.gyro": sim.reading("vehicle.imu.gyro"),
+            }
+            if index == 0:
+                ins.update(
+                    "vehicle.dvl.velocity",
+                    sim.reading("vehicle.dvl.velocity"),
+                    t=t,
+                    u=inputs,
+                )
+            ins.predict(dt, t=t, u=inputs)
+        truth = sim.state["vehicle"]
+        estimate = ins.state_dict()["vehicle"]
+        errors.append(np.linalg.norm(estimate["velocity"] - truth["velocity"]))
+    assert errors[1] < .3 * errors[0]
+    assert errors[1] < 2e-5
 
 
 def test_autodiff_F_matches_finite_difference_oracle():

@@ -8,6 +8,7 @@ same retraction, including every off-diagonal block.
 
 For relative orientation D = Z(psi) S(tilt), theta = tilt + psi * up:
 
+  p_true = p + delta_p
   v_true = D (v + delta_v - theta x v)
   bg_true = bg + delta_bg + R_sensor.T (Omega - D.T Omega - theta x Omega)
   ba_true = ba + delta_ba + R_sensor.T (g - S.T g - tilt x g)
@@ -24,10 +25,14 @@ and error scoring refer to boxminus(truth, estimate), which is not generally
 antisymmetric. These are local coordinates: the swing/twist decomposition is
 singular at a 180-degree relative swing and has the usual angular branch cut.
 
-World-frame R3 field states share the navigation-vector retraction, including
-local water velocity. This preserves the finite yaw/relative-velocity relation
-used by force observations. Such augmented charts carry the v3 identifier;
-the existing position/velocity/bias-only chart retains its v2 identity.
+Position is an affine point, not a navigation vector. Rotating its error about
+the world origin made a broad physical prior's mean and variance depend on an
+arbitrary translation of that origin. Additive position errors retain ordinary
+physical position moments and make pressure and position aiding independent of
+that coordinate choice. World-frame R3 field states still share the velocity
+retraction, including local water velocity, preserving the finite
+yaw/relative-velocity relation used by force observations. The v4 identifier
+distinguishes this position meaning from the earlier v2/v3 charts.
 """
 
 from functools import cached_property
@@ -62,7 +67,7 @@ def _left_inverse(theta):
 
 
 class INSStateSpec(StateSpec):
-    error_model = "gravity_and_earth_referenced_swing_twist_v2"
+    error_model = "gravity_and_earth_referenced_swing_twist_v4"
 
     def __init__(
         self,
@@ -77,10 +82,10 @@ class INSStateSpec(StateSpec):
         super().__init__(list(product.slots))
         self.product_spec = product
         self.orientation = self.slot(f"{craft}.orientation")
-        self.navigation_vectors = tuple(
-            self.slot(f"{craft}.{name}") for name in ("position", "velocity")
-        )
-        navigation_names = {slot.name for slot in self.navigation_vectors}
+        self.navigation_vectors = (self.slot(f"{craft}.velocity"),)
+        # Position uses the product spec's additive point coordinates in both
+        # directions. Exclude it from the world-field vector discovery too.
+        navigation_names = {f"{craft}.position", f"{craft}.velocity"}
         field_vectors = tuple(
             slot for slot in product.slots
             if isinstance(slot.manifold, R3Manifold)
@@ -94,7 +99,6 @@ class INSStateSpec(StateSpec):
             # residual that repeated Jacobian corrections mistake for
             # information. Select by declared frame, never by sensor/name.
             self.navigation_vectors += field_vectors
-            self.error_model = "gravity_and_earth_referenced_swing_twist_v3"
         self.biases = tuple(
             self.slot(f"{imu}.{name}")
             for name in ("gyro_bias", "accel_bias")

@@ -88,6 +88,9 @@ def gyro_endpoint_update(block):
         "start_end_gyro_correlation": ca.MX.zeros(3, 3),
         "bias_jacobian": A @ ca.reshape(get("bias_jacobian"), 9, 6) + B,
         "end_gyro": u[12:15],
+        "delta_start_accel_cross_covariance": A @ ca.reshape(get("delta_start_accel_cross_covariance"),9,3) + ca.if_else(first,F,ca.MX.zeros(9,3)),
+        "delta_end_accel_cross_covariance": F,
+        "start_end_accel_correlation": ca.if_else(first,ca.MX.eye(3),ca.MX.zeros(3,3)),
     }
     next_state = ca.vertcat(*[
         ca.vec(replacements.get(field.name, get(field.name, auxiliary)))
@@ -114,7 +117,9 @@ def compose_endpoint_packets(left, right):
         if not np.isfinite(cross).all() or np.any(packet["start_end_gyro_correlation"]):
             raise ValueError("endpoint composition needs finite cross covariance and distinct independent boundaries")
         end_cross.append(cross)
-    independent = [{**p, "delta_end_gyro_cross_covariance": np.zeros(27)} for p in (left, right)]
+    independent = [{**p, "delta_end_gyro_cross_covariance": np.zeros(27),
+                    "delta_end_accel_cross_covariance":np.zeros(27),
+                    "start_end_accel_correlation":np.zeros(9)} for p in (left, right)]
     combined = compose_preintegrated_packets(*independent)
     ra, rb = (quat_to_rotmat_np(np.asarray(p["delta_orientation"])) for p in (left, right))
 
@@ -133,6 +138,14 @@ def compose_endpoint_packets(left, right):
     right_start = np.asarray(right["delta_start_gyro_cross_covariance"]).reshape(9, 3, order="F")
     cross = A @ end_cross[0] @ right_start.T @ B.T
     covariance = np.asarray(combined["covariance"]).reshape(9, 9, order="F")+cross+cross.T
+    if bool(np.asarray(left["accel_endpoint"]).item()) != bool(np.asarray(right["accel_endpoint"]).item()):
+        raise ValueError("packet accelerometer integration modes differ")
+    if bool(np.asarray(left["accel_endpoint"]).item()):
+        aend = np.asarray(left["delta_end_accel_cross_covariance"]).reshape(9,3,order="F")
+        astart = np.asarray(right["delta_start_accel_cross_covariance"]).reshape(9,3,order="F")
+        cross = A @ aend @ astart.T @ B.T
+        covariance += cross + cross.T
     combined["covariance"] = (.5*(covariance+covariance.T)).reshape(-1, order="F")
     combined["delta_end_gyro_cross_covariance"] = (B @ end_cross[1]).reshape(-1, order="F")
+    combined["delta_end_accel_cross_covariance"] = (B @ np.asarray(right["delta_end_accel_cross_covariance"]).reshape(9,3,order="F")).reshape(-1,order="F")
     return combined

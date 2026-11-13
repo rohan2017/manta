@@ -70,8 +70,9 @@ _RIGID = ("position", "orientation", "velocity", "angular_velocity")
 PREINTEGRATION_DURATION_RTOL = 1e-9
 
 # The selected accelerometer sample drives both strapdown propagation and the
-# `ModelForce.specific_force` pseudo-measurement, so their noises are
-# correlated. INS drops that cross term, which is sound only while
+# `ModelForce.specific_force` pseudo-measurement. Endpoint acceleration retains
+# its shared noise in the augmented state and removes it from independent R.
+# The legacy left-held path drops that cross term, which is sound only while
 # `rho = accel_noise_sigma / model_error_sigma` is small: the neglected
 # contribution to the innovation covariance and gain scales like rho².
 # Above the ceiling (25 % of R) the dropped term is no longer a second-order
@@ -129,7 +130,9 @@ class _INSSystem:
     """Linearized-system-compatible IR over a strapdown recurrence."""
 
     def __init__(self, source, *, imu, track, sensors, inputs,
-                 propagation: str, navigation_frame: NavigationFrame | None) -> None:
+                 propagation: str, navigation_frame: NavigationFrame | None,
+                 accel_integration="left_hold") -> None:
+        self.boundary_dim = 6 if accel_integration == "endpoint" else 3
         # Reuse the one authoritative model snapshot/compiler. The resulting
         # dynamics transition is only a source of ordinary measurement models
         # and non-navigation state recurrences; navigation is replaced below.
@@ -182,11 +185,17 @@ class _INSSystem:
                 "start_end_gyro_correlation": 9,
                 "start_gyro_noise_sigma": 3,
                 "end_gyro_noise_sigma": 3,
+                "delta_start_accel_cross_covariance": 27,
+                "delta_end_accel_cross_covariance": 27,
+                "start_end_accel_correlation": 9,
+                "start_accel_noise_sigma": 3,
+                "end_accel_noise_sigma": 3,
                 "bias_jacobian": 54,
                 "gyro_bias_reference": 3,
                 "accel_bias_reference": 3,
                 "start_gyro": 3,
                 "duration": 1,
+                "accel_endpoint": 1,
                 "velocity_time_moments": 4,
                 "position_time_moments": 4,
             }
@@ -339,7 +348,10 @@ class _INSSystem:
             sigma_model = min(part.white_sigmas)
             rho = (float(self.imu.accel_noise_sigma) / sigma_model
                    if sigma_model > 0.0 else float("inf"))
-            if not rho <= MODEL_FORCE_RHO_CEILING:
+            ceiling = 1.0 if self.boundary_dim == 6 else MODEL_FORCE_RHO_CEILING
+            if rho > ceiling and self.boundary_dim == 6:
+                raise ValueError("endpoint force residual variance must include accelerometer white variance")
+            if self.boundary_dim != 6 and not rho <= ceiling:
                 raise ValueError(
                     f"INS: ModelForce {owner_name!r} noise ratio rho = "
                     f"accel_noise_sigma/min(white model_error sigma) = "
@@ -349,7 +361,7 @@ class _INSSystem:
                     "longer a second-order term. The white model-error floor "
                     "comes from the fit evidence — select a quieter "
                     "accelerometer or refit")
-            if rho > MODEL_FORCE_RHO_WARNING:
+            if self.boundary_dim != 6 and rho > MODEL_FORCE_RHO_WARNING:
                 warnings.warn(
                     f"INS: ModelForce {owner_name!r} noise ratio rho={rho:.4g} "
                     f"exceeds MODEL_FORCE_RHO_WARNING={MODEL_FORCE_RHO_WARNING}"
@@ -370,6 +382,8 @@ class _INSSystem:
         return gravity
 
     def _differentiate(self, spec: StateSpec) -> dict[str, Any]:
+        nb = self.boundary_dim
+        nr = 9+nb
         n_tan = spec.tangent_dim
         n_u = sum(field.dim for field in self.input_fields)
         n_noise = sum(ns.dim for ns in self.noise_specs)
@@ -426,6 +440,11 @@ class _INSSystem:
             if self.propagation == "preintegrated" else None
         )
 
+        if nb == 6 and self.propagation == "preintegrated":
+            packet_delta_start_cross = ca.horzcat(packet_delta_start_cross,ca.reshape(packet_chunk("delta_start_accel_cross_covariance",27),9,3))
+            packet_delta_end_cross = ca.horzcat(packet_delta_end_cross,ca.reshape(packet_chunk("delta_end_accel_cross_covariance",27),9,3))
+            packet_start_end_correlation = ca.diagcat(packet_start_end_correlation,ca.reshape(packet_chunk("start_end_accel_correlation",9),3,3))
+
         def state_chunk(xv, name, dim):
             if name not in spec:
                 return ca.MX.zeros(dim, 1)
@@ -449,13 +468,15 @@ class _INSSystem:
                 # The packet covariance already represents the raw IMU white
                 # noise. Endpoint readings remain available to ordinary
                 # measurement models but must not inject that noise twice.
-                end_error = (ca.MX.zeros(3, 1) if boundary_end_error is None
+                end_error = (ca.MX.zeros(nb, 1) if boundary_end_error is None
                              else boundary_end_error)
                 end_sigma = packet_chunk("end_gyro_noise_sigma", 3)
                 gyro_corrected = (
-                    gyro_sample - gyro_bias + ca.diag(end_sigma) @ end_error
+                    gyro_sample - gyro_bias + ca.diag(end_sigma) @ end_error[:3]
                 )
                 accel_corrected = accel_sample - accel_bias
+                if nb == 6:
+                    accel_corrected += ca.diag(packet_chunk("end_accel_noise_sigma",3)) @ end_error[3:]
             omega_inertial_body = R_bs @ gyro_corrected
             p = state_chunk(xv, p_name, 3)
             q = state_chunk(xv, q_name, 4)
@@ -539,7 +560,7 @@ class _INSSystem:
                 # the vehicle torque model.
                 start_error = (
                     ca.MX.zeros(3, 1) if boundary_start_error is None
-                    else boundary_start_error
+                    else boundary_start_error[:3]
                 )
                 start_sigma = packet_chunk("start_gyro_noise_sigma", 3)
                 omega_start = R_bs @ (
@@ -582,6 +603,7 @@ class _INSSystem:
                 consistent = (ca.fabs(dt - duration)
                               <= PREINTEGRATION_DURATION_RTOL
                               * ca.fmax(ca.fabs(dt), ca.fabs(duration)))
+                consistent = ca.logic_and(consistent, packet_chunk("accel_endpoint",1) == float(nb == 6))
                 poison = ca.if_else(consistent, ca.MX.zeros(1, 1),
                                     ca.MX.nan(1, 1))
                 replacements = {
@@ -602,13 +624,13 @@ class _INSSystem:
 
         packet_noisy_fn = None
         packet_Q = ca.MX.zeros(n_tan, n_tan)
-        boundary_start_G = ca.MX.zeros(n_tan, 3)
-        boundary_end_G = ca.MX.zeros(n_tan, 3)
-        boundary_conditional_gain = ca.MX.zeros(12, 3)
-        boundary_conditional_covariance = ca.MX.zeros(12, 12)
-        boundary_joint_covariance = ca.MX.zeros(15, 15)
-        boundary_start_total_G = ca.MX.zeros(n_tan, 3)
-        boundary_end_residual_cross = ca.MX.zeros(n_tan, 3)
+        boundary_start_G = ca.MX.zeros(n_tan, nb)
+        boundary_end_G = ca.MX.zeros(n_tan, nb)
+        boundary_conditional_gain = ca.MX.zeros(nr, nb)
+        boundary_conditional_covariance = ca.MX.zeros(nr, nr)
+        boundary_joint_covariance = ca.MX.zeros(9+2*nb, 9+2*nb)
+        boundary_start_total_G = ca.MX.zeros(n_tan, nb)
+        boundary_end_residual_cross = ca.MX.zeros(n_tan, nb)
         if self.propagation == "preintegrated":
             packet_error = ca.MX.sym("packet_error", 9, 1)
             x_packet, _ = evaluate(x, zero_noise, packet_error)
@@ -616,21 +638,21 @@ class _INSSystem:
             G_packet = ca.substitute(
                 ca.jacobian(packet_state_error, packet_error), packet_error,
                 ca.MX.zeros(9, 1))
-            start_error = ca.MX.sym("boundary_start_error", 3, 1)
+            start_error = ca.MX.sym("boundary_start_error", nb, 1)
             x_start, _ = evaluate(
                 x, zero_noise, boundary_start_error=start_error)
             start_state_error = spec.boxminus_sym(x_start, x_new)
             boundary_start_G = ca.substitute(
                 ca.jacobian(start_state_error, start_error), start_error,
-                ca.MX.zeros(3, 1))
-            end_error = ca.MX.sym("boundary_end_error", 3, 1)
+                ca.MX.zeros(nb, 1))
+            end_error = ca.MX.sym("boundary_end_error", nb, 1)
             x_end, outs_boundary_end = evaluate(
                 x, zero_noise, boundary_end_error=end_error)
             _, outs_boundary_end_noisy = evaluate(x, noise, boundary_end_error=end_error)
             end_state_error = spec.boxminus_sym(x_end, x_new)
             boundary_end_G = ca.substitute(
                 ca.jacobian(end_state_error, end_error), end_error,
-                ca.MX.zeros(3, 1))
+                ca.MX.zeros(nb, 1))
 
             # Nonlinear covariance propagation uses this same mechanization,
             # including the correlated packet and both acquisition boundaries.
@@ -651,10 +673,10 @@ class _INSSystem:
             )
             joint_delta_end = ca.vertcat(
                 ca.horzcat(packet_covariance, packet_delta_end_cross),
-                ca.horzcat(packet_delta_end_cross.T, ca.MX.eye(3)),
+                ca.horzcat(packet_delta_end_cross.T, ca.MX.eye(nb)),
             )
             boundary_joint_covariance = ca.vertcat(
-                ca.horzcat(ca.MX.eye(3), boundary_conditional_gain.T),
+                ca.horzcat(ca.MX.eye(nb), boundary_conditional_gain.T),
                 ca.horzcat(boundary_conditional_gain, joint_delta_end),
             )
             boundary_conditional_covariance = symmetrize(
@@ -670,7 +692,7 @@ class _INSSystem:
                 + packet_map @ boundary_conditional_gain
             )
             boundary_end_residual_cross = (
-                packet_map @ boundary_conditional_covariance[:, 9:12]
+                packet_map @ boundary_conditional_covariance[:, 9:]
             )
         else:
             outs_boundary_end = None
@@ -716,8 +738,15 @@ class _INSSystem:
                 full, dim, h, h_noisy, H, L_h, cols, H_fn)
             if self.propagation == "preintegrated":
                 h_boundary = ca.reshape(outs_boundary_end[full], dim, 1)
+                h_boundary_noisy = ca.reshape(outs_boundary_end_noisy[full],dim,1)
+                if nb == 6 and full.rsplit(".",1)[0] in _qualified_parts(self.world,ModelForce):
+                    # eta is negative acquisition error / sigma. The force
+                    # residual uses the very accelerometer already integrated.
+                    shared = ca.diag(packet_chunk("end_accel_noise_sigma",3)) @ end_error[3:]
+                    h_boundary -= shared
+                    h_boundary_noisy -= shared
                 boundary_error = ca.MX.sym(
-                    f"boundary_error_{entry_ident(full)}", 3, 1)
+                    f"boundary_error_{entry_ident(full)}", nb, 1)
                 # `outs_boundary_end` was built against `end_error`; substitute
                 # a sensor-local symbol before differentiating so generated
                 # entry-point graphs do not share a free symbol.
@@ -726,10 +755,10 @@ class _INSSystem:
                 boundary_sensor_functions[full] = ca.Function(
                     f"boundary_measurement_{entry_ident(full)}",
                     [x,u,dt,t,noise,end_error],
-                    [ca.reshape(outs_boundary_end_noisy[full],dim,1)])
+                    [h_boundary_noisy])
                 boundary_sensor_H[full] = ca.substitute(
                     ca.jacobian(h_boundary, boundary_error), boundary_error,
-                    ca.MX.zeros(3, 1))
+                    ca.MX.zeros(nb, 1))
 
         predict_fn = ca.Function("predict", [x, u, dt, t], [x_new],
                                  ["x", "u", "dt", "t"], ["x_new"])
@@ -835,8 +864,16 @@ class INS(_FilterBase):
     ``covariance="nonlinear"`` instead uses augmented sigma-point prediction in
     that chart. Both map physical priors and apply the coupled covariance reset.
     The default ``"linearized"`` retains the existing covariance recursion.
-    ``expand=True`` expands the hot filter kernels to scalar expressions before
-    lowering; this preserves equations but changes code size and evaluation cost.
+    ``covariance="conventional"`` uses modified velocity coordinates and
+    additive biases, retaining covariance on feedback as a local approximation.
+    ``"conventional_reset"`` applies its differential reset instead.
+    ``accel_integration="endpoint"`` retains both shared gyro and accelerometer
+    boundary errors and requires preintegration with a non-linearized chart.
+    :class:`INSStream` selects conventional/endpoint/preintegrated explicitly
+    and provides the ordinary timestamped-sample driving loop.
+    ``expand=True`` expands the hot filter kernels to scalar expressions and
+    eliminates common subexpressions before lowering; this preserves equations
+    but changes code size and evaluation cost.
     Initialization quadrature is kept separate. Unsupported scalar operations
     fail explicitly. See ``docs/explanation/nonlinear-ins-covariance.md``.
     """
@@ -850,11 +887,16 @@ class INS(_FilterBase):
                  propagation: str = "raw",
                  navigation_frame: NavigationFrame | None = None,
                  covariance: str = "linearized",
+                 accel_integration: str = "left_hold",
                  expand: bool = False) -> None:
-        if covariance not in {"linearized", "geometric", "nonlinear"}:
-            raise ValueError("INS covariance must be 'linearized', 'geometric' or 'nonlinear'")
+        if covariance not in {"linearized", "geometric", "nonlinear", "conventional", "conventional_reset", "conventional_nonlinear"}:
+            raise ValueError(f"unknown INS covariance mode: {covariance!r}")
         if not isinstance(expand, bool):
             raise TypeError("INS expand must be a bool")
+        if accel_integration not in {"left_hold", "endpoint"}:
+            raise ValueError("unknown accelerometer integration")
+        if accel_integration == "endpoint" and (propagation != "preintegrated" or covariance == "linearized"):
+            raise ValueError("endpoint acceleration requires an active-boundary preintegrated INS")
         finite_chart = covariance != "linearized"
         if navigation_frame is not None and not isinstance(navigation_frame, NavigationFrame):
             raise TypeError("INS navigation_frame must be a NavigationFrame")
@@ -868,7 +910,8 @@ class INS(_FilterBase):
                 f"{propagation!r}")
         sys = _INSSystem(world, imu=imu, track=track,
                          sensors=sensors, inputs=inputs,
-                         propagation=propagation, navigation_frame=navigation_frame)
+                         propagation=propagation, navigation_frame=navigation_frame,
+                         accel_integration=accel_integration)
         if finite_chart and propagation == "raw" and np.any(sys.lever_arm):
             raise NotImplementedError(
                 "Finite-chart INS with a displaced IMU requires propagation='preintegrated' "
@@ -900,12 +943,21 @@ class INS(_FilterBase):
             position = physical.slot(f"{sys.craft_name}.position")
             p0 = initial[position.ambient_offset:position.ambient_offset + 3]
             reference = -np.asarray(ca.evalf(sys._gravity(ca.MX(p0), ca.MX(0)))).ravel()
-            sys.spec = INSStateSpec(
+            chart = INSStateSpec
+            if covariance.startswith("conventional"):
+                from ._ins_conventional import ConventionalINSStateSpec
+                chart = ConventionalINSStateSpec
+            sys.spec = chart(
                 physical, craft=sys.craft_name, imu=sys.imu_name,
                 rotation_body_from_imu=sys.R_craft_from_sensor,
                 reference_specific_force=reference,
+                **({"retain_covariance": covariance != "conventional_reset"}
+                   if covariance.startswith("conventional") else {}),
                 reference_angular_velocity=(navigation_frame.angular_velocity
                                             if navigation_frame is not None else (0, 0, 0)))
+        if covariance.startswith("conventional"):
+            from ._ins_conventional import transform_derivatives
+            transform_derivatives(sys)
         self._bind_system(world, sys)
         self.covariance = covariance
         self.imu = sys.imu_name
@@ -977,7 +1029,7 @@ class INS(_FilterBase):
 
         P_auto, P_consider_auto = prediction_covariance(Q_auto)
         x_auto = sys.x_new
-        if finite_chart:
+        if covariance in {"geometric", "nonlinear", "conventional_nonlinear"}:
             from ._ins_moments import predict_first_order, predict_moments
             prediction = predict_first_order if covariance == "geometric" else predict_moments
             x_auto, P_auto, P_consider_auto = prediction(sys, spec, P, P_consider)
@@ -994,7 +1046,7 @@ class INS(_FilterBase):
             [*predict_input_names, "u", "dt", "t"], predict_output_names)
         P_override, P_consider_override = prediction_covariance(Q + Q_packet)
         x_override = sys.x_new
-        if finite_chart:
+        if covariance in {"geometric", "nonlinear", "conventional_nonlinear"}:
             x_override, P_override, P_consider_override = prediction(
                 sys, spec, P, P_consider, process_noise=False, extra_Q=Q)
         predict_q_fn = ca.Function(
@@ -1025,6 +1077,10 @@ class INS(_FilterBase):
 
             def expressions(R, ps=ps, H=H, consider_H=consider_H,
                             threshold=threshold):
+                if sys.boundary_dim == 6 and ps.full in sys.measurement_sources:
+                    # Held-out residual white variance includes acquisition
+                    # noise; its conditional component now lives in the state.
+                    R = R - float(sys.imu.accel_noise_sigma)**2 * ca.MX.eye(ps.dim)
                 if n_consider:
                     candidate_x, candidate_P, C_candidate, nu, S = (
                         schmidt_update(
@@ -1092,12 +1148,14 @@ class INS(_FilterBase):
         metadata = {
             "estimator": "ins",
             "covariance": covariance,
+            "accel_integration": accel_integration,
             "expanded_filter_kernels": expand,
             "uncertainty_prediction": (
-                "augmented_unscented" if covariance == "nonlinear" else
+                "augmented_unscented" if covariance in {"nonlinear", "conventional_nonlinear"} else
                 "first_order_with_quadratic_bias_mean_transport" if covariance == "geometric"
                 else "first_order"),
             "error_model": getattr(spec, "error_model", "product_manifold"),
+            "covariance_feedback": ("retain_local_approximation" if covariance in {"conventional", "conventional_nonlinear"} else "differential_reset"),
             "reference_specific_force": getattr(spec, "reference_specific_force", None),
             "reference_angular_velocity": getattr(spec, "reference_angular_velocity", None),
             "propagation": propagation,
@@ -1105,7 +1163,7 @@ class INS(_FilterBase):
                                  else navigation_frame.metadata()),
             "preintegration_packet_schema": PREINTEGRATION_PACKET_SCHEMA,
             "max_packet_frame_rotation_rad": MAX_PACKET_FRAME_ROTATION_RAD,
-            "earth_translation_quadrature": "left_hold_cubic_rotation_midpoint_coriolis",
+            "earth_translation_quadrature": accel_integration+"_cubic_rotation_midpoint_coriolis",
             "prediction_inputs": (
                 (sys.accel_input, sys.gyro_input)
                 if propagation == "raw"
@@ -1122,15 +1180,18 @@ class INS(_FilterBase):
             # acceptance checks that admitted it.
             "model_force_evidence": MappingProxyType(
                 dict(sys.evidence_by_sensor)),
-            "rho_ceiling": MODEL_FORCE_RHO_CEILING,
-            "rho_warning": MODEL_FORCE_RHO_WARNING,
+            "rho_ceiling": 1.0 if sys.boundary_dim == 6 else MODEL_FORCE_RHO_CEILING,
+            "force_accel_noise": "estimated_shared_endpoint" if sys.boundary_dim == 6 else "neglected_cross_correlation",
+            "rho_warning": 1.0 if sys.boundary_dim == 6 else MODEL_FORCE_RHO_WARNING,
             "rho_warned_sensors": tuple(sorted(
                 name for name, rho in sys.rho_by_sensor.items()
-                if rho > MODEL_FORCE_RHO_WARNING)),
+                if sys.boundary_dim != 6 and rho > MODEL_FORCE_RHO_WARNING)),
             "lever_arm_m": tuple(float(v) for v in sys.lever_arm),
             "preintegration_boundary_covariance_qualified": True,
             "preintegration_boundary_consider_dimension": n_boundary_consider,
             "gyro_boundary_error_state": getattr(sys,"boundary_state_name",None),
+            "boundary_error_dimension": sys.boundary_dim,
+            "boundary_error_order": ("gyro", "accel") if sys.boundary_dim == 6 else ("gyro",),
             "preintegration_boundary_covariance_model": (
                 "estimated_transient_gyro_error"
                 if hasattr(sys, "boundary_state_name") else
@@ -1157,7 +1218,10 @@ class INS(_FilterBase):
             for name, function in self._module.functions.items():
                 if name == "predict" or name.startswith(("predict_", "update_")):
                     try:
-                        function = function.expand()
+                        # Matrix expansion can duplicate scalar expressions
+                        # shared across covariance blocks. Merge them before
+                        # C generation to reduce source size and compiler work.
+                        function = function.expand(function.name(), {"cse": True})
                     except RuntimeError as error:
                         raise ValueError(
                             f"INS expand=True cannot expand kernel {name!r}; "

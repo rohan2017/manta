@@ -26,7 +26,7 @@ fields.
   `Ellipsoid` collision obstacle, a dipole magnetic field.
 - **Initial-state factories** — `earth.position(...)`, `earth.velocity(...)`,
   `earth.velocity(0, 0, 0)` and how they resolve to WorldFrame seeds at compile time.
-- **`Scene`** — `earth.scene_at(planet_point)` returns a local East/North/Up
+- **`Scene`** — `earth.scene_at(planet_point)` returns a local North/West/Up
   frame fixed in the planet's body frame, used as numeric I/O glue while the
   dynamics stay in WorldFrame: `scene.at_rest(...)` for full rigid-attachment
   placement (orbital velocity + body spin rate + local-tangent attitude) in

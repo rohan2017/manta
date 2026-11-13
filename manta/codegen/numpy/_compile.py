@@ -26,6 +26,7 @@ import math
 import os
 import platform
 import shutil
+import signal
 import subprocess
 import sys
 import sysconfig
@@ -297,11 +298,28 @@ def build_native_library(
         try:
             with open(source_path, "w", encoding="utf-8") as stream:
                 stream.write(source)
-            subprocess.run(
-                [compiler, *compiler_flags, "-fPIC", "-shared", source_path,
-                 *link_args, "-o", private_path],
-                check=True, capture_output=True, timeout=timeout_s,
-            )
+            command = [compiler, *compiler_flags, "-fPIC", "-shared", source_path,
+                       *link_args, "-o", private_path]
+            # Killing only the cc driver leaves its cc1/assembler children
+            # consuming CPU after a failed readiness step. Own the process
+            # group and reap it on timeout or caller interruption.
+            with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                  start_new_session=(os.name == "posix")) as process:
+                try:
+                    stdout, stderr = process.communicate(timeout=timeout_s)
+                except BaseException:
+                    try:
+                        if os.name == "posix":
+                            os.killpg(process.pid, signal.SIGKILL)
+                        else:
+                            process.kill()
+                    except ProcessLookupError:
+                        pass
+                    process.communicate()
+                    raise
+                if process.returncode:
+                    raise subprocess.CalledProcessError(
+                        process.returncode, command, output=stdout, stderr=stderr)
         except subprocess.CalledProcessError as exc:
             stderr = (exc.stderr.decode(errors="replace")
                       if isinstance(exc.stderr, bytes) else (exc.stderr or ""))

@@ -2,7 +2,7 @@
 
 A `Scene` is a frame **rigidly fixed in a planet's body frame**: a local
 patch of ground (a launch site, a dive site, a stretch of sea) with a
-human-friendly East/North/Up orientation. It exists purely as I/O
+human-friendly North/West/Up orientation by default. It exists purely as I/O
 convenience — the simulator integrates everything in the inertial
 `WorldFrame`; a Scene only translates the *inputs* (where to place a
 craft) and *outputs* (poses / state to report or draw) between WorldFrame
@@ -44,7 +44,7 @@ from ..ir._rotation import (
 
 
 class Scene:
-    """A local East/North/Up frame fixed in a planet's body frame.
+    """A local North/West/Up frame fixed in a planet's body frame.
 
     Construct via `planet.scene_at(position, heading=...)` rather than
     directly. `position` is the anchor point in PlanetFrame (typically a
@@ -52,6 +52,7 @@ class Scene:
     there — +z along the planet's Cartesian surface normal (radial for the
     base planet), +x north (the planet spin axis projected into the tangent
     plane), +y = up×north — optionally yawed by `heading` (radians) about up.
+    Set ``heading=-pi/2`` for East/North/Up axes.
     """
 
     def __init__(self,

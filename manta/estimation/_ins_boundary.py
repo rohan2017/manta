@@ -1,4 +1,7 @@
-"""Transient gyro-boundary error state for nonlinear packet INS.
+"""Transient acquisition-boundary error state for packet INS.
+
+The endpoint-acceleration mode carries six coordinates (gyro, accel); the
+legacy mode carries only the three gyro coordinates.
 
 A static Schmidt nuisance deliberately keeps its mean and covariance fixed.
 That approximation is unsuitable for the nonlinear lever transform when aiding
@@ -13,7 +16,7 @@ import copy
 import casadi as ca
 import numpy as np
 
-from ..ir.manifold import R3Manifold
+from ..ir.manifold import RnManifold
 from ..ir.module import entry_ident
 from ..ir.state_spec import StateSpec, flatten_nested
 from ..linearization.engine import SensorModel
@@ -21,31 +24,35 @@ from ..linearization.partition import partition_blocks
 
 
 class BoundaryStateSpec(StateSpec):
-    def __init__(self, physical, name):
+    def __init__(self, physical, name, dim=3):
         extended = StateSpec.from_layout(
-            [(s.name, s.manifold) for s in physical.slots] + [(name, R3Manifold())]
+            [(s.name, s.manifold) for s in physical.slots] + [(name, RnManifold(dim))]
         )
         super().__init__(list(extended.slots))
+        self.boundary_dim = dim
         self.physical_spec = physical
         self.boundary_state_name = name
 
     def pack_projected(self, source):
         values = flatten_nested(source)
-        values.setdefault(self.boundary_state_name, np.zeros(3))
+        values.setdefault(self.boundary_state_name, np.zeros(self.boundary_dim))
         return super().pack_projected(values)
 
 
 def with_boundary_state(base):
     sys = copy.copy(base)
-    name = f"{base.imu_name}.gyro_boundary_error"
-    spec = BoundaryStateSpec(base.spec, name)
+    suffix = "imu_boundary_error" if base.boundary_dim == 6 else "gyro_boundary_error"
+    name = f"{base.imu_name}.{suffix}"
+    nb = base.boundary_dim
+    nr = 9+nb
+    spec = BoundaryStateSpec(base.spec, name, nb)
     sys.spec = spec
     sys.boundary_state_name = name
     old_na = base.spec.ambient_dim
     n = spec.tangent_dim
     x = ca.MX.sym("x", spec.ambient_dim)
     u, dt, t, noise = base.u_sym, base.dt_sym, base.t_sym, base.n_sym
-    residual = ca.MX.sym("packet_residual", 12)
+    residual = ca.MX.sym("packet_residual", nr)
     start = x[old_na:]
     packet_error = base.boundary_conditional_gain_sym @ start + residual
     physical = base.packet_noisy_fn(
@@ -55,7 +62,7 @@ def with_boundary_state(base):
     sys.packet_residual_fn = ca.Function(
         "ins_boundary_state_packet", [x, u, dt, t, noise, residual], [full]
     )
-    x_noisy = ca.substitute(full, residual, ca.MX.zeros(12))
+    x_noisy = ca.substitute(full, residual, ca.MX.zeros(nr))
     x_new = ca.substitute(x_noisy, noise, ca.MX.zeros(noise.numel()))
     d = ca.MX.sym("delta", n)
     error = spec.boxminus_sym(ca.substitute(x_new, x, spec.boxplus_sym(x, d)), x_new)
@@ -73,7 +80,7 @@ def with_boundary_state(base):
         ca.substitute(full, noise, ca.MX.zeros(noise.numel())), x_new
     )
     G = ca.substitute(
-        ca.jacobian(packet_error_output, residual), residual, ca.MX.zeros(12)
+        ca.jacobian(packet_error_output, residual), residual, ca.MX.zeros(nr)
     )
     sys.x_sym = x
     sys.x_new = x_new

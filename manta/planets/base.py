@@ -302,7 +302,7 @@ class Planet:
                  *,
                  heading: float = 0.0) -> Scene:
         """A local **`Scene`** anchored at PlanetFrame point `position` — a
-        ground patch with a human-friendly East/North/Up frame, used to
+        ground patch with a human-friendly North/West/Up frame, used to
         place craft and to translate poses/state for reporting + rendering.
 
         `position` is in the planet-fixed frame (origin at the planet

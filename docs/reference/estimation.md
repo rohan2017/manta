@@ -13,6 +13,18 @@ and the observability / consistency analysis tools.
 
 ::: manta.IMUPreintegrator
 
+## Inertial navigation
+
+See the [standalone INS guide](../how-to/use-ins.md) for an example using your own model.
+
+The low-level [INS transform][manta.INS] also supports custom packet scheduling.
+
+::: manta.INSStream
+
+::: manta.NavigationEnvironment
+
+::: manta.NavigationFrame
+
 ## Observability and consistency
 
 ::: manta.estimation.observability

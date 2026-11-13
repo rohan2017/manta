@@ -1008,7 +1008,12 @@ def _emit_per_craft_dynamics(g_ctx, craft, pc: CraftTrace, dt) -> None:
     new_ang_vel = ir.Vec3[CraftFrame].from_mx(new_om_mx)
     new_state_outputs = [(n, rate_overrides.get(n, v))
                          for n, v in new_state_outputs]
-    omega_dt_world = orientation.apply(ang_vel * dt)
+    # Use the same midpoint angular rate as the momentum transport above.
+    # Left-held orientation while evolving point-sampled gyro rates leaves a
+    # first-order phase error: even constant angular acceleration gives the
+    # wrong attitude by alpha*T*dt/2. That inconsistency contaminates inertial
+    # alignment experiments long before it is visually apparent in a plant.
+    omega_dt_world = orientation.apply((ang_vel + alpha * (0.5 * dt)) * dt)
     new_orientation = SO3Manifold().boxplus(orientation, omega_dt_world).normalize()
 
     g_ctx.output(new_position,    prefix + "position")

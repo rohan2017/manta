@@ -97,7 +97,7 @@ velocity at both endpoints. The end correction uses the **end** attitude.
 The retained delta/start/end gyro covariance and dynamic Schmidt state remain
 part of the differentiated recurrence.
 
-## Packet schema 2: deterministic timing moments
+## Deterministic timing moments (introduced in schema 2)
 
 The MCU/preintegrator still integrates inertial motion in its starting sensor
 frame. It receives no planet reference. The existing delta covariance,
@@ -138,7 +138,10 @@ a packet's application-specific duration or motion bandwidth. As with duration
 mismatch, invalid inputs poison the generated navigation result rather than
 substituting a plausible value; Python rejects the non-finite state.
 
-Both preintegrator and INS Modules advertise `preintegration_packet_schema=2`.
+Current preintegrator and INS Modules advertise `preintegration_packet_schema=4`.
+Schema 4 additionally carries shared accelerometer endpoint correlations and
+the acceleration integration tag; endpoint acceleration uses the matching
+force quadrature moments. See [point-sample integration](imu-sample-integration.md).
 An old transport packet is not silently upgraded. Rebuild generated MCU code,
 packet adapters, fixtures, and the companion artifact together. This branch
 makes no Shiver wire-ABI changes; integration must explicitly carry both new

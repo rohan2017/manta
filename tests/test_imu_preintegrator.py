@@ -60,7 +60,7 @@ def test_packet_contract_and_reset():
         accel_bias=(0.1, 0.2, 0.3), gyro_bias=(0.01, 0.02, 0.03))
     assert packet["duration"] == pytest.approx(0.002)
     assert packet["sample_count"] == 1
-    assert PREINTEGRATION_PACKET_SCHEMA == 3
+    assert PREINTEGRATION_PACKET_SCHEMA == 4
     assert "start_accel" not in PACKET_FIELDS
     assert "start_accel" not in packet
     assert packet["covariance"].shape == (81,)
@@ -189,7 +189,7 @@ def test_preintegrated_ins_uses_true_endpoint_gyro_during_angular_acceleration()
     assert runtime.module.metadata[
         "preintegration_boundary_covariance_model"
     ] == "dynamic_schmidt_joint_packet"
-    preintegrator = TargetNumpy(IMUPreintegrator())
+    preintegrator = TargetNumpy(IMUPreintegrator(gyro_integration="endpoint", sample_rate_hz=250))
     dt = 0.004
     control = {"turn.throttle": 10.0}
     previous = None
@@ -210,6 +210,7 @@ def test_preintegrated_ins_uses_true_endpoint_gyro_during_angular_acceleration()
                 t=(index - 1) * dt,
                 accel=previous["accel"],
                 gyro=previous["gyro"],
+                end_gyro=current["gyro"],
                 accel_bias=np.zeros(3),
                 gyro_bias=np.zeros(3),
             ))
@@ -223,7 +224,7 @@ def test_preintegrated_ins_uses_true_endpoint_gyro_during_angular_acceleration()
                 estimate["orientation"], truth_at_epoch["orientation"],
                 atol=2e-10,
             )
-            # The plant's left-endpoint attitude step and continuous sensor
+            # Left-held accelerometer integration and continuous sensor
             # acceleration differ at O(dt), but the omitted endpoint lever
             # velocity (0.42 m/s in this fixture) must not survive.
             np.testing.assert_allclose(
@@ -392,7 +393,8 @@ def test_noisefit_accepts_recorded_preintegration_packet_traces():
     assert Z.shape == (3, K)
 
 
-def test_preintegrator_cpp_roundtrip(tmp_path: Path):
+@pytest.mark.parametrize("gyro_integration", ["left_hold", "endpoint"])
+def test_preintegrator_cpp_roundtrip(tmp_path: Path, gyro_integration):
     cxx = next((c for c in ("c++", "g++", "clang++") if shutil.which(c)), None)
     cc = next((c for c in ("cc", "gcc", "clang") if shutil.which(c)), None)
     eigen_inc = next((p for p in ("/usr/include/eigen3",
@@ -402,7 +404,9 @@ def test_preintegrator_cpp_roundtrip(tmp_path: Path):
         pytest.skip("C/C++ compiler or Eigen headers not available")
 
     block = IMUPreintegrator(
-        accel_noise_density=2e-3, gyro_noise_density=3e-4)
+        accel_noise_density=2e-3, gyro_noise_density=3e-4,
+        gyro_integration=gyro_integration,
+        sample_rate_hz=500 if gyro_integration == "endpoint" else None)
     result = TargetCpp(block, tmp_path, class_name="Preintegrator")
     harness = tmp_path / "harness.cpp"
     harness.write_text(r'''
@@ -416,12 +420,20 @@ int main() {
     u.accel_bias.setZero();
     u.gyro_bias.setZero();
     manta_gen::Preintegrator::Outputs o;
-    for (int i = 0; i < 5; ++i) o = p.step(u, 0.002);
+    for (int i = 0; i < 5; ++i) {
+        // ENDPOINT_INPUT
+        o = p.step(u, 0.002);
+    }
     std::printf("%.17g %.17g %.17g %.17g %.17g %.17g\n",
         o.duration, o.sample_count, o.delta_orientation[0],
         o.delta_orientation[1], o.delta_velocity[0], o.covariance[0]);
 }
 ''')
+    if gyro_integration == "endpoint":
+        harness.write_text(harness.read_text().replace(
+            "// ENDPOINT_INPUT",
+            "u.gyro << 0.3 + 0.01*i, -0.1, 0.5; "
+            "u.end_gyro << 0.3 + 0.01*(i+1), -0.1, 0.5;"))
     k_obj, w_obj = tmp_path / "k.o", tmp_path / "w.o"
     commands = (
         [cc, "-c", "-O2", str(result.kernels_c), "-o", str(k_obj)],
@@ -440,10 +452,13 @@ int main() {
     cpp = np.fromstring(proc.stdout, sep=" ")
 
     runtime = TargetNumpy(block)
-    for _ in range(5):
+    for index in range(5):
+        extra = ({"end_gyro": (.3 + .01*(index+1), -.1, .5)}
+                 if gyro_integration == "endpoint" else {})
         packet = runtime.step(
-            .002, accel=(.4, -.2, 9.81), gyro=(.3, -.1, .5),
-            accel_bias=(0, 0, 0), gyro_bias=(0, 0, 0))
+            .002, accel=(.4, -.2, 9.81),
+            gyro=(.3 + (.01*index if extra else 0), -.1, .5),
+            accel_bias=(0, 0, 0), gyro_bias=(0, 0, 0), **extra)
     expected = np.array([
         packet["duration"], packet["sample_count"],
         packet["delta_orientation"][0], packet["delta_orientation"][1],

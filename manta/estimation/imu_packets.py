@@ -47,7 +47,8 @@ def compose_preintegrated_packets(
         return vector(packet, key, rows * cols).reshape((rows, cols), order="F")
 
     for packet in (left, right):
-        for key in ("delta_end_gyro_cross_covariance", "start_end_gyro_correlation"):
+        for key in ("delta_end_gyro_cross_covariance", "start_end_gyro_correlation",
+                    "delta_end_accel_cross_covariance", "start_end_accel_correlation"):
             size = 27 if key.startswith("delta") else 9
             if np.any(vector(packet, key, size)):
                 raise ValueError("packet composition requires fresh independent right boundaries")
@@ -99,6 +100,7 @@ def compose_preintegrated_packets(
            + b @ matrix(right, "covariance", 9, 9) @ b.T)
     jac = a @ matrix(left, "bias_jacobian", 9, 6) + b @ matrix(right, "bias_jacobian", 9, 6)
     start_cross = a @ matrix(left, "delta_start_gyro_cross_covariance", 9, 3)
+    accel_start_cross = a @ matrix(left, "delta_start_accel_cross_covariance", 9, 3)
     # Validate the unused right/start block too. That boundary lies inside the
     # combined packet; its noise is already in the right increment covariance.
     matrix(right, "delta_start_gyro_cross_covariance", 9, 3)
@@ -119,6 +121,10 @@ def compose_preintegrated_packets(
         "delta_start_gyro_cross_covariance": start_cross.reshape(-1, order="F"),
         "delta_end_gyro_cross_covariance": np.zeros(27),
         "start_end_gyro_correlation": np.zeros(9),
+        "delta_start_accel_cross_covariance": accel_start_cross.reshape(-1, order="F"),
+        "delta_end_accel_cross_covariance": (b @ matrix(right,"delta_end_accel_cross_covariance",9,3)).reshape(-1,order="F"),
+        "start_end_accel_correlation": np.zeros(9),
+        "end_accel_noise_sigma": vector(right,"end_accel_noise_sigma",3).copy(),
         "end_accel": vector(right, "end_accel", 3).copy(),
         "end_gyro": vector(right, "end_gyro", 3).copy(),
         "end_gyro_noise_sigma": vector(right, "end_gyro_noise_sigma", 3).copy(),
