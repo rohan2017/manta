@@ -25,6 +25,8 @@ The low-level [INS transform][manta.INS] also supports custom packet scheduling.
 
 ::: manta.NavigationFrame
 
+::: manta.PreintegratedIMUPacket
+
 ## Observability and consistency
 
 ::: manta.estimation.observability

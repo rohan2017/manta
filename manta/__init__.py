@@ -96,6 +96,7 @@ from .craft import Craft
 from .estimation.ekf import EKF
 from .estimation.imu_integrator import IMUIntegrator
 from .estimation.imu_packets import compose_preintegrated_packets
+from .estimation.imu_packet import PreintegratedIMUPacket
 from .estimation.imu_preintegrator import (
     IMUPreintegrator,
     frame_preintegrated_packet,
@@ -150,6 +151,7 @@ __all__ = [
     "DEFAULT_MAX_INSTRUCTIONS",
     "EKF",
     "INS",
+    "PreintegratedIMUPacket",
     "INSStream",
     "NavigationEnvironment",
     "LQR",

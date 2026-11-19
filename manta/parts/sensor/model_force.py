@@ -66,7 +66,7 @@ from .._declarations import (
     WhiteNoise,
 )
 from ..base import Part, PartRole
-from .imu import IMU
+from ._imu_contract import require_strapdown_imu
 
 _AXES = ("x", "y", "z")
 
@@ -104,10 +104,9 @@ class ModelForce(Part):
     model_error_correlated_z = GaussMarkovNoise("R1", sigma=0.0, tau=1.0)
     specific_force = Output()
 
-    def __init__(self, name: str, *, imu: IMU,
+    def __init__(self, name: str, *, imu: Part,
                  evidence: FitEvidence | None = None, **overrides) -> None:
-        if not isinstance(imu, IMU):
-            raise TypeError("ModelForce: imu must be an IMU part")
+        require_strapdown_imu(imu)
         if "model_error_sigma" in overrides:
             iso = overrides.pop("model_error_sigma")
             for axis in _AXES:
@@ -123,12 +122,12 @@ class ModelForce(Part):
         # The pseudo-reading is sourced from this accelerometer, so its
         # default cadence must agree.  A caller may still override ``rate``
         # explicitly for a downsampled observer channel.
-        overrides.setdefault("rate", imu.rate)
+        overrides.setdefault("rate", getattr(imu, "rate", None))
         super().__init__(name, accelerometer=imu, evidence=evidence,
                          **overrides)
 
     @staticmethod
-    def _overrides_from_evidence(name: str, imu: IMU, evidence,
+    def _overrides_from_evidence(name: str, imu: Part, evidence,
                                  overrides: dict) -> dict:
         who = f"ModelForce({name!r})"
         if not isinstance(evidence, FitEvidence):
@@ -149,11 +148,12 @@ class ModelForce(Part):
                     f"{who}: evidence channel contract has shape "
                     f"{contract.channel_shape}, expected the accelerometer's "
                     "(3,)")
-            if (contract.channel_rate_hz is not None and imu.rate is not None
-                    and contract.channel_rate_hz != imu.rate):
+            rate = getattr(imu, "rate", None)
+            if (contract.channel_rate_hz is not None and rate is not None
+                    and contract.channel_rate_hz != rate):
                 raise ValueError(
                     f"{who}: evidence cadence {contract.channel_rate_hz:g} Hz "
-                    f"does not match IMU cadence {imu.rate:g} Hz")
+                    f"does not match IMU cadence {rate:g} Hz")
         if tuple(a.axis for a in evidence.axes) != _AXES:
             raise ValueError(
                 f"{who}: evidence must carry axes {_AXES}, got "
@@ -220,7 +220,7 @@ class ModelForce(Part):
         # to INS propagation Q; the per-axis white channels alone own this
         # R, the Gauss–Markov channels are filter state, and the held-out
         # bias is a deterministic correction (see module docstring).
-        expected_sample = (predicted + self.accelerometer.accel_bias
+        expected_sample = (predicted + getattr(self.accelerometer, "accel_bias", zero)
                            + Vec3[PartFrame].coerce(self.residual_bias)
                            + self._axis_vector("model_error_correlated"))
         return PartUpdate(

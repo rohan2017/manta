@@ -1,0 +1,90 @@
+# Preintegrated IMU packet contract
+
+`manta.PreintegratedIMUPacket` wraps preintegrator readouts or parsed device
+fields. `filter.predict(packet)` consumes it through the ordinary Manta filter
+runtime. The INS must select `propagation="preintegrated"` and the matching
+accelerometer integration mode. Plain mapping packets and
+`predict_preintegrated(...)` remain supported.
+
+## Values
+
+`manta.estimation.imu_packet.PACKET_LAYOUT` defines the canonical field order
+and shapes. This is also the flattened generated preintegrator readout order;
+`PACKET_FIELDS` is derived from it. Important conventions:
+
+- Quaternion: scalar-first `[w,x,y,z]`, rotating vectors from end-IMU axes into start-IMU axes.
+- Delta velocity/position: m/s and metres, in the IMU frame at packet start, before gravity and planet rotation compensation.
+- Delta covariance: 9×9, errors ordered rotation vector, velocity, position.
+- Bias Jacobian: 9×6, columns gyro bias (rad/s), accelerometer bias (m/s²).
+- Bias reference: the values used during preintegration; host prediction applies first-order bias correction.
+- Boundary cross-covariances: with **standardized** acquisition errors. The corresponding physical noise sigmas are separate fields.
+- Duration: seconds; sample count: number of integrated intervals.
+- `accel_endpoint`: 1 for point endpoint integration, 0 for left-held acceleration.
+- Matrices: column-major (Fortran/CasADi) flattening. A two-dimensional array is also accepted by the Python constructor.
+
+The class validates shape, finite values, duration, count, mode, quaternion,
+and covariance. It owns immutable copies. Typed prediction checks that the
+packet starts at `filter.time`, refusing duplicates or gaps before mutation.
+Use `reset(..., t=epoch)` to initialize state at a nonzero epoch.
+Clock domain, sensor identity, calibration identity, CRC, loss recovery, and
+transport framing remain application responsibilities.
+
+## Optional binary encoding
+
+`to_bytes()` / `from_bytes()` use a fixed **2,488-byte** schema-4 encoding:
+
+| Offset | Type | Meaning |
+|---|---|---|
+| 0 | 4 bytes | ASCII `MIPK` |
+| 4 | little-endian uint32 | schema = 4 |
+| 8 | little-endian IEEE-754 float64 | start time in filter-clock seconds |
+| 16 | 309 little-endian float64 values | `PACKET_LAYOUT`, without padding |
+
+Do not serialize a native C struct and assume matching padding or endianness.
+`PreintegratedIMUPacket.c_header()` emits the portable encoder and offsets.
+At 50 packets/s this full covariance format uses 124,400 bytes/s before
+transport overhead. Choose packet cadence and transport accordingly; dropping
+cross-covariance fields is not a valid bandwidth optimization.
+
+## Firmware loop
+
+The example's `--export-preintegrator` option exports `TargetCpp` artifacts,
+including the C kernel source/header, `imu_packet.h`, and
+`imu_preintegrator.h`. The latter is a small C99 calling shim generated from
+the module's actual state defaults and input layout. It owns state and
+workspace in an `ImuPreintegrator` struct, with no heap allocation or Eigen.
+Compile your firmware with `preintegrator_kernels.c` and the math library.
+The Python exporter is in the example so it is easy to inspect or adapt.
+
+The encoder consumes `y` directly:
+
+```c
+static ImuPreintegrator imu;  /* state and work buffers: allocate once */
+double inputs[MANTA_IMU_INPUT_COUNT] = {0};
+imu_preintegrator_reset(&imu);
+/* Fill ACCEL, GYRO, END_ACCEL, END_GYRO and bias references using the
+   MANTA_IMU_INPUT_* offsets. Then call once per observed interval: */
+int status = imu_preintegrator_step(&imu, inputs, dt, interval_start_time);
+/* Handle nonzero status before transmitting. */
+uint8_t payload[MANTA_IMU_PACKET_SIZE];
+manta_imu_packet_encode(payload, packet_start_time, imu.y);
+/* Send payload using your device's transport. */
+```
+
+Keep the actual previous IMU acquisition. For each fresh pair, integrate the
+interval using both endpoint samples and their actual timestamp difference.
+At the desired boundary, send the packet and reset **preintegrator accumulated
+state**, retaining the last raw acquisition as the next interval's left end.
+Do not synthesize a duplicate sample or replace the shared boundary with an
+independent one. The Python example shows the same loop.
+
+Gyro/accelerometer densities are converted with the declared acquisition rate
+into per-sample sigmas. These are independent point acquisitions; filtered
+samples, hardware delta angles, and delta velocities require their own
+acquisition contract. The first sample establishes an endpoint and cannot
+produce a positive-duration packet by itself.
+
+Close a packet at each aiding timestamp the host needs. A packet cannot be
+split exactly after transmission from its aggregate deltas alone. Out-of-order
+measurements, missing packets, and clock synchronization need an explicit
+application policy; the packet class does not invent motion or observations.

@@ -40,8 +40,9 @@ class. Backends contain no per-transform code.
 ## Quick example
 
 For IMU navigation with your own vehicle and sensors, see the
-[standalone INS guide](docs/how-to/use-ins.md). `INSStream` handles timestamped
-IMU packets and aiding without Shiver or a robot-specific package.
+[standalone INS guide](docs/how-to/use-ins.md). Two editable files define the
+sensor models and run the ordinary INS runtime in global coordinates, with
+typed IMU packets and a C firmware export. No Shiver is required.
 
 ```python
 import numpy as np

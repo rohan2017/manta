@@ -1,11 +1,13 @@
 # Integrating timestamped IMU samples
 
-For paired point acquisitions, use `INSStream` or explicitly select both
+For paired point acquisitions, select both
 `gyro_integration="endpoint"` and `accel_integration="endpoint"` in
 `IMUPreintegrator`, with `sample_rate_hz` set to the acquisition bandwidth.
 The matching INS needs `propagation="preintegrated"`,
 `accel_integration="endpoint"`, and a non-linearized covariance chart.
-See the [standalone guide](../how-to/use-ins.md) for the driving loop.
+Wrap the readouts in `PreintegratedIMUPacket` and use the ordinary filter's
+`predict(packet)`. See the [standalone guide](../how-to/use-ins.md) for the
+driving loop and [packet format](imu-packet-format.md) for firmware transport.
 
 ## Mean integration
 

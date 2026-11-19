@@ -76,6 +76,7 @@ nav:
       - Fields and disturbances: explanation/fields.md
       - Planets: explanation/planets.md
       - State estimation (error-state EKF): explanation/estimation.md
+      - Preintegrated IMU packet format: explanation/imu-packet-format.md
       - Control synthesis (LQR): explanation/control.md
       - RTI MPC optimization roadmap: explanation/mpc-optimization.md
       - Codegen and backends: explanation/codegen.md

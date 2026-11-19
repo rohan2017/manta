@@ -1,138 +1,122 @@
-# Use the INS with your own model
+# INS with your own sensor models
 
-Manta's INS needs only Manta, NumPy, and CasADi. It does not need Shiver,
-Mako, a simulator, a controller, or model-force aiding. Install this repository
-with Python 3.12 or newer (`python -m pip install .`).
+Start with two files:
 
-The complete [standalone example](https://github.com/rohan2017/manta/blob/main/examples/vehicles/ins_standalone.py)
-defines its own craft and feeds synthetic stationary measurements:
+- [ins_models.py](https://github.com/rohan2017/manta/blob/main/examples/vehicles/ins_models.py): editable body, IMU, DVL, GPS, and barometer equations, declared directly as Manta Parts.
+- [ins_standalone.py](https://github.com/rohan2017/manta/blob/main/examples/vehicles/ins_standalone.py): build the filter, feed measurements, preintegrate, and print position errors.
+
+From a checkout installed with `python -m pip install .` (Python 3.12+):
 
 ```sh
-python -m examples.vehicles.ins_standalone --duration 120
-# Optional C compiler; compiles and caches kernels before running:
-python -m examples.vehicles.ins_standalone --duration 120 --native
+python -m examples.vehicles.ins_standalone --duration 60
 ```
 
-## Build and initialize
+Only Manta, NumPy, and CasADi are required. The example generates noisy
+measurements for a prescribed spherical-Earth track crossing the dateline.
+The DVL is an ideal ground-velocity observation here; acoustic lock and sensor
+availability are not simulated.
+It starts aligned; this is an API/integration example, not cold-start
+alignment or statistical qualification. Replace `measurements()` with your
+own data. Sensor noise, bias states, mounts, and equations are in the first file.
+You can also copy just those two files into another directory with Manta
+installed and run `python ins_standalone.py --duration 60` there.
 
-Define a `Craft` with mass/inertia, an `IMU` or `ConstantBiasIMU`, and the
-aiding sensors you use. Set mounting transforms and measurement noise in
-the sensor models. No hull, thruster, or hydrodynamic model is required.
-`ConstantBiasIMU` retains estimable constant gyro/accelerometer biases;
-use `IMU` with measured nonzero bias random-walk densities for drifting biases.
-
-Put the craft in a local estimator `World` with an explicit `GravityField`.
-For gyrocompassing, derive gravity and rotation from the same planet:
+## The same filter API
 
 ```python
-from manta import INSStream, NavigationEnvironment, World
+from manta import EKF, UKF, INS, TargetNumpy
 
-# planet is Earth() or your own Planet subclass. anchor is Cartesian
-# PlanetFrame position in metres, not latitude/longitude.
-environment = NavigationEnvironment.from_scene(
-    planet.scene_at(anchor), frame_id="dive_site", epoch="t=0")
-world = World().add_field(environment.gravity)
-world.add_craft(my_craft)
-ins = INSStream(world, imu="imu", sample_rate_hz=100, predict_every=2,
-                navigation_frame=environment.frame,
-                sensors=["dvl.velocity", "gps.position"])
+ekf = TargetNumpy(EKF(world, sensors=aiding_outputs))
+ukf = TargetNumpy(UKF(world, sensors=aiding_outputs))
+ins = TargetNumpy(INS(world, imu="imu", sensors=aiding_outputs))
 ```
 
-All positions/velocities, sensor references, and other environmental fields
-in this estimator World use those local axes. Default scene axes are north,
-west, up; `heading=-pi/2` selects east, north, up. Do not put inertial
-planet-scale simulation coordinates into this World. The helper uses the
-planet's registered gravity and rotation, preserves spatial gravity variation,
-and includes centrifugal acceleration exactly once. Rebuild after changing
-the planet or anchor. A manual `NavigationFrame` and gravity field remain
-available for other coordinate conventions.
+All expose `reset`, `predict`, `update`, `state_dict`, `x`, `P`, and checkpoints.
+INS uses its selected IMU for strapdown; EKF/UKF use declared vehicle dynamics.
+A custom IMU need not inherit the built-in model. It declares `gyro` and
+`accel` outputs plus three-axis `gyro_noise` and `accel_noise` white channels
+in `PartFrame`. The contract is calibrated inertial rate (rad/s) and specific
+force (m/s²), with optional additive `gyro_bias` / `accel_bias` states.
 
-Call `ins.reset(initial_state, P=P)` with your initial pose/velocity/bias mean
-and physical tangent covariance. The example builds `P` by named slots using
-`ins.filter.module.port("prior_x").spec`; quaternions are scalar-first
-`[w,x,y,z]`, while attitude uncertainty is a three-component rotation vector
-in radians. Internal shared-endpoint noise states are initialized by Manta.
-Do not use arbitrary defaults as a calibrated startup prior.
-
-## Feed measurements
+For point samples or remote preintegration, the example explicitly selects:
 
 ```python
-ins.update_imu(accel_m_s2, gyro_rad_s, t=timestamp_seconds)
-# At an actual IMU endpoint, when a new aiding observation arrives:
-result = ins.update("dvl.velocity", velocity_in_sensor_axes, t=timestamp_seconds)
-# GPS Cartesian position must use the estimator's navigation frame.
-ins.update("gps.position", position_in_navigation_axes, t=timestamp_seconds)
-ins.flush()                    # finish a partial packet at end of log
-state = ins.state_dict()["vehicle"]
+ins = TargetNumpy(INS(world, imu="imu", sensors=aiding_outputs,
+    propagation="preintegrated", accel_integration="endpoint",
+    covariance="conventional_reset"))
 ```
 
-Supply paired, increasing-timestamp **point acquisitions** in IMU axes:
-accelerometer specific force (approximately +g upward at rest) and **inertial**
-gyro rate, including planet rotation. Do not subtract planet rate yourself.
-The first pair establishes a boundary; a second is required before prediction
-or aiding. Aiding must coincide with the latest observed IMU endpoint and
-flushes any partial packet. The driver rejects stale/future aiding; it does
-not interpolate, hold missing samples, or perform delayed-data replay.
-`ins.time` identifies the estimated-state epoch, which can lag the latest
-sample while a packet is pending.
+This is an error-state EKF with quaternion nominal attitude, additive bias
+errors, modified velocity error coordinates, Joseph updates, and differential
+covariance reset. Low-level compatibility defaults remain `raw`, `left_hold`,
+and `linearized`; advanced covariance modes remain explicit. Set a credible
+initial physical covariance using `reset(P=...)`, as the example does.
 
-Sensor white-noise sigmas are **per acquisition**, in rad/s and m/s². For
-gyro ARW `a` in degrees/√hour at sample rate `f`, use
-`gyro_noise_sigma = deg2rad(a) / 60 * sqrt(f)` under Manta's independent
-sample convention. Bias prior standard deviation in degrees/hour converts
-with `deg2rad(b)/3600`; it is not a random-walk density. Filtered or correlated
-hardware measurements need an appropriate acquisition/noise model.
+## Global coordinates, without reframing
 
-## Filter and gyrocompassing
+With no `navigation_frame` override, **all three filters use Manta's global,
+inertial `WorldFrame`**, including position, velocity, and orientation. The
+planet supplies spatial gravity and its rotation. These Cartesian coordinates
+and quaternions have no dateline or polar coordinate singularity. There is no
+local origin to move when travelling around the planet.
+For reporting, `planet.world_to_planet(position, velocity, t=ins.time)` returns
+planet-fixed position and ground-relative velocity without changing the filter.
 
-`INSStream` explicitly selects the single-Gaussian error-state EKF with
-`covariance="conventional"`, preintegrated endpoint gyro **and** acceleration,
-quaternion nominal attitude, additive bias errors, modified velocity error
-coordinates, and Joseph measurement corrections. This mode retains covariance
-on feedback as a local approximation; `covariance="conventional_reset"`
-selects the differential reset. Neither is a general broad-prior alignment
-solution. The low-level `INS` defaults remain `linearized/raw/left_hold` for
-compatibility; choose those options explicitly when comparing modes.
+The sensor equations handle reference frames:
 
-Gravity and planet rotation are nonparallel reference vectors away from the
-poles. A heading error produces propagation errors that aiding observations
-constrain; Kalman cross-covariances then correct attitude and biases. There
-is no hidden magnetometer or separate gyro-to-north update. Constant gyro bias
-can imitate a heading error, so gyrocompassing needs a credible bias prior,
-calibration, or informative motion. A nonrotating planet or a polar location
-does not provide this heading reference.
+- GPS predicts planet-fixed Cartesian position: `R_planet_from_world(t) @ (p-center)`. On Earth this is ECEF. Convert receiver latitude/longitude/height into those Cartesian metres before updating.
+- Bottom-track DVL predicts `R_sensor_from_world @ (v - omega_planet × (p-center))`, including mount kinematics supplied by Manta. Inertial velocity is not ground velocity.
+- Barometer predicts the planet fluid field's absolute pressure in pascals.
+- IMU measures inertial rotation and specific force in its own axes. Do not subtract Earth rate before strapdown.
 
-Tests cover integration, acquisition covariance, coordinate transformations,
-and native/interpreted parity. The broad attitude/gyro-bias/accelerometer-bias
-joint posterior still has known statistical-consistency limitations. Do not
-interpret a small heading error or these tests as universal covariance
-qualification. Validate the intended sensor, prior, motion, and aiding regime.
+Use one synchronized clock for the filter, packet timestamps, and planet's
+rotation model. `reset(..., t=start_time)` sets the initial state's epoch.
+A stationary instrument still moves and rotates in inertial coordinates;
+gyrocompassing emerges from gravity, the planet-relative aiding models, and
+attitude/bias cross-covariances. Bias calibration/prior and excitation still
+matter. Global coordinates remove reframing, not accumulated sensor drift.
 
-## Optional model aiding and native kernels
+`NavigationEnvironment` is an optional helper for explicitly authored
+planet-attached Cartesian worlds. The earlier guide used its fixed local
+axes. It is unnecessary here. `INSStream` is an optional Python scheduler
+around INS/preintegration, not a different filter; the normal API above uses
+neither helper.
 
-Model aiding adds a calibrated `ModelForce` observation to the estimator model.
-It does **not** replace IMU navigation propagation. Fit/reduce vehicle dynamics
-using representative **submerged** data, validate on held-out submerged data,
-and supply the required accepted fit evidence to `ModelForce`. Sensor noise
-comes from sensor characterization, not a reduced-order sensor fit.
-Use `fit_result.evidence(held_out, sensor="imu.accel",
-known_white_sigma=imu.accel_noise_sigma)` to keep known acquisition variance
-out of the fitted correlated dynamics error.
+## Preintegrate on an MCU, predict on the host
 
-The stream never applies force aiding automatically. When submerged and the
-model and achieved controls are valid, call
-`ins.update("model_force.specific_force", accel_sample, t=t, u=controls)` once
-at the matching endpoint. Use the same raw acceleration acquisition as
-`update_imu`; Manta retains its shared prediction/measurement uncertainty.
-Pass current controls to prediction/update and flush at an observed boundary
-before changing controls within a packet. During surface operation, omit
-force updates. Healthy DVL can make force aiding largely redundant; model
-mismatch can make it harmful.
+```python
+from manta import PreintegratedIMUPacket
 
-For repeated use, call `ins.compile(sensors=["dvl.velocity", "gps.position"])`
-before the live loop. It defaults to O1 and a 20,000-instruction compilation
-limit. If passing per-reading `R` to updates, compile with
-`covariance="per_sample"`. Compilation errors propagate; there is no silent
-fallback. Measure latency on your own model and computer. The underlying
-`ins.model`, `ins.filter`, and `ins.preintegrator` expose the ordinary Manta
-transform/runtime APIs for custom scheduling or code generation.
+# Same process: construct from IMUPreintegrator runtime readouts.
+packet = PreintegratedIMUPacket(readouts, start_time=t0)
+# Remote alternative: decode the standard binary encoding.
+packet = PreintegratedIMUPacket.from_bytes(received_payload)
+
+inputs = ins.preintegrated_inputs(packet)
+ins.predict(packet)                         # advances to packet.end_time
+ins.update("dvl.velocity", measured_dvl, u=inputs)
+```
+
+`u=inputs` preserves the endpoint gyro/accelerometer and their shared noise
+when an aiding model needs them (lever arms or ModelForce). It is the same
+explicit input mechanism used by EKF/UKF. Measurements must be at the current
+state epoch; delayed observations require application-level replay.
+
+Export the preintegrator and portable packet encoder:
+
+```sh
+python -m examples.vehicles.ins_standalone --export-preintegrator /tmp/imu-firmware
+```
+
+The output contains standalone **C numerical kernels**, a C++ convenience
+wrapper, `imu_preintegrator.h` for C99 state/workspace bookkeeping, and
+`imu_packet.h`, a C99/C++ encoder with field-offset constants.
+The C kernels and encoder do not require Python, CasADi at runtime, or Eigen;
+the optional C++ wrapper uses Eigen. See [the packet contract](../explanation/imu-packet-format.md)
+for kernel calls, ordering, units, and firmware responsibilities.
+
+Model-force aiding is optional and off in this example. For underwater use,
+fit dynamics on submerged data and apply force updates only while submerged
+and the model is valid. Sensor noise is characterized separately. Broad
+attitude/bias posterior consistency remains a known limitation; these examples
+and coordinate tests do not qualify every alignment or dropout regime.

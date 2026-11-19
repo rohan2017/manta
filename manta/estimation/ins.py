@@ -41,7 +41,9 @@ from ..linearization import LinearizedSystem
 from ..linearization.engine import SensorModel, TickLinearizer
 from ..linearization.partition import dependency_closure, partition_blocks
 from ..linearization.system import freeze_complement, slot_of_tangent_index
-from ..parts import IMU, ModelForce
+from ..parts import ModelForce
+from ..parts.base import Part
+from ..parts.sensor._imu_contract import require_strapdown_imu
 from ..parts._mounting import rest_pose_from
 from ..parts.articulation.joint import ArticulatedJoint
 from ._assembly import (
@@ -161,7 +163,8 @@ class _INSSystem:
         source_world = (source.world_copy() if hasattr(source, "world_copy")
                         else source)
         self.imu_name, self.imu = _resolve_part(
-            source_world, self.world, imu, IMU, who="INS")
+            source_world, self.world, imu, Part, who="INS")
+        require_strapdown_imu(self.imu)
         self.craft_name = self.imu_name.split(".", 1)[0]
         self.craft = next(c for c in self.crafts if c.name == self.craft_name)
         self.propagation = propagation
@@ -843,7 +846,9 @@ class INS(_FilterBase):
 
     Args mirror ``EKF`` where their meanings agree. ``imu`` identifies the
     physical IMU whose accelerometer and gyro become required prediction
-    inputs in ``u``. Its own outputs are removed from the ordinary update set.
+    inputs in ``u``. A user-defined Part with the same declared strapdown
+    channels is accepted; inheritance from the built-in IMU is not required.
+    Its own outputs are removed from the ordinary update set.
     A selected, colocated ``ModelForce.specific_force`` is automatically
     sourced from that IMU's accelerometer by analysis tools. Such a part
     must carry accepted fit evidence (``ModelForce(evidence=...)``):
@@ -855,7 +860,8 @@ class INS(_FilterBase):
     :class:`~manta.estimation.imu_preintegrator.IMUPreintegrator`; the
     high-rate recurrence and the lower-rate INS can both be lowered to
     generated C/C++.
-    ``navigation_frame`` supplies fixed planet-attached Cartesian kinematics.
+    The default frame is the global inertial WorldFrame, shared with EKF/UKF.
+    ``navigation_frame`` optionally supplies planet-attached Cartesian kinematics.
     The caller resolves its anchor and rotation vector; the IMU remains
     inertial. Its gravity convention is explicit. See
     ``docs/explanation/earth-relative-ins.md`` for equations, packet schema,
@@ -869,8 +875,8 @@ class INS(_FilterBase):
     ``"conventional_reset"`` applies its differential reset instead.
     ``accel_integration="endpoint"`` retains both shared gyro and accelerometer
     boundary errors and requires preintegration with a non-linearized chart.
-    :class:`INSStream` selects conventional/endpoint/preintegrated explicitly
-    and provides the ordinary timestamped-sample driving loop.
+    ``TargetNumpy(INS(...))`` accepts ``PreintegratedIMUPacket`` via its ordinary
+    ``predict`` method. No streaming wrapper is required.
     ``expand=True`` expands the hot filter kernels to scalar expressions and
     eliminates common subexpressions before lowering; this preserves equations
     but changes code size and evaluation cost.

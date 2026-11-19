@@ -13,6 +13,7 @@ import numpy as np
 
 from ..._validation import require_finite, require_positive
 from ...estimation._kalman import joseph_update_np
+from ...estimation.imu_packet import PreintegratedIMUPacket
 from ...ir._names import resolve_suffix
 from ...ir.module import entry_ident
 from ._compile import (
@@ -181,14 +182,15 @@ class NumpyFilter(NumpyRuntime):
         return self._spec.to_nested(self._state["x"])
 
     def reset(self, state: dict | None = None, *,
-              P: np.ndarray | None = None) -> None:
-        """Reset state, covariance, and clock from the Module defaults.
+              P: np.ndarray | None = None, t: float = 0.) -> None:
+        """Reset state/covariance from Module defaults and clock to ``t``.
 
         ``state`` is merged over the declared initial state and ``P`` may
         replace the declared initial covariance. To move only the nominal
         state while deliberately preserving covariance, use
         :meth:`set_state_keep_covariance`.
         """
+        time = float(require_finite(t, name="reset t"))
         physical_prior = "initialize_prior" in self.module.functions
         x_field = (self.module.port("prior_x") if physical_prior
                    else self.module.state.field("x"))
@@ -213,7 +215,7 @@ class NumpyFilter(NumpyRuntime):
         self._validate_staged_state(staged)
         self._state.update(staged)
         self._state_revision += 1
-        self._t = 0.0
+        self._t = time
 
     def reset_from_model_record(self, record: dict, *,
                                 P: np.ndarray | None = None) -> None:
@@ -351,21 +353,36 @@ class NumpyFilter(NumpyRuntime):
             u: dict[str, Any] | None = None,
             Q: np.ndarray | None = None) -> None:
         """Advance a preintegrated INS by the packet's accumulated duration."""
+        if isinstance(packet, PreintegratedIMUPacket):
+            return self.predict(packet, t=t, u=u, Q=Q)
         if "duration" not in packet:
             raise KeyError("predict_preintegrated packet is missing 'duration'")
         dt = require_positive(
             packet["duration"], name="predict_preintegrated packet duration")
         self.predict(dt, t=t, u=self.preintegrated_inputs(packet, u=u), Q=Q)
 
-    def predict(self, dt: float, *, t: float | None = None,
+    def predict(self, dt: float | PreintegratedIMUPacket, *, t: float | None = None,
                 u: dict[str, Any] | None = None,
                 Q: np.ndarray | None = None) -> None:
-        """Advance the estimate by `dt`. Process noise: an explicit `Q`, else
+        """Advance by `dt`, or consume a typed ``PreintegratedIMUPacket``.
+
+        Typed packets require a preintegrated INS and must start at the
+        current filter epoch. Use ``preintegrated_inputs(packet)`` as ``u``
+        for subsequent aiding that reuses the same endpoint acquisitions.
+        Process noise: an explicit `Q`, else
         `self.Q`, else the model's baked `L Σ Lᵀ`. `u` is `{input: value}`
         (unset inputs fall to the Module's declared defaults); pass the same
         held `u` truth ran on. `t=None` uses (and advances) the runtime's
         clock, matching `NumpySim.step`; an explicit `t` overrides and
         resynchronizes it."""
+        if isinstance(dt, PreintegratedIMUPacket):
+            packet = dt
+            if abs(packet.start_time - self._t) > 1e-9:
+                raise ValueError("IMU packet must start at filter.time; gaps/duplicates require explicit recovery")
+            if t is not None and (not np.isfinite(t) or abs(t-packet.start_time) > 1e-9):
+                raise ValueError("predict t must match the IMU packet start_time")
+            t, dt = packet.start_time, packet.duration
+            u = self.preintegrated_inputs(packet, u=u)
         dt = require_positive(dt, name=f"{type(self).__name__}.predict dt")
         t0 = self._t if t is None else float(require_finite(
             t, name=f"{type(self).__name__}.predict t"))

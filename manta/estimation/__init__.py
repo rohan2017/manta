@@ -21,6 +21,7 @@ from .consistency import NEESReport, chi2_gate, chi2_quantile, nees
 from .ekf import EKF, measurement_component, measurement_slot
 from .imu_integrator import IMUIntegrator
 from .imu_packets import compose_preintegrated_packets
+from .imu_packet import PreintegratedIMUPacket
 from .imu_preintegrator import IMUPreintegrator, frame_preintegrated_packet
 from .madgwick import Madgwick
 from .mahony import Mahony
@@ -37,6 +38,7 @@ from .ukf import UKF
 __all__ = [
     "EKF",
     "INS",
+    "PreintegratedIMUPacket",
     "INSStream",
     "NavigationEnvironment",
     "GaussianSumINS",

@@ -52,35 +52,7 @@ from ..ir._rotation import quat_conj, quat_mul, so3_exp, so3_log
 from ..ir.manifold import R3Manifold, RnManifold, ScalarManifold, SO3Manifold
 from ..recurrence import RecurrenceBlock
 
-PREINTEGRATION_PACKET_SCHEMA = 4
-
-PACKET_FIELDS = (
-    "delta_orientation",
-    "delta_velocity",
-    "delta_position",
-    "covariance",
-    "delta_start_gyro_cross_covariance",
-    "delta_end_gyro_cross_covariance",
-    "start_end_gyro_correlation",
-    "start_gyro_noise_sigma",
-    "end_gyro_noise_sigma",
-    "delta_start_accel_cross_covariance",
-    "delta_end_accel_cross_covariance",
-    "start_end_accel_correlation",
-    "start_accel_noise_sigma",
-    "end_accel_noise_sigma",
-    "bias_jacobian",
-    "gyro_bias_reference",
-    "accel_bias_reference",
-    "start_gyro",
-    "end_accel",
-    "end_gyro",
-    "duration",
-    "accel_endpoint",
-    "sample_count",
-    "velocity_time_moments",
-    "position_time_moments",
-)
+from .imu_packet import PACKET_FIELDS, PREINTEGRATION_PACKET_SCHEMA
 
 
 @lru_cache(maxsize=32)

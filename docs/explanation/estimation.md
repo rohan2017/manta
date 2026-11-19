@@ -20,9 +20,11 @@ state from vehicle dynamics. There is no angular-velocity estimate and no gyro
 or torque-model residual. The state contains navigation, selected IMU bias,
 and structurally relevant disturbance slots.
 
-For a fixed planet-attached navigation frame, INS now accepts explicit
-`NavigationFrame` kinematics. `NavigationEnvironment.from_scene` derives a
-matched gravity field and rotation from a planet. The
+By default INS, EKF, and UKF all use the global inertial `WorldFrame`. Author
+planet-relative GPS/DVL measurements with the planet's coordinate transforms;
+no local-frame reset is needed for global travel. An explicit `NavigationFrame`
+override and `NavigationEnvironment` helper remain available for separately
+authored planet-attached Cartesian models. The
 [standalone INS guide](../how-to/use-ins.md) covers timestamped acquisitions,
 initialization, gyrocompassing, and optional model aiding without Shiver.
 Calibrated synthetic gyrocompassing works, but broad attitude/bias statistical
