@@ -1,9 +1,4 @@
-"""Editable part equations; no built-in Manta part models are used.
-
-State: global inertial WorldFrame. GPS: planet-fixed Cartesian metres (ECEF
-on Earth). DVL: bottom-relative sensor-axis velocity. Barometer: pascals.
-IMU: sensor-frame inertial rate and specific force, with additive biases.
-"""
+"""Analytic coordinate-test fixtures; not a hardware runner."""
 import casadi as ca
 from manta import Craft, World
 from manta.fields import FluidField, gravity_at
@@ -98,3 +93,24 @@ def make_world(planet, initial_state):
     world = World("navigation").add_planet(planet)
     world.add_craft(craft, **initial_state)
     return world
+
+import numpy as np
+from manta.ir._rotation import quat_from_rotmat_np
+
+def trajectory(planet, t, speed=2.):
+    """Independent circular-path oracle in inertial Cartesian coordinates."""
+    latitude = np.deg2rad(45.)
+    radius = planet.R_EQ + 10.  # Air track: GPS and barometer are both available.
+    relative_rate = speed/(radius*np.cos(latitude))
+    longitude = np.deg2rad(179.9999) + (planet.omega+relative_rate)*t
+    s, c = np.sin(longitude), np.cos(longitude)
+    up = np.array([np.cos(latitude)*c, np.cos(latitude)*s, np.sin(latitude)])
+    east = np.array([-s, c, 0.])
+    north = np.cross(up, east)
+    rotation = np.column_stack((east, north, up))
+    p = radius*up
+    omega = np.array([0., 0., planet.omega+relative_rate])
+    v = np.cross(omega, p)
+    a = np.cross(omega, v)
+    return dict(position=p, velocity=v, orientation=quat_from_rotmat_np(rotation),
+                angular_velocity=rotation.T@omega), rotation, a

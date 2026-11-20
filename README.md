@@ -40,9 +40,9 @@ class. Backends contain no per-transform code.
 ## Quick example
 
 For IMU navigation with your own vehicle and sensors, see the
-[standalone INS guide](docs/how-to/use-ins.md). Two editable files define the
-sensor models and run the ordinary INS runtime in global coordinates, with
-typed IMU packets and a C firmware export. No Shiver is required.
+[INS guide](docs/how-to/use-ins.md) and the separate
+[INS handoff hardware skeleton](https://github.com/Ulysses-Ecosystem-Engineering/ins-handoff).
+It contains editable part models and driver hooks. No Shiver is required.
 
 ```python
 import numpy as np

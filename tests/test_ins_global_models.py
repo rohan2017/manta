@@ -7,8 +7,8 @@ from manta import INS, EKF, UKF, IMUPreintegrator, PreintegratedIMUPacket, Targe
 from manta.fields import GravityField, FluidField
 from manta.ir import Vec3, WorldFrame
 from manta.planets import Earth
-from examples.vehicles.ins_models import make_world, IMU as UserIMU
-from examples.vehicles.ins_standalone import trajectory
+from tests._ins_global_models import make_world, IMU as UserIMU
+from tests._ins_global_models import trajectory
 
 
 @pytest.mark.parametrize("estimator", [INS, EKF, UKF])
@@ -142,7 +142,7 @@ def test_user_imu_without_bias_states_or_rate_supports_model_force():
     from manta import Craft, World
     from manta.ir import PartFrame, Wrench
     from manta.parts import Part, Output, WhiteNoise, PartUpdate, ModelForce
-    from examples.vehicles.ins_models import Body
+    from tests._ins_global_models import Body
     from tests.test_ins import _evidence
 
     class BareIMU(Part):

@@ -1,25 +1,14 @@
 # INS with your own sensor models
 
-Start with two files:
+The hardware integration skeleton lives in the separate
+[INS handoff repository](https://github.com/Ulysses-Ecosystem-Engineering/ins-handoff):
 
-- [ins_models.py](https://github.com/rohan2017/manta/blob/main/examples/vehicles/ins_models.py): editable body, IMU, DVL, GPS, and barometer equations, declared directly as Manta Parts.
-- [ins_standalone.py](https://github.com/rohan2017/manta/blob/main/examples/vehicles/ins_standalone.py): build the filter, feed measurements, preintegrate, and print position errors.
+- `models.py`: editable body, IMU, DVL, GPS and barometer equations.
+- `run_ins.py`: driver hooks, the ordinary INS runtime and C preintegrator export.
 
-From a checkout installed with `python -m pip install .` (Python 3.12+):
-
-```sh
-python -m examples.vehicles.ins_standalone --duration 60
-```
-
-Only Manta, NumPy, and CasADi are required. The example generates noisy
-measurements for a prescribed spherical-Earth track crossing the dateline.
-The DVL is an ideal ground-velocity observation here; acoustic lock and sensor
-availability are not simulated.
-It starts aligned; this is an API/integration example, not cold-start
-alignment or statistical qualification. Replace `measurements()` with your
-own data. Sensor noise, bias states, mounts, and equations are in the first file.
-You can also copy just those two files into another directory with Manta
-installed and run `python ins_standalone.py --duration 60` there.
+Install its pinned Manta dependency, implement the initial-state and measurement
+driver hooks, and run `python run_ins.py`. It requires real acquisitions and an
+explicit initial state; no simulated data or assumed heading is supplied.
 
 ## The same filter API
 
@@ -38,7 +27,7 @@ A custom IMU need not inherit the built-in model. It declares `gyro` and
 in `PartFrame`. The contract is calibrated inertial rate (rad/s) and specific
 force (m/s²), with optional additive `gyro_bias` / `accel_bias` states.
 
-For point samples or remote preintegration, the example explicitly selects:
+For point samples or remote preintegration, the handoff explicitly selects:
 
 ```python
 ins = TargetNumpy(INS(world, imu="imu", sensors=aiding_outputs,
@@ -50,7 +39,7 @@ This is an error-state EKF with quaternion nominal attitude, additive bias
 errors, modified velocity error coordinates, Joseph updates, and differential
 covariance reset. Low-level compatibility defaults remain `raw`, `left_hold`,
 and `linearized`; advanced covariance modes remain explicit. Set a credible
-initial physical covariance using `reset(P=...)`, as the example does.
+initial physical covariance using `reset(P=...)`, as the handoff does.
 
 ## Global coordinates, without reframing
 
@@ -105,7 +94,8 @@ state epoch; delayed observations require application-level replay.
 Export the preintegrator and portable packet encoder:
 
 ```sh
-python -m examples.vehicles.ins_standalone --export-preintegrator /tmp/imu-firmware
+# From the INS handoff checkout:
+python run_ins.py --export-preintegrator /tmp/imu-firmware
 ```
 
 The output contains standalone **C numerical kernels**, a C++ convenience
@@ -115,8 +105,8 @@ The C kernels and encoder do not require Python, CasADi at runtime, or Eigen;
 the optional C++ wrapper uses Eigen. See [the packet contract](../explanation/imu-packet-format.md)
 for kernel calls, ordering, units, and firmware responsibilities.
 
-Model-force aiding is optional and off in this example. For underwater use,
+Model-force aiding is optional and off in the handoff. For underwater use,
 fit dynamics on submerged data and apply force updates only while submerged
 and the model is valid. Sensor noise is characterized separately. Broad
-attitude/bias posterior consistency remains a known limitation; these examples
+attitude/bias posterior consistency remains a known limitation; the integration skeleton
 and coordinate tests do not qualify every alignment or dropout regime.

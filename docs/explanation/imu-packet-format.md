@@ -48,13 +48,14 @@ cross-covariance fields is not a valid bandwidth optimization.
 
 ## Firmware loop
 
-The example's `--export-preintegrator` option exports `TargetCpp` artifacts,
+The [INS handoff](https://github.com/Ulysses-Ecosystem-Engineering/ins-handoff)
+runner's `--export-preintegrator` option exports `TargetCpp` artifacts,
 including the C kernel source/header, `imu_packet.h`, and
 `imu_preintegrator.h`. The latter is a small C99 calling shim generated from
 the module's actual state defaults and input layout. It owns state and
 workspace in an `ImuPreintegrator` struct, with no heap allocation or Eigen.
 Compile your firmware with `preintegrator_kernels.c` and the math library.
-The Python exporter is in the example so it is easy to inspect or adapt.
+The Python exporter lives in handoff `run_ins.py` so it is easy to inspect or adapt.
 
 The encoder consumes `y` directly:
 
@@ -76,7 +77,7 @@ interval using both endpoint samples and their actual timestamp difference.
 At the desired boundary, send the packet and reset **preintegrator accumulated
 state**, retaining the last raw acquisition as the next interval's left end.
 Do not synthesize a duplicate sample or replace the shared boundary with an
-independent one. The Python example shows the same loop.
+independent one. The handoff raw-IMU runner shows the same endpoint handling.
 
 Gyro/accelerometer densities are converted with the declared acquisition rate
 into per-sample sigmas. These are independent point acquisitions; filtered
