@@ -29,42 +29,18 @@ Use `reset(..., t=epoch)` to initialize state at a nonzero epoch.
 Clock domain, sensor identity, calibration identity, CRC, loss recovery, and
 transport framing remain application responsibilities.
 
-## C struct and application serialization
-
-`PreintegratedIMUPacket.c_struct_header()` generates a C99/C++ header containing
-`MantaPreintegratedIMUPacket` and `manta_imu_packet_from_readouts(...)`. The
-struct contains `uint32_t schema`, `double start_time`, and every field in
-`PACKET_LAYOUT` as a named double or fixed-size double array. Matrices are
-flattened column-major; this is a data contract, not a packed wire struct.
-The copy function maps codegen readouts into those members without casting
-flat arrays to structs or relying on native padding.
-
-The firmware application owns serialization and transport. The host application
-owns deserialization, then constructs:
-
-```python
-packet = PreintegratedIMUPacket(decoded_fields, start_time=decoded_start_time,
-                               schema=decoded_schema)
-filter.predict(packet)
-```
-
-Serialize all numerical fields and retain their precision and correlations.
-Do not transmit native struct memory and assume matching padding/endianness.
-Wire encoding is independent of the physical bus: the same encoding can be
-transported over UART or Ethernet, and either bus can carry different encodings.
-
 ## Firmware loop
 
 The [INS handoff](https://github.com/Ulysses-Ecosystem-Engineering/ins-handoff)
 runner's `--export-preintegrator` option exports `TargetCpp` artifacts,
-including the C kernel source/header, struct-only `imu_packet.h`, and
+including the C kernel source/header, binary-codec `imu_packet.h`, and
 `imu_preintegrator.h`. The latter is a small C99 calling shim generated from
 the module's actual state defaults and input layout. It owns state and
 workspace in an `ImuPreintegrator` struct, with no heap allocation or Eigen.
 Compile your firmware with `preintegrator_kernels.c` and the math library.
 The Python exporter lives in handoff `run_ins.py` so it is easy to inspect or adapt.
 
-Copy the readouts into named packet fields for your serializer:
+Encode the readouts directly into the standard binary payload:
 
 ```c
 static ImuPreintegrator imu;  /* state and work buffers: allocate once */
@@ -74,10 +50,9 @@ imu_preintegrator_reset(&imu);
    MANTA_IMU_INPUT_* offsets. Then call once per observed interval: */
 int status = imu_preintegrator_step(&imu, inputs, dt, interval_start_time);
 /* Handle nonzero status before transmitting. */
-static MantaPreintegratedIMUPacket packet;
-manta_imu_packet_from_readouts(&packet, packet_start_time, imu.y);
-/* Your code serializes packet.schema, packet.start_time, and all named
-   numerical fields, then sends the payload using your chosen bus. */
+static uint8_t payload[MANTA_IMU_PACKET_SIZE];
+manta_imu_packet_encode(payload, packet_start_time, imu.y);
+/* Your transport sends exactly sizeof(payload) bytes. */
 ```
 
 Keep the actual previous IMU acquisition. For each fresh pair, integrate the
@@ -98,7 +73,7 @@ split exactly after transmission from its aggregate deltas alone. Out-of-order
 measurements, missing packets, and clock synchronization need an explicit
 application policy; the packet class does not invent motion or observations.
 
-## Optional binary encoding
+## Standard binary encoding
 
 `to_bytes()` / `from_bytes()` use a fixed **2,488-byte** schema-4 encoding:
 
@@ -110,9 +85,51 @@ application policy; the packet class does not invent motion or observations.
 | 16 | 309 little-endian float64 values | `PACKET_LAYOUT`, without padding |
 
 Do not serialize a native C struct and assume matching padding or endianness.
-`PreintegratedIMUPacket.c_header()` emits the struct plus this optional encoder
-and offsets. The handoff exporter uses `c_struct_header()` instead, leaving
-serialization to the application. A bus choice does not require this encoding.
+`PreintegratedIMUPacket.c_header()` emits this encoder and the named C struct.
+The handoff exporter uses this codec by default. The host calls
+`PreintegratedIMUPacket.from_bytes(payload)` on one complete payload. This
+removes manual field packing from the application; the transport sees bytes.
 At 50 packets/s this full covariance format uses 124,400 bytes/s before
 transport overhead. Choose packet cadence and transport accordingly; dropping
 cross-covariance fields is not a valid bandwidth optimization.
+
+## Transport boundary
+
+The codec is independent of UART, TCP, UDP or another link. Byte-stream reads
+and writes can be partial or combine multiple payloads. The application must
+buffer/reassemble packets, establish boundaries, and handle disconnection or
+loss; message/frame size limits may require fragmentation. On an already
+aligned reliable stream, consume `PreintegratedIMUPacket.wire_size` bytes per
+payload. Do not decode arbitrary read chunks or rely on a single write/read
+transferring the whole packet. Retain C payload buffers until asynchronous
+transmission finishes.
+
+Magic, schema, length and numerical checks are not a checksum. The codec adds
+no CRC, authentication or automatic stream resynchronization; the transport
+supplies the framing and integrity appropriate to the link. Unknown schemas
+are rejected explicitly instead of silently interpreting incompatible fields.
+
+## Optional custom serialization
+
+`PreintegratedIMUPacket.c_struct_header()` generates a C99/C++ header containing
+`MantaPreintegratedIMUPacket` and `manta_imu_packet_from_readouts(...)`. The
+struct contains `uint32_t schema`, `double start_time`, and every field in
+`PACKET_LAYOUT` as a named double or fixed-size double array. Matrices are
+flattened column-major; this is a data contract, not a packed wire struct.
+The copy function maps codegen readouts into those members without casting
+flat arrays to structs or relying on native padding.
+
+Use this path only when integrating with an existing encoding or another
+specific protocol constraint. In that case the application owns serialization
+and deserialization, then constructs:
+
+```python
+packet = PreintegratedIMUPacket(decoded_fields, start_time=decoded_start_time,
+                               schema=decoded_schema)
+filter.predict(packet)
+```
+
+Serialize all numerical fields and retain their precision and correlations.
+Do not transmit native struct memory and assume matching padding/endianness.
+Wire encoding is independent of the physical bus: the same encoding can be
+transported over UART or Ethernet, and either bus can carry different encodings.

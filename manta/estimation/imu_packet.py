@@ -225,7 +225,7 @@ class PreintegratedIMUPacket(Mapping):
 
     @staticmethod
     def c_header():
-        """Optional fixed binary encoder, plus the transport-independent struct.
+        """Standard binary encoder, plus the transport-independent struct.
 
         Use :meth:`c_struct_header` alone when the application owns serialization.
         """

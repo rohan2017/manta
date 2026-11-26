@@ -105,8 +105,8 @@ from manta import PreintegratedIMUPacket
 
 # Same process: construct from IMUPreintegrator runtime readouts.
 packet = PreintegratedIMUPacket(readouts, start_time=t0)
-# Remote alternative: your driver deserializes your chosen protocol.
-packet = PreintegratedIMUPacket(decoded_fields, start_time=t0, schema=decoded_schema)
+# Remote alternative: the driver delivers one complete opaque payload.
+packet = PreintegratedIMUPacket.from_bytes(payload)
 
 inputs = ins.preintegrated_inputs(packet)
 ins.predict(packet)                         # advances to packet.end_time
@@ -118,7 +118,7 @@ when an aiding model needs them (lever arms or ModelForce). It is the same
 explicit input mechanism used by EKF/UKF. Measurements must be at the current
 state epoch; delayed observations require application-level replay.
 
-Export the preintegrator and named C packet struct:
+Export the preintegrator and standard binary encoder:
 
 ```sh
 # From the INS handoff checkout:
@@ -127,11 +127,12 @@ python run_ins.py --export-preintegrator /tmp/imu-firmware
 
 The output contains standalone **C numerical kernels**, a C++ convenience
 wrapper, `imu_preintegrator.h` for C99 state/workspace bookkeeping, and
-`imu_packet.h`, containing `MantaPreintegratedIMUPacket` and a readout-copy
-function. Your firmware serializes those named fields and sends them over
-your bus; your Python driver deserializes them into the packet class. The
-export chooses no wire encoding or transport.
-The C kernels and struct do not require Python, CasADi at runtime, or Eigen;
+`imu_packet.h`, containing `manta_imu_packet_encode`. Firmware encodes the
+readouts into an opaque byte payload; the host calls
+`PreintegratedIMUPacket.from_bytes(payload)`. Your driver owns the transport
+and reassembles complete payloads, not internal field packing. The named C
+struct remains available for custom protocols.
+The C kernels and codec do not require Python, CasADi at runtime, or Eigen;
 the optional C++ wrapper uses Eigen. See [the packet contract](../explanation/imu-packet-format.md)
 for kernel calls, ordering, units, and firmware responsibilities.
 
