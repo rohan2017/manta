@@ -77,26 +77,17 @@ No magnetometer is required, but unknown gyro bias, poor IMU precision and
 insufficient constraints can prevent useful alignment. The handoff still
 requires an initial attitude estimate/prior; it contains no cold-start aligner.
 
-## Optional helpers: what they actually do
+## Explicit driver loop
 
-`NavigationEnvironment.from_scene(...)` snapshots a planet and scene anchor
-to build a matched `NavigationFrame` and gravity field for an explicitly
-planet-attached Cartesian estimator world. It projects spatial gravity into
-those fixed axes and includes centrifugal acceleration once. The frame
-supplies the rotation/origin terms needed by the INS equations. It does not
-move the origin with the vehicle, synchronize sensors, or perform alignment.
-Other fields and sensor equations must also use those coordinates. Rebuild
-it if the planet/anchor changes. The global `WorldFrame` path above needs
-neither this helper nor a local-frame override.
+Construct `TargetNumpy(INS(...))` directly. The driver keeps adjacent IMU
+acquisitions, runs `IMUPreintegrator`, closes an interval at a chosen prediction
+or aiding boundary, and calls `predict(packet)`. Corrections use the same
+`update` method as EKF/UKF. No scheduler is hidden in the estimator. The handoff
+shows the whole loop; received MCU packets skip host preintegration entirely.
 
-`INSStream` is a Python sample scheduler around `INS`, `IMUPreintegrator` and
-`TargetNumpy`. It remembers the previous acquisition, batches intervals,
-flushes a partial packet before aiding, and forwards corrections to the same
-filter. "Stream" describes its input handling, not another estimator.
-It only accepts aiding at the latest observed IMU endpoint and provides no
-delayed-measurement replay. Its compatibility default is `covariance="conventional"`;
-the handoff explicitly selects `"conventional_reset"`. Keep the ordinary
-transform/runtime API when you own the driver loop or receive MCU packets.
+Use the planet's gravity in the global inertial World for the default path.
+An explicit `NavigationFrame` remains supported for separately authored
+rotating-coordinate models, with gravity conventions owned by that model.
 
 ## Orientation math and model authoring
 
@@ -114,8 +105,8 @@ from manta import PreintegratedIMUPacket
 
 # Same process: construct from IMUPreintegrator runtime readouts.
 packet = PreintegratedIMUPacket(readouts, start_time=t0)
-# Remote alternative: decode the standard binary encoding.
-packet = PreintegratedIMUPacket.from_bytes(received_payload)
+# Remote alternative: your driver deserializes your chosen protocol.
+packet = PreintegratedIMUPacket(decoded_fields, start_time=t0, schema=decoded_schema)
 
 inputs = ins.preintegrated_inputs(packet)
 ins.predict(packet)                         # advances to packet.end_time
@@ -127,7 +118,7 @@ when an aiding model needs them (lever arms or ModelForce). It is the same
 explicit input mechanism used by EKF/UKF. Measurements must be at the current
 state epoch; delayed observations require application-level replay.
 
-Export the preintegrator and portable packet encoder:
+Export the preintegrator and named C packet struct:
 
 ```sh
 # From the INS handoff checkout:
@@ -136,8 +127,11 @@ python run_ins.py --export-preintegrator /tmp/imu-firmware
 
 The output contains standalone **C numerical kernels**, a C++ convenience
 wrapper, `imu_preintegrator.h` for C99 state/workspace bookkeeping, and
-`imu_packet.h`, a C99/C++ encoder with field-offset constants.
-The C kernels and encoder do not require Python, CasADi at runtime, or Eigen;
+`imu_packet.h`, containing `MantaPreintegratedIMUPacket` and a readout-copy
+function. Your firmware serializes those named fields and sends them over
+your bus; your Python driver deserializes them into the packet class. The
+export chooses no wire encoding or transport.
+The C kernels and struct do not require Python, CasADi at runtime, or Eigen;
 the optional C++ wrapper uses Eigen. See [the packet contract](../explanation/imu-packet-format.md)
 for kernel calls, ordering, units, and firmware responsibilities.
 

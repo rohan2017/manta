@@ -23,8 +23,8 @@ and structurally relevant disturbance slots.
 By default INS, EKF, and UKF all use the global inertial `WorldFrame`. Author
 planet-relative GPS/DVL measurements with the planet's coordinate transforms;
 no local-frame reset is needed for global travel. An explicit `NavigationFrame`
-override and `NavigationEnvironment` helper remain available for separately
-authored planet-attached Cartesian models. The
+override remains available for explicitly authored planet-attached Cartesian
+models; the caller supplies gravity and rotation consistently. The
 [standalone INS guide](../how-to/use-ins.md) covers timestamped acquisitions,
 initialization, gyrocompassing, and optional model aiding without Shiver.
 Calibrated synthetic gyrocompassing works, but broad attitude/bias statistical

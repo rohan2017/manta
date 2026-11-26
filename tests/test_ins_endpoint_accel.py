@@ -146,7 +146,7 @@ def test_accel_endpoint_packet_composition_matches_acquisitions():
 
 @pytest.mark.parametrize("outer_rate", [5, 10, 100])
 def test_full_ins_preserves_shared_accel_noise_across_packet_boundaries(outer_rate):
-    from manta import INSStream, Craft, World
+    from manta import INS, IMUPreintegrator, PreintegratedIMUPacket, TargetNumpy, Craft, World
     from manta.parts import Mass, ConstantBiasIMU
     from manta.fields import GravityField
 
@@ -155,17 +155,20 @@ def test_full_ins_preserves_shared_accel_noise_across_packet_boundaries(outer_ra
     craft.add(ConstantBiasIMU("imu", gyro_noise_sigma=0, accel_noise_sigma=0.1))
     world = World("endpoint_noise").add_field(GravityField(g=(0, 0, -9.81)))
     world.add_craft(craft)
-    rt = INSStream(
-        world,
-        imu="imu",
-        sample_rate_hz=100,
-        predict_every=100 // outer_rate,
-        sensors=[],
-    )
+    rt = TargetNumpy(INS(world, imu="imu", sensors=[], propagation="preintegrated",
+                         accel_integration="endpoint", covariance="conventional"))
+    pre = TargetNumpy(IMUPreintegrator(sample_rate_hz=100, gyro_integration="endpoint",
+                                      accel_integration="endpoint", accel_noise_density=.01))
     rt.reset(P=np.zeros((15, 15)))
-    for i in range(21):
-        rt.update_imu([0, 0, 0], [0, 0, 0], t=i * 0.01)
-    rt.flush()
+    start = 0.
+    for i in range(1, 21):
+        values = pre.step(.01, accel=[0, 0, 0], gyro=[0, 0, 0],
+                          end_accel=[0, 0, 0], end_gyro=[0, 0, 0],
+                          accel_bias=[0, 0, 0], gyro_bias=[0, 0, 0])
+        if i % (100 // outer_rate) == 0 or i == 20:
+            rt.predict(PreintegratedIMUPacket(values, start_time=start))
+            start = rt.time
+            pre.reset()
     slot = rt.spec.slot("c.velocity")
     i = slot.tangent_offset
     np.testing.assert_allclose(
@@ -174,7 +177,7 @@ def test_full_ins_preserves_shared_accel_noise_across_packet_boundaries(outer_ra
 
 
 def test_model_force_uses_shared_acceleration_noise_once():
-    from manta import Craft, INSStream, World
+    from manta import Craft, INS, IMUPreintegrator, PreintegratedIMUPacket, TargetNumpy, World
     from manta.fields import GravityField
     from manta.parts import ConstantBiasIMU, Mass, ModelForce
     from tests.test_ins import _evidence
@@ -188,12 +191,18 @@ def test_model_force_uses_shared_acceleration_noise_once():
     )
     world = World().add_field(GravityField(g=(0, 0, -9.81)))
     world.add_craft(craft)
-    ins = INSStream(
-        world, imu="imu", sample_rate_hz=100, sensors=["model_force.specific_force"]
-    )
+    ins = TargetNumpy(INS(world, imu="imu", sensors=["model_force.specific_force"],
+                          propagation="preintegrated", accel_integration="endpoint",
+                          covariance="conventional"))
+    pre = TargetNumpy(IMUPreintegrator(sample_rate_hz=100, gyro_integration="endpoint",
+                                      accel_integration="endpoint", accel_noise_density=.01))
     ins.reset(P=np.zeros((15, 15)))
-    ins.update_imu([0, 0, 0], [0, 0, 0], t=0)
-    ins.update_imu([0, 0, 0], [0, 0, 0], t=0.01)
+    values = pre.step(.01, accel=[0, 0, 0], gyro=[0, 0, 0],
+                      end_accel=[0, 0, 0], end_gyro=[0, 0, 0],
+                          accel_bias=[0, 0, 0], gyro_bias=[0, 0, 0])
+    packet = PreintegratedIMUPacket(values, start_time=0.)
+    inputs = ins.preintegrated_inputs(packet)
+    ins.predict(packet)
     # v error = h/2*(n0+n1), residual error = n1+independent model error.
     # The held-out residual variance .2² already contains n1's variance .1².
     prior_variance = 0.01**2 * 0.1**2 / 2
@@ -203,7 +212,7 @@ def test_model_force_uses_shared_acceleration_noise_once():
     np.testing.assert_allclose(
         ins.P[selection, selection], np.eye(3) * prior_variance, atol=1e-18
     )
-    result = ins.update("model_force.specific_force", [0, 0, 0], t=0.01)
+    result = ins.update("model_force.specific_force", [0, 0, 0], u=inputs)
     np.testing.assert_allclose(
         result.innovation_covariance, np.eye(3) * 0.2**2, atol=1e-15
     )

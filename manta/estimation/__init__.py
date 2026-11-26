@@ -39,8 +39,6 @@ __all__ = [
     "EKF",
     "INS",
     "PreintegratedIMUPacket",
-    "INSStream",
-    "NavigationEnvironment",
     "GaussianSumINS",
     "UKF",
     "IMUIntegrator",
@@ -71,12 +69,6 @@ def __getattr__(name):
     if name == "INS":
         from .ins import INS
         return INS
-    if name == "INSStream":
-        from .ins_stream import INSStream
-        return INSStream
-    if name == "NavigationEnvironment":
-        from .navigation_environment import NavigationEnvironment
-        return NavigationEnvironment
     if name == "GaussianSumINS":
         from .ins_mixture import GaussianSumINS
         return GaussianSumINS

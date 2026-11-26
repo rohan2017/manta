@@ -19,10 +19,6 @@ See the [standalone INS guide](../how-to/use-ins.md) for an example using your o
 
 The low-level [INS transform][manta.INS] also supports custom packet scheduling.
 
-::: manta.INSStream
-
-::: manta.NavigationEnvironment
-
 ::: manta.NavigationFrame
 
 ::: manta.PreintegratedIMUPacket

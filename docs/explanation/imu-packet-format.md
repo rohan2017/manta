@@ -29,35 +29,42 @@ Use `reset(..., t=epoch)` to initialize state at a nonzero epoch.
 Clock domain, sensor identity, calibration identity, CRC, loss recovery, and
 transport framing remain application responsibilities.
 
-## Optional binary encoding
+## C struct and application serialization
 
-`to_bytes()` / `from_bytes()` use a fixed **2,488-byte** schema-4 encoding:
+`PreintegratedIMUPacket.c_struct_header()` generates a C99/C++ header containing
+`MantaPreintegratedIMUPacket` and `manta_imu_packet_from_readouts(...)`. The
+struct contains `uint32_t schema`, `double start_time`, and every field in
+`PACKET_LAYOUT` as a named double or fixed-size double array. Matrices are
+flattened column-major; this is a data contract, not a packed wire struct.
+The copy function maps codegen readouts into those members without casting
+flat arrays to structs or relying on native padding.
 
-| Offset | Type | Meaning |
-|---|---|---|
-| 0 | 4 bytes | ASCII `MIPK` |
-| 4 | little-endian uint32 | schema = 4 |
-| 8 | little-endian IEEE-754 float64 | start time in filter-clock seconds |
-| 16 | 309 little-endian float64 values | `PACKET_LAYOUT`, without padding |
+The firmware application owns serialization and transport. The host application
+owns deserialization, then constructs:
 
-Do not serialize a native C struct and assume matching padding or endianness.
-`PreintegratedIMUPacket.c_header()` emits the portable encoder and offsets.
-At 50 packets/s this full covariance format uses 124,400 bytes/s before
-transport overhead. Choose packet cadence and transport accordingly; dropping
-cross-covariance fields is not a valid bandwidth optimization.
+```python
+packet = PreintegratedIMUPacket(decoded_fields, start_time=decoded_start_time,
+                               schema=decoded_schema)
+filter.predict(packet)
+```
+
+Serialize all numerical fields and retain their precision and correlations.
+Do not transmit native struct memory and assume matching padding/endianness.
+Wire encoding is independent of the physical bus: the same encoding can be
+transported over UART or Ethernet, and either bus can carry different encodings.
 
 ## Firmware loop
 
 The [INS handoff](https://github.com/Ulysses-Ecosystem-Engineering/ins-handoff)
 runner's `--export-preintegrator` option exports `TargetCpp` artifacts,
-including the C kernel source/header, `imu_packet.h`, and
+including the C kernel source/header, struct-only `imu_packet.h`, and
 `imu_preintegrator.h`. The latter is a small C99 calling shim generated from
 the module's actual state defaults and input layout. It owns state and
 workspace in an `ImuPreintegrator` struct, with no heap allocation or Eigen.
 Compile your firmware with `preintegrator_kernels.c` and the math library.
 The Python exporter lives in handoff `run_ins.py` so it is easy to inspect or adapt.
 
-The encoder consumes `y` directly:
+Copy the readouts into named packet fields for your serializer:
 
 ```c
 static ImuPreintegrator imu;  /* state and work buffers: allocate once */
@@ -67,9 +74,10 @@ imu_preintegrator_reset(&imu);
    MANTA_IMU_INPUT_* offsets. Then call once per observed interval: */
 int status = imu_preintegrator_step(&imu, inputs, dt, interval_start_time);
 /* Handle nonzero status before transmitting. */
-uint8_t payload[MANTA_IMU_PACKET_SIZE];
-manta_imu_packet_encode(payload, packet_start_time, imu.y);
-/* Send payload using your device's transport. */
+static MantaPreintegratedIMUPacket packet;
+manta_imu_packet_from_readouts(&packet, packet_start_time, imu.y);
+/* Your code serializes packet.schema, packet.start_time, and all named
+   numerical fields, then sends the payload using your chosen bus. */
 ```
 
 Keep the actual previous IMU acquisition. For each fresh pair, integrate the
@@ -89,3 +97,22 @@ Close a packet at each aiding timestamp the host needs. A packet cannot be
 split exactly after transmission from its aggregate deltas alone. Out-of-order
 measurements, missing packets, and clock synchronization need an explicit
 application policy; the packet class does not invent motion or observations.
+
+## Optional binary encoding
+
+`to_bytes()` / `from_bytes()` use a fixed **2,488-byte** schema-4 encoding:
+
+| Offset | Type | Meaning |
+|---|---|---|
+| 0 | 4 bytes | ASCII `MIPK` |
+| 4 | little-endian uint32 | schema = 4 |
+| 8 | little-endian IEEE-754 float64 | start time in filter-clock seconds |
+| 16 | 309 little-endian float64 values | `PACKET_LAYOUT`, without padding |
+
+Do not serialize a native C struct and assume matching padding or endianness.
+`PreintegratedIMUPacket.c_header()` emits the struct plus this optional encoder
+and offsets. The handoff exporter uses `c_struct_header()` instead, leaving
+serialization to the application. A bus choice does not require this encoding.
+At 50 packets/s this full covariance format uses 124,400 bytes/s before
+transport overhead. Choose packet cadence and transport accordingly; dropping
+cross-covariance fields is not a valid bandwidth optimization.

@@ -65,6 +65,7 @@ transport schemas, generated code, and estimator artifacts together.
 Do not call `frame_preintegrated_packet` on an endpoint-integrated packet:
 that helper attaches an independent gyro endpoint and clears its correlation.
 Use the actual paired right acquisition. Partial flushes must retain this
-same acquisition and its covariance. `INSStream` implements that contract
-for ordered measurements at observed boundaries; applications with delayed
-or asynchronous data must supply their own timing/replay layer.
+same acquisition and its covariance. The application loop closes packets at
+observed boundaries, calls `predict(packet)`, then calls aiding updates with
+`u=filter.preintegrated_inputs(packet)`. Applications with delayed or
+asynchronous data must supply their own timing/replay layer.
