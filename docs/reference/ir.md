@@ -4,6 +4,9 @@ The low-level `manta.ir` layer — frames, typed values, manifolds, and the
 flat-vector state spec. Most users never touch this directly; it is
 exported for advanced use (building bare CasADi graphs).
 
+For custom Part and Field equations, use [manta.types](types.md) instead.
+Numerical quaternion helpers under `manta.ir._rotation` are private.
+
 ## Frames
 
 ::: manta.ir.Frame

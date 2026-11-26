@@ -99,6 +99,7 @@ nav:
       - Overview: reference/index.md
       - Model — World, Craft, Coupling: reference/model.md
       - Parts: reference/parts.md
+      - Model authoring types: reference/types.md
       - Fields: reference/fields.md
       - Planets: reference/planets.md
       - Transforms — Sim, EKF, LQR: reference/transforms.md

@@ -6,6 +6,8 @@ organized by the same layers as the [architecture](../explanation/architecture.m
 - **[Model](model.md)** — `World`, `Craft`, `Coupling`: the declarative
   layer.
 - **[Parts](parts.md)** — the stock parts you add to a craft.
+- **[Model authoring types](types.md)** — public symbolic values and frame tags;
+  SciPy interoperability for numerical orientations.
 - **[Fields](fields.md)** — gravity, fluid, magnetic, collision, optical
   fields and their disturbances.
 - **[Planets](planets.md)** — `Planet` / `Earth` world-level entities.

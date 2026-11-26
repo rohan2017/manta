@@ -46,6 +46,10 @@ Standard usage::
         ekf.predict(dt, t=t)                 # ...then predict (you own order)
         t += dt
 
+Custom Part/Field equations import symbolic values and frame tags from
+``manta.types``. Numerical orientation work can use SciPy Rotation with
+``scalar_first=True`` at the quaternion boundary.
+
 The low-level IR (`manta.ir`) is still exported for advanced use
 (building bare CasADi graphs directly), but the typical user works
 through the World/Target API above.

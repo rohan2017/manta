@@ -22,15 +22,17 @@ parameters, state, inputs, and per-tick wrench contribution.
 ## Worked example skeleton
 
 ```python
-from manta.parts import Part, Parameter, Input, Wrench
-# from manta.ir.frames import CraftFrame
+from manta.parts import Part, Parameter, Input
+from manta.types import PartFrame, Vec3, Wrench
 
 class MyThruster(Part):
     gain = Parameter(1.0)
     throttle = Input(0.0)
 
     def update(self, ctx):
-        ...  # return PartUpdate(wrench=Wrench(force=..., frame=CraftFrame))
+        forward = Vec3[PartFrame].constant((1, 0, 0))
+        zero = Vec3[PartFrame].constant((0, 0, 0))
+        return Wrench(force=forward * self.gain * self.throttle, torque=zero)
 ```
 
 ## Source material

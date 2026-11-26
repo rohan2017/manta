@@ -7,6 +7,9 @@ Most extensions are a new [`Disturbance`][manta.fields.Disturbance] on an
 existing [`Field`][manta.fields.Field] — a new gravity source, a new flow.
 A genuinely new physical kind is a new `Field` subclass.
 
+Import symbolic values and frame tags from `manta.types`; the model equations
+do not need compiler internals from `manta.ir`.
+
 ## To cover
 
 - **New disturbance (common case)** — subclass `Disturbance`, implement

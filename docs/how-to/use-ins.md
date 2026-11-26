@@ -22,6 +22,9 @@ ins = TargetNumpy(INS(world, imu="imu", sensors=aiding_outputs))
 
 All expose `reset`, `predict`, `update`, `state_dict`, `x`, `P`, and checkpoints.
 INS uses its selected IMU for strapdown; EKF/UKF use declared vehicle dynamics.
+EKF and UKF also differ in how they approximate uncertainty; the INS is an
+error-state EKF with an IMU-driven prediction. Sensor models and the
+`reset`/`predict`/`update` pattern are shared, not a separate navigation API.
 A custom IMU need not inherit the built-in model. It declares `gyro` and
 `accel` outputs plus three-axis `gyro_noise` and `accel_noise` white channels
 in `PartFrame`. The contract is calibrated inertial rate (rad/s) and specific
@@ -65,11 +68,44 @@ gyrocompassing emerges from gravity, the planet-relative aiding models, and
 attitude/bias cross-covariances. Bias calibration/prior and excitation still
 matter. Global coordinates remove reframing, not accumulated sensor drift.
 
-`NavigationEnvironment` is an optional helper for explicitly authored
-planet-attached Cartesian worlds. The earlier guide used its fixed local
-axes. It is unnecessary here. `INSStream` is an optional Python scheduler
-around INS/preintegration, not a different filter; the normal API above uses
-neither helper.
+Gyrocompassing is inference from the planet's rotation and gravity together
+with suitable observations or motion constraints. It is not an unconditional
+"find north" switch or unique to the INS class: a dynamics EKF/UKF can also
+infer heading when its IMU measurement model makes rotation observable.
+The INS routes that information through strapdown and aiding corrections.
+No magnetometer is required, but unknown gyro bias, poor IMU precision and
+insufficient constraints can prevent useful alignment. The handoff still
+requires an initial attitude estimate/prior; it contains no cold-start aligner.
+
+## Optional helpers: what they actually do
+
+`NavigationEnvironment.from_scene(...)` snapshots a planet and scene anchor
+to build a matched `NavigationFrame` and gravity field for an explicitly
+planet-attached Cartesian estimator world. It projects spatial gravity into
+those fixed axes and includes centrifugal acceleration once. The frame
+supplies the rotation/origin terms needed by the INS equations. It does not
+move the origin with the vehicle, synchronize sensors, or perform alignment.
+Other fields and sensor equations must also use those coordinates. Rebuild
+it if the planet/anchor changes. The global `WorldFrame` path above needs
+neither this helper nor a local-frame override.
+
+`INSStream` is a Python sample scheduler around `INS`, `IMUPreintegrator` and
+`TargetNumpy`. It remembers the previous acquisition, batches intervals,
+flushes a partial packet before aiding, and forwards corrections to the same
+filter. "Stream" describes its input handling, not another estimator.
+It only accepts aiding at the latest observed IMU endpoint and provides no
+delayed-measurement replay. Its compatibility default is `covariance="conventional"`;
+the handoff explicitly selects `"conventional_reset"`. Keep the ordinary
+transform/runtime API when you own the driver loop or receive MCU packets.
+
+## Orientation math and model authoring
+
+Use `manta.types` for symbolic Part equations and
+`scipy.spatial.transform.Rotation` for numerical orientation work in drivers,
+initialization and output. `manta.ir._rotation` is private and should not be
+imported by applications. See [model authoring types](../reference/types.md)
+for the tested quaternion conventions and examples. SciPy is not required by
+Manta's estimator kernels and cannot replace symbolic algebra inside a Part.
 
 ## Preintegrate on an MCU, predict on the host
 

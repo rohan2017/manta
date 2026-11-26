@@ -2,7 +2,7 @@
 import casadi as ca
 from manta import Craft, World
 from manta.fields import FluidField, gravity_at
-from manta.ir import PartFrame, PlanetFrame, WorldFrame, Scalar, Vec3, Wrench
+from manta.types import PartFrame, PlanetFrame, WorldFrame, Scalar, Vec3, Wrench
 from manta.parts import Part, PartRole, Parameter, State, WhiteNoise, Output, PartUpdate
 
 
